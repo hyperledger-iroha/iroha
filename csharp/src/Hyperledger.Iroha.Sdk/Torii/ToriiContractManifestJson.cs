@@ -11,27 +11,117 @@ internal static class ToriiContractManifestJson
     private const int MaxSchemaDepth = 256;
     private const int MaxBoundaryWords = 13;
 
+    // BEGIN GENERATED: kotodama-v1-validator-policy
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
-        "authorize", "break", "const", "continue", "else", "enum", "error", "false",
-        "fn", "for", "hajimari", "if", "in", "kaizen", "kotoage", "let", "match",
-        "module", "return", "seiyaku", "state", "struct", "trigger", "true", "var", "view",
+        "authorize",
+        "break",
+        "const",
+        "continue",
+        "else",
+        "enum",
+        "error",
+        "false",
+        "fn",
+        "for",
+        "hajimari",
+        "始まり",
+        "if",
+        "in",
+        "kaizen",
+        "改善",
+        "kotoage",
+        "言挙げ",
+        "let",
+        "match",
+        "module",
+        "return",
+        "seiyaku",
+        "誓約",
+        "state",
+        "struct",
+        "trigger",
+        "true",
+        "var",
+        "view",
     };
-
     private static readonly HashSet<string> ReservedDeclarationNames = new(StringComparer.Ordinal)
     {
-        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
-        "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
-        "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
-        "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
-        "AssetHandle", "ProofBlob", "SoracloudRequest", "SoracloudResponse",
-        "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
-        "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
-        "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
-        "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "Json",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "DomainId",
+        "Name",
+        "NftId",
+        "DataSpaceId",
+        "Option",
+        "Result",
+        "List",
+        "StateMap",
+        "Secret",
+        "AccountView",
+        "AssetView",
+        "AssetDefinitionView",
+        "DomainView",
+        "NftView",
+        "QueryPage",
+        "AxtDescriptor",
+        "AssetHandle",
+        "ProofBlob",
+        "SoracloudRequest",
+        "SoracloudResponse",
+        "state_map_get",
+        "__kotodama_list_len",
+        "__kotodama_list_get",
+        "__kotodama_list_try_set",
+        "__kotodama_list_try_push",
+        "__kotodama_list_pop",
+        "__kotodama_list_contains",
+        "__kotodama_list_take",
+        "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round",
+        "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
     };
+    private static readonly HashSet<string> RetiredNumericTypeNames = new(StringComparer.Ordinal)
+    {
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "num",
+        "Int",
+        "Integer",
+        "float",
+        "f32",
+        "f64",
+        "Decimal",
+        "Fixed",
+        "FixedPoint",
+        "Amount",
+        "amount",
+        "money",
+        "Quantity",
+        "number",
+    };
+    // END GENERATED: kotodama-v1-validator-policy
 
     private static readonly IReadOnlyDictionary<string, ToriiEntrypointValueKindV1> ValueKinds =
         new Dictionary<string, ToriiEntrypointValueKindV1>(StringComparer.Ordinal)
@@ -134,7 +224,7 @@ internal static class ToriiContractManifestJson
             "provenance");
 
         var seiyakuName = OptionalExactString(root, "seiyaku_name", $"{context}.seiyaku_name");
-        if (seiyakuName is not null && !IsCanonicalDeclarationIdentifier(seiyakuName))
+        if (seiyakuName is not null && !IsCanonicalTypeDeclarationIdentifier(seiyakuName))
         {
             throw new JsonException($"{context}.seiyaku_name must be a canonical Kotodama declaration identifier.");
         }
@@ -443,7 +533,7 @@ internal static class ToriiContractManifestJson
         EnsureOnly(root, context, "name", "fields");
         var name = RequiredExactString(root, "name", $"{context}.name");
         var fields = RequiredStringList(root, "fields", $"{context}.fields");
-        if (!IsCanonicalBoundaryIdentifier(name)
+        if (!IsCanonicalTypeDeclarationIdentifier(name)
             || fields.Count == 0
             || fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
@@ -703,7 +793,7 @@ internal static class ToriiContractManifestJson
             case ToriiEntrypointValueTypeNodeKindV1.Struct:
                 var product = node.StructValue!;
                 if (product.Fields.Count == 0
-                    || !IsCanonicalBoundaryIdentifier(product.Name)
+                    || !IsCanonicalTypeDeclarationIdentifier(product.Name)
                     || product.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
                 {
                     throw new JsonException($"{context} contains a noncanonical struct node.");
@@ -893,7 +983,7 @@ internal static class ToriiContractManifestJson
         EnsureOnly(root, context, "namespace", "name", "code");
         var namespaceName = RequiredExactString(root, "namespace", $"{context}.namespace");
         var name = RequiredExactString(root, "name", $"{context}.name");
-        if (!IsCanonicalDeclarationIdentifier(namespaceName)
+        if (!IsCanonicalTypeDeclarationIdentifier(namespaceName)
             || !IsCanonicalBoundaryIdentifier(name))
         {
             throw new JsonException(
@@ -1059,7 +1149,7 @@ internal static class ToriiContractManifestJson
             ["provenance"] = value.Provenance is null ? null : BuildProvenance(value.Provenance, $"{context}.provenance"),
         };
         ValidateExactStringOptional(value.SeiyakuName, $"{context}.seiyaku_name");
-        if (value.SeiyakuName is not null && !IsCanonicalDeclarationIdentifier(value.SeiyakuName))
+        if (value.SeiyakuName is not null && !IsCanonicalTypeDeclarationIdentifier(value.SeiyakuName))
         {
             throw new JsonException($"{context}.seiyaku_name must be a canonical Kotodama declaration identifier.");
         }
@@ -1232,7 +1322,7 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject BuildStructNode(ToriiEntrypointStructTypeNodeV1 value, string context)
     {
-        if (!IsCanonicalBoundaryIdentifier(value.Name)
+        if (!IsCanonicalTypeDeclarationIdentifier(value.Name)
             || value.Fields.Count == 0
             || value.Fields.Any(field => !IsCanonicalBoundaryIdentifier(field)))
         {
@@ -1315,7 +1405,7 @@ internal static class ToriiContractManifestJson
 
     private static JsonObject BuildErrorCode(ToriiContractErrorCodeDescriptor value, string context)
     {
-        if (!IsCanonicalDeclarationIdentifier(value.Namespace)
+        if (!IsCanonicalTypeDeclarationIdentifier(value.Namespace)
             || !IsCanonicalBoundaryIdentifier(value.Name)
             || value.Code == 0)
         {
@@ -1749,10 +1839,16 @@ internal static class ToriiContractManifestJson
             && !value.StartsWith("__kotodama_link_", StringComparison.Ordinal);
     }
 
+    private static bool IsCanonicalTypeDeclarationIdentifier(string value)
+    {
+        return IsCanonicalDeclarationIdentifier(value)
+            && !RetiredNumericTypeNames.Contains(value);
+    }
+
     private static bool IsCanonicalEntrypointName(string value)
     {
         return value is "hajimari" or "始まり" or "kaizen" or "改善"
-            || IsCanonicalBoundaryIdentifier(value);
+            || IsCanonicalDeclarationIdentifier(value);
     }
 
     private static bool HasIdentifierSyntax(string value)

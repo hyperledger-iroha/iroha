@@ -29,7 +29,7 @@
       "profile": "Tier1",
       "state": null
     },
-    "twap_local_per_xor": "8123.445500",
+    "twap_local_per_xor": "8123.4455",
     "twap_window_seconds": 60,
     "volatility_class": {
       "bucket": "Stable",

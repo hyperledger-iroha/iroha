@@ -71,6 +71,7 @@ async fn npos_v2_stays_within_round_envelope_under_250ms_links() -> Result<()> {
         client
             .submit::<InstructionBox>(
                 Log::new(Level::INFO, format!("pacemaker latency tick {idx}")).into(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .wrap_err_with(|| format!("submit pacemaker latency tick {idx}"))?;
         network

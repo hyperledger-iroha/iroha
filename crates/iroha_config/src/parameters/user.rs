@@ -7798,6 +7798,9 @@ pub struct Offline {
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
+    /// Estimated decoded Kagemusha verifier budget, capped at the 256 MiB default.
+    #[config(default = "defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES")]
+    pub kagemusha_max_decoded_bytes: u64,
 }
 
 impl Default for Offline {
@@ -7808,6 +7811,7 @@ impl Default for Offline {
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
+            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
 }
@@ -8031,6 +8035,7 @@ impl Offline {
             escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
+            mut kagemusha_max_decoded_bytes,
         } = self;
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
@@ -8050,6 +8055,22 @@ impl Offline {
                 Report::new(ParseError::InvalidSettlementConfig)
                     .attach("settlement.offline Kagemusha release paths must not be empty"),
             );
+        }
+        if kagemusha_max_decoded_bytes == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.kagemusha_max_decoded_bytes must be greater than zero",
+            ));
+            kagemusha_max_decoded_bytes =
+                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
+        } else if kagemusha_max_decoded_bytes
+            > defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(format!(
+                "settlement.offline.kagemusha_max_decoded_bytes cannot exceed the non-raiseable {}-byte safety ceiling",
+                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+            )));
+            kagemusha_max_decoded_bytes =
+                defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES;
         }
         let mut escrow_bindings = BTreeMap::new();
         for (definition, account) in escrow_accounts {
@@ -8087,6 +8108,7 @@ impl Offline {
             escrow_accounts: escrow_bindings,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
+            kagemusha_max_decoded_bytes,
         }
     }
 }
@@ -20400,7 +20422,7 @@ mod offline_cfg_tests {
             "audit_export_dir": null,
             "embedded_signature_policy": null,
             "signer": {
-                "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
@@ -20441,7 +20463,7 @@ mod offline_cfg_tests {
         let signer = parsed.signer.expect("signer present");
         assert_eq!(
             signer.account_id,
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
@@ -23243,6 +23265,10 @@ mod settlement_offline_tests {
         assert!(emitter.into_result().is_ok());
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
+        assert_eq!(
+            actual.kagemusha_max_decoded_bytes,
+            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
     }
 
     #[test]
@@ -23291,6 +23317,53 @@ mod settlement_offline_tests {
         .parse(&mut emitter);
 
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn offline_parse_rejects_zero_kagemusha_decoded_budget() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            kagemusha_max_decoded_bytes: 0,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+        assert_eq!(
+            actual.kagemusha_max_decoded_bytes,
+            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
+    }
+
+    #[test]
+    fn offline_parse_rejects_kagemusha_budget_above_safety_ceiling() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+                + 1,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+        assert_eq!(
+            actual.kagemusha_max_decoded_bytes,
+            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
+    }
+
+    #[test]
+    fn offline_parse_allows_lower_kagemusha_budget() {
+        let lower = defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES / 2;
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            kagemusha_max_decoded_bytes: lower,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.kagemusha_max_decoded_bytes, lower);
     }
 }
 

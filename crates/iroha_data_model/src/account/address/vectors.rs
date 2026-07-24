@@ -578,11 +578,23 @@ impl ErrorHarness {
     }
 
     fn i105_checksum_mismatch(&self) -> ErrorVector {
-        let mut chars = self.i105.chars().collect::<Vec<_>>();
-        let last = chars.len().saturating_sub(1);
-        chars[last] = if chars[last] == '1' { '2' } else { '1' };
-        let tampered = chars.into_iter().collect::<String>();
-        let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch must fail");
+        let canonical = self
+            .address
+            .canonical_bytes()
+            .expect("error-vector address must have canonical bytes");
+        let payload = super::encode_base_n(&canonical, super::I105_BASE)
+            .expect("canonical bytes must encode as I105 digits");
+        let mut checksum = super::i105_checksum_digits(&canonical);
+        checksum[0] ^= 1;
+        let mut tampered = super::i105_sentinel_for_discriminant(self.network_prefix);
+        for digit in payload.into_iter().chain(checksum) {
+            tampered.push_str(
+                super::i105_digit_symbol(digit)
+                    .expect("payload and checksum digits are in the I105 alphabet"),
+            );
+        }
+        let err = AccountAddress::from_i105_for_discriminant(&tampered, Some(self.network_prefix))
+            .expect_err("checksum mismatch must fail");
 
         ErrorVector {
             label: "i105_checksum_mismatch",
@@ -597,7 +609,8 @@ impl ErrorHarness {
 
     fn i105_too_short(&self) -> ErrorVector {
         let too_short = super::i105_sentinel_for_discriminant(self.network_prefix);
-        let err = AccountAddress::from_i105(&too_short).expect_err("too short i105 form must fail");
+        let err = AccountAddress::from_i105_for_discriminant(&too_short, Some(self.network_prefix))
+            .expect_err("too short i105 form must fail");
 
         ErrorVector {
             label: "i105_too_short",

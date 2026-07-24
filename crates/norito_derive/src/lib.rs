@@ -1704,31 +1704,10 @@ fn derive_struct_deserialize(
                     }
                 } else if let Some(len_expr) = u8_array_len(ty) {
                     let decode_expr = quote! {
-                        (|| -> ::core::result::Result<_, norito::core::Error> {
-                            let (base, total) = norito::core::payload_ctx().ok_or(norito::core::Error::MissingPayloadContext)?;
-                            let start = (ptr as usize).saturating_sub(base);
-                            let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                            if start + offset >= payload.len() {
-                                return Err(norito::core::Error::LengthMismatch);
-                            }
-                            let (field_len, hdr) =
-                                norito::core::read_len_dyn_slice(&payload[start + offset..])?;
-                            let expected_len: usize = #len_expr;
-                            if field_len != expected_len {
-                                return Err(norito::core::Error::LengthMismatch);
-                            }
-                            let data_start = start + offset + hdr;
-                            let data_end = data_start
-                                .checked_add(field_len)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            if data_end > payload.len() {
-                                return Err(norito::core::Error::LengthMismatch);
-                            }
-                            let mut value = [0u8; #len_expr];
-                            value.copy_from_slice(&payload[data_start..data_end]);
-                            offset += hdr + field_len;
-                            Ok(value)
-                        })()
+                        norito::core::decode_context_framed_byte_array::<{ #len_expr }>(
+                            ptr,
+                            &mut offset,
+                        )
                     };
                     if let Some(fallback) = fallback_expr {
                         quote! {
@@ -1754,37 +1733,10 @@ fn derive_struct_deserialize(
                     add_bound(&mut r#gen, ty, quote!(for<'__d> norito::core::NoritoDeserialize<'__d>));
                     add_bound(&mut r#gen, ty, quote!(norito::core::NoritoSerialize));
                     let decode_expr = quote! {
-                        (|| -> ::core::result::Result<#ty, norito::core::Error> {
-                            let (base, total) = norito::core::payload_ctx().ok_or(norito::core::Error::MissingPayloadContext)?;
-                            let start = (ptr as usize).saturating_sub(base);
-                            let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                            if start + offset >= payload.len() {
-                                return Err(norito::core::Error::LengthMismatch);
-                            }
-                            let (field_len, hdr) =
-                                norito::core::read_len_dyn_slice(&payload[start + offset..])?;
-                            let data_start = offset
-                                .checked_add(hdr)
-                                .and_then(|s| start.checked_add(s))
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            let data_end = data_start
-                                .checked_add(field_len)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            let field_data = payload
-                                .get(data_start..data_end)
-                                .ok_or(norito::core::Error::LengthMismatch)?;
-                            let (value, consumed) =
-                                norito::core::decode_field_canonical::<#ty>(field_data)?;
-                            #[cfg(feature = "compact-len")]
-                            {
-                                offset += hdr + consumed;
-                            }
-                            #[cfg(not(feature = "compact-len"))]
-                            {
-                                offset += hdr + consumed;
-                            }
-                            Ok(value)
-                        })()
+                        norito::core::decode_context_field_canonical::<#ty>(
+                            ptr,
+                            &mut offset,
+                        )
                     };
                     if let Some(fallback) = fallback_expr {
                         quote! {
@@ -1836,35 +1788,10 @@ fn derive_struct_deserialize(
 
                     if let Some(len_expr) = u8_array_len(ty) {
                         let decode_expr = quote! {
-                            (|| -> ::core::result::Result<_, norito::core::Error> {
-                                let (base, total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                    ctx
-                                } else {
-                                    return Err(norito::core::Error::MissingPayloadContext);
-                                };
-                                let start = (ptr as usize).saturating_sub(base);
-                                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                                if start + offset >= payload.len() {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                                let (field_len, hdr) =
-                                    norito::core::read_len_dyn_slice(&payload[start + offset..])?;
-                                let expected_len: usize = #len_expr;
-                                if field_len != expected_len {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                                let data_start = start + offset + hdr;
-                                let data_end = data_start
-                                    .checked_add(field_len)
-                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                if data_end > payload.len() {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                                let mut value = [0u8; #len_expr];
-                                value.copy_from_slice(&payload[data_start..data_end]);
-                                offset += hdr + field_len;
-                                Ok(value)
-                            })()
+                            norito::core::decode_context_framed_byte_array::<{ #len_expr }>(
+                                ptr,
+                                &mut offset,
+                            )
                         };
                         if let Some(fallback) = fallback_expr {
                             quote! {
@@ -1886,41 +1813,10 @@ fn derive_struct_deserialize(
                         add_bound(&mut r#gen, ty, quote!(for<'__d> norito::core::NoritoDeserialize<'__d>));
                         add_bound(&mut r#gen, ty, quote!(norito::core::NoritoSerialize));
                         let decode_expr = quote! {
-                            (|| -> ::core::result::Result<#ty, norito::core::Error> {
-                                let (base, total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                    ctx
-                                } else {
-                                    return Err(norito::core::Error::MissingPayloadContext);
-                                };
-                                let start = (ptr as usize).saturating_sub(base);
-                                let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-                                if start + offset >= payload.len() {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                                let (field_len, hdr) =
-                                    norito::core::read_len_dyn_slice(&payload[start + offset..])?;
-                                let data_start = offset
-                                    .checked_add(hdr)
-                                    .and_then(|s| start.checked_add(s))
-                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                let data_end = data_start
-                                    .checked_add(field_len)
-                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                let field_data = payload
-                                    .get(data_start..data_end)
-                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                let (value, consumed) =
-                                    norito::core::decode_field_canonical::<#ty>(field_data)?;
-                                #[cfg(feature = "compact-len")]
-                                {
-                                    offset += hdr + consumed;
-                                }
-                                #[cfg(not(feature = "compact-len"))]
-                                {
-                                    offset += hdr + consumed;
-                                }
-                                Ok(value)
-                            })()
+                            norito::core::decode_context_field_canonical::<#ty>(
+                                ptr,
+                                &mut offset,
+                            )
                         };
                         if let Some(fallback) = fallback_expr {
                             quote! {
@@ -2009,7 +1905,7 @@ fn derive_struct_deserialize(
                         } else {
                             quote! {
                                 #name: {
-                                    let __start = __offs[__i];
+                                    let mut __start = __offs[__i];
                                     let __end = __offs[__i + 1];
                                     __i += 1;
                                     let __len = __end - __start;
@@ -2025,12 +1921,11 @@ fn derive_struct_deserialize(
                                             core::any::type_name::<#ty>(),
                                         );
                                     }
-                                    unsafe {
-                                        let field_data = std::slice::from_raw_parts(data_base.add(__start), __len);
-                                        let (v, consumed) = norito::core::decode_field_canonical::<#ty>(field_data)?;
-                                        debug_assert_eq!(consumed, __len);
-                                        v
-                                    }
+                                    norito::core::decode_context_field_fixed_canonical::<#ty>(
+                                        data_base,
+                                        &mut __start,
+                                        __len,
+                                    )?
                                 }
                             }
                         }
@@ -2130,29 +2025,10 @@ fn derive_struct_deserialize(
                             }
                         } else {
                             quote! {
-                                let ptr2 = unsafe { data_base.add(__data_off) };
-                                let remaining = total_rem
-                                    .checked_sub(__data_off)
-                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                let slice = unsafe { std::slice::from_raw_parts(ptr2, remaining) };
-                                #[cfg(debug_assertions)]
-                                if norito::debug_trace_enabled() {
-                                    let preview_len = core::cmp::min(slice.len(), 16);
-                                    eprintln!(
-                                        "packed decode {}::{} compat slice_len={} preview={:?}",
-                                        stringify!(#ident),
-                                        stringify!(#name),
-                                        slice.len(),
-                                        &slice[..preview_len]
-                                    );
-                                }
-                                match norito::core::decode_field_prefix::<#ty>(slice) {
-                                    Ok((compat, used)) => {
-                                        __data_off += used;
-                                        compat
-                                    }
-                                    Err(err) => return Err(err),
-                                }
+                                norito::core::decode_context_field_prefix::<#ty>(
+                                    data_base,
+                                    &mut __data_off,
+                                )?
                             }
                         };
                         let compat_decode_named_len_mismatch = compat_decode_named.clone();
@@ -2161,53 +2037,30 @@ fn derive_struct_deserialize(
                         } else if let Some(len_expr) = u8_array_len(ty) {
                             quote!{
                                 #name: {
-                                    let mut __arr: [u8; #len_expr] = [0; #len_expr];
-                                    let __slice = unsafe { ::std::slice::from_raw_parts(data_base.add(__data_off), #len_expr) };
-                                    __arr.copy_from_slice(__slice);
-                                    __data_off += #len_expr;
-                                    __arr
+                                    norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                        data_base,
+                                        &mut __data_off,
+                                    )?
                                 }
                             }
                         } else if is_self_delimiting(ty) {
                             quote!{
                                 #name: {
-                                    // Self-delimiting fields determine their own boundary while decoding.
-                                    // This matters for packed sequences, maps, and `Option(Some)`, whose
-                                    // leading bytes are not a total-payload length header.
-                                    let data_ptr = unsafe { data_base.add(__data_off) };
-                                    let remaining = total_rem
-                                        .checked_sub(__data_off)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    let field_data = unsafe { std::slice::from_raw_parts(data_ptr, remaining) };
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        let preview_len = core::cmp::min(field_data.len(), 16);
-                                        let preview = &field_data[..preview_len];
-                                        eprintln!(
-                                            "packed decode {}::{} self_delim slice_len={} preview={:?}",
-                                            stringify!(#ident),
-                                            stringify!(#name),
-                                            field_data.len(),
-                                            preview
-                                        );
-                                    }
-                                    let (value, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
-                                    __data_off += used;
-                                    value
+                                    norito::core::decode_context_field_prefix::<#ty>(
+                                        data_base,
+                                        &mut __data_off,
+                                    )?
                                 }
                             }
                         } else if let Some(fixed_len) = fixed_size {
                             let fixed_len_lit = fixed_len;
                             quote!{
                                 #name: {
-                                    // Copy exactly the fixed-size payload and deserialize
-                                    let __fsz: usize = #fixed_len_lit;
-                                    let ptr2 = unsafe { data_base.add(__data_off) };
-                                    __data_off += __fsz;
-                                    let field_data = unsafe { std::slice::from_raw_parts(ptr2, __fsz) };
-                                    let (v, consumed) = norito::core::decode_field_canonical::<#ty>(field_data)?;
-                                    debug_assert_eq!(consumed, __fsz);
-                                    v
+                                    norito::core::decode_context_field_fixed_canonical::<#ty>(
+                                        data_base,
+                                        &mut __data_off,
+                                        #fixed_len_lit,
+                                    )?
                                 }
                             }
                         } else if is_signature_like(ty) {
@@ -2223,60 +2076,11 @@ fn derive_struct_deserialize(
                                             eprintln!("packed signature decode len={}", __len);
                                         }
                                         __sz_i += 1;
-                                        let ptr2 = unsafe { data_base.add(__data_off) };
-                                        __data_off += __len;
-                                        unsafe {
-                                            let layout = std::alloc::Layout::from_size_align(__len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                            let tmp_ptr = std::alloc::alloc(layout);
-                                            if tmp_ptr.is_null() {
-                                                std::alloc::handle_alloc_error(layout);
-                                            }
-                                            core::ptr::copy(ptr2, tmp_ptr, __len);
-                                            let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
-                                            let _payload_guard = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let v_res: ::core::result::Result<#ty, norito::core::Error> = {
-                                                // Try direct archived decode first
-                                                match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
-                                                    Ok(val) => Ok(val),
-                                                    Err(err) => {
-                                                        if err.is_decode_resource_limit() {
-                                                            Err(err)
-                                                        } else {
-                                                        #[cfg(feature = "compact-len")]
-                                                        {
-                                                            let fallback = Err(err);
-                                                            let compat = (|| {
-                                                                if let Ok((inner_len, inner_hdr)) = norito::core::read_len_from_slice(tmp_slice) {
-                                                                    if inner_hdr + inner_len == tmp_slice.len() {
-                                                                        // Strip outer varint and decode inner archived bytes.
-                                                                        let layout2 = std::alloc::Layout::from_size_align(inner_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                                        let tmp2 = std::alloc::alloc(layout2);
-                                                                        if tmp2.is_null() {
-                                                                            std::alloc::handle_alloc_error(layout2);
-                                                                        }
-                                                                        core::ptr::copy(tmp_slice.as_ptr().add(inner_hdr), tmp2, inner_len);
-                                                                        let inner_slice = std::slice::from_raw_parts(tmp2 as *const u8, inner_len);
-                                                                        let _g2 = norito::core::PayloadCtxGuard::enter(inner_slice);
-                                                                        let inner_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
-                                                                        std::alloc::dealloc(tmp2, layout2);
-                                                                        return Some(inner_res);
-                                                                    }
-                                                                }
-                                                                None
-                                                            })();
-                                                            compat.unwrap_or(fallback)
-                                                        }
-                                                        #[cfg(not(feature = "compact-len"))]
-                                                        {
-                                                            Err(err)
-                                                        }
-                                                        }
-                                                    }
-                                                }
-                                            };
-                                            std::alloc::dealloc(tmp_ptr, layout);
-                                            v_res?
-                                        }
+                                        norito::core::decode_context_field_archived_compat::<#ty>(
+                                            data_base,
+                                            &mut __data_off,
+                                            __len,
+                                        )?
                                     } else {
                                         #compat_decode_named_len_mismatch
                                     }
@@ -2292,56 +2096,11 @@ fn derive_struct_deserialize(
                                             .get(__sz_i)
                                             .ok_or(norito::core::Error::LengthMismatch)?;
                                         __sz_i += 1;
-                                        let ptr2 = unsafe { data_base.add(__data_off) };
-                                        __data_off += __len;
-                                        unsafe {
-                                            let layout = std::alloc::Layout::from_size_align(__len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                            let tmp_ptr = std::alloc::alloc(layout);
-                                            if tmp_ptr.is_null() {
-                                                std::alloc::handle_alloc_error(layout);
-                                            }
-                                            core::ptr::copy(ptr2, tmp_ptr, __len);
-                                            let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
-                                            let _payload_guard = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let v_res: ::core::result::Result<#ty, norito::core::Error> = match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
-                                                Ok(val) => Ok(val),
-                                                Err(err) => {
-                                                    if err.is_decode_resource_limit() {
-                                                        Err(err)
-                                                    } else {
-                                                    #[cfg(feature = "compact-len")]
-                                                    {
-                                                        let fallback = Err(err);
-                                                        let compat = (|| {
-                                                            if let Ok((inner_len, inner_hdr)) = norito::core::read_len_from_slice(tmp_slice) {
-                                                                if inner_hdr + inner_len == tmp_slice.len() {
-                                                                    let layout2 = std::alloc::Layout::from_size_align(inner_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                                    let tmp2 = std::alloc::alloc(layout2);
-                                                                    if tmp2.is_null() {
-                                                                        std::alloc::handle_alloc_error(layout2);
-                                                                    }
-                                                                    core::ptr::copy(tmp_slice.as_ptr().add(inner_hdr), tmp2, inner_len);
-                                                                    let inner_slice = std::slice::from_raw_parts(tmp2 as *const u8, inner_len);
-                                                                    let _g2 = norito::core::PayloadCtxGuard::enter(inner_slice);
-                                                                    let inner_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp2 as *const norito::core::Archived<#ty>));
-                                                                    std::alloc::dealloc(tmp2, layout2);
-                                                                    return Some(inner_res);
-                                                                }
-                                                            }
-                                                            None
-                                                        })();
-                                                        compat.unwrap_or(fallback)
-                                                    }
-                                                    #[cfg(not(feature = "compact-len"))]
-                                                    {
-                                                        Err(err)
-                                                    }
-                                                    }
-                                                }
-                                            };
-                                            std::alloc::dealloc(tmp_ptr, layout);
-                                            v_res?
-                                        }
+                                        norito::core::decode_context_field_archived_compat::<#ty>(
+                                            data_base,
+                                            &mut __data_off,
+                                            __len,
+                                        )?
                                     } else { #compat_decode_named }
                                 }
                             }
@@ -2572,32 +2331,7 @@ fn derive_struct_deserialize(
                         } else {
                             let mut offset = 0usize;
                             let __value = Self { #(#deserialize_fields),* };
-                            if let Some((__base, __total)) = norito::core::payload_ctx() {
-                                if __total != 0 {
-                                    let __ptr_us = ptr as usize;
-                                    if __ptr_us < __base {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    let __start = __ptr_us - __base;
-                                    if __start > __total {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    let __payload = unsafe {
-                                        std::slice::from_raw_parts(__base as *const u8, __total)
-                                    };
-                                    let __remaining = __payload
-                                        .get(__start..)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    if offset != __remaining.len() {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    norito::core::note_payload_access(__remaining, offset);
-                                } else if offset != 0 {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                            } else {
-                                return Err(norito::core::Error::MissingPayloadContext);
-                            }
+                            norito::core::finish_context_fields(ptr, offset)?;
                             __value
                         };
                         Ok(__value)
@@ -2640,23 +2374,15 @@ fn derive_struct_deserialize(
                         } else {
                             quote! {
                                 let #idx_var = {
-                                    let __start = __offs[__i];
+                                    let mut __start = __offs[__i];
                                     let __end = __offs[__i + 1];
                                     __i += 1;
                                     let __len = __end - __start;
-                                    unsafe {
-                                        let layout = std::alloc::Layout::from_size_align(__len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                        let tmp_ptr = std::alloc::alloc(layout);
-                                        if tmp_ptr.is_null() {
-                                            std::alloc::handle_alloc_error(layout);
-                                        }
-                                        core::ptr::copy(data_base.add(__start), tmp_ptr, __len);
-                                        let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
-                                        let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
-                                        std::alloc::dealloc(tmp_ptr, layout);
-                                        v_res?
-                                    }
+                                    norito::core::decode_context_field_fixed_archived::<#ty>(
+                                        data_base,
+                                        &mut __start,
+                                        __len,
+                                    )?
                                 };
                             }
                         }
@@ -2729,11 +2455,10 @@ fn derive_struct_deserialize(
                         } else if let Some(len_expr) = u8_array_len(ty) {
                             quote! {
                                 let #idx_var = {
-                                    let mut __arr: [u8; #len_expr] = [0; #len_expr];
-                                    let __slice = unsafe { ::std::slice::from_raw_parts(data_base.add(__data_off), #len_expr) };
-                                    __arr.copy_from_slice(__slice);
-                                    __data_off += #len_expr;
-                                    __arr
+                                    norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                        data_base,
+                                        &mut __data_off,
+                                    )?
                                 };
                             }
                         } else if is_self_delimiting(ty) {
@@ -2755,22 +2480,11 @@ fn derive_struct_deserialize(
                             let fixed_len_lit = fixed_len;
                             quote! {
                                 let #idx_var = {
-                                    let __fsz: usize = #fixed_len_lit;
-                                    let ptr2 = unsafe { data_base.add(__data_off) };
-                                    __data_off += __fsz;
-                                    unsafe {
-                                        let layout = std::alloc::Layout::from_size_align(__fsz.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                        let tmp_ptr = std::alloc::alloc(layout);
-                                        if tmp_ptr.is_null() {
-                                            std::alloc::handle_alloc_error(layout);
-                                        }
-                                        core::ptr::copy(ptr2, tmp_ptr, __fsz);
-                                        let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz);
-                                        let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
-                                        std::alloc::dealloc(tmp_ptr, layout);
-                                        v_res?
-                                    }
+                                    norito::core::decode_context_field_fixed_archived::<#ty>(
+                                        data_base,
+                                        &mut __data_off,
+                                        #fixed_len_lit,
+                                    )?
                                 };
                             }
                         } else {
@@ -2783,29 +2497,16 @@ fn derive_struct_deserialize(
                                             .get(__sz_i)
                                             .ok_or(norito::core::Error::LengthMismatch)?;
                                         __sz_i += 1;
-                                        let ptr2 = unsafe { data_base.add(__data_off) };
-                                        __data_off += __len;
-                                        unsafe {
-                                            let layout = std::alloc::Layout::from_size_align(__len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                            let tmp_ptr = std::alloc::alloc(layout);
-                                            if tmp_ptr.is_null() {
-                                                std::alloc::handle_alloc_error(layout);
-                                            }
-                                            core::ptr::copy(ptr2, tmp_ptr, __len);
-                                            let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, __len);
-                                            let (v, _used) = norito::core::decode_field_canonical::<#ty>(tmp_slice)?;
-                                            std::alloc::dealloc(tmp_ptr, layout);
-                                            v
-                                        }
+                                        norito::core::decode_context_field_fixed_canonical::<#ty>(
+                                            data_base,
+                                            &mut __data_off,
+                                            __len,
+                                        )?
                                     } else {
-                                        let ptr2 = unsafe { data_base.add(__data_off) };
-                                        let remaining = total_rem
-                                            .checked_sub(__data_off)
-                                            .ok_or(norito::core::Error::LengthMismatch)?;
-                                        let slice = unsafe { std::slice::from_raw_parts(ptr2, remaining) };
-                                        let (value, used) = norito::core::decode_field_prefix::<#ty>(slice)?;
-                                        __data_off += used;
-                                        value
+                                        norito::core::decode_context_field_prefix::<#ty>(
+                                            data_base,
+                                            &mut __data_off,
+                                        )?
                                     }
                                 };
                             }
@@ -2989,32 +2690,7 @@ fn derive_struct_deserialize(
                             let mut offset = 0usize;
                             #(#deserialize_fields)*
                             let __value = Self( #(#vars),* );
-                            if let Some((__base, __total)) = norito::core::payload_ctx() {
-                                if __total != 0 {
-                                    let __ptr_us = ptr as usize;
-                                    if __ptr_us < __base {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    let __start = __ptr_us - __base;
-                                    if __start > __total {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    let __payload = unsafe {
-                                        std::slice::from_raw_parts(__base as *const u8, __total)
-                                    };
-                                    let __remaining = __payload
-                                        .get(__start..)
-                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                    if offset != __remaining.len() {
-                                        return Err(norito::core::Error::LengthMismatch);
-                                    }
-                                    norito::core::note_payload_access(__remaining, offset);
-                                } else if offset != 0 {
-                                    return Err(norito::core::Error::LengthMismatch);
-                                }
-                            } else {
-                                return Err(norito::core::Error::MissingPayloadContext);
-                            }
+                            norito::core::finish_context_fields(ptr, offset)?;
                             __value
                         };
                         Ok(__value)
@@ -3431,11 +3107,7 @@ fn derive_enum_deserialize(
             Fields::Unit => arms.push(quote! {
                 #disc => {
                     let offset = 4usize;
-                    let __payload = norito::core::payload_slice_from_ptr(ptr)?;
-                    if offset != __payload.len() {
-                        return Err(norito::core::Error::LengthMismatch);
-                    }
-                    norito::core::note_payload_access(__payload, offset);
+                    norito::core::finish_context_fields(ptr, offset)?;
                     Self::#v_ident
                 }
             }),
@@ -3473,24 +3145,15 @@ fn derive_enum_deserialize(
                                     quote! {
                                         let #idx_var = {
                                             if norito::core::use_packed_struct() {
-                                                let __slice = unsafe { std::slice::from_raw_parts(ptr.add(offset), #len_expr as usize) };
-                                                let mut __arr: [u8; #len_expr] = [0; #len_expr];
-                                                __arr.copy_from_slice(__slice);
-                                                offset += #len_expr as usize;
-                                                __arr
+                                                norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             } else {
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                let field_data = unsafe { std::slice::from_raw_parts(data_ptr, field_len) };
-                                                let (value, consumed) = norito::core::decode_field_canonical::<#ty>(field_data)?;
-                                                #[cfg(feature = "compact-len")]
-                                                { offset += hdr + consumed; }
-                                                #[cfg(not(feature = "compact-len"))]
-                                                { offset += hdr + consumed; }
-                                                value
+                                                norito::core::decode_context_field_canonical::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             }
                                         };
                                     }
@@ -3500,39 +3163,15 @@ fn derive_enum_deserialize(
                                         quote! {
                                             let #idx_var = {
                                                 if norito::core::use_packed_struct() {
-                                                    // Self-delimiting fields in packed enums do not carry an outer
-                                                    // size header. Decode from the remaining payload and advance by
-                                                    // the exact number of bytes the field consumed.
-                                                    let __payload = norito::core::payload_slice_from_ptr(ptr)?;
-                                                    let field_data = __payload
-                                                        .get(offset..)
-                                                        .ok_or(norito::core::Error::LengthMismatch)?;
-                                                    let (val, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
-                                                    offset += used;
-                                                    val
+                                                    norito::core::decode_context_field_prefix::<#ty>(
+                                                        ptr,
+                                                        &mut offset,
+                                                    )?
                                                 } else {
-                                                    // AoS: length-prefixed outer framing (pointer-based)
-                                                    let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                        Ok(res) => res,
-                                                        Err(err) => return Err(err),
-                                                    };
-                                                    let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                    let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                    let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                    if tmp_ptr.is_null() {
-                                                        std::alloc::handle_alloc_error(layout);
-                                                    }
-                                                    unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                    let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                    unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                    let value = value_res?;
-                                                    #[cfg(feature = "compact-len")]
-                                                    { offset += hdr + field_len; }
-                                                    #[cfg(not(feature = "compact-len"))]
-                                                    { offset += hdr + field_len; }
-                                                    value
+                                                    norito::core::decode_context_field_archived::<#ty>(
+                                                        ptr,
+                                                        &mut offset,
+                                                    )?
                                                 }
                                             };
                                         }
@@ -3542,44 +3181,16 @@ fn derive_enum_deserialize(
                                     quote! {
                                             let #idx_var = {
                                                 if norito::core::use_packed_struct() {
-                                                    let __fsz: usize = #fixed_len_lit;
-                                                    let data = unsafe { std::slice::from_raw_parts(ptr.add(offset), __fsz) };
-                                                    let layout = std::alloc::Layout::from_size_align(__fsz.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                    let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                    if tmp_ptr.is_null() {
-                                                        std::alloc::handle_alloc_error(layout);
-                                                    }
-                                                    unsafe { std::ptr::copy(data.as_ptr(), tmp_ptr, __fsz); }
-                                                    let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz) };
-                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                    unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                    let value = value_res?;
-                                                    offset += __fsz;
-                                                    value
+                                                    norito::core::decode_context_field_fixed_archived::<#ty>(
+                                                        ptr,
+                                                        &mut offset,
+                                                        #fixed_len_lit,
+                                                    )?
                                                 } else {
-                                                    // AoS outer length + payload (pointer-based)
-                                                    let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                        Ok(res) => res,
-                                                        Err(err) => return Err(err),
-                                                    };
-                                                    let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                    let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                    let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                    if tmp_ptr.is_null() {
-                                                        std::alloc::handle_alloc_error(layout);
-                                                    }
-                                                    unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                    let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                    unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                    let value = value_res?;
-                                                    #[cfg(feature = "compact-len")]
-                                                    { offset += hdr + field_len; }
-                                                    #[cfg(not(feature = "compact-len"))]
-                                                    { offset += hdr + field_len; }
-                                                    value
+                                                    norito::core::decode_context_field_archived::<#ty>(
+                                                        ptr,
+                                                        &mut offset,
+                                                    )?
                                                 }
                                             };
                                         }
@@ -3590,196 +3201,35 @@ fn derive_enum_deserialize(
                                 if is_opt_res {
                                     quote! {
                                         let #idx_var = {
-                                            // Unnamed variant Option/Result: read outer size, then decode bounded window
-                                            let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                Ok(res) => res,
-                                                Err(err) => return Err(err),
-                                            };
-                                            let raw = unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) };
-                                            let (val, used) = norito::core::decode_field_canonical::<#ty>(raw)?;
-                                            debug_assert_eq!(used, field_len);
-                                            offset += hdr + field_len;
-                                            val
+                                            norito::core::decode_context_field_canonical::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )?
                                         };
                                     }
                                 } else if is_vec_type(ty) {
                                     quote! {
                                         let #idx_var = {
                                             if norito::core::use_packed_struct() {
-                                                // Unnamed variant Vec: read outer size, then decode bounded window
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                match norito::core::decode_field_canonical::<#ty>(unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) }) {
-                                                    Ok((val, used)) => { debug_assert_eq!(used, field_len); offset += hdr + used; val }
-                                                    Err(err) => {
-                                                        if err.is_decode_resource_limit() {
-                                                            return Err(err);
-                                                        }
-                                                        // Archived fallback
-                                                        let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                        let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                        let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                        if tmp_ptr.is_null() {
-                                                            std::alloc::handle_alloc_error(layout);
-                                                        }
-                                                        unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                        let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                        let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                        let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                        unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                        let val = val_res?;
-                                                        offset += hdr + field_len;
-                                                        val
-                                                    }
-                                                }
+                                                norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             } else {
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let val = val_res?;
-                                                #[cfg(feature = "compact-len")]
-                                                { offset += hdr + field_len; }
-                                                #[cfg(not(feature = "compact-len"))]
-                                                { offset += hdr + field_len; }
-                                                val
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             }
                                         };
                                     }
                                 } else {
                                     quote! {
                                         let #idx_var = {
-                                            let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                Ok(res) => res,
-                                                Err(err) => return Err(err),
-                                            };
-                                            #[cfg(debug_assertions)]
-                                            if norito::debug_trace_enabled() {
-                                                eprintln!(
-                                                    "decode enum {}::{} field{} size header={} hdr={}",
-                                                    stringify!(#ident),
-                                                    stringify!(#v_ident),
-                                                    #i,
-                                                    field_len,
-                                                    hdr
-                                                );
-                                            }
-                                            let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                            let mut __used = field_len;
-                                            let mut __decoded: ::core::option::Option<#ty> = ::core::option::Option::None;
-                                            {
-                                                let (ctx_base, ctx_total) = if let Some(ctx) = norito::core::payload_ctx() {
-                                                    ctx
-                                                } else {
-                                                    return Err(norito::core::Error::MissingPayloadContext);
-                                                };
-                                                let struct_start = (ptr as usize).saturating_sub(ctx_base);
-                                                let field_start = struct_start
-                                                    .checked_add(offset)
-                                                    .and_then(|v| v.checked_add(hdr))
-                                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                                if field_start <= ctx_total {
-                                                    let available = ctx_total - field_start;
-                                                    #[cfg(debug_assertions)]
-                                                    if norito::debug_trace_enabled() {
-                                                        eprintln!(
-                                                            "decode enum {}::{} field{} canonical attempt header={} ctx_total={} available={}",
-                                                            stringify!(#ident),
-                                                            stringify!(#v_ident),
-                                                            #i,
-                                                            field_len,
-                                                            ctx_total,
-                                                            available
-                                                        );
-                                                    }
-                                                    let full_slice = unsafe {
-                                                        std::slice::from_raw_parts(data_ptr, available)
-                                                    };
-                                                    match norito::core::decode_field_canonical::<#ty>(full_slice) {
-                                                        Ok((val, used)) => {
-                                                            __used = used;
-                                                            __decoded = ::core::option::Option::Some(val);
-                                                            #[cfg(debug_assertions)]
-                                                            if norito::debug_trace_enabled() {
-                                                                eprintln!(
-                                                                    "decode enum {}::{} field{} canonical used={}",
-                                                                    stringify!(#ident),
-                                                                    stringify!(#v_ident),
-                                                                    #i,
-                                                                    used
-                                                                );
-                                                            }
-                                                        }
-                                                        Err(err) => {
-                                                            if err.is_decode_resource_limit() {
-                                                                return Err(err);
-                                                            }
-                                                            #[cfg(debug_assertions)]
-                                                            if norito::debug_trace_enabled() {
-                                                                eprintln!(
-                                                                    "decode enum {}::{} field{} canonical failed: {err:?}",
-                                                                    stringify!(#ident),
-                                                                    stringify!(#v_ident),
-                                                                    #i
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            let (val, used_total) = if let ::core::option::Option::Some(value) = __decoded {
-                                                #[cfg(debug_assertions)]
-                                                if norito::debug_trace_enabled() && __used != field_len {
-                                                    eprintln!(
-                                                        "decode enum {}::{} field{} canonical len mismatch header={} used={}",
-                                                        stringify!(#ident),
-                                                        stringify!(#v_ident),
-                                                        #i,
-                                                        field_len,
-                                                        __used
-                                                    );
-                                                }
-                                                (value, __used)
-                                            } else {
-                                                let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                #[cfg(debug_assertions)]
-                                                if norito::debug_trace_enabled() {
-                                                    let preview_len = core::cmp::min(tmp_slice.len(), 16);
-                                                    eprintln!(
-                                                        "decode enum {}::{} field{} payload preview {:?}",
-                                                        stringify!(#ident),
-                                                        stringify!(#v_ident),
-                                                        #i,
-                                                        &tmp_slice[..preview_len]
-                                                    );
-                                                }
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                (value, field_len)
-                                            };
-                                            offset += hdr + used_total;
-                                            val
+                                            norito::core::decode_context_field_flexible::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )?
                                         };
                                     }
                                 }
@@ -3795,11 +3245,7 @@ fn derive_enum_deserialize(
                         let mut offset = 4usize;
                         #(#deser_stmts)*
                         let __value = Self::#v_ident(#(#vars),*);
-                        let __payload = norito::core::payload_slice_from_ptr(ptr)?;
-                        if offset != __payload.len() {
-                            return Err(norito::core::Error::LengthMismatch);
-                        }
-                        norito::core::note_payload_access(__payload, offset);
+                        norito::core::finish_context_fields(ptr, offset)?;
                         __value
                     }
                 });
@@ -3837,33 +3283,15 @@ fn derive_enum_deserialize(
                                     quote! {
                                         let #name = {
                                             if norito::core::use_packed_struct() {
-                                                let __slice = unsafe { std::slice::from_raw_parts(ptr.add(offset), #len_expr as usize) };
-                                                let mut __arr: [u8; #len_expr] = [0; #len_expr];
-                                                __arr.copy_from_slice(__slice);
-                                                offset += #len_expr as usize;
-                                                __arr
+                                                norito::core::decode_context_byte_array::<{ #len_expr }>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             } else {
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                #[cfg(feature = "compact-len")]
-                                                { offset += hdr + field_len; }
-                                                #[cfg(not(feature = "compact-len"))]
-                                                { offset += hdr + field_len; }
-                                                value
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             }
                                         };
                                     }
@@ -3871,39 +3299,15 @@ fn derive_enum_deserialize(
                                     quote! {
                                         let #name = {
                                             if norito::core::use_packed_struct() {
-                                                // Packed enum fields that are self-delimiting own their boundary.
-                                                // There is no outer size header here, so decode from the remaining
-                                                // payload and use the canonical consumed byte count.
-                                                let __payload = norito::core::payload_slice_from_ptr(ptr)?;
-                                                let field_data = __payload
-                                                    .get(offset..)
-                                                    .ok_or(norito::core::Error::LengthMismatch)?;
-                                                let (value, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
-                                                offset += used;
-                                                value
+                                                norito::core::decode_context_field_prefix::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             } else {
-                                                // AoS: outer field length wraps the self-delimiting payload.
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                #[cfg(feature = "compact-len")]
-                                                { offset += hdr + field_len; }
-                                                #[cfg(not(feature = "compact-len"))]
-                                                { offset += hdr + field_len; }
-                                                value
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             }
                                         };
                                     }
@@ -3912,43 +3316,16 @@ fn derive_enum_deserialize(
                                     quote! {
                                         let #name = {
                                             if norito::core::use_packed_struct() {
-                                                let __fsz: usize = #fixed_len_lit;
-                                                let data = unsafe { std::slice::from_raw_parts(ptr.add(offset), __fsz) };
-                                                let layout = std::alloc::Layout::from_size_align(__fsz.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data.as_ptr(), tmp_ptr, __fsz); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, __fsz) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                offset += __fsz;
-                                                value
+                                                norito::core::decode_context_field_fixed_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                    #fixed_len_lit,
+                                                )?
                                             } else {
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                #[cfg(feature = "compact-len")]
-                                                { offset += hdr + field_len; }
-                                                #[cfg(not(feature = "compact-len"))]
-                                                { offset += hdr + field_len; }
-                                                value
+                                                norito::core::decode_context_field_archived::<#ty>(
+                                                    ptr,
+                                                    &mut offset,
+                                                )?
                                             }
                                         };
                                     }
@@ -3958,77 +3335,28 @@ fn derive_enum_deserialize(
                                 if is_opt_res {
                                     quote! {
                                         let #name = {
-                                            // Option/Result fields in enum named-variants carry an outer [len] header.
-                                            let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                Ok(res) => res,
-                                                Err(err) => return Err(err),
-                                            };
-                                            let sub = unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) };
-                                            let (value, used) = norito::core::decode_field_canonical::<#ty>(sub)?;
-                                            debug_assert_eq!(used, field_len);
-                                            offset += hdr + field_len;
-                                            value
+                                            norito::core::decode_context_field_canonical::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )?
                                         };
                                     }
                                 } else if is_vec_type(ty) {
                                     quote! {
                                         let #name = {
-                                            // Vec in enum named-variant: outer size present; use pointer-bounded window
-                                            let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                Ok(res) => res,
-                                                Err(err) => return Err(err),
-                                            };
-                                            match norito::core::decode_field_canonical::<#ty>(unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) }) {
-                                                Ok((value, used)) => { debug_assert_eq!(used, field_len); offset += hdr + used; value }
-                                                Err(err) => {
-                                                    if err.is_decode_resource_limit() {
-                                                        return Err(err);
-                                                    }
-                                                    // Archived fallback
-                                                    let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                                    let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                    let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                    if tmp_ptr.is_null() {
-                                                        std::alloc::handle_alloc_error(layout);
-                                                    }
-                                                    unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                                    let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                    unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                    let value = value_res?;
-                                                    offset += hdr + field_len;
-                                                    value
-                                                }
-                                            }
+                                            norito::core::decode_context_field_canonical_or_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )?
                                         };
                                     }
                                 } else {
                                     quote! {
                                         let #name = {
-                                            // Enum named-variants do not use a hybrid FIELD_BITSET header.
-                                            // Read the outer field length at the current pointer and decode a bounded window.
-                                            let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                Ok(res) => res,
-                                                Err(err) => return Err(err),
-                                            };
-                                            let data_ptr = unsafe { ptr.add(offset + hdr) };
-                                            let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                            let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                            if tmp_ptr.is_null() {
-                                                std::alloc::handle_alloc_error(layout);
-                                            }
-                                            unsafe { std::ptr::copy(data_ptr, tmp_ptr, field_len); }
-                                            let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, field_len) };
-                                            let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                            let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                            unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                            let value = value_res?;
-                                            #[cfg(feature = "compact-len")]
-                                            { offset += hdr + field_len; }
-                                            #[cfg(not(feature = "compact-len"))]
-                                            { offset += hdr + field_len; }
-                                            value
+                                            norito::core::decode_context_field_archived::<#ty>(
+                                                ptr,
+                                                &mut offset,
+                                            )?
                                         };
                                     }
                                 }
@@ -4048,11 +3376,7 @@ fn derive_enum_deserialize(
                         #(#deser_stmts)*
 
                         let __value = Self::#v_ident { #(#names),* };
-                        let __payload = norito::core::payload_slice_from_ptr(ptr)?;
-                        if offset != __payload.len() {
-                            return Err(norito::core::Error::LengthMismatch);
-                        }
-                        norito::core::note_payload_access(__payload, offset);
+                        norito::core::finish_context_fields(ptr, offset)?;
                         __value
                     }
                 });
@@ -4139,6 +3463,93 @@ fn derive_enum_deserialize(
             }
         }
         #__decode_from_slice_impl
+    }
+}
+
+#[cfg(test)]
+mod deserialize_codegen_tests {
+    use super::*;
+
+    fn compact(tokens: TokenStream2) -> String {
+        tokens
+            .to_string()
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect()
+    }
+
+    #[test]
+    fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
+        let struct_input: DeriveInput = syn::parse_quote! {
+            struct Record {
+                opaque: Opaque,
+            }
+        };
+        let Data::Struct(struct_data) = &struct_input.data else {
+            unreachable!("test input is a struct");
+        };
+        let struct_expansion = compact(derive_struct_deserialize(
+            &struct_input.ident,
+            &struct_input.generics,
+            &struct_data.fields,
+            &struct_input.attrs,
+            None,
+        ));
+
+        let enum_input: DeriveInput = syn::parse_quote! {
+            enum Message {
+                Tuple(Opaque, u64),
+                Named { values: Vec<u32> },
+            }
+        };
+        let Data::Enum(enum_data) = &enum_input.data else {
+            unreachable!("test input is an enum");
+        };
+        let enum_expansion = compact(derive_enum_deserialize(
+            &enum_input.ident,
+            &enum_input.generics,
+            enum_data,
+            &enum_input.attrs,
+            None,
+        ));
+
+        for expansion in [&struct_expansion, &enum_expansion] {
+            assert!(
+                expansion.contains("norito::core::decode_context_field_"),
+                "generated decoder must call the shared context-field helpers"
+            );
+            assert!(
+                !expansion.contains("std::alloc::alloc("),
+                "generated decoder must not inline archived-field allocation"
+            );
+            assert!(
+                !expansion.contains("PayloadCtxGuard::enter(tmp_slice)"),
+                "generated decoder must not inline archived-field context setup"
+            );
+        }
+
+        assert!(
+            struct_expansion.contains("decode_context_field_archived_compat::<Opaque>"),
+            "the legacy retry path must remain delegated to the shared helper"
+        );
+        assert!(
+            struct_expansion.contains("decode_context_field_canonical::<Opaque>"),
+            "ordinary framed struct fields must use the shared canonical helper"
+        );
+        assert!(
+            enum_expansion.contains("decode_context_field_flexible::<Opaque>"),
+            "tuple-enum compatibility decoding must use the shared flexible helper"
+        );
+        assert!(
+            enum_expansion.contains("decode_context_field_prefix::<Vec<u32>>"),
+            "self-delimiting Vec fields must retain their consumed-prefix path"
+        );
+        for expansion in [&struct_expansion, &enum_expansion] {
+            assert!(
+                expansion.contains("finish_context_fields(ptr,offset)"),
+                "full-consumption validation must remain shared"
+            );
+        }
     }
 }
 

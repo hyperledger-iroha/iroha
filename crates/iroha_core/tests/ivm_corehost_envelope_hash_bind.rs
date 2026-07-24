@@ -39,6 +39,7 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     let authority: AccountId = ALICE_ID.clone();
     let mut vm = IVM::new(0);
     let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
+    host.set_local_contract_debug_execution();
     // Seed the pending envelope hash that the vendor bridge injects into Unshield proofs.
     let expected_hash: [u8; 32] = [0x11; 32];
     host.__test_set_last_env_hash_unshield(expected_hash);
@@ -70,6 +71,7 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
     let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
     let ptr = store_tlv(&mut vm, &tlv);
     vm.set_register(10, ptr);
+    vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD);
 
     // Directly invoke the vendor bridge syscall and inspect queued instructions.
     host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)

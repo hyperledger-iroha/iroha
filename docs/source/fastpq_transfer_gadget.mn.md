@@ -102,12 +102,12 @@ lands, prover нь нийлэг аргаар түлхүүр/баланс хос�
 | `ivm::host` & тестүүд | Үндсэн/Өгөгдмөл хостууд нь хамрах хүрээ идэвхтэй байх үед `transfer_v1`-г багцын хавсралт гэж үздэг бөгөөд `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` гадаргуутай, хуурамч WSV хост нь оролтуудыг хийхээс өмнө буферээр хадгалдаг тул регрессийн тестүүд тодорхойлогддог тэнцвэрийг баталгаажуулдаг. шинэчлэлтүүд.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Төрийн шилжилтийн дараа `TransferTranscript`-г ялгаруулж, `StateBlock::capture_exec_witness` үед `FastpqTransitionBatch` бичлэгүүдийг тодорхой `public_inputs`-ээр бүтээж, FASTPQ prover lane-г ажиллуулж, Torii болон St.6-г хүлээн авна. `TransitionBatch` оролтууд. `TransferAssetBatch` нь дараалсан шилжүүлгийг нэг транскрипт болгон бүлэглэж, олон дельта багцын посейдоны дижестийг орхигдуулдаг тул гаджет нь оруулгуудыг тодорхой хэмжээгээр давтаж чаддаг. |
 | `fastpq_prover` | `gadgets::transfer` одоо төлөвлөгчийн (`crates/fastpq_prover/src/gadgets/transfer.rs`) олон дельта хуулбарыг (тэнцвэрийн арифметик + Посейдоны дижест) баталгаажуулж, бүтэцлэгдсэн гэрчүүдийг (орлуулагчтай хосолсон SMT blobуудыг оруулаад) гаргадаг. `trace::build_trace` нь багцын мета өгөгдлөөс гарсан хуулбарыг тайлж, `transfer_transcripts`-ийн даацын ачаалалгүй шилжүүлгийн багцаас татгалзаж, баталгаажсан гэрчүүдийг `Trace::transfer_witnesses`-д хавсаргаж, `TracePolynomialData::transfer_plan()` нь төлөвлөгөөг нэгтгэх хүртэл төлөвлөгөөгөө биелүүлэх хүртэл хадгалдаг. (`crates/fastpq_prover/src/trace.rs`). Мөр тоолох регрессийн бэхэлгээ нь одоо `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`)-ээр дамжиж, 65536 жийргэвчтэй мөр хүртэлх хувилбаруудыг хамардаг бол хосолсон SMT утас нь TF-3 багцын туслах үе шатын ард үлддэг (байршуулагч нь тэр хүртэл ул мөрийг хадгалдаг). |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` туслахыг `transfer_v1_batch_begin`, дараалсан `transfer_asset` болон `transfer_v1_batch_end` болгон бууруулна. Tuple аргумент бүр нь `(AccountId, AccountId, AssetDefinitionId, int)` хэлбэртэй байх ёстой; нэг шилжүүлэг нь одоо байгаа барилгачин хэвээр байна. |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` туслахыг `transfer_v1_batch_begin`, дараалсан `transfer_asset` болон `transfer_v1_batch_end` болгон бууруулна. Tuple аргумент бүр нь `(AccountId, AccountId, AssetDefinitionId, quantity)` хэлбэртэй байх ёстой; нэг шилжүүлэг нь одоо байгаа барилгачин хэвээр байна. |
 
 Жишээ Kotodama ашиглалт:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

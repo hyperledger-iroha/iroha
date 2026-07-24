@@ -192,9 +192,9 @@ fn non_vm_instructions_charge_fees() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
 
-    // 4) Execute via executor and verify fee transfer
+    // 4) Execute after genesis so the production fee exemption does not apply.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -305,7 +305,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     .sign(alice_kp.private_key());
 
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.current_dataspace_id = Some(route);
@@ -431,9 +431,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
 
-    // 4) Execute via executor and verify sponsored fee transfer
+    // 4) Execute after genesis and verify sponsored fee transfer.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
 
@@ -445,7 +445,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         &asset_def_id,
         &instruction,
         init,
-        1,
+        2,
     );
     state_tx.nexus.enabled = false;
 
@@ -950,7 +950,7 @@ fn ivm_syscall_charges_fees() {
     .sign(alice_kp.private_key());
 
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let contract_route = iroha_data_model::nexus::DataSpaceId::new(10);
@@ -1133,9 +1133,9 @@ fn ivm_gas_fees_record_settlement_receipt() {
     .sign(alice_kp.private_key());
     let tx_hash = tx.hash();
 
-    // 4) Execute via executor and verify settlement receipt is recorded
+    // 4) Execute after genesis and verify settlement receipt is recorded.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();

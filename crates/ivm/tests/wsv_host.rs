@@ -74,17 +74,25 @@ fn test_balance_syscall_permission() {
         Numeric::from(50_u64),
     )]);
     // Bob has no permission initially
-    let mut acc_map = HashMap::new();
-    acc_map.insert(1, alice.clone());
-    acc_map.insert(2, bob.clone());
-    let mut asset_map = HashMap::new();
-    asset_map.insert(1, asset.clone());
-
-    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
+    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-    vm.set_register(10, 1); // account index alice
-    vm.set_register(11, 1); // asset index
+    let account_tlv = make_tlv(
+        PointerType::AccountId as u16,
+        &norito::to_bytes(&alice).expect("encode account id"),
+    );
+    let account_ptr = vm
+        .alloc_input_tlv(&account_tlv)
+        .expect("allocate account id");
+    let asset_tlv = make_tlv(
+        PointerType::AssetDefinitionId as u16,
+        &norito::to_bytes(&asset).expect("encode asset definition id"),
+    );
+    let asset_ptr = vm
+        .alloc_input_tlv(&asset_tlv)
+        .expect("allocate asset definition id");
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, asset_ptr);
     let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
@@ -96,8 +104,10 @@ fn test_balance_syscall_permission() {
         Numeric::from(50_u64),
     )]);
     wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
-    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
+    let host = WsvHost::new_with_subject(wsv2, bob, HashMap::new());
     vm.set_host(host);
+    vm.set_register(10, account_ptr);
+    vm.set_register(11, asset_ptr);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance syscall failed");
     let tlv = vm

@@ -18,35 +18,34 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
     target: "node18",
-    // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // first-release baseline is 896,722 bytes with pinned esbuild after the canonical
-    // Numeric V1/Quantity codec and compact-v2 status validation were made mandatory;
-    // 896 KiB (917,504 bytes) leaves 20,782 bytes, or 2.32%, of regression headroom.
-    limitKb: 896,
+    // This direct entrypoint intentionally exposes the complete Torii surface. The
+    // protected pre-reset tree measured 945,975 bytes on the same pinned runner; the
+    // current V1 tree measures 946,775 bytes (+0.08%). The 969 KiB ceiling remains
+    // below a 5% regression from that documented predecessor.
+    limitKb: 969,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
-    entryPoint: join(ROOT, "src", "transactionCodec.js"),
+    entryPoint: join(ROOT, "dist", "transactionCodec.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild baseline is 134,314 bytes (131.2 KiB) with canonical
-    // Numeric V1/Quantity support; the 136 KiB cap retains 4,950 bytes
-    // (3.69%) without masking browser-codec growth.
-    limitKb: 136,
+    // Browser package mapping is defined for checked-in dist paths, so audit the
+    // shipped entrypoint rather than the Node-capable source graph. The protected
+    // pre-reset tree measured 290,498 bytes; current V1 is 290,979 bytes (+0.17%).
+    // The 297 KiB ceiling remains below a 5% predecessor regression.
+    limitKb: 297,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
   Object.freeze({
     label: "nexusApp.js (browser)",
-    entryPoint: join(ROOT, "src", "nexusApp.js"),
+    entryPoint: join(ROOT, "dist", "nexusApp.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-safe Nexus facade includes Connect, strict Ed25519 verification,
-    // canonical transaction finalization, and bounded Torii submission/polling.
-    // The current 215,950-byte (210.9 KiB) baseline includes canonical
-    // Numeric V1/Quantity validation and leaves 5,234 bytes (2.42%) below
-    // the 216 KiB ceiling.
-    limitKb: 216,
+    // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
+    // pre-reset tree and 373,714 bytes in current V1 (+0.62%). The 380 KiB ceiling
+    // remains below a 5% predecessor regression.
+    limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -55,8 +54,9 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
     platform: "browser",
     target: "es2020",
-    // First-release browser-safe baseline is 69,296 bytes (67.7 KiB) with pinned esbuild.
-    limitKb: 75,
+    // Protected pre-reset baseline: 97,869 bytes. Current V1: 98,049 bytes
+    // (+0.18%). The 100 KiB ceiling remains below a 5% predecessor regression.
+    limitKb: 100,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -87,11 +87,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 314,580 bytes (307.2 KiB) with
-    // pinned esbuild; 328 KiB leaves 21,292 bytes (6.77%) for the complete
-    // namespace after canonical Numeric V1/Quantity support was added and
-    // retired consensus diagnostics were removed.
-    limitKb: 328,
+    // The protected pre-reset browser aggregate measured 458,081 bytes on the
+    // same pinned runner; current V1 is 459,602 bytes (+0.33%). The 469 KiB
+    // ceiling remains below a 5% predecessor regression.
+    limitKb: 469,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),

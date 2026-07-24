@@ -1,48 +1,19 @@
+use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{
     IVMHost,
-    host::{DefaultHost, ZkCurve, ZkHalo2Backend, ZkHalo2Config},
+    host::{self, DefaultHost, ZkHalo2Backend, ZkHalo2Config},
     syscalls,
 };
 
-fn build_envelope_bytes(k: u32) -> Vec<u8> {
-    use iroha_zkp_halo2::{IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, ZkCurveId};
-
-    // Build a minimal, self-consistent envelope that advertises vector length 2^k.
-    let n = 1u32
-        .checked_shl(k)
-        .expect("k too large for vector length encoding");
-    let curve_id = ZkCurveId::Pallas.as_u16();
-    let zero = [0u8; 32];
-    let env = OpenVerifyEnvelope {
-        params: IpaParams {
-            version: 1,
-            curve_id,
-            n,
-            g: Vec::new(),
-            h: Vec::new(),
-            u: zero,
-        },
-        public: PolyOpenPublic {
-            version: 1,
-            curve_id,
-            n,
-            z: zero,
-            t: zero,
-            p_g: zero,
-        },
-        proof: IpaProofData {
-            version: 1,
-            l: Vec::new(),
-            r: Vec::new(),
-            a_final: zero,
-            b_final: zero,
-        },
-        transcript_label: ivm::host::LABEL_TRANSFER.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
-    norito::to_bytes(&env).expect("encode")
+fn build_envelope_bytes() -> Vec<u8> {
+    let envelope = OpenVerifyEnvelope::new(
+        BackendTag::Halo2IpaPasta,
+        host::LABEL_TRANSFER,
+        [1; 32],
+        vec![1, 2, 3],
+        vec![4, 5, 6],
+    );
+    norito::to_bytes(&envelope).expect("encode canonical envelope")
 }
 
 fn make_tlv(payload: &[u8]) -> Vec<u8> {
@@ -57,44 +28,38 @@ fn make_tlv(payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn verify_gated_by_max_k_returns_zero() {
-    // Envelope with k=12 (n=4096)
-    let payload = build_envelope_bytes(12);
+fn max_k_configuration_does_not_admit_without_verifier_registry() {
+    let payload = build_envelope_bytes();
     let tlv = make_tlv(&payload);
-    let mut vm = ivm::IVM::new(1_000_000);
+    let mut vm = ivm::IVM::new(u64::MAX);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc");
     vm.set_register(10, ptr);
-    // Host config with max_k=8, enabled=true, curve=Pallas, backend=Ipa
     let cfg = ZkHalo2Config {
         enabled: true,
-        curve: ZkCurve::Pallas,
         backend: ZkHalo2Backend::Ipa,
-        max_k: 8,
+        max_k: 1,
         verifier_budget_ms: 50,
         verifier_max_batch: 4,
         ..ZkHalo2Config::default()
     };
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
-    // Syscall should succeed (no error), but r10 must be 0 due to gating
     let _gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
-    assert_eq!(vm.register(10), 0, "verify must be gated by max_k");
-    assert_eq!(vm.register(11), 4, "ERR_K expected when k exceeds limit");
+    assert_eq!(vm.register(10), 0);
+    assert_eq!(vm.register(11), host::ERR_BACKEND);
 }
 
 #[test]
 fn verify_gated_by_enabled_flag_returns_zero() {
-    let payload = build_envelope_bytes(8);
+    let payload = build_envelope_bytes();
     let tlv = make_tlv(&payload);
-    let mut vm = ivm::IVM::new(1_000_000);
+    let mut vm = ivm::IVM::new(u64::MAX);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc");
     vm.set_register(10, ptr);
     let cfg = ZkHalo2Config {
         enabled: false,
-        curve: ZkCurve::Pallas,
         backend: ZkHalo2Backend::Ipa,
-        max_k: 18,
         verifier_budget_ms: 50,
         verifier_max_batch: 4,
         ..ZkHalo2Config::default()
@@ -104,5 +69,5 @@ fn verify_gated_by_enabled_flag_returns_zero() {
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
     assert_eq!(vm.register(10), 0, "verify must be disabled by config");
-    assert_eq!(vm.register(11), 1, "ERR_DISABLED expected when gating");
+    assert_eq!(vm.register(11), host::ERR_DISABLED);
 }

@@ -61,7 +61,7 @@ Docs синк шалгалт
   - Дахин сэргээх: `make docs-syscalls`
   - Зөвхөн шалгах: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI хүснэгт (crates/ivm/docs/syscalls.md)
-  - Зөвхөн шалгах: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Зөвхөн шалгах: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Үүсгэсэн хэсгийг шинэчлэх (мөн кодын баримтын хүснэгт): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Заагч-ABI хүснэгтүүд (crates/ivm/docs/pointer_abi.md болон ivm.md)
   - Зөвхөн шалгах: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

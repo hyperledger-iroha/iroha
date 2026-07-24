@@ -10,7 +10,7 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
-use iroha_primitives::{numeric::Numeric, time::TimeSource};
+use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 mod snapshots;
 use snapshots::assert_events;
@@ -280,12 +280,12 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     let bal_par = view_par
         .world()
         .assets()
         .get(&a_coin)
-        .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into());
+        .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(bal_seq, bal_par, "final balances must match");
 }
 
@@ -409,7 +409,7 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
             .world()
             .assets()
             .get(id)
-            .map_or_else(|| Numeric::new(0, 0), |v| v.clone().into_inner().into())
+            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
     };
     assert_eq!(bal(&state_seq, &a_coin), bal(&state_par, &a_coin));
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));

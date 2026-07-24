@@ -3063,11 +3063,17 @@ mod tests {
             .as_mut()
             .expect("boundary snapshot")
             .leader_seed[0] ^= 0x80;
+        let replacement_context_id = forged_context_id.finality_artifact.context_id();
         forged_context_id
             .finality_artifact
             .commit_qc
             .round
-            .context_id = forged_context_id.finality_artifact.context_id();
+            .context_id = replacement_context_id;
+        forged_context_id
+            .finality_artifact
+            .commit_qc
+            .proposal_round
+            .context_id = replacement_context_id;
         let mut verifier = BridgeFinalityVerifier::with_context(
             original_context.chain_id,
             forged_context_id.finality_artifact.context_id(),

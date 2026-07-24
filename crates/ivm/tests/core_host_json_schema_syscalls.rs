@@ -1,6 +1,5 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     nexus::DataSpaceId,
@@ -9,8 +8,8 @@ use iroha_data_model::{
 };
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
-    CoreHost, EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType, IVM,
-    PointerType, ProgramMetadata, encoding, instruction::wide, syscalls,
+    CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+    EmbeddedStateType, IVM, PointerType, ProgramMetadata, encoding, instruction::wide, syscalls,
 };
 mod common;
 
@@ -42,7 +41,21 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
-        entrypoints: Vec::new(),
+        entrypoints: vec![EmbeddedEntrypointDescriptor {
+            name: "inspect".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
         states: vec![EmbeddedStateDescriptor {
             name: name.to_owned(),
             ty: EmbeddedStateType::StateMap {
@@ -400,71 +413,126 @@ fn schema_decode_rejects_blob() {
 }
 
 #[test]
-fn schema_decode_unknown_schema_exposes_metadata() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
-    let schema = b"UnknownSchema";
-    let payload = [0xAB, 0xCD, 0xEF];
-    let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
-    let p_bytes = vm
-        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &payload))
-        .unwrap();
+fn schema_unknown_and_malformed_inputs_fail_closed_for_both_abis() {
+    let generic_json = iroha_primitives::json::Json::from_str_norito(r#"{"value":1}"#)
+        .expect("parse adversarial generic JSON");
+    let generic_json_bytes =
+        norito::to_bytes(&generic_json).expect("encode adversarial generic JSON");
+    for (schema, payload) in [
+        (&b"UnknownSchema"[..], generic_json_bytes.as_slice()),
+        (&b"Order"[..], generic_json_bytes.as_slice()),
+    ] {
+        for syscall in [
+            syscalls::SYSCALL_SCHEMA_DECODE,
+            syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
+        ] {
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(CoreHost::new());
+            let p_schema = vm.alloc_input_tlv(&tlv(PointerType::Name, schema)).unwrap();
+            let p_bytes = vm
+                .alloc_input_tlv(&tlv(PointerType::NoritoBytes, payload))
+                .unwrap();
+            let dec = common::assemble(
+                &[
+                    encoding::wide::encode_sys(wide::system::SCALL, syscall as u8).to_le_bytes(),
+                    encoding::wide::encode_halt().to_le_bytes(),
+                ]
+                .concat(),
+            );
+            vm.set_register(10, p_schema);
+            vm.set_register(11, p_bytes);
+            vm.load_program(&dec).unwrap();
+            assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+            assert_eq!(vm.register(10), p_schema);
+            assert_eq!(vm.register(11), p_bytes);
+        }
+    }
 
-    let dec = common::assemble(
-        &[
-            encoding::wide::encode_sys(wide::system::SCALL, syscalls::SYSCALL_SCHEMA_DECODE as u8)
-                .to_le_bytes(),
-            encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat(),
-    );
-    vm.set_register(10, p_schema);
-    vm.set_register(11, p_bytes);
-    vm.load_program(&dec).unwrap();
-    vm.run().unwrap();
+    for syscall in [
+        syscalls::SYSCALL_SCHEMA_ENCODE,
+        syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
+    ] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(CoreHost::new());
+        let p_schema = vm
+            .alloc_input_tlv(&tlv(PointerType::Name, b"UnknownSchema"))
+            .unwrap();
+        let p_json = vm
+            .alloc_input_tlv(&tlv(PointerType::Json, br#"{"value":1}"#))
+            .unwrap();
+        let enc = common::assemble(
+            &[
+                encoding::wide::encode_sys(wide::system::SCALL, syscall as u8).to_le_bytes(),
+                encoding::wide::encode_halt().to_le_bytes(),
+            ]
+            .concat(),
+        );
+        vm.set_register(10, p_schema);
+        vm.set_register(11, p_json);
+        vm.load_program(&enc).unwrap();
+        assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+        assert_eq!(vm.register(10), p_schema);
+        assert_eq!(vm.register(11), p_json);
+    }
+}
 
-    let p_out = vm.register(10);
-    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
-    assert_eq!(tlv_j.type_id, PointerType::Json);
+#[test]
+fn schema_info_resolves_only_explicit_families_for_both_abis() {
+    let known = [
+        ("Order", "OrderByTime", 2usize),
+        ("OrderByTime", "OrderByTime", 2usize),
+        ("Trade", "TradeV2", 2usize),
+        ("TradeV1", "TradeV2", 2usize),
+        ("TradeV2", "TradeV2", 2usize),
+        ("QueryRequest", "QueryRequest", 1usize),
+        ("QueryResponse", "QueryResponse", 1usize),
+    ];
 
-    let value: norito::json::Value = common::json_from_payload(tlv_j.payload);
-    let obj = value.as_object().expect("fallback json object");
+    for syscall in [
+        syscalls::SYSCALL_SCHEMA_INFO,
+        syscalls::SYSCALL_SCHEMA_INFO_DIRECT,
+    ] {
+        for (schema, expected_current, expected_versions) in known {
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(CoreHost::new());
+            let p_schema = vm
+                .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
+                .expect("allocate schema name");
+            let program = common::assemble_syscalls(&[syscall]);
+            vm.set_register(10, p_schema);
+            vm.load_program(&program).expect("load schema info program");
+            vm.run().expect("known schema info succeeds");
+            let output = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("schema info output");
+            assert_eq!(output.type_id, PointerType::Json);
+            let value = common::json_from_payload(output.payload);
+            assert_eq!(
+                value["current"]["name"].as_str(),
+                Some(expected_current),
+                "current schema for {schema}"
+            );
+            assert_eq!(
+                value["versions"].as_array().map(Vec::len),
+                Some(expected_versions),
+                "version count for {schema}"
+            );
+        }
 
-    let schema_obj = obj
-        .get("schema")
-        .and_then(norito::json::Value::as_object)
-        .expect("schema metadata");
-    let schema_name = schema_obj
-        .get("name")
-        .and_then(norito::json::Value::as_str)
-        .expect("schema name");
-    assert_eq!(schema_name, "UnknownSchema");
-    assert!(matches!(
-        schema_obj.get("id"),
-        Some(norito::json::Value::Null)
-    ));
-    assert!(matches!(
-        schema_obj.get("version"),
-        Some(norito::json::Value::Null)
-    ));
-
-    let payload_b64 = obj
-        .get("payload_base64")
-        .and_then(norito::json::Value::as_str)
-        .expect("payload base64");
-    assert_eq!(payload_b64, BASE64_STANDARD.encode(payload));
-
-    let len = obj
-        .get("payload_len")
-        .and_then(norito::json::Value::as_u64)
-        .expect("payload length");
-    assert_eq!(len as usize, payload.len());
-
-    let versions = obj
-        .get("known_versions")
-        .and_then(norito::json::Value::as_array)
-        .expect("known versions array");
-    assert!(versions.is_empty());
+        for schema in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(CoreHost::new());
+            let p_schema = vm
+                .alloc_input_tlv(&tlv(PointerType::Name, schema.as_bytes()))
+                .expect("allocate adversarial schema name");
+            let program = common::assemble_syscalls(&[syscall]);
+            vm.set_register(10, p_schema);
+            vm.load_program(&program).expect("load schema info program");
+            assert_eq!(vm.run(), Err(ivm::VMError::NoritoInvalid));
+            assert_eq!(vm.register(10), p_schema);
+        }
+    }
 }
 
 #[test]
@@ -658,7 +726,7 @@ fn json_set_i64_direct_accepts_input_heap_and_literal_pointers() {
 
 #[test]
 fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
-    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let owner_literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let expected_owner = AccountId::parse_encoded(owner_literal)
         .expect("valid canonical account id")
         .into_account_id()
@@ -731,15 +799,15 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
 
 #[test]
 fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
-    let base_tlv = tlv(PointerType::Name, b"state");
+    let base_tlv = tlv(PointerType::Name, b"entries");
     let key_payload = tlv(PointerType::Blob, b"canonical key bytes");
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
     let direct_prog = assemble_state_map_syscall(
         syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
-        "state",
+        "entries",
         EmbeddedStateType::Bytes,
     );
-    let expected_path = format!("state/{}", hex::encode(&key_payload));
+    let expected_path = format!("entries/{}", hex::encode(&key_payload));
 
     let decode_path = |vm: &IVM| {
         let tlv = vm
@@ -773,7 +841,7 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
 
     let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(
         syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
-        "state",
+        "entries",
         EmbeddedStateType::Bytes,
         &[base_tlv.as_slice(), key_tlv.as_slice()],
     );
@@ -800,7 +868,7 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     let p_owner_key = vm
         .alloc_input_tlv(&tlv(PointerType::Name, b"owner"))
         .unwrap();
-    let owner_literal = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let owner_literal = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let p_owner = vm
         .alloc_input_tlv(&tlv(PointerType::AccountId, owner_literal.as_bytes()))
         .unwrap();

@@ -34,7 +34,7 @@ Mode bits
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
-- `abi_hash`: authenticated SHA-256 commitment to the exact canonical ABI descriptor selected by `abi_version`; admission validates it before prefix or instruction decoding.
+- `abi_hash`: authenticated Iroha Hash v1 commitment (Blake2b-256 with the final byte's least-significant bit set to 1) to the exact canonical ABI descriptor selected by `abi_version`; admission validates it before prefix or instruction decoding.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 → unset).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -71,7 +71,7 @@ The following policy summary is generated from the implementation and should not
 | version_minor | 0 or 1 (deployable CNTR contracts require 1) |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
+| vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
 ### ABI Hashes (generated)
@@ -80,7 +80,7 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 98679112b5a065a4dc962c5cfe128d0c545ed948f915ea8804767d369e4ef64f |
+| ABI v1 | 38823fb30c83cbf4a47f8898de1a7d7ec153a14f2b76c3d0b3461c620083b6b3 |
 <!-- END GENERATED ABI HASHES -->
 
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.

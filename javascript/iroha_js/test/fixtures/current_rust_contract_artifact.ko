@@ -1,6 +1,5 @@
 seiyaku BrowserArtifactParity {
     state int counter;
-
     hajimari() {
         counter = 0;
     }

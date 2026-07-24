@@ -16,6 +16,8 @@ import { blake2b256 } from "../src/blake2b.js";
 import {
   KOTODAMA_V1_DECLARATION_RESERVED,
   KOTODAMA_V1_KEYWORDS,
+  KOTODAMA_V1_RETIRED_TYPE_NAMES,
+  isCanonicalKotodamaIdentifier,
 } from "../src/kotodamaIdentifiers.js";
 
 const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -30,6 +32,19 @@ const CRC64_TABLE = Array.from({ length: 256 }, (_, index) => {
     crc = (crc & 1n) === 0n ? crc >> 1n : (crc >> 1n) ^ CRC64_POLYNOMIAL;
   }
   return crc;
+});
+
+test("Kotodama identifier policy keeps retired types contextual", () => {
+  for (const name of ["Amount", "amount"]) {
+    assert.equal(isCanonicalKotodamaIdentifier(name), true);
+    assert.equal(isCanonicalKotodamaIdentifier(name, { declaration: true }), true);
+    assert.equal(isCanonicalKotodamaIdentifier(name, { typeDeclaration: true }), false);
+    assert.equal(KOTODAMA_V1_RETIRED_TYPE_NAMES.includes(name), true);
+  }
+  for (const name of ["int", "decimal", "quantity"]) {
+    assert.equal(isCanonicalKotodamaIdentifier(name), true);
+    assert.equal(isCanonicalKotodamaIdentifier(name, { declaration: true }), false);
+  }
 });
 
 function u32Le(value) {
@@ -997,8 +1012,8 @@ test("compiler literal-table validation matches Rust ABI-v1 framing", async () =
       /exactly 8 bytes/u,
     ],
     [
-      "retired pointer type",
-      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0010 }) }]),
+      "unassigned pointer type",
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0013 }) }]),
       /not allowed by ABI v1/u,
     ],
     [
@@ -1960,13 +1975,15 @@ test("compiler response metadata, framing, and byte streams fail closed", async 
   );
   assert.equal(responseGetterCalls, 0);
 
-  let proxyGets = 0;
+  let proxyStringGets = 0;
   const proxiedResponse = new Proxy(jsonResponse(SERVICE_SUCCESS), {
     get(target, property, receiver) {
       // Promise resolution performs the unavoidable thenable check. The
-      // transport itself must not read any response instance property.
+      // native Response brand check may consult an implementation-private
+      // symbol, but the transport itself must not read public instance fields.
       if (property === "then") return Reflect.get(target, property, receiver);
-      proxyGets += 1;
+      if (typeof property === "symbol") return undefined;
+      proxyStringGets += 1;
       throw new Error("response get trap must not run");
     },
   });
@@ -1977,7 +1994,7 @@ test("compiler response metadata, framing, and byte streams fail closed", async 
     proxiedClient.compile("seiyaku Demo {}", { timeoutMs: 100 }),
     /invalid Response/u,
   );
-  assert.equal(proxyGets, 0);
+  assert.equal(proxyStringGets, 0);
 
   for (const response of [
     new Response(JSON.stringify(SERVICE_SUCCESS), {
@@ -2051,6 +2068,7 @@ test("compiler response metadata, framing, and byte streams fail closed", async 
     );
   }
 
+  let proxyGets = 0;
   const hostileChunks = [
     new Uint8Array(),
     { byteLength: 1 },

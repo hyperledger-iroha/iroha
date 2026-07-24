@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - እንደገና ማመንጨት: `make docs-syscalls`
   - ብቻ ያረጋግጡ: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI ሰንጠረዥ (crates/ivm/docs/syscalls.md)
-  - ብቻ ያረጋግጡ: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - ብቻ ያረጋግጡ: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - የመነጨውን ክፍል (እና የኮድ ሰነዶች ሰንጠረዥ) ያዘምኑ፡ `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - ጠቋሚ-ABI ሠንጠረዦች (ሳጥኖች/ivm/docs/pointer_abi.md እና ivm.md)
   - ብቻ ያረጋግጡ: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

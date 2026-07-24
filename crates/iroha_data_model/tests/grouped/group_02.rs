@@ -22,6 +22,8 @@ mod oracle_reference_fixtures;
 mod parameter_defaults;
 #[path = "../peer.rs"]
 mod peer;
+#[path = "../policy_jury_zk_roundtrip.rs"]
+mod policy_jury_zk_roundtrip;
 #[path = "../precomputed.rs"]
 mod precomputed;
 #[path = "../print_asset_norito.rs"]

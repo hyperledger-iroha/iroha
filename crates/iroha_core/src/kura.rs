@@ -175,6 +175,7 @@ const KURA_V2_FINALITY_RECORD_VERSION: u16 = 2;
 /// is remembered. Entries retain only stable path/file/directory metadata and
 /// an artifact hash, not the potentially multi-megabyte artifact itself.
 const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
+const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
@@ -199,6 +200,20 @@ struct StableSidecarRead {
     bytes: Vec<u8>,
     bytes_hash: Hash,
     metadata: StableSidecarMetadata,
+}
+
+#[derive(Debug, Clone)]
+struct CertifiedFrontierPairDurabilityAttestation {
+    artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
+    data_metadata: StableSidecarMetadata,
+    index_metadata: StableSidecarMetadata,
+}
+
+#[derive(Debug, Clone)]
+struct CertifiedFrontierArtifactValidationAttestation {
+    artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
+    bytes_hash: Hash,
+    frontier_metadata: StableSidecarMetadata,
 }
 
 #[derive(Debug)]
@@ -787,6 +802,11 @@ impl KuraV2FinalityRecord {
 }
 const CERTIFIED_LANE_BLOCKS_DATA_FILE: &str = "certified_blocks.norito";
 const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
+const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE: &str = "latest_certified_frontier.norito";
+const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE: &str = "latest_certified_frontier.build";
+const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION: u16 = 1;
+const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN: &[u8] =
+    b"iroha:kura:latest-certified-lane-block-frontier:v1\0";
 const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
@@ -1060,6 +1080,18 @@ pub struct Kura {
     active_merge_path: Mutex<PathBuf>,
     /// Current lane storage entries, keyed by lane id, used for lane-local artifact placement.
     lane_storage_entries: Mutex<BTreeMap<LaneId, LaneConfigEntry>>,
+    /// Monotonic wake-up generation for committed-lane operator status.
+    committed_lane_status_revision: AtomicU64,
+    /// Fail-stop latch for an ambiguous latest-certified frontier publication boundary.
+    latest_certified_frontier_storage_unknown: AtomicBool,
+    /// Restart-empty proof that the exact pair completed its strict barriers;
+    /// artifact plus pair metadata and namespace identity gate fsync reuse.
+    certified_frontier_pair_durability:
+        Mutex<BTreeMap<LaneId, CertifiedFrontierPairDurabilityAttestation>>,
+    /// Bounded restart-empty proof that exact stable frontier bytes completed
+    /// full certificate validation and subsequent pair repair/readback.
+    certified_frontier_artifact_validation:
+        Mutex<BTreeMap<LaneId, CertifiedFrontierArtifactValidationAttestation>>,
     /// Serializes lifecycle geometry moves, snapshot checkpoints, and archive garbage collection.
     /// Acquire it after `prune_lock` and before `sidecar_lock` when locks are combined.
     lane_geometry_lock: Mutex<()>,
@@ -3928,6 +3960,10 @@ impl Kura {
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
             lane_storage_entries: Mutex::new(startup_lane_storage_entries),
+            committed_lane_status_revision: AtomicU64::new(0),
+            latest_certified_frontier_storage_unknown: AtomicBool::new(false),
+            certified_frontier_pair_durability: Mutex::new(BTreeMap::new()),
+            certified_frontier_artifact_validation: Mutex::new(BTreeMap::new()),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: config.max_disk_usage_bytes.get(),
             eviction_required_replicas: config.eviction_required_replicas,
@@ -4159,6 +4195,10 @@ impl Kura {
             active_blocks_dir: Mutex::new(blocks_root),
             active_merge_path: Mutex::new(merge_log_path),
             lane_storage_entries: Mutex::new(Self::lane_storage_entries_from_config(&lane_config)),
+            committed_lane_status_revision: AtomicU64::new(0),
+            latest_certified_frontier_storage_unknown: AtomicBool::new(false),
+            certified_frontier_pair_durability: Mutex::new(BTreeMap::new()),
+            certified_frontier_artifact_validation: Mutex::new(BTreeMap::new()),
             lane_geometry_lock: Mutex::new(()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
@@ -4273,6 +4313,17 @@ impl Kura {
     /// Attach a telemetry sink for storage budget reporting.
     pub fn attach_telemetry(&self, telemetry: StateTelemetry) {
         let _ = self.telemetry.set(telemetry);
+    }
+
+    /// Return the current committed-lane status evidence revision.
+    #[must_use]
+    pub(crate) fn committed_lane_status_revision(&self) -> u64 {
+        self.committed_lane_status_revision.load(Ordering::Acquire)
+    }
+
+    fn note_committed_lane_status_change(&self) {
+        self.committed_lane_status_revision
+            .fetch_add(1, Ordering::Release);
     }
 
     /// Configure FASTPQ proof sidecar persistence limits from runtime configuration.
@@ -17467,7 +17518,9 @@ impl Kura {
         } else {
             None
         };
-        self.store_block_durable(&block, merge_entry.as_ref())
+        self.store_block_durable(&block, merge_entry.as_ref())?;
+        self.note_committed_lane_status_change();
+        Ok(())
     }
 
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
@@ -17483,7 +17536,9 @@ impl Kura {
         merge_entry: &MergeLedgerEntry,
     ) -> Result<()> {
         let block = block.into();
-        self.store_block_durable(&block, Some(merge_entry))
+        self.store_block_durable(&block, Some(merge_entry))?;
+        self.note_committed_lane_status_change();
+        Ok(())
     }
 
     /// Replace Kura's current top block durably.
@@ -17534,6 +17589,7 @@ impl Kura {
                 self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
+                self.note_committed_lane_status_change();
                 return Ok(());
             }
         }
@@ -17576,6 +17632,7 @@ impl Kura {
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
+            self.note_committed_lane_status_change();
             return Ok(());
         }
 
@@ -17618,6 +17675,7 @@ impl Kura {
             Self::prune_commit_manifests_above_in_dir(&directory, retained_height)?;
         }
         self.append_debug_block_dump(&block);
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -18894,6 +18952,7 @@ impl Kura {
 
         forward_or_stop!("prune-intent clearance", self.finish_prune_intent());
 
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -20772,6 +20831,49 @@ impl CertifiedLaneBlockArtifact {
     }
 }
 
+/// Bounded durable head for one active lane's latest certified session.
+///
+/// The complete artifact is retained so a frontier publication that survives a
+/// crash can repair the exact ordinary progress-pair entry without scanning
+/// lane-local history.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct LatestCertifiedLaneBlockFrontierV1 {
+    version: u16,
+    artifact: CertifiedLaneBlockArtifact,
+    integrity_hash: Hash,
+}
+
+#[derive(Debug)]
+struct LatestCertifiedLaneBlockFrontierRead {
+    frontier: LatestCertifiedLaneBlockFrontierV1,
+    snapshot: StableSidecarRead,
+}
+
+impl LatestCertifiedLaneBlockFrontierV1 {
+    fn new(artifact: CertifiedLaneBlockArtifact) -> Option<Self> {
+        let mut frontier = Self {
+            version: LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION,
+            artifact,
+            integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        frontier.integrity_hash = frontier.computed_integrity_hash()?;
+        Some(frontier)
+    }
+
+    fn computed_integrity_hash(&self) -> Option<Hash> {
+        let mut canonical = self.clone();
+        canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
+        norito::to_bytes(&canonical).ok().map(|bytes| {
+            Hash::new_from_chunks(&[LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN, &bytes])
+        })
+    }
+
+    fn ordinary_height(&self) -> u64 {
+        self.artifact.proposal.descriptor.lane_block_height
+    }
+}
+
 /// Known metadata formats for lane-owned executable payloads and view proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLaneBlockArtifactFormat {
@@ -22015,6 +22117,17 @@ impl Kura {
         )
     }
 
+    fn latest_certified_lane_block_frontier_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE),
+            dir.join(LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE),
+        )
+    }
+
     fn autonomous_lane_block_paths_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -22128,6 +22241,10 @@ impl Kura {
     pub(crate) fn validate_certified_lane_block_artifact(
         artifact: &CertifiedLaneBlockArtifact,
     ) -> std::result::Result<(), &'static str> {
+        #[cfg(test)]
+        if FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.replace(false)) {
+            return Err("injected certified lane block artifact validation failure");
+        }
         artifact
             .encode_framed()
             .map_err(|_| "certified lane block exceeds the merge source envelope byte limit")?;
@@ -23235,6 +23352,631 @@ impl Kura {
         Ok(())
     }
 
+    fn decode_latest_certified_lane_block_frontier(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<LatestCertifiedLaneBlockFrontierV1> {
+        let byte_limit = usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX);
+        if bytes.is_empty() || bytes.len() > byte_limit {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "latest certified lane block frontier has an invalid byte length",
+            ));
+        }
+        let frontier = norito::decode_from_bytes::<LatestCertifiedLaneBlockFrontierV1>(bytes)
+            .map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!(
+                        "latest certified lane block frontier is not exact framed Norito: {error}"
+                    ),
+                )
+            })?;
+        if frontier.version != LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION
+            || frontier.computed_integrity_hash() != Some(frontier.integrity_hash)
+            || norito::to_bytes(&frontier).map_err(Error::NoritoFrame)? != bytes
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "latest certified lane block frontier is non-canonical or has invalid integrity",
+            ));
+        }
+        Ok(frontier)
+    }
+
+    fn recover_latest_certified_lane_block_frontier_build_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        build_path: &Path,
+    ) -> Result<()> {
+        match std::fs::symlink_metadata(build_path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Error::IO(error, build_path.to_path_buf())),
+            Ok(metadata) => {
+                let accounting_mutation = self.begin_total_disk_usage_mutation();
+                Self::remove_bound_progress_temp_if_present(namespace, build_path)
+                    .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
+                Self::sync_bound_progress_intent_directories(namespace)
+                    .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
+                self.update_disk_usage_delta(metadata.len(), 0);
+                accounting_mutation.finish();
+                Ok(())
+            }
+        }
+    }
+
+    fn read_latest_certified_lane_block_frontier_structural_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        recover_build: bool,
+    ) -> Result<Option<LatestCertifiedLaneBlockFrontierRead>> {
+        if self
+            .latest_certified_frontier_storage_unknown
+            .load(Ordering::Acquire)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "latest certified lane block frontier storage is ambiguous until restart",
+            ));
+        }
+        let (frontier_path, build_path) =
+            Self::latest_certified_lane_block_frontier_paths_for_entry(entry, &self.store_root);
+        let directory = frontier_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "latest certified lane block frontier path has no parent",
+                )
+            })?;
+        let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+        if recover_build {
+            self.recover_latest_certified_lane_block_frontier_build_locked(
+                &namespace,
+                &build_path,
+            )?;
+        } else {
+            match std::fs::symlink_metadata(&build_path) {
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::IO(error, build_path)),
+                Ok(_) => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        build_path,
+                        "latest certified lane block frontier has an unresolved build",
+                    ));
+                }
+            }
+        }
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            &frontier_path,
+            &directory,
+            usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
+        )?
+        else {
+            return Ok(None);
+        };
+        let frontier =
+            Self::decode_latest_certified_lane_block_frontier(&frontier_path, &snapshot.bytes)?;
+        if !self.certified_frontier_artifact_validation_is_attested(
+            entry.lane_id,
+            &frontier.artifact,
+            &snapshot,
+        ) {
+            Self::validate_certified_lane_block_artifact(&frontier.artifact).map_err(
+                |message| {
+                    Self::invalid_lane_artifact_error(
+                        frontier_path.clone(),
+                        format!("latest certified lane block frontier is invalid: {message}"),
+                    )
+                },
+            )?;
+        }
+        Ok(Some(LatestCertifiedLaneBlockFrontierRead {
+            frontier,
+            snapshot,
+        }))
+    }
+
+    fn read_latest_certified_lane_block_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        recover_build: bool,
+    ) -> Result<Option<LatestCertifiedLaneBlockFrontierRead>> {
+        let Some(frontier) =
+            self.read_latest_certified_lane_block_frontier_structural_locked(entry, recover_build)?
+        else {
+            return Ok(None);
+        };
+        self.require_active_lane_artifact(entry, &frontier.frontier.artifact.proposal.descriptor)?;
+        Ok(Some(frontier))
+    }
+
+    fn confirm_latest_certified_lane_block_frontier_read_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        expected: &StableSidecarRead,
+    ) -> Result<()> {
+        let (frontier_path, build_path) =
+            Self::latest_certified_lane_block_frontier_paths_for_entry(entry, &self.store_root);
+        let directory = frontier_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "latest certified lane block frontier path has no parent",
+                )
+            })?;
+        let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+        match std::fs::symlink_metadata(&build_path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::IO(error, build_path)),
+            Ok(_) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    build_path,
+                    "latest certified lane block frontier changed while being authenticated",
+                ));
+            }
+        }
+        let Some(current) = self.read_regular_sidecar_snapshot(
+            &frontier_path,
+            &directory,
+            usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
+        )?
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                frontier_path,
+                "latest certified lane block frontier disappeared after authentication",
+            ));
+        };
+        if current.bytes_hash != expected.bytes_hash
+            || current.bytes != expected.bytes
+            || current.metadata.canonical_path != expected.metadata.canonical_path
+            || !Self::sidecar_file_metadata_unchanged(
+                &current.metadata.file,
+                &expected.metadata.file,
+            )
+            || !Self::sidecar_metadata_same_object(
+                &current.metadata.directory,
+                &expected.metadata.directory,
+            )
+            || !Self::progress_mutation_namespace_unchanged(&namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                frontier_path,
+                "latest certified lane block frontier changed after authentication",
+            ));
+        }
+        Ok(())
+    }
+
+    fn sync_exact_latest_certified_lane_block_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        expected: &StableSidecarRead,
+    ) -> Result<()> {
+        let (frontier_path, build_path) =
+            Self::latest_certified_lane_block_frontier_paths_for_entry(entry, &self.store_root);
+        let directory = frontier_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "latest certified lane block frontier path has no parent",
+                )
+            })?;
+        let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+        match std::fs::symlink_metadata(&build_path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::IO(error, build_path)),
+            Ok(_) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    build_path,
+                    "latest certified lane block frontier has an unresolved build",
+                ));
+            }
+        }
+        let metadata = self
+            .regular_sidecar_metadata(&frontier_path, &directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "latest certified lane block frontier disappeared before duplicate sync",
+                )
+            })?;
+        if !Self::stable_sidecar_metadata_unchanged(&metadata, &expected.metadata) {
+            return Err(Self::invalid_lane_artifact_error(
+                frontier_path,
+                "latest certified lane block frontier changed before duplicate sync",
+            ));
+        }
+        let file = Self::open_bound_progress_file(&namespace, &frontier_path, &metadata)?;
+        file.sync_all()
+            .map_err(|error| Error::IO(error, frontier_path.clone()))?;
+        Self::sync_bound_progress_intent_directories(&namespace)
+            .map_err(|error| Error::IO(error, frontier_path.clone()))?;
+        self.confirm_latest_certified_lane_block_frontier_read_locked(entry, expected)
+    }
+
+    fn publish_latest_certified_lane_block_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        artifact: &CertifiedLaneBlockArtifact,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+    ) -> Result<bool> {
+        if self
+            .latest_certified_frontier_storage_unknown
+            .load(Ordering::Acquire)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "latest certified lane block frontier storage is ambiguous until restart",
+            ));
+        }
+        let (frontier_path, build_path) =
+            Self::latest_certified_lane_block_frontier_paths_for_entry(entry, &self.store_root);
+        let directory = frontier_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "latest certified lane block frontier path has no parent",
+                )
+            })?;
+        let recovery_namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+        self.recover_latest_certified_lane_block_frontier_build_locked(
+            &recovery_namespace,
+            &build_path,
+        )?;
+        drop(recovery_namespace);
+        let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
+
+        let replacement =
+            LatestCertifiedLaneBlockFrontierV1::new(artifact.clone()).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    frontier_path.clone(),
+                    "failed to seal latest certified lane block frontier",
+                )
+            })?;
+        if let Some(existing_read) =
+            self.read_latest_certified_lane_block_frontier_structural_locked(entry, false)?
+        {
+            if existing_read.frontier == replacement {
+                self.sync_exact_latest_certified_lane_block_frontier_locked(
+                    entry,
+                    &existing_read.snapshot,
+                )?;
+                return Ok(false);
+            }
+            let existing_descriptor = &existing_read.frontier.artifact.proposal.descriptor;
+            let replacement_descriptor = &replacement.artifact.proposal.descriptor;
+            let reset_authorized = authority.is_some_and(|authority| {
+                authority.permits_frontier_replacement(existing_descriptor, replacement_descriptor)
+            });
+            let existing_is_retired = self
+                .require_active_lane_artifact(entry, existing_descriptor)
+                .is_err();
+            if !reset_authorized && !existing_is_retired {
+                if replacement.ordinary_height() < existing_read.frontier.ordinary_height() {
+                    return Ok(false);
+                }
+                if replacement.ordinary_height() == existing_read.frontier.ordinary_height() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        frontier_path,
+                        "latest certified lane block frontier has a divergent equal-order artifact",
+                    ));
+                }
+                if replacement_descriptor.proposal_height < existing_descriptor.proposal_height {
+                    return Ok(false);
+                }
+            }
+        }
+
+        let bytes = norito::to_bytes(&replacement).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty()
+            || bytes.len() > usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                frontier_path,
+                "latest certified lane block frontier exceeds its hard byte limit",
+            ));
+        }
+        let before_bytes = Self::file_len_or_zero(&frontier_path)?
+            .saturating_add(Self::file_len_or_zero(&build_path)?);
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut build = Self::create_new_bound_progress_temp(&namespace, &build_path)
+            .map_err(|error| Error::IO(error, build_path.clone()))?;
+        if let Err(error) = build
+            .write_all(&bytes)
+            .and_then(|()| build.flush())
+            .and_then(|()| build.sync_all())
+        {
+            drop(build);
+            let _ = Self::remove_bound_progress_temp_if_present(&namespace, &build_path);
+            let _ = Self::sync_bound_progress_intent_directories(&namespace);
+            return Err(Error::IO(error, build_path));
+        }
+        if !Self::progress_mutation_namespace_unchanged(&namespace) {
+            drop(build);
+            return Err(Self::invalid_lane_artifact_error(
+                build_path,
+                "latest certified lane block frontier namespace changed before publication",
+            ));
+        }
+        if let Err(error) =
+            Self::promote_bound_progress_temp(&namespace, &build_path, &frontier_path, &build)
+        {
+            if error.published {
+                self.latest_certified_frontier_storage_unknown
+                    .store(true, Ordering::Release);
+            } else {
+                drop(build);
+                let _ = Self::remove_bound_progress_temp_if_present(&namespace, &build_path);
+                let _ = Self::sync_bound_progress_intent_directories(&namespace);
+            }
+            return Err(Error::IO(error.source, frontier_path));
+        }
+        let post_publish = build
+            .sync_all()
+            .and_then(|()| Self::sync_bound_progress_intent_directories(&namespace));
+        if let Err(error) = post_publish {
+            self.latest_certified_frontier_storage_unknown
+                .store(true, Ordering::Release);
+            return Err(Error::IO(error, frontier_path));
+        }
+        let readback = self.read_regular_sidecar_snapshot(
+            &frontier_path,
+            &directory,
+            usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
+        );
+        if !matches!(readback, Ok(Some(ref current)) if current.bytes == bytes)
+            || !Self::progress_mutation_namespace_unchanged(&namespace)
+        {
+            self.latest_certified_frontier_storage_unknown
+                .store(true, Ordering::Release);
+            return Err(Self::invalid_lane_artifact_error(
+                frontier_path,
+                "latest certified lane block frontier changed before durable readback",
+            ));
+        }
+        let after_bytes = Self::file_len_or_zero(&frontier_path)?
+            .saturating_add(Self::file_len_or_zero(&build_path)?);
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
+        Ok(true)
+    }
+
+    fn recover_certified_lane_block_pair_from_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        artifact: &CertifiedLaneBlockArtifact,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+    ) -> Result<()> {
+        let descriptor = &artifact.proposal.descriptor;
+        let lane_id = descriptor.lane_id;
+        let lane_block_height = descriptor.lane_block_height;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        if !self.recover_bound_progress_sidecar_artifacts(
+            &data_path,
+            &index_path,
+            "certified lane block frontier recovery",
+        ) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "failed to recover certified lane block pair for its durable frontier",
+            ));
+        }
+        let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        if let BoundProgressPair::Present(existing_bound) = &mut existing_pair
+            && let Some(existing) = self
+                .read_certified_lane_block_artifact_structural_from_bound_locked(
+                    lane_id,
+                    lane_block_height,
+                    existing_bound,
+                )
+        {
+            if existing == *artifact {
+                if self.certified_frontier_pair_durability_is_attested(
+                    lane_id,
+                    artifact,
+                    existing_bound,
+                ) {
+                    return Ok(());
+                }
+                if !self.sync_bound_progress_sidecar(
+                    existing_bound,
+                    "certified lane block frontier recovery",
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to make frontier-backed certified lane block pair durable",
+                        ),
+                        data_path,
+                    ));
+                }
+                self.note_certified_frontier_pair_durability(lane_id, artifact, existing_bound);
+                return Ok(());
+            }
+            let existing_is_active = self
+                .require_active_lane_artifact(entry, &existing.proposal.descriptor)
+                .is_ok();
+            let reset_authorized = authority.is_some_and(|authority| {
+                authority.permits_slot_replacement(
+                    &existing.proposal.descriptor,
+                    &artifact.proposal.descriptor,
+                )
+            });
+            if existing_is_active && !reset_authorized {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "certified lane block pair conflicts with its durable frontier",
+                ));
+            }
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                reset_authorized,
+                "replacing a reset- or incarnation-retired certified lane block pair from its durable frontier"
+            );
+        }
+        drop(existing_pair);
+
+        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
+        let payload = artifact.encode_framed()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        if !Self::append_indexed_progress_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "certified lane block frontier recovery",
+            None,
+            SidecarIndexOrigin::FirstWrite,
+            &mutation_namespace,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to repair certified lane block pair from its durable frontier",
+                ),
+                data_path,
+            ));
+        }
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let recovered = match &mut pair {
+            BoundProgressPair::Absent(_) => false,
+            BoundProgressPair::Present(bound) => {
+                let exact = self
+                    .read_certified_lane_block_artifact_structural_from_bound_locked(
+                        lane_id,
+                        lane_block_height,
+                        bound,
+                    )
+                    .as_ref()
+                    == Some(artifact);
+                if exact
+                    && self.sync_bound_progress_sidecar(
+                        bound,
+                        "certified lane block frontier recovery",
+                    )
+                {
+                    self.note_certified_frontier_pair_durability(lane_id, artifact, bound);
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        if !recovered {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "repaired certified lane block pair differs from its durable frontier",
+                ),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes
+            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
+        {
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
+        }
+        Ok(())
+    }
+
+    fn certified_frontier_pair_durability_is_attested(
+        &self,
+        lane_id: LaneId,
+        artifact: &CertifiedLaneBlockArtifact,
+        bound: &BoundProgressSidecar,
+    ) -> bool {
+        let artifact_hash = HashOf::new(artifact);
+        let metadata_matches = self
+            .certified_frontier_pair_durability
+            .lock()
+            .get(&lane_id)
+            .is_some_and(|attestation| {
+                attestation.artifact_hash == artifact_hash
+                    && Self::stable_sidecar_metadata_unchanged(
+                        &attestation.data_metadata,
+                        &bound.data_metadata,
+                    )
+                    && Self::stable_sidecar_metadata_unchanged(
+                        &attestation.index_metadata,
+                        &bound.index_metadata,
+                    )
+            });
+        metadata_matches && self.bound_progress_sidecar_unchanged(bound)
+    }
+
+    fn certified_frontier_artifact_validation_is_attested(
+        &self,
+        lane_id: LaneId,
+        artifact: &CertifiedLaneBlockArtifact,
+        snapshot: &StableSidecarRead,
+    ) -> bool {
+        let artifact_hash = HashOf::new(artifact);
+        self.certified_frontier_artifact_validation
+            .lock()
+            .get(&lane_id)
+            .is_some_and(|attestation| {
+                attestation.artifact_hash == artifact_hash
+                    && attestation.bytes_hash == snapshot.bytes_hash
+                    && Self::stable_sidecar_metadata_unchanged(
+                        &attestation.frontier_metadata,
+                        &snapshot.metadata,
+                    )
+            })
+    }
+
+    fn note_certified_frontier_pair_durability(
+        &self,
+        lane_id: LaneId,
+        artifact: &CertifiedLaneBlockArtifact,
+        bound: &BoundProgressSidecar,
+    ) {
+        let mut attestations = self.certified_frontier_pair_durability.lock();
+        if !attestations.contains_key(&lane_id)
+            && attestations.len() >= CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY
+        {
+            attestations.pop_first();
+        }
+        attestations.insert(
+            lane_id,
+            CertifiedFrontierPairDurabilityAttestation {
+                artifact_hash: HashOf::new(artifact),
+                data_metadata: bound.data_metadata.clone(),
+                index_metadata: bound.index_metadata.clone(),
+            },
+        );
+    }
+
+    fn note_certified_frontier_artifact_validation(
+        &self,
+        lane_id: LaneId,
+        frontier: &LatestCertifiedLaneBlockFrontierV1,
+        snapshot: &StableSidecarRead,
+    ) {
+        let mut attestations = self.certified_frontier_artifact_validation.lock();
+        if !attestations.contains_key(&lane_id)
+            && attestations.len() >= CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY
+        {
+            attestations.pop_first();
+        }
+        attestations.insert(
+            lane_id,
+            CertifiedFrontierArtifactValidationAttestation {
+                artifact_hash: HashOf::new(&frontier.artifact),
+                bytes_hash: snapshot.bytes_hash,
+                frontier_metadata: snapshot.metadata.clone(),
+            },
+        );
+    }
+
     /// Persist a certified standalone lane-block session under its lane segment.
     ///
     /// # Errors
@@ -23251,21 +23993,54 @@ impl Kura {
         session: &crate::lane_consensus::CommittedLaneBlockSession,
         signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
     ) -> Result<()> {
+        self.persist_committed_lane_block_session_inner(session, signer_pops, None)
+    }
+
+    pub(crate) fn persist_committed_lane_block_session_with_authority(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+        authority: &crate::state::CertifiedLaneBlockPersistenceAuthority,
+    ) -> Result<()> {
+        self.persist_committed_lane_block_session_inner(session, signer_pops, Some(authority))
+    }
+
+    fn persist_committed_lane_block_session_inner(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+    ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         let artifact = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
-        self.write_certified_lane_block_artifact(&artifact)
+        self.write_certified_lane_block_artifact_with_authority(&artifact, authority)
     }
 
+    #[cfg(test)]
     fn write_certified_lane_block_artifact(
         &self,
         artifact: &CertifiedLaneBlockArtifact,
+    ) -> Result<()> {
+        self.write_certified_lane_block_artifact_with_authority(artifact, None)
+    }
+
+    fn write_certified_lane_block_artifact_with_authority(
+        &self,
+        artifact: &CertifiedLaneBlockArtifact,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
         Self::validate_certified_lane_block_artifact(artifact).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
         })?;
+        if authority.is_some_and(|authority| !authority.authorizes_proposal(&artifact.proposal)) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "certified lane block persistence authority does not match the proposal",
+            ));
+        }
         let descriptor = &artifact.proposal.descriptor;
         let lane_id = descriptor.lane_id;
         let lane_block_height = descriptor.lane_block_height;
@@ -23299,12 +24074,67 @@ impl Kura {
                 "failed to recover certified lane block data/index pair to a durable fixed point",
             ));
         }
+        let frontier_read =
+            self.read_latest_certified_lane_block_frontier_structural_locked(&entry, true)?;
+        if let Some(frontier_read) = &frontier_read {
+            let frontier_is_active = self
+                .require_active_lane_artifact(
+                    &entry,
+                    &frontier_read.frontier.artifact.proposal.descriptor,
+                )
+                .is_ok();
+            if frontier_is_active {
+                self.recover_certified_lane_block_pair_from_frontier_locked(
+                    &entry,
+                    &frontier_read.frontier.artifact,
+                    authority,
+                )?;
+            }
+            self.confirm_latest_certified_lane_block_frontier_read_locked(
+                &entry,
+                &frontier_read.snapshot,
+            )?;
+            if frontier_is_active {
+                self.note_certified_frontier_artifact_validation(
+                    lane_id,
+                    &frontier_read.frontier,
+                    &frontier_read.snapshot,
+                );
+            }
+        } else {
+            let existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+            let ordinary_pair_is_nonempty = match &existing_pair {
+                BoundProgressPair::Absent(_) => false,
+                BoundProgressPair::Present(bound) => {
+                    bound
+                        .data
+                        .metadata()
+                        .map_err(|error| Error::IO(error, data_path.clone()))?
+                        .len()
+                        != 0
+                        || bound
+                            .index
+                            .metadata()
+                            .map_err(|error| Error::IO(error, index_path.clone()))?
+                            .len()
+                            != 0
+                }
+            };
+            if ordinary_pair_is_nonempty {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    "certified lane block pair is nonempty without its mandatory latest frontier",
+                ));
+            }
+        }
         let mutation_namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
-        if let Ok(mut existing_bound) = self.open_bound_progress_sidecar(&data_path, &index_path)
+        let mut existing_exact = false;
+        let mut existing_pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        if let BoundProgressPair::Present(existing_bound) = &mut existing_pair
             && let Some(existing) = self.read_certified_lane_block_artifact_from_bound_locked(
                 lane_id,
                 lane_block_height,
-                &mut existing_bound,
+                existing_bound,
             )
         {
             if existing == *artifact {
@@ -23313,7 +24143,7 @@ impl Kura {
                 // directory barrier failed. Reissue the complete durability
                 // sequence before acknowledging the duplicate and allowing
                 // consensus to retire its volatile reconstruction source.
-                if !self.sync_bound_progress_sidecar(&existing_bound, "certified lane block") {
+                if !self.sync_bound_progress_sidecar(existing_bound, "certified lane block") {
                     return Err(Error::IO(
                         std::io::Error::other(
                             "failed to make existing certified lane block durable",
@@ -23321,26 +24151,40 @@ impl Kura {
                         data_path,
                     ));
                 }
-                return Ok(());
+                existing_exact = true;
+            } else {
+                let existing_is_active = self
+                    .require_active_lane_artifact(&entry, &existing.proposal.descriptor)
+                    .is_ok();
+                let reset_authorized = authority.is_some_and(|authority| {
+                    authority.permits_slot_replacement(&existing.proposal.descriptor, descriptor)
+                });
+                if existing_is_active && !reset_authorized {
+                    return Err(Self::invalid_lane_artifact_error(
+                        data_path,
+                        format!(
+                            "certified lane block already exists for lane {} height {} with a different active-incarnation payload",
+                            lane_id.as_u32(),
+                            lane_block_height
+                        ),
+                    ));
+                }
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    reset_authorized,
+                    "overwriting a reset- or incarnation-retired certified lane block in active storage"
+                );
             }
-            if self
-                .require_active_lane_artifact(&entry, &existing.proposal.descriptor)
-                .is_ok()
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    format!(
-                        "certified lane block already exists for lane {} height {} with a different active-incarnation payload",
-                        lane_id.as_u32(),
-                        lane_block_height
-                    ),
-                ));
+        }
+        drop(existing_pair);
+        let frontier_changed =
+            self.publish_latest_certified_lane_block_frontier_locked(&entry, artifact, authority)?;
+        if existing_exact {
+            if frontier_changed {
+                self.note_committed_lane_status_change();
             }
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                "overwriting retired-incarnation certified lane block in recreated lane storage"
-            );
+            return Ok(());
         }
 
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
@@ -23409,6 +24253,7 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -23441,6 +24286,111 @@ impl Kura {
             &index_path,
             true,
         )
+    }
+
+    /// Return the bounded durable latest-certified frontier for an active lane.
+    ///
+    /// Ordinary publication advances only when neither proposal height nor
+    /// lane-local height regresses and the lane-local height strictly advances;
+    /// a distinct artifact at the same lane-local height is a conflict. Exact
+    /// State reset authority may cross its watermark to a lower reused lane
+    /// height. A surviving frontier also repairs its exact ordinary pair before
+    /// being returned.
+    #[must_use]
+    pub(crate) fn latest_certified_lane_block_frontier(
+        &self,
+        lane_id: LaneId,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        self.latest_certified_lane_block_frontier_inner(lane_id, None)
+    }
+
+    pub(crate) fn latest_certified_lane_block_frontier_with_authority(
+        &self,
+        lane_id: LaneId,
+        authority: &crate::state::CertifiedLaneBlockPersistenceAuthority,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        self.latest_certified_lane_block_frontier_inner(lane_id, Some(authority))
+    }
+
+    fn latest_certified_lane_block_frontier_inner(
+        &self,
+        lane_id: LaneId,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        if self.prune_recovery_is_required()
+            || self
+                .latest_certified_frontier_storage_unknown
+                .load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let _guard = self.sidecar_lock.lock();
+        if self.prune_recovery_is_required() {
+            return None;
+        }
+        let frontier_read =
+            match self.read_latest_certified_lane_block_frontier_locked(&entry, true) {
+                Ok(Some(frontier)) => frontier,
+                Ok(None) => return None,
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        lane = %lane_id.as_u32(),
+                        "failed to read latest certified lane block frontier"
+                    );
+                    return None;
+                }
+            };
+        if authority.is_some_and(|authority| {
+            !authority.authorizes_proposal(&frontier_read.frontier.artifact.proposal)
+        }) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                "latest certified lane block frontier is outside its State-authenticated lifecycle"
+            );
+            return None;
+        }
+        #[cfg(test)]
+        run_latest_certified_frontier_post_validation_hook_for_tests();
+        if let Err(error) = self.recover_certified_lane_block_pair_from_frontier_locked(
+            &entry,
+            &frontier_read.frontier.artifact,
+            authority,
+        ) {
+            iroha_logger::warn!(
+                ?error,
+                lane = %lane_id.as_u32(),
+                lane_block_height = frontier_read
+                    .frontier
+                    .artifact
+                    .proposal
+                    .descriptor
+                    .lane_block_height,
+                "failed to recover certified lane block pair from its durable frontier"
+            );
+            return None;
+        }
+        if let Err(error) = self.confirm_latest_certified_lane_block_frontier_read_locked(
+            &entry,
+            &frontier_read.snapshot,
+        ) {
+            self.latest_certified_frontier_storage_unknown
+                .store(true, Ordering::Release);
+            iroha_logger::warn!(
+                ?error,
+                lane = %lane_id.as_u32(),
+                "latest certified lane block frontier changed after certificate authentication"
+            );
+            return None;
+        }
+        self.note_certified_frontier_artifact_validation(
+            lane_id,
+            &frontier_read.frontier,
+            &frontier_read.snapshot,
+        );
+        (!self.prune_recovery_is_required()).then_some(frontier_read.frontier.artifact)
     }
 
     /// Return the highest valid certified standalone lane block for a lane and dataspace.
@@ -23624,7 +24574,6 @@ impl Kura {
     /// bounded independently of the sidecar index length so malformed sparse or
     /// foreign history cannot turn proposal/startup recovery into an unbounded
     /// walk; failing to find an artifact within the budget fails closed.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn latest_certified_lane_block_artifacts_matching<F>(
         &self,
         lane_id: LaneId,
@@ -23859,6 +24808,29 @@ impl Kura {
         lane_block_height: u64,
         bound: &mut BoundProgressSidecar,
     ) -> Option<CertifiedLaneBlockArtifact> {
+        let artifact = self.read_certified_lane_block_artifact_structural_from_bound_locked(
+            lane_id,
+            lane_block_height,
+            bound,
+        )?;
+        if let Err(message) = Self::validate_certified_lane_block_artifact(&artifact) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                message,
+                "durability-attested certified lane block validation failed"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    fn read_certified_lane_block_artifact_structural_from_bound_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        bound: &mut BoundProgressSidecar,
+    ) -> Option<CertifiedLaneBlockArtifact> {
         let artifact = Self::read_indexed_sidecar_from_open_files(
             lane_block_height,
             &mut bound.data,
@@ -23876,15 +24848,6 @@ impl Kura {
                 actual_lane = %descriptor.lane_id.as_u32(),
                 actual_height = descriptor.lane_block_height,
                 "durability-attested certified lane block identity mismatch"
-            );
-            return None;
-        }
-        if let Err(message) = Self::validate_certified_lane_block_artifact(&artifact) {
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                message,
-                "durability-attested certified lane block validation failed"
             );
             return None;
         }
@@ -25349,6 +26312,7 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -25689,6 +26653,7 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -27039,6 +28004,7 @@ impl Kura {
         if accounting_complete {
             accounting_mutation.finish();
         }
+        self.note_committed_lane_status_change();
         Ok(())
     }
 
@@ -27393,12 +28359,32 @@ impl Kura {
         &self,
         proposal: &LaneBlockProposalV1,
     ) -> bool {
-        let Ok(receipt) = self.recover_lane_block_application_receipt_artifact(proposal) else {
-            return false;
-        };
+        self.lane_block_application_receipt_conflicts_with_preflight_inner(proposal, true)
+    }
+
+    /// Check canonical-result/preflight conflict without publishing a missing
+    /// lane-artifact sidecar as a consequence of status projection.
+    pub(crate) fn lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.lane_block_application_receipt_conflicts_with_preflight_inner(proposal, false)
+    }
+
+    fn lane_block_application_receipt_conflicts_with_preflight_inner(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        repair_missing_sidecar: bool,
+    ) -> bool {
         let Some(preflight) = self.read_lane_block_execution_preflight(
             proposal.descriptor.lane_id,
             proposal.descriptor.lane_block_height,
+        ) else {
+            return false;
+        };
+        let Ok(receipt) = self.recover_lane_block_application_receipt_artifact_with_sidecar_repair(
+            proposal,
+            repair_missing_sidecar,
         ) else {
             return false;
         };
@@ -27729,6 +28715,14 @@ impl Kura {
         LaneBlockPayloadAvailability::Available
     }
 
+    /// Return whether the exact certified lane payload is locally recoverable
+    /// without publishing a missing lane-artifact sidecar.
+    #[must_use]
+    pub(crate) fn lane_block_payload_is_recoverable(&self, proposal: &LaneBlockProposalV1) -> bool {
+        self.recover_lane_block_payload_with_sidecar_repair(proposal, false)
+            .is_ok()
+    }
+
     /// Recover accepted entrypoints for a certified standalone lane block.
     ///
     /// The recovered payload is accepted only when the certified descriptor
@@ -28049,7 +29043,12 @@ impl Kura {
             artifact,
             LaneBlockArtifactConflictPolicy::PreserveCanonical,
         ) {
-            Ok(_) => true,
+            Ok(checkpoint) => {
+                if checkpoint.is_some() {
+                    self.note_committed_lane_status_change();
+                }
+                true
+            }
             Err(err) => {
                 warn!(
                     ?err,
@@ -37707,6 +38706,29 @@ std::thread_local! {
     static FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC: std::cell::Cell<Option<ProgressIntentDirectorySyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
+    static FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn run_latest_certified_frontier_post_validation_hook_for_tests() {
+    let hook = LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnce() + 'static) {
+    LATEST_CERTIFIED_FRONTIER_POST_VALIDATION_HOOK.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(hook));
+        assert!(previous.is_none(), "frontier test hook already installed");
+    });
+}
+
+#[cfg(test)]
+fn fail_next_certified_lane_block_artifact_validation_for_tests() {
+    FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
 }
 
 fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
@@ -52206,6 +53228,23 @@ mod tests {
         crate::lane_consensus::CommittedLaneBlockSession,
         BTreeMap<PublicKey, Vec<u8>>,
     ) {
+        sample_committed_lane_block_session_at_proposal_height_for_kura(
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            lane_block_height,
+        )
+    }
+
+    fn sample_committed_lane_block_session_at_proposal_height_for_kura(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        proposal_height: u64,
+    ) -> (
+        crate::lane_consensus::CommittedLaneBlockSession,
+        BTreeMap<PublicKey, Vec<u8>>,
+    ) {
         let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let signer_pop =
             bls_normal_pop_prove(keypair.private_key()).expect("kura certified lane signer PoP");
@@ -52224,7 +53263,7 @@ mod tests {
                 )
                 .as_bytes(),
             ),
-            proposal_height: lane_block_height,
+            proposal_height,
             previous_lane_block_height: lane_block_height.saturating_sub(1),
             previous_lane_block_descriptor_hash: lane_block_height
                 .checked_sub(1)
@@ -56164,6 +57203,428 @@ mod tests {
             reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
             Some(artifact)
         );
+    }
+
+    #[test]
+    fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_at_proposal_height_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                3,
+                30,
+            );
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified frontier");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone())
+        );
+
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        fs::remove_file(&data_path).expect("remove ordinary certified data");
+        fs::remove_file(&index_path).expect("remove ordinary certified index");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone()),
+            "the durable frontier must redo its exact ordinary pair"
+        );
+        assert_eq!(
+            kura.read_certified_lane_block_artifact(lane_id, 3),
+            Some(expected.clone())
+        );
+
+        drop(kura);
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        assert_eq!(
+            reopened.latest_certified_lane_block_frontier(lane_id),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn unchanged_latest_certified_frontier_does_not_repeat_pair_fsync() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified frontier");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone()),
+            "the first read must strictly attest the ordinary pair"
+        );
+
+        fail_next_indexed_sidecar_data_sync_for_tests();
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected),
+            "an unchanged process-local attestation must avoid a repeated pair fsync"
+        );
+        let (data_path, _) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        let data = fs::File::open(data_path).expect("open certified pair data");
+        assert!(
+            sync_indexed_sidecar_data(&data).is_err(),
+            "the cached frontier read must leave the injected fsync fault unconsumed"
+        );
+    }
+
+    #[test]
+    fn unchanged_latest_certified_frontier_does_not_repeat_bls_validation() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified frontier");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone()),
+            "first read must perform full artifact validation"
+        );
+
+        fail_next_certified_lane_block_artifact_validation_for_tests();
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone()),
+            "exact stable frontier identity must reuse its bounded BLS attestation"
+        );
+        assert_eq!(
+            Kura::validate_certified_lane_block_artifact(&expected),
+            Err("injected certified lane block artifact validation failure"),
+            "the unchanged cached read must leave the injected validation fault unconsumed"
+        );
+    }
+
+    #[test]
+    fn latest_certified_frontier_validation_attestation_is_exact_artifact_bound() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified frontier");
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected),
+            "first read must validate and attest the exact artifact"
+        );
+
+        let (frontier_path, _) =
+            Kura::latest_certified_lane_block_frontier_paths_for_entry(lane_entry, temp_dir.path());
+        let stored = fs::read(&frontier_path).expect("read attested frontier");
+        let mut frontier = norito::decode_from_bytes::<LatestCertifiedLaneBlockFrontierV1>(&stored)
+            .expect("decode attested frontier");
+        *frontier
+            .artifact
+            .commit_qc
+            .bls_aggregate_signature
+            .first_mut()
+            .expect("valid commit aggregate signature is nonempty") ^= 1;
+        let invalid = LatestCertifiedLaneBlockFrontierV1::new(frontier.artifact)
+            .expect("seal structurally canonical invalid-proof frontier");
+        fs::write(
+            &frontier_path,
+            norito::to_bytes(&invalid).expect("encode invalid-proof frontier"),
+        )
+        .expect("replace frontier with an invalid proof");
+
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            None,
+            "a different artifact hash must never reuse the prior BLS validation attestation"
+        );
+    }
+
+    #[test]
+    fn latest_certified_frontier_rejects_equal_height_conflict_before_publication() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (first, first_pops) = sample_committed_lane_block_session_at_proposal_height_for_kura(
+            lane_id,
+            lane_entry.dataspace_id,
+            1,
+            10,
+        );
+        let (conflict, conflict_pops) =
+            sample_committed_lane_block_session_at_proposal_height_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                1,
+                11,
+            );
+        let (older_conflict, older_conflict_pops) =
+            sample_committed_lane_block_session_at_proposal_height_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                1,
+                9,
+            );
+        let expected = CertifiedLaneBlockArtifact::new(first.clone(), first_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&first, &first_pops)
+            .expect("persist first certificate");
+        assert!(
+            kura.persist_committed_lane_block_session(&conflict, &conflict_pops)
+                .is_err(),
+            "a distinct proposal at an occupied lane height must fail before frontier publication"
+        );
+        assert!(
+            kura.persist_committed_lane_block_session(&older_conflict, &older_conflict_pops,)
+                .is_err(),
+            "equal lane height must conflict even when the distinct proposal has a lower global height"
+        );
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(expected.clone())
+        );
+        let conflicting_artifact = CertifiedLaneBlockArtifact::new(conflict, conflict_pops);
+        let conflicting_payload = conflicting_artifact
+            .encode_framed()
+            .expect("encode conflicting certificate");
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            1,
+            &conflicting_payload,
+            "certified lane block conflict fixture",
+            FsyncMode::Always,
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            None,
+            "a conflicting active ordinary slot must not be silently repaired without reset authority"
+        );
+        assert_ne!(
+            kura.read_certified_lane_block_artifact(lane_id, 1),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (old_slot, old_slot_pops) =
+            sample_committed_lane_block_session_at_proposal_height_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                1,
+                90,
+            );
+        let (old_tip, old_tip_pops) =
+            sample_committed_lane_block_session_at_proposal_height_for_kura(
+                lane_id,
+                lane_entry.dataspace_id,
+                513,
+                100,
+            );
+        let (fresh, fresh_pops) = sample_committed_lane_block_session_at_proposal_height_for_kura(
+            lane_id,
+            lane_entry.dataspace_id,
+            1,
+            101,
+        );
+        let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+            lane_id,
+            lane_entry.dataspace_id,
+            fresh.proposal.descriptor.lane_incarnation,
+            Some(100),
+        );
+        let expected = CertifiedLaneBlockArtifact::new(fresh.clone(), fresh_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&old_slot, &old_slot_pops)
+            .expect("persist pre-reset occupied slot");
+        kura.persist_committed_lane_block_session(&old_tip, &old_tip_pops)
+            .expect("persist high pre-reset tip");
+
+        fail_next_bound_progress_append_data_sync_for_tests();
+        assert!(
+            kura.persist_committed_lane_block_session_with_authority(
+                &fresh,
+                &fresh_pops,
+                &authority,
+            )
+            .is_err(),
+            "fault must interrupt after the lower post-reset frontier wins but before pair replacement"
+        );
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen after frontier crash");
+        assert_eq!(
+            reopened.latest_certified_lane_block_frontier_with_authority(lane_id, &authority,),
+            Some(expected.clone()),
+            "State-authenticated reset authority must repair the reused lower slot after restart"
+        );
+        assert_eq!(
+            reopened.read_certified_lane_block_artifact(lane_id, 1),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn latest_certified_frontier_absence_never_bootstraps_from_ordinary_history() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (session, signer_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certificate");
+        let (frontier_path, _) =
+            Kura::latest_certified_lane_block_frontier_paths_for_entry(lane_entry, temp_dir.path());
+        fs::remove_file(&frontier_path).expect("remove mandatory frontier");
+
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            None,
+            "frontier reads must not fall back to reverse ordinary history"
+        );
+        assert_eq!(
+            kura.read_certified_lane_block_artifact(lane_id, 1),
+            Some(expected),
+            "fixture must retain valid ordinary history"
+        );
+        assert!(
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .is_err(),
+            "a nonempty ordinary pair without its frontier is unsupported, not a migration source"
+        );
+        assert!(!frontier_path.exists());
+    }
+
+    #[test]
+    fn latest_certified_frontier_corruption_and_post_validation_substitution_fail_closed() {
+        let make_kura = || {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry").clone();
+            let (session, signer_pops) =
+                sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+            let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("persist certificate");
+            (temp_dir, lane_config, lane_entry, lane_id, kura)
+        };
+
+        let (corrupt_dir, _corrupt_config, corrupt_entry, corrupt_lane, corrupt_kura) = make_kura();
+        let (corrupt_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
+            &corrupt_entry,
+            corrupt_dir.path(),
+        );
+        let mut noncanonical = fs::read(&corrupt_path).expect("read frontier");
+        noncanonical.push(0);
+        fs::write(&corrupt_path, noncanonical).expect("write noncanonical frontier");
+        assert_eq!(
+            corrupt_kura.latest_certified_lane_block_frontier(corrupt_lane),
+            None
+        );
+
+        let (
+            substitute_dir,
+            _substitute_config,
+            substitute_entry,
+            substitute_lane,
+            substitute_kura,
+        ) = make_kura();
+        let (substitute_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
+            &substitute_entry,
+            substitute_dir.path(),
+        );
+        let hook_path = substitute_path.clone();
+        set_latest_certified_frontier_post_validation_hook_for_tests(move || {
+            let mut bytes = fs::read(&hook_path).expect("read authenticated frontier");
+            let last = bytes.last_mut().expect("frontier is nonempty");
+            *last ^= 1;
+            fs::write(&hook_path, bytes).expect("substitute frontier after validation");
+        });
+        assert_eq!(
+            substitute_kura.latest_certified_lane_block_frontier(substitute_lane),
+            None,
+            "exact post-BLS reread must reject in-place substitution"
+        );
+        assert!(
+            substitute_kura
+                .latest_certified_frontier_storage_unknown
+                .load(Ordering::Acquire),
+            "post-authentication ambiguity must fail-stop the live frontier"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn latest_certified_frontier_rejects_hardlink_and_symlink_paths() {
+        use std::os::unix::fs::symlink;
+
+        for hardlink in [true, false] {
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = two_lane_runtime_config();
+            let lane_id = LaneId::from(1);
+            let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+            let (session, signer_pops) =
+                sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+            let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+            kura.persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("persist certificate");
+            let (frontier_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
+                lane_entry,
+                temp_dir.path(),
+            );
+            let attacker_path = frontier_path.with_extension("attacker");
+            if hardlink {
+                fs::hard_link(&frontier_path, &attacker_path).expect("add a second hard link");
+            } else {
+                fs::rename(&frontier_path, &attacker_path).expect("move frontier to attacker path");
+                symlink(&attacker_path, &frontier_path).expect("substitute frontier symlink");
+            }
+            assert_eq!(
+                kura.latest_certified_lane_block_frontier(lane_id),
+                None,
+                "frontier must reject non-single-link or symlink storage"
+            );
+        }
     }
 
     #[test]

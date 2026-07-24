@@ -225,7 +225,7 @@ test("orderbook builders accept owner accounts at the V1 byte ceiling", () => {
     {
       side: "bid",
       tier: "hot",
-      pricePerGibMicroXor: "1",
+      pricePerGib: "1",
       quantityGib: "1",
       ownerAccount,
       expiryUnix: "1700010000",
@@ -265,7 +265,7 @@ test("orderbook owner-account byte ceiling rejects adversarial oversized inputs"
         {
           side: "bid",
           tier: "hot",
-          pricePerGibMicroXor: "1",
+          pricePerGib: "1",
           quantityGib: "1",
           ownerAccount,
           expiryUnix: "1700010000",

@@ -253,9 +253,9 @@ The response carries five required nullable SDK snapshots:
 `activeRecursiveStepEpVerifier`. Each is null exactly with its matching
 unavailable blocker. The recursive records are exactly
 `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, both under
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, both under
 `halo2/ipa`. They appear or disappear atomically with `artifactSet` and must
 match its activation window and proof bound. Verifier ids, commitments, and
 public-input schema hashes remain distinct across all five roles.

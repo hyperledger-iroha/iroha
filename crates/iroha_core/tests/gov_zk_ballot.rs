@@ -34,7 +34,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 
@@ -116,11 +116,11 @@ fn zk_ballot_records_and_dedupes() {
     let mut stx = sblock.transaction();
 
     // Register a real Halo2 verifying key and wire config defaults
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     // Submit two identical ballots (same proof → same derived nullifier) → second must fail
-    let proof_b64 = bundle.proof_b64.clone();
+    let proof_b64 = bundle.proof_b64();
     let public_inputs = "{}".to_string();
     let election_id = "referendum-1".to_string();
     let instr = CastZkBallot {
@@ -207,14 +207,14 @@ fn zk_ballot_records_and_dedupes() {
 fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
     let state = new_state();
     assert!(
-        state.gov.min_bond_amount > 0,
+        !state.gov.min_bond_amount.is_zero(),
         "bond must be required by default"
     );
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -264,7 +264,7 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
 
     let err = CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: "{}".to_string(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -288,7 +288,7 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -338,7 +338,7 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
 
     CastZkBallot {
         election_id: election_id.clone(),
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: r#"{"direction":"Aye"}"#.to_string(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -363,7 +363,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -433,7 +433,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
 
     let instr = CastZkBallot {
         election_id: election_id.clone(),
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs.clone(),
     };
 
@@ -454,7 +454,7 @@ fn zk_ballot_rejects_invalid_proof() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -537,7 +537,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -585,7 +585,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
         },
     );
 
-    let amount = stx.gov.min_bond_amount.max(1u128);
+    let amount = stx.gov.min_bond_amount.clone().max(Quantity::one());
     let duration = stx.gov.conviction_step_blocks.max(1u64);
     let public_inputs = format!(
         "{{\"owner\":\"{}\",\"amount\":{},\"duration_blocks\":{}}}",
@@ -594,7 +594,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
 
     let err = CastZkBallot {
         election_id: election_id.clone(),
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -629,7 +629,7 @@ fn zk_ballot_rejects_malformed_public_inputs() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -682,7 +682,7 @@ fn zk_ballot_rejects_malformed_public_inputs() {
     let malformed_public_inputs = "{\"owner\": \"alice#wonderland\"".to_string();
     let err = CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: malformed_public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -706,7 +706,7 @@ fn zk_ballot_rejects_non_object_public_inputs() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -759,7 +759,7 @@ fn zk_ballot_rejects_non_object_public_inputs() {
     let non_object_public_inputs = "[1,2,3]".to_string();
     let err = CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: non_object_public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -784,7 +784,7 @@ fn zk_ballot_rejects_public_input_aliases() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -864,7 +864,7 @@ fn zk_ballot_rejects_public_input_aliases() {
     for (public_inputs, expected) in cases {
         let err = CastZkBallot {
             election_id: election_id.clone(),
-            proof_b64: bundle.proof_b64.clone(),
+            proof_b64: bundle.proof_b64(),
             public_inputs_json: public_inputs,
         }
         .execute(&ALICE_ID, &mut stx)
@@ -881,7 +881,7 @@ fn zk_ballot_accepts_null_public_input_hints() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -934,7 +934,7 @@ fn zk_ballot_accepts_null_public_input_hints() {
     let public_inputs = r#"{"root_hint":null,"owner":null,"amount":null,"duration_blocks":null,"direction":null,"nullifier":null}"#.to_string();
     CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -955,7 +955,7 @@ fn zk_ballot_rejects_owner_non_string() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -1008,7 +1008,7 @@ fn zk_ballot_rejects_owner_non_string() {
     let owner_non_string = "{\"owner\": 5}".to_string();
     let err = CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: owner_non_string,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1032,7 +1032,7 @@ fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let vk_id = bundle.vk_id.clone();
 
     let perm = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -1097,7 +1097,7 @@ fn zk_ballot_rejects_when_vk_commitment_mismatched() {
 
     let err = CastZkBallot {
         election_id,
-        proof_b64: bundle.proof_b64.clone(),
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: public_inputs,
     }
     .execute(&ALICE_ID, &mut stx)

@@ -37,8 +37,11 @@ public final class HttpClientRejectCodeTests {
 
     final TransactionPayload payload =
         TransactionPayload.builder()
+            .setFeePayment(
+                org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
+                    java.util.Collections.emptyList(), 1L))
             .setChainId("00000001")
-            .setAuthority("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
+            .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .setCreationTimeMs(1L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();

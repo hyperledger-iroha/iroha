@@ -1,29 +1,15 @@
+use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{IVMHost, syscalls};
 
-fn build_env(k: u32) -> Vec<u8> {
-    use h2::{PrimeField64 as F, norito_helpers as nh};
-    use iroha_zkp_halo2::{self as h2, backend::pallas::PallasBackend};
-    let n = 1usize << k;
-    let params = h2::Params::new(n).unwrap();
-    let coeffs: Vec<F> = (0u64..(n as u64)).map(|i| F::from(i + 1)).collect();
-    let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut tr = h2::Transcript::new(ivm::host::LABEL_TRANSFER);
-    let p_g = poly.commit(&params).unwrap();
-    let z = F::from(3u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).unwrap();
-    let params_wire = nh::params_to_wire(&params);
-    let public_wire = nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g);
-    let proof_wire = nh::proof_to_wire(&proof);
-    let env = h2::OpenVerifyEnvelope {
-        params: params_wire,
-        public: public_wire,
-        proof: proof_wire,
-        transcript_label: ivm::host::LABEL_TRANSFER.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    };
-    norito::to_bytes(&env).expect("encode env")
+fn build_env(public_input_len: usize) -> Vec<u8> {
+    let envelope = OpenVerifyEnvelope::new(
+        BackendTag::Halo2IpaPasta,
+        ivm::host::LABEL_TRANSFER,
+        [1; 32],
+        vec![1; public_input_len],
+        vec![2, 3, 4],
+    );
+    norito::to_bytes(&envelope).expect("encode canonical envelope")
 }
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
@@ -38,23 +24,26 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn zk_verify_positive_for_small_k_under_max_k() {
-    let mut vm = ivm::IVM::new(1_000_000);
-    // Allow up to k=8 for this test matrix
+fn default_host_fails_closed_for_canonical_input_size_matrix() {
+    let mut vm = ivm::IVM::new(u64::MAX);
     let cfg = ivm::host::ZkHalo2Config {
         enabled: true,
-        max_k: 8,
         ..Default::default()
     };
     let mut host = ivm::host::DefaultHost::new().with_zk_halo2_config(cfg);
-    for &k in &[3u32, 4u32] {
-        let env = build_env(k);
+    for public_input_len in [8, 16] {
+        let env = build_env(public_input_len);
         let tlv = make_tlv(ivm::PointerType::NoritoBytes as u16, &env);
         let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
         vm.set_register(10, ptr);
         let _ = host
             .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
             .expect("syscall ok");
-        assert_eq!(vm.register(10), 1, "expected r10=1 for k={k} <= max_k");
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(
+            vm.register(11),
+            ivm::host::ERR_BACKEND,
+            "standalone host must fail closed without a verifier-key registry"
+        );
     }
 }

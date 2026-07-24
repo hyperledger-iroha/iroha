@@ -57,10 +57,7 @@ use iroha_core::{
         MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
         merge_qc_message_digest,
     },
-    merge_sidecar::{
-        MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
-        decode_merge_candidate_body,
-    },
+    merge_sidecar::decode_certified_merge_sidecar,
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
@@ -4871,6 +4868,7 @@ fn build_transaction_for_legacy_default_shard(
         .find_map(|nonce| {
             let transaction = client.build_transaction(
                 [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let hash = transaction.hash();
@@ -5249,6 +5247,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
                     marker_key.clone(),
                     marker_value.clone(),
                 )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let hash = transaction.hash();
@@ -5449,40 +5448,6 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
     ensure!(
         validate_merge_qc_evidence(&network.chain_id(), &forged_merge_entry).is_err(),
         "forged merge QC aggregate was accepted"
-    );
-
-    let candidate = MergeLedgerCandidate::from(&target_entry);
-    let (candidate_bytes, candidate_hash) = canonical_merge_candidate_bytes(&candidate);
-    let candidate_advert = MergeCandidateAdvertV1::new(
-        candidate.epoch_id,
-        candidate.view,
-        candidate.carrier_height,
-        candidate.carrier_parent_hash,
-        target_entry.merge_qc.validator_set_hash,
-        target_entry.merge_qc.message_digest,
-        candidate_hash,
-        u64::try_from(candidate_bytes.len()).expect("candidate length fits in u64"),
-        target_entry.merge_qc.validator_set[0].clone(),
-    );
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &candidate_bytes)? == candidate,
-        "canonical leader candidate body did not round-trip"
-    );
-    let mut mismatched_candidate = candidate.clone();
-    mismatched_candidate.view = mismatched_candidate.view.saturating_add(1);
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &mismatched_candidate.canonical_bytes())
-            .is_err(),
-        "candidate body from another round was accepted under the leader advert"
-    );
-    let mut corrupted_candidate_bytes = candidate_bytes;
-    let candidate_last = corrupted_candidate_bytes
-        .last_mut()
-        .ok_or_else(|| eyre!("candidate encoding is empty"))?;
-    *candidate_last ^= 0x80;
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &corrupted_candidate_bytes).is_err(),
-        "corrupted candidate body was accepted"
     );
 
     let (carrier, blocks) = query_merge_carrier(&submitter, &target_entry)?;

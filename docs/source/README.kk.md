@@ -61,7 +61,7 @@ Docs синхрондауды тексеру
   - Қайта құру: `make docs-syscalls`
   - Тек тексеру: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI кестесі (crates/ivm/docs/syscalls.md)
-  - Тек тексеру: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Тек тексеру: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Жасалған бөлімді жаңарту (және кодтық құжаттар кестесі): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer‑ABI кестелері (crates/ivm/docs/pointer_abi.md және ivm.md)
   - Тек тексеру: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

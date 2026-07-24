@@ -4335,6 +4335,7 @@ class GovernanceUnlockStats:
         )
 
 
+# BEGIN GENERATED: kotodama-v1-validator-policy
 _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
     {
         "authorize",
@@ -4369,6 +4370,7 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
         "view",
     }
 )
+
 _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
     {
         "int",
@@ -4417,9 +4419,42 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "__kotodama_decimal_to_int_round",
     }
 )
-_KOTODAMA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+_KOTODAMA_RETIRED_NUMERIC_TYPE_NAMES = frozenset(
+    {
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "num",
+        "Int",
+        "Integer",
+        "float",
+        "f32",
+        "f64",
+        "Decimal",
+        "Fixed",
+        "FixedPoint",
+        "Amount",
+        "amount",
+        "money",
+        "Quantity",
+        "number",
+    }
+)
+# END GENERATED: kotodama-v1-validator-policy
 _KOTODAMA_RETIRED_NUMERIC_TYPE_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:i64|u128|Amount|num|number|float|money)(?![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_])(?:"
+    + "|".join(re.escape(name) for name in _KOTODAMA_RETIRED_NUMERIC_TYPE_NAMES)
+    + r")(?![A-Za-z0-9_])"
 )
 
 
@@ -4466,7 +4501,9 @@ def _contract_string_tuple(value: Any, path: str) -> Tuple[str, ...]:
     )
 
 
-def _canonical_kotodama_identifier(value: str, *, declaration: bool = False) -> bool:
+def _canonical_kotodama_identifier(
+    value: str, *, declaration: bool = False, type_declaration: bool = False
+) -> bool:
     return (
         _KOTODAMA_IDENTIFIER_RE.fullmatch(value) is not None
         and value not in _KOTODAMA_RESERVED_IDENTIFIERS
@@ -4474,6 +4511,13 @@ def _canonical_kotodama_identifier(value: str, *, declaration: bool = False) -> 
         and (
             not declaration
             or value not in _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS
+        )
+        and (
+            not type_declaration
+            or (
+                value not in _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS
+                and value not in _KOTODAMA_RETIRED_NUMERIC_TYPE_NAMES
+            )
         )
     )
 
@@ -4737,7 +4781,9 @@ class EntrypointValueTypeV1:
                 if (
                     not isinstance(descriptor, EntrypointStructTypeNodeV1)
                     or not descriptor.fields
-                    or not _canonical_kotodama_identifier(descriptor.name)
+                    or not _canonical_kotodama_identifier(
+                        descriptor.name, type_declaration=True
+                    )
                     or any(
                         not _canonical_kotodama_identifier(field)
                         for field in descriptor.fields
@@ -5238,7 +5284,7 @@ class ContractErrorCodeDescriptor:
         )
         name = _contract_required_string(value.get("name"), "error code descriptor.name")
         if not _canonical_kotodama_identifier(
-            namespace, declaration=True
+            namespace, type_declaration=True
         ) or not _canonical_kotodama_identifier(name):
             raise TypeError("error code names must be canonical Kotodama identifiers")
         return cls(namespace=namespace, name=name, code=code)
@@ -5394,7 +5440,7 @@ class ContractManifest:
         ):
             raise TypeError("manifest `seiyaku_name` must be a non-empty string when provided")
         if seiyaku_name is not None and not _canonical_kotodama_identifier(
-            seiyaku_name, declaration=True
+            seiyaku_name, type_declaration=True
         ):
             raise TypeError("manifest `seiyaku_name` must be a canonical Kotodama identifier")
         code_hash = _contract_canonical_hash_hex(

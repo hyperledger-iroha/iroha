@@ -858,15 +858,7 @@ fn register_zk_asset_writes_policy_metadata() {
     // Minimal state and transaction
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -951,15 +943,7 @@ fn register_zk_asset_writes_policy_metadata() {
 fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1039,15 +1023,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
 fn schedule_confidential_policy_transition_records_pending() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1156,15 +1132,7 @@ fn schedule_confidential_policy_transition_records_pending() {
 fn confidential_policy_transition_applies_at_effective_height() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1282,15 +1250,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
 fn cancel_confidential_policy_transition_clears_pending() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1397,15 +1357,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
 fn transfer_rejects_when_nullifiers_exceed_cap() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     let mut zk_cfg = state.zk.clone();
     zk_cfg.max_nullifiers_per_tx = 1;
     state
@@ -1541,15 +1493,7 @@ fn transfer_rejects_repeated_nullifier_in_same_instruction() {
 fn shield_rejected_when_policy_disallows() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1625,15 +1569,7 @@ fn shield_rejected_when_policy_disallows() {
 fn unshield_rejected_when_policy_disallows() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1709,15 +1645,7 @@ fn unshield_rejected_when_policy_disallows() {
 fn zk_transfer_rejected_when_policy_transparent() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -1847,7 +1775,7 @@ fn shield_burns_and_unshield_mints() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = ChainId::from("iroha-test-chain");
-    let mut state = State::new_with_chain(World::new(), kura, query, chain_id.clone());
+    let mut state = State::new_with_chain_for_testing(World::new(), kura, query, chain_id.clone());
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2063,15 +1991,7 @@ fn zk_roots_are_bounded_in_world_state() {
     // Create state and set a small ZK cap
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
             halo2: cfg::Halo2 {
@@ -2101,6 +2021,7 @@ fn zk_roots_are_bounded_in_world_state() {
                 metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
+            sccp: cfg::Sccp::default(),
             root_history_cap: 4,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,
@@ -2229,15 +2150,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
 
     state
         .set_zk(cfg::Zk {
@@ -2268,6 +2181,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                 metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
+            sccp: cfg::Sccp::default(),
             root_history_cap: 8,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

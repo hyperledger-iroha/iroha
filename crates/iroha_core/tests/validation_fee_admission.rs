@@ -795,8 +795,8 @@ fn signed_batch_transfer_with_principal_amounts(
     recipient: &AccountId,
     fee_asset: &AssetDefinitionId,
     policy: &ValidationFeePolicyV1,
-    first_principal_amount: Numeric,
-    second_principal_amount: Numeric,
+    first_principal_amount: Quantity,
+    second_principal_amount: Quantity,
 ) -> SignedTransaction {
     signed_batch_transfer_with_entries(
         state,
@@ -808,25 +808,22 @@ fn signed_batch_transfer_with_principal_amounts(
                 user.clone(),
                 recipient.clone(),
                 fee_asset.clone(),
-                Quantity::try_from_numeric(first_principal_amount)
-                    .expect("principal fixture quantity must be non-negative"),
+                first_principal_amount,
             ),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 recipient.clone(),
                 fee_asset.clone(),
-                Quantity::try_from_numeric(second_principal_amount)
-                    .expect("principal fixture quantity must be non-negative"),
+                second_principal_amount,
             ),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 policy_treasury_account(policy),
                 fee_asset.clone(),
-                Quantity::try_from_numeric(Numeric::new(
+                quantity(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ))
-                .expect("fee fixture quantity must be non-negative"),
+                ),
             ),
         ],
     )
@@ -882,11 +879,11 @@ fn accept_transaction_error(state: &State, tx: SignedTransaction) -> String {
     }
 }
 
-fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Numeric {
+fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
     world
         .assets()
         .get(asset_id)
-        .map_or_else(Numeric::zero, |value| value.clone().into_inner().into())
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 #[test]
@@ -1037,12 +1034,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must not commit when validation-fee admission fails"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "treasury must not be credited by a transaction rejected before execution"
     );
     drop(view);
@@ -1075,12 +1072,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must not commit when the fee amount is wrong"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "wrong fee amount must not credit the treasury"
     );
     drop(view);
@@ -1119,12 +1116,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "recipient must not be credited by a rejected transaction"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "fee transfer must roll back when the later principal transfer fails"
     );
     drop(view);
@@ -1154,12 +1151,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "principal transfer must roll back when the later fee transfer fails"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        Numeric::zero(),
+        Quantity::zero(),
         "treasury must not be credited by a rejected transaction"
     );
     drop(view);
@@ -1187,12 +1184,12 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let view = state.view();
     assert_eq!(
         asset_balance(view.world(), &recipient_asset),
-        Numeric::new(1, 0),
+        Quantity::from(1_u64),
         "principal transfer must commit with the exact fee"
     );
     assert_eq!(
         asset_balance(view.world(), &treasury_asset),
-        policy.fee.as_numeric().clone(),
+        policy.fee.clone(),
         "fee transfer must commit with the principal transfer"
     );
 }
@@ -1334,8 +1331,8 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         &policy,
-        Numeric::new(1, 0),
-        Numeric::new(1, 0),
+        Quantity::from(1_u64),
+        Quantity::from(1_u64),
     );
     let exact_batch_result = accept_transaction_error(&state, exact_batch_tx.clone());
     assert_eq!(exact_batch_result, "ok");
@@ -1347,8 +1344,8 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         &policy,
-        Numeric::new(1, 0),
-        Numeric::new(2, 0),
+        Quantity::from(1_u64),
+        Quantity::from(2_u64),
     );
     let mut batch_principal_mutation_tx = exact_batch_tx.clone();
     batch_principal_mutation_tx.set_signature(wrong_batch_principal_tx.signature().clone());
@@ -1376,11 +1373,10 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                Quantity::try_from_numeric(Numeric::new(
+                quantity(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ))
-                .expect("fee fixture quantity must be non-negative"),
+                ),
             ),
         ],
     );
@@ -1400,8 +1396,8 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &recipient,
         &fee_asset,
         &policy,
-        Numeric::new(2, 0),
-        Numeric::new(1, 0),
+        Quantity::from(2_u64),
+        Quantity::from(1_u64),
     );
     let mut batch_amount_mutation_tx = exact_batch_tx.clone();
     batch_amount_mutation_tx.set_signature(wrong_batch_amount_tx.signature().clone());
@@ -1428,11 +1424,10 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 user.clone(),
                 policy_treasury_account(&policy),
                 fee_asset.clone(),
-                Quantity::try_from_numeric(Numeric::new(
+                quantity(
                     2 * TEST_VALIDATION_FEE_MINOR_UNITS,
                     TEST_VALIDATION_FEE_ASSET_SCALE.into(),
-                ))
-                .expect("fee fixture quantity must be non-negative"),
+                ),
             ),
         ],
     );
@@ -1452,8 +1447,8 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         &alternate_recipient,
         &fee_asset,
         &policy,
-        Numeric::new(1, 0),
-        Numeric::new(1, 0),
+        Quantity::from(1_u64),
+        Quantity::from(1_u64),
     );
     let mut batch_recipient_mutation_tx = exact_batch_tx;
     batch_recipient_mutation_tx.set_signature(wrong_batch_recipient_tx.signature().clone());

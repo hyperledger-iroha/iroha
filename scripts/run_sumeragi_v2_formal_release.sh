@@ -110,6 +110,8 @@ readonly verus_log_copy="${invocation_dir}/verus.log"
 readonly cross_tool_evidence_copy="${invocation_dir}/cross_tool_evidence.json"
 readonly harness_lock_copy="${invocation_dir}/harness-Cargo.lock"
 readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
+readonly tlaps_resource_jsonl_copy="${invocation_dir}/tlaps_resource.jsonl"
+readonly tlaps_resource_summary_copy="${invocation_dir}/tlaps_resource_summary.json"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
 readonly final_marker="Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"
 readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
@@ -121,6 +123,8 @@ cross_tool_obligations="$(
 readonly cross_tool_obligations
 
 verify_identity "before execution"
+readonly SUMERAGI_TLAPS_THREADS=1
+export SUMERAGI_TLAPS_THREADS
 set +e
 bash ci/check_sumeragi_formal.sh 2>&1 | tee "$gate_log"
 pipeline_status=("${PIPESTATUS[@]}")
@@ -142,10 +146,14 @@ readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
 readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
 readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
 readonly source_cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"
+readonly source_tlaps_resource_jsonl="target/formal/sumeragi_v2/tlaps_resource.jsonl"
+readonly source_tlaps_resource_summary="target/formal/sumeragi_v2/tlaps_resource_summary.json"
 if [[ ! -f "$source_ledger" || -L "$source_ledger" \
   || ! -f "$source_evidence" || -L "$source_evidence" \
   || ! -f "$source_verus_evidence" || -L "$source_verus_evidence" \
-  || ! -f "$source_verus_log" || -L "$source_verus_log" ]]; then
+  || ! -f "$source_verus_log" || -L "$source_verus_log" \
+  || ! -f "$source_tlaps_resource_jsonl" || -L "$source_tlaps_resource_jsonl" \
+  || ! -f "$source_tlaps_resource_summary" || -L "$source_tlaps_resource_summary" ]]; then
   echo "strict formal release gate did not produce regular TLAPS/Verus evidence files" >&2
   exit 1
 fi
@@ -166,6 +174,10 @@ cp -- "$source_verus_evidence" "${verus_evidence_copy}.partial"
 mv -- "${verus_evidence_copy}.partial" "$verus_evidence_copy"
 cp -- "$source_verus_log" "${verus_log_copy}.partial"
 mv -- "${verus_log_copy}.partial" "$verus_log_copy"
+cp -- "$source_tlaps_resource_jsonl" "${tlaps_resource_jsonl_copy}.partial"
+mv -- "${tlaps_resource_jsonl_copy}.partial" "$tlaps_resource_jsonl_copy"
+cp -- "$source_tlaps_resource_summary" "${tlaps_resource_summary_copy}.partial"
+mv -- "${tlaps_resource_summary_copy}.partial" "$tlaps_resource_summary_copy"
 if [[ -n "$cross_tool_obligations" ]]; then
   cp -- "$source_cross_tool_evidence" "${cross_tool_evidence_copy}.partial"
   mv -- "${cross_tool_evidence_copy}.partial" "$cross_tool_evidence_copy"
@@ -197,7 +209,7 @@ printf '%s\t%s\n' \
   cargo_verus_path "$cargo_verus_path" \
   cargo_verus_sha256 "$(hash_file "$cargo_verus_path")" \
   tlc_profile ci \
-  tlaps_threads 4 \
+  tlaps_threads 1 \
   >"$toolchain_tmp"
 mv -- "$toolchain_tmp" "$toolchain_copy"
 
@@ -227,6 +239,8 @@ verus_evidence_sha256="$(hash_file "$verus_evidence_copy")"
 verus_log_sha256="$(hash_file "$verus_log_copy")"
 harness_cargo_lock_sha256="$(hash_file "$harness_lock_copy")"
 formal_toolchain_sha256="$(hash_file "$toolchain_copy")"
+tlaps_resource_jsonl_sha256="$(hash_file "$tlaps_resource_jsonl_copy")"
+tlaps_resource_summary_sha256="$(hash_file "$tlaps_resource_summary_copy")"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
   schema_version 1 \
@@ -241,6 +255,8 @@ printf '%s\t%s\n' \
   verus_log_sha256 "$verus_log_sha256" \
   harness_cargo_lock_sha256 "$harness_cargo_lock_sha256" \
   formal_toolchain_sha256 "$formal_toolchain_sha256" \
+  tlaps_resource_jsonl_sha256 "$tlaps_resource_jsonl_sha256" \
+  tlaps_resource_summary_sha256 "$tlaps_resource_summary_sha256" \
   >"$completion_tmp"
 if [[ -n "$cross_tool_obligations" ]]; then
   printf '%s\t%s\n' \

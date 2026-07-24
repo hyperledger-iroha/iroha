@@ -11605,7 +11605,7 @@ fn either(bool value) -> bool { return value || rhs(); }
     #[test]
     fn lower_account_id_canonical_literal_to_static_account_dataref() {
         let canonical = iroha_data_model::account::AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
@@ -11936,7 +11936,7 @@ fn either(bool value) -> bool { return value || rhs(); }
                 fn main() {
                     let args = TransferArgs {
                         domain: DomainId::parse("wonderland.universal"),
-                        to: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                        to: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                     };
                     ledger::domain::transfer(
                         source: context::authority(),

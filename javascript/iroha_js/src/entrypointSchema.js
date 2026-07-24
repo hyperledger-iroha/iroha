@@ -117,8 +117,11 @@ function validateNode(node, context) {
   switch (node.kind) {
     case "Struct": {
       requireExactKeys(node.value, ["name", "fields"], `${context}.value`);
+      const reservedSchemaName =
+        CORE_QUERY_VIEWS.has(node.value.name) || node.value.name === "QueryPage";
       if (
-        !isCanonicalKotodamaIdentifier(node.value.name) ||
+        (!reservedSchemaName &&
+          !isCanonicalKotodamaIdentifier(node.value.name, { typeDeclaration: true })) ||
         !Array.isArray(node.value.fields) ||
         node.value.fields.length === 0
       ) {

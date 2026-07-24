@@ -46,15 +46,15 @@ fn translate_unknown_param() {
 }
 
 #[test]
-fn override_language_in_compiler() {
-    // Intentionally reference an unknown parameter to force a compiler error
-    // and verify the error is emitted in the overridden language (Japanese).
-    let src = "fn f(a){ let c = b + 1; }";
+fn compiler_language_override_preserves_structured_diagnostics() {
+    // CompilerSession owns source diagnostics so every compiler facade emits the
+    // same stable codes and messages. Language overrides still apply to the
+    // explicitly translated facade errors, but must not rewrite this contract.
+    let src = "誓約 Localized { fn f(int a) { let c = b + 1; } }";
     let c = Compiler::new_with_language(Language::Japanese);
     let err = c.compile_source(src).unwrap_err();
-    // Expect the Japanese prefix for semantic errors
     assert!(
-        err.contains("意味解析エラー"),
+        err.contains("error[K2002] resolve: unknown value `b`"),
         "unexpected error message: {err}"
     );
 }

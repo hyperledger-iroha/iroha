@@ -64,7 +64,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
 
 #[test]
 fn pointer_from_norito_syscall_returns_pointer() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -92,7 +92,7 @@ fn pointer_from_norito_syscall_returns_pointer() {
 
 #[test]
 fn pointer_from_norito_rejects_retired_blob_carrier() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let pointer_bytes = encode_account_id_pointer_in_blob(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -112,7 +112,7 @@ fn pointer_from_norito_rejects_retired_blob_carrier() {
 
 #[test]
 fn pointer_from_norito_rejects_inner_tlv_without_hash() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let pointer_bytes = encode_account_id_pointer_without_inner_hash(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -131,7 +131,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
 
 #[test]
 fn pointer_from_norito_rejects_wrong_expected_type() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);

@@ -2053,7 +2053,7 @@ mod tests {
             "## `kotoage` / `言挙げ`, views, and lifecycle",
             "### `deposit(int amount)`",
             "Declaration: `kotoage`/`言挙げ` (authorized public mutation)",
-            "Declaration: `view` (read-only public call)",
+            "Declaration: `view` (read-only call)",
             "Lifecycle declaration: `hajimari`/`始まり`",
             "Lifecycle declaration: `kaizen`/`改善`",
             "Authorization: `CanDeposit`",
@@ -2082,7 +2082,7 @@ mod tests {
         )
         .expect("branded Japanese keywords are valid V1 syntax");
         assert_eq!(
-            branded, "誓約 Demo { 言挙げ fn run() authorize(\"Run\") {} }\n",
+            branded, "誓約 Demo {\n    言挙げ fn run() authorize(\"Run\") {}\n}\n",
             "formatting must preserve the selected branded script",
         );
         let error = format_source_text(
@@ -2502,7 +2502,7 @@ mod tests {
         ])
         .expect_err("standalone module build must fail");
         assert!(
-            error.to_string().contains("K4003"),
+            error.to_string().contains("E_ROOT_MUST_BE_SEIYAKU"),
             "unexpected error: {error}"
         );
         assert!(!target.join("dev/math.to").exists());

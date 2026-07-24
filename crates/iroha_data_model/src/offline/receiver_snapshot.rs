@@ -554,14 +554,17 @@ mod tests {
     use crate::account::AccountId;
 
     fn key(device: &str) -> KagemushaActiveReceiverKeyV1 {
+        let (public_key, _) =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xDA; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("receiver fixture seed derives a checked Ed25519 keypair")
+                .into_parts();
         KagemushaActiveReceiverKeyV1 {
-            account_id: AccountId::new(
-                "ed0120DA4C84C3437092D99CC989C14892278064B9FB34A8F7D579B520C1D3B4BDB17A"
-                    .parse()
-                    .expect("account public key"),
-            ),
+            account_id: AccountId::new(public_key),
             device_id: device.to_owned(),
-            asset_definition_id: "sbd#wonderland".parse().expect("asset"),
+            asset_definition_id: AssetDefinitionId::new(
+                crate::domain::DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                "sbd".parse().expect("asset name"),
+            ),
         }
     }
 

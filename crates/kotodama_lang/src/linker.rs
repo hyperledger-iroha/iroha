@@ -4009,9 +4009,17 @@ mod tests {
 
     #[test]
     fn package_graph_rejects_invalid_types_and_bodies() {
-        for source in [
-            "module Quotes { fn quote(MissingType value) -> int { return 1; } }",
-            "module Quotes { fn quote() -> int { return true; } }",
+        for (source, expected_code, expected_phase) in [
+            (
+                "module Quotes { fn quote(MissingType value) -> int { return 1; } }",
+                "K2002",
+                DiagnosticPhase::Resolve,
+            ),
+            (
+                "module Quotes { fn quote() -> int { return true; } }",
+                "E_RETURN_TYPE_MISMATCH",
+                DiagnosticPhase::Semantic,
+            ),
         ] {
             let error = ModuleBuildGraph::default()
                 .validate_package(
@@ -4025,11 +4033,23 @@ mod tests {
                     LinkerOptions::default(),
                 )
                 .expect_err("invalid typed module must fail");
-            assert!(
-                matches!(error, SourceGraphError::Resolve { .. })
-                    || error.diagnostic_code() == "K2003",
-                "{error:?}"
+            assert_eq!(error.diagnostic_code(), expected_code, "{error:?}");
+            let diagnostics = error.into_diagnostics();
+            let diagnostic = diagnostics
+                .diagnostics
+                .first()
+                .expect("invalid typed module has a diagnostic");
+            assert_eq!(diagnostic.code, expected_code);
+            assert_eq!(diagnostic.phase, expected_phase);
+            let primary = diagnostic
+                .primary_span
+                .as_ref()
+                .expect("invalid typed module retains its source owner");
+            assert_eq!(
+                primary.package_identity.as_deref(),
+                Some("local/quotes@1.0.0")
             );
+            assert_eq!(primary.source.as_deref(), Some("invalid.ko"));
         }
     }
 
@@ -4307,7 +4327,16 @@ mod tests {
             assert_eq!(graph.link_attempt_count(), 0);
             let rendered = error.to_string();
             assert!(!rendered.contains('\0'));
-            assert!(!rendered.contains('\n'));
+            if source_name.chars().any(char::is_control) {
+                assert!(
+                    !rendered.contains(&format!("`{source_name}`")),
+                    "raw control characters must not be copied into diagnostics"
+                );
+                assert!(
+                    rendered.contains(&format!("`{}`", source_name.escape_debug())),
+                    "control characters must use an escaped diagnostic spelling"
+                );
+            }
         }
     }
 
@@ -4355,10 +4384,24 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("invalid source text must reach the parser");
-        assert!(matches!(
-            error,
-            SourceGraphError::Parse { ref source, .. } if source == "src/app.ko"
-        ));
+        let SourceGraphError::Parse {
+            source,
+            diagnostics,
+        } = error
+        else {
+            panic!("invalid source text must produce parse diagnostics");
+        };
+        assert_eq!(source, "<project>");
+        assert!(
+            diagnostics.diagnostics.iter().all(|diagnostic| {
+                diagnostic
+                    .primary_span
+                    .as_ref()
+                    .and_then(|span| span.source.as_deref())
+                    == Some("src/app.ko")
+            }),
+            "every aggregated diagnostic must retain the canonical root path"
+        );
         assert_eq!(graph.parse_attempt_count(), 1);
         assert_eq!(graph.link_attempt_count(), 1);
     }
@@ -4382,9 +4425,30 @@ mod tests {
             .validate_package(reordered, LinkerOptions::default())
             .expect_err("reordered malformed package must fail identically");
         assert_eq!(first, second);
-        assert!(matches!(
-            first,
-            SourceGraphError::Parse { ref source, .. } if source == "a.ko"
-        ));
+        let SourceGraphError::Parse {
+            source,
+            diagnostics,
+        } = first
+        else {
+            panic!("malformed package must produce parse diagnostics");
+        };
+        assert_eq!(source, "<project>");
+        let owners = diagnostics
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                diagnostic
+                    .primary_span
+                    .as_ref()
+                    .and_then(|span| span.source.as_deref())
+                    .expect("aggregated parse diagnostic retains its source owner")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            owners.windows(2).all(|pair| pair[0] <= pair[1]),
+            "aggregated diagnostics follow canonical module order: {owners:?}"
+        );
+        assert_eq!(owners.first().copied(), Some("a.ko"));
+        assert!(owners.contains(&"z.ko"));
     }
 }

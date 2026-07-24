@@ -61,6 +61,7 @@ use crate::zk::{
         with_kagemusha_authenticated_artifact_payload_from_source_v4,
     },
     kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4,
+    kagemusha_recursion_adapter::kagemusha_artifact_encoding_sizes_v4,
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
 
@@ -96,6 +97,35 @@ const MAX_CATALOG_RELEASES_V4: usize = 16;
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 const MAX_CATALOG_AGGREGATE_BYTES_V4: u64 = 8 * 1024 * 1024 * 1024;
+/// Default decoded-resident ceiling used by non-daemon catalog callers.
+pub const DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4: u64 = 256 * 1024 * 1024;
+/// `ParamsIPA` retains two vectors of 64-byte Pasta affine points per domain row.
+const PARSED_PARAMS_BYTES_PER_ROW_V4: u64 = 2 * 64;
+/// Conservative expansion from compressed verifier-key bytes to parsed points.
+const PARSED_VERIFYING_KEY_EXPANSION_V4: u64 = 2;
+/// Conservative retained cost of Halo2's verifier-key evaluation domain.
+///
+/// The vendored domain owns forward and inverse FFT twiddle tables for the
+/// base and extended domains. Charging 512 bytes per base-domain row covers
+/// those tables, their vector metadata, and construction scratch without
+/// pretending that the tiny serialized VK is representative of its decoded
+/// footprint.
+const PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4: u64 = 512;
+/// Small authenticated objects retained in several catalog/verifier owners.
+const CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
+    + MAX_ATTESTATION_BYTES
+    + 2 * KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
+    + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
+    as u64;
+/// Metadata parsing scratch that can overlap verifier parsing.
+const CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4: u64 = (3 * MAX_MANIFEST_BYTES
+    + MAX_POLICY_BYTES
+    + MAX_ATTESTATION_BYTES
+    + KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4)
+    as u64;
+/// Extra allocator/metadata headroom applied to decoded catalog estimates.
+const DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4: u64 = 5;
+const DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4: u64 = 4;
 
 /// Canonical identity committed by each V4 verifier registry record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -131,6 +161,12 @@ pub(crate) struct KagemushaAuthenticatedArtifactSetV4 {
 pub(crate) struct ResolvedKagemushaTerminalVerifierV4 {
     qualified_source: Arc<KagemushaQualifiedArtifactSourceV4>,
     verifier: Arc<KagemushaPastaCycleOpaqueVerifierV4>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KagemushaCatalogMemoryEstimateV4 {
+    persistent_bytes: u64,
+    peak_load_bytes: u64,
 }
 
 /// One startup-authenticated ABI-21 release retained for consensus execution.
@@ -195,19 +231,42 @@ impl KagemushaReleaseCatalogV4 {
     /// All filesystem access, hashing, framing checks, and Halo2 verifier
     /// parsing complete before the returned immutable catalog is published.
     pub fn load(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
+        Self::load_with_decoded_budget(
+            policy_path,
+            artifact_dir,
+            DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4,
+        )
+    }
+
+    /// Authenticate a catalog under an explicit decoded-resident memory ceiling.
+    pub fn load_with_decoded_budget(
+        policy_path: &Path,
+        artifact_dir: &Path,
+        max_decoded_bytes: u64,
+    ) -> Result<Self, String> {
+        if max_decoded_bytes == 0 {
+            return Err(
+                "Kagemusha V4 decoded catalog memory budget must be greater than zero".to_owned(),
+            );
+        }
+        if max_decoded_bytes > DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4 {
+            return Err(format!(
+                "Kagemusha V4 decoded catalog memory budget cannot exceed the non-raiseable {DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4}-byte safety ceiling"
+            ));
+        }
         #[cfg(all(
             unix,
             not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
         ))]
         {
-            Self::load_descriptor_relative(policy_path, artifact_dir)
+            Self::load_descriptor_relative(policy_path, artifact_dir, max_decoded_bytes)
         }
         #[cfg(not(all(
             unix,
             not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
         )))]
         {
-            let _ = (policy_path, artifact_dir);
+            let _ = (policy_path, artifact_dir, max_decoded_bytes);
             Err(
                 "Kagemusha V4 descriptor-relative catalog loading is unsupported on this platform"
                     .to_owned(),
@@ -219,7 +278,11 @@ impl KagemushaReleaseCatalogV4 {
         unix,
         not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
     ))]
-    fn load_descriptor_relative(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
+    fn load_descriptor_relative(
+        policy_path: &Path,
+        artifact_dir: &Path,
+        max_decoded_bytes: u64,
+    ) -> Result<Self, String> {
         let (policy_parent_path, policy_file_name) =
             absolute_file_parent_and_name(policy_path, "release policy")?;
         let policy_parent =
@@ -236,6 +299,7 @@ impl KagemushaReleaseCatalogV4 {
 
         let mut releases = BTreeMap::new();
         let mut aggregate_catalog_bytes = 0_u64;
+        let mut aggregate_decoded_bytes = 0_u64;
         for directory_name in &directory_names {
             let file_name = directory_name.as_str();
             let manifest_sha256 = parse_manifest_directory_name(file_name)?;
@@ -246,15 +310,26 @@ impl KagemushaReleaseCatalogV4 {
                 .ok_or_else(|| {
                     "Kagemusha V4 catalog aggregate byte accounting overflowed".to_owned()
                 })?;
-            let (release, release_bytes) = load_release_directory(
+            let remaining_decoded_bytes = max_decoded_bytes
+                .checked_sub(aggregate_decoded_bytes)
+                .ok_or_else(|| {
+                    "Kagemusha V4 decoded catalog memory accounting overflowed".to_owned()
+                })?;
+            let (release, release_bytes, release_decoded_bytes) = load_release_directory(
                 &directory,
                 manifest_sha256,
                 &policy,
                 policy_sha256,
                 remaining_catalog_bytes,
+                remaining_decoded_bytes,
             )?;
             aggregate_catalog_bytes =
                 add_catalog_release_bytes(aggregate_catalog_bytes, release_bytes)?;
+            aggregate_decoded_bytes = aggregate_decoded_bytes
+                .checked_add(release_decoded_bytes)
+                .ok_or_else(|| {
+                    "Kagemusha V4 decoded catalog memory accounting overflowed".to_owned()
+                })?;
             artifact_root.verify_directory_entry(directory_name, &directory)?;
             if releases
                 .insert(manifest_sha256, Arc::new(release))
@@ -283,9 +358,9 @@ impl KagemushaReleaseCatalogV4 {
     /// Build the exact governed activation payload for one authenticated release.
     ///
     /// This is the only production constructor for the consensus payload. It
-    /// projects both inline verifier records from the immutable, fully parsed
-    /// startup catalog, so an operator cannot substitute release fields, key
-    /// bytes, commitments, schemas, activation heights, or policy identity.
+    /// projects both inline verifier records from the immutable, qualified
+    /// pinned startup source, so an operator cannot substitute release fields,
+    /// key bytes, commitments, schemas, activation heights, or policy identity.
     /// Consensus still enforces that `verifier_version` is the next atomic
     /// Eq/Ep version when the resulting instruction is executed.
     pub fn build_activation(
@@ -1527,6 +1602,128 @@ fn verify_exact_release_inventory_v4(
     Ok(aggregate_bytes)
 }
 
+fn checked_decoded_estimate_headroom_v4(bytes: u64) -> Result<u64, String> {
+    bytes
+        .checked_mul(DECODED_ESTIMATE_HEADROOM_NUMERATOR_V4)
+        .and_then(|value| {
+            value.checked_add(DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4.saturating_sub(1))
+        })
+        .and_then(|value| value.checked_div(DECODED_ESTIMATE_HEADROOM_DENOMINATOR_V4))
+        .ok_or_else(|| "Kagemusha V4 decoded catalog memory estimate overflowed".to_owned())
+}
+
+fn profile_artifact_payload_bytes_v4(
+    profile: &iroha_data_model::offline::KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+) -> Result<u64, String> {
+    profile
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == kind)
+        .map(|artifact| artifact.payload_size_bytes)
+        .ok_or_else(|| {
+            format!(
+                "Kagemusha V4 profile is missing the {kind:?} artifact required for memory accounting"
+            )
+        })
+}
+
+fn validate_catalog_artifact_encoding_sizes_v4(
+    manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+) -> Result<(), String> {
+    for profile in &manifest.profiles {
+        let sizes = kagemusha_artifact_encoding_sizes_v4(&profile.circuit_params, profile.parity)?;
+        for (kind, label, expected_bytes) in [
+            (
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+                "parameters",
+                sizes.parameters_bytes,
+            ),
+            (
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+                "proving key",
+                sizes.proving_key_bytes,
+            ),
+            (
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+                "verifier key",
+                sizes.verifying_key_bytes,
+            ),
+        ] {
+            if expected_bytes == 0
+                || expected_bytes >= KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+            {
+                return Err(format!(
+                    "Kagemusha V4 {label} length {expected_bytes} violates the fixed {}-byte artifact-size corridor",
+                    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+                ));
+            }
+            let declared_bytes = profile_artifact_payload_bytes_v4(profile, kind)?;
+            if declared_bytes != expected_bytes {
+                return Err(format!(
+                    "Kagemusha V4 {label} descriptor length {declared_bytes} does not match the exact authenticated shape length {expected_bytes}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn estimate_catalog_release_memory_v4(
+    manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+) -> Result<KagemushaCatalogMemoryEstimateV4, String> {
+    let mut persistent_bytes = CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4;
+    let mut largest_transient_payload_bytes = 0_u64;
+    for profile in &manifest.profiles {
+        let rows = 1_u64
+            .checked_shl(profile.ipa_k)
+            .ok_or_else(|| "Kagemusha V4 parameter row estimate overflowed".to_owned())?;
+        let parsed_params_bytes = rows
+            .checked_mul(PARSED_PARAMS_BYTES_PER_ROW_V4)
+            .ok_or_else(|| "Kagemusha V4 parsed parameter estimate overflowed".to_owned())?;
+        let parsed_verifying_key_domain_bytes = rows
+            .checked_mul(PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4)
+            .ok_or_else(|| "Kagemusha V4 parsed verifier domain estimate overflowed".to_owned())?;
+        let params_payload_bytes = profile_artifact_payload_bytes_v4(
+            profile,
+            KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+        )?;
+        let verifying_key_payload_bytes = profile_artifact_payload_bytes_v4(
+            profile,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+        )?;
+        let bootstrap_payload_bytes = profile_artifact_payload_bytes_v4(
+            profile,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+        )?;
+        let retained_and_parsed_verifying_key_bytes = verifying_key_payload_bytes
+            .checked_mul(1 + PARSED_VERIFYING_KEY_EXPANSION_V4)
+            .ok_or_else(|| "Kagemusha V4 verifier-key estimate overflowed".to_owned())?;
+        persistent_bytes = persistent_bytes
+            .checked_add(parsed_params_bytes)
+            .and_then(|value| value.checked_add(parsed_verifying_key_domain_bytes))
+            .and_then(|value| value.checked_add(retained_and_parsed_verifying_key_bytes))
+            .ok_or_else(|| "Kagemusha V4 persistent memory estimate overflowed".to_owned())?;
+        // The descriptor-relative loader opens and drops one raw role before
+        // requesting the next. Only the largest payload overlaps the final
+        // parsed verifier set; summing six raw payloads would model the retired
+        // all-Vec loader rather than production behavior.
+        largest_transient_payload_bytes = largest_transient_payload_bytes.max(
+            params_payload_bytes
+                .max(verifying_key_payload_bytes)
+                .max(bootstrap_payload_bytes),
+        );
+    }
+    let peak_load_bytes = persistent_bytes
+        .checked_add(CATALOG_RELEASE_METADATA_TRANSIENT_BYTES_V4)
+        .and_then(|value| value.checked_add(largest_transient_payload_bytes))
+        .ok_or_else(|| "Kagemusha V4 peak memory estimate overflowed".to_owned())?;
+    Ok(KagemushaCatalogMemoryEstimateV4 {
+        persistent_bytes: checked_decoded_estimate_headroom_v4(persistent_bytes)?,
+        peak_load_bytes: checked_decoded_estimate_headroom_v4(peak_load_bytes)?,
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 #[cfg(all(
     unix,
@@ -1538,7 +1735,8 @@ fn load_release_directory(
     policy: &KagemushaRecursiveSpendReleasePolicyV1,
     policy_sha256: [u8; 32],
     remaining_catalog_bytes: u64,
-) -> Result<(KagemushaCachedReleaseV4, u64), String> {
+    remaining_decoded_bytes: u64,
+) -> Result<(KagemushaCachedReleaseV4, u64, u64), String> {
     let manifest_bytes = read_bounded_directory_file(
         directory,
         MANIFEST_FILE_NAME_V4,
@@ -1550,6 +1748,14 @@ fn load_release_directory(
         return Err("Kagemusha V4 manifest digest does not match its directory".to_owned());
     }
     let manifest = decode_canonical_manifest(&manifest_bytes)?;
+    validate_catalog_artifact_encoding_sizes_v4(&manifest)?;
+    let memory_estimate = estimate_catalog_release_memory_v4(&manifest)?;
+    if memory_estimate.peak_load_bytes > remaining_decoded_bytes {
+        return Err(format!(
+            "Kagemusha V4 decoded catalog memory estimate {} exceeds the remaining budget {remaining_decoded_bytes}",
+            memory_estimate.peak_load_bytes
+        ));
+    }
     let inventory_bytes = verify_exact_release_inventory_v4(directory, &manifest)?;
     if inventory_bytes > remaining_catalog_bytes {
         return Err(format!(
@@ -1687,6 +1893,7 @@ fn load_release_directory(
             resolved,
         },
         inventory_bytes,
+        memory_estimate.persistent_bytes,
     ))
 }
 
@@ -2209,6 +2416,148 @@ mod tests {
             max_proof_bytes: manifest.max_proof_bytes,
         };
         (authenticated, promotion)
+    }
+
+    #[test]
+    fn decoded_catalog_estimate_accounts_for_params_and_vk_expansion() {
+        let (authenticated, _) = authenticated_candidate_binding_release();
+        let estimate = estimate_catalog_release_memory_v4(authenticated.manifest())
+            .expect("candidate-binding memory estimate");
+        let rows = 1_u64 << KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let params = rows * PARSED_PARAMS_BYTES_PER_ROW_V4 * 2;
+        let verifier_domains = rows * PARSED_VERIFYING_KEY_DOMAIN_BYTES_PER_ROW_V4 * 2;
+        let retained_and_parsed_vk = 64 * (1 + PARSED_VERIFYING_KEY_EXPANSION_V4) * 2;
+        let expected_persistent = checked_decoded_estimate_headroom_v4(
+            CATALOG_RELEASE_METADATA_PERSISTENT_BYTES_V4
+                + params
+                + verifier_domains
+                + retained_and_parsed_vk,
+        )
+        .expect("expected persistent estimate");
+
+        assert_eq!(estimate.persistent_bytes, expected_persistent);
+        assert!(estimate.peak_load_bytes > estimate.persistent_bytes);
+        assert!(estimate.peak_load_bytes <= DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4);
+    }
+
+    #[test]
+    fn decoded_catalog_headroom_rounds_up() {
+        assert_eq!(
+            checked_decoded_estimate_headroom_v4(1).expect("one-byte estimate"),
+            2
+        );
+        assert_eq!(
+            checked_decoded_estimate_headroom_v4(4).expect("aligned estimate"),
+            5
+        );
+    }
+
+    #[test]
+    fn catalog_preflight_rejects_inexact_proving_key_before_halo_parsing() {
+        let (authenticated, _) = authenticated_candidate_binding_release();
+        let error = validate_catalog_artifact_encoding_sizes_v4(authenticated.manifest())
+            .expect_err("an inexact proving-key descriptor must fail before parsing");
+
+        assert!(error.contains("proving key descriptor length 64"));
+        assert!(error.contains("exact authenticated shape length"));
+    }
+
+    #[test]
+    fn decoded_catalog_estimate_rejects_shift_overflow() {
+        let (authenticated, _) = authenticated_candidate_binding_release();
+        let mut manifest = authenticated.manifest().clone();
+        manifest.profiles[0].ipa_k = u64::BITS;
+
+        assert!(estimate_catalog_release_memory_v4(&manifest).is_err());
+    }
+
+    #[test]
+    fn decoded_catalog_loader_rejects_zero_budget_before_filesystem_access() {
+        let error = KagemushaReleaseCatalogV4::load_with_decoded_budget(
+            Path::new("missing-policy"),
+            Path::new("missing-artifacts"),
+            0,
+        )
+        .err()
+        .expect("zero decoded budget must fail first");
+
+        assert!(error.contains("must be greater than zero"));
+    }
+
+    #[test]
+    fn decoded_catalog_loader_rejects_budget_above_safety_ceiling() {
+        let error = KagemushaReleaseCatalogV4::load_with_decoded_budget(
+            Path::new("missing-policy"),
+            Path::new("missing-artifacts"),
+            DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4 + 1,
+        )
+        .err()
+        .expect("an over-ceiling decoded budget must fail before filesystem access");
+
+        assert!(error.contains("non-raiseable"));
+        assert!(error.contains(&DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4.to_string()));
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    #[test]
+    fn decoded_catalog_loader_enforces_budget_before_artifact_reads() {
+        let temporary = tempfile::tempdir().expect("temporary catalog root");
+        let root = canonical_temporary_root(&temporary);
+        let policy = write_test_policy(&root);
+        let artifacts = root.join("artifacts");
+        let (authenticated, _) = authenticated_candidate_binding_release();
+        let mut manifest = authenticated.manifest().clone();
+        for profile in &mut manifest.profiles {
+            let sizes =
+                kagemusha_artifact_encoding_sizes_v4(&profile.circuit_params, profile.parity)
+                    .expect("compact artifact encoding sizes");
+            for descriptor in &mut profile.artifacts {
+                let payload_size = match descriptor.kind {
+                    KagemushaPastaCycleArtifactKindV4::ParamsIpa => sizes.parameters_bytes,
+                    KagemushaPastaCycleArtifactKindV4::ProvingKey => sizes.proving_key_bytes,
+                    KagemushaPastaCycleArtifactKindV4::VerifyingKey => sizes.verifying_key_bytes,
+                    KagemushaPastaCycleArtifactKindV4::BootstrapWitness => {
+                        descriptor.payload_size_bytes
+                    }
+                };
+                descriptor.payload_size_bytes = payload_size;
+                descriptor.size_bytes = payload_size
+                    .checked_add(4_096)
+                    .expect("compact framed artifact size");
+            }
+        }
+        let manifest_bytes = norito::to_bytes(&manifest).expect("canonical compact manifest");
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
+        let release = artifacts.join(hex::encode(manifest_sha256));
+        std::fs::create_dir_all(&release).expect("create compact release directory");
+        std::fs::write(release.join(MANIFEST_FILE_NAME_V4), manifest_bytes)
+            .expect("write compact manifest");
+
+        let estimate =
+            estimate_catalog_release_memory_v4(&manifest).expect("compact catalog memory estimate");
+        assert!(estimate.peak_load_bytes <= DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4);
+        let error = KagemushaReleaseCatalogV4::load_with_decoded_budget(
+            &policy,
+            &artifacts,
+            estimate.peak_load_bytes - 1,
+        )
+        .err()
+        .expect("a one-byte-short decoded budget must fail before inventory reads");
+        assert!(
+            error.contains("decoded catalog memory estimate"),
+            "unexpected error: {error}"
+        );
+
+        let error = KagemushaReleaseCatalogV4::load(&policy, &artifacts)
+            .err()
+            .expect("the intentionally incomplete inventory must still fail closed");
+        assert!(
+            !error.contains("decoded catalog memory estimate") && error.contains("inventory"),
+            "default loader rejected before the bounded inventory check: {error}"
+        );
     }
 
     #[cfg(all(

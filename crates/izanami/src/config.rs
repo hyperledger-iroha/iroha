@@ -858,6 +858,18 @@ fn normalize_lane_metadata(raw: &mut Table) {
     }
 }
 
+fn embedded_dataspace_manifest_hash(id: DataSpaceId) -> String {
+    use std::fmt::Write as _;
+
+    let mut bytes = [0_u8; 32];
+    bytes[..8].copy_from_slice(&id.as_u64().to_le_bytes());
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String should not fail");
+    }
+    encoded
+}
+
 fn build_nexus_layer(
     nexus: &ActualNexus,
     sumeragi: &ActualSumeragi,
@@ -933,6 +945,12 @@ fn build_nexus_layer(
             value.insert("alias".to_string(), Value::String(entry.alias.clone()));
             let id = i64::try_from(entry.id.as_u64()).unwrap_or_default();
             value.insert("id".to_string(), Value::Integer(id));
+            if entry.id != DataSpaceId::UNIVERSAL {
+                value.insert(
+                    "manifest_hash".to_string(),
+                    Value::String(embedded_dataspace_manifest_hash(entry.id)),
+                );
+            }
             if let Some(description) = &entry.description {
                 value.insert(
                     "description".to_string(),
@@ -1130,77 +1148,6 @@ fn write_sumeragi_v2_layer(layer: &mut Table, sumeragi: &ActualSumeragi) {
         .write(
             ["sumeragi", "keys", "allowed_hsm_providers"],
             Value::Array(allowed_hsm_providers),
-        )
-        .write(
-            ["sumeragi", "npos", "epoch_length_blocks"],
-            i64::try_from(sumeragi.npos.epoch_length_blocks).expect("epoch length fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "vrf", "commit_window_blocks"],
-            i64::try_from(sumeragi.npos.vrf.commit_window_blocks).expect("VRF window fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "vrf", "reveal_window_blocks"],
-            i64::try_from(sumeragi.npos.vrf.reveal_window_blocks).expect("VRF window fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-            i64::try_from(sumeragi.npos.vrf.commit_deadline_offset_blocks)
-                .expect("VRF deadline fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-            i64::try_from(sumeragi.npos.vrf.reveal_deadline_offset_blocks)
-                .expect("VRF deadline fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "max_validators"],
-            i64::from(sumeragi.npos.election.max_validators),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "min_self_bond"],
-            i64::try_from(sumeragi.npos.election.min_self_bond).expect("bond fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "min_nomination_bond"],
-            i64::try_from(sumeragi.npos.election.min_nomination_bond).expect("bond fits i64"),
-        )
-        .write(
-            [
-                "sumeragi",
-                "npos",
-                "election",
-                "max_nominator_concentration_pct",
-            ],
-            i64::from(sumeragi.npos.election.max_nominator_concentration_pct),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "seat_band_pct"],
-            i64::from(sumeragi.npos.election.seat_band_pct),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "max_entity_correlation_pct"],
-            i64::from(sumeragi.npos.election.max_entity_correlation_pct),
-        )
-        .write(
-            ["sumeragi", "npos", "election", "finality_margin_blocks"],
-            i64::try_from(sumeragi.npos.election.finality_margin_blocks)
-                .expect("finality margin fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "reconfig", "evidence_horizon_blocks"],
-            i64::try_from(sumeragi.npos.reconfig.evidence_horizon_blocks)
-                .expect("reconfiguration horizon fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "reconfig", "activation_lag_blocks"],
-            i64::try_from(sumeragi.npos.reconfig.activation_lag_blocks)
-                .expect("activation lag fits i64"),
-        )
-        .write(
-            ["sumeragi", "npos", "reconfig", "slashing_delay_blocks"],
-            i64::try_from(sumeragi.npos.reconfig.slashing_delay_blocks)
-                .expect("slashing delay fits i64"),
         );
 }
 
@@ -1500,6 +1447,36 @@ mod tests {
             profile.bootstrap_public_lanes,
             vec![LaneId::new(0), LaneId::new(1), LaneId::new(2)],
             "embedded nexus profile should expose every stake-elected bootstrap lane"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_preserves_embedded_dataspace_manifest_hashes() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        let dataspaces = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .and_then(|nexus| nexus.get("dataspace_catalog"))
+            .and_then(Value::as_array)
+            .expect("embedded dataspace catalog");
+        let manifest_hash = |alias: &str| {
+            dataspaces
+                .iter()
+                .filter_map(Value::as_table)
+                .find(|entry| entry.get("alias").and_then(Value::as_str) == Some(alias))
+                .and_then(|entry| entry.get("manifest_hash"))
+                .and_then(Value::as_str)
+        };
+
+        assert_eq!(manifest_hash("universal"), None);
+        assert_eq!(
+            manifest_hash("governance"),
+            Some("0100000000000000000000000000000000000000000000000000000000000000")
+        );
+        assert_eq!(
+            manifest_hash("zk"),
+            Some("0200000000000000000000000000000000000000000000000000000000000000")
         );
     }
 

@@ -38,7 +38,7 @@ fn map_path(base: &str, pointer_payload: &[u8]) -> String {
 
 #[test]
 fn durable_map_account_id_path_is_reversible_canonical_hex() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
@@ -70,7 +70,7 @@ fn durable_map_name_value_roundtrip() {
 
 #[test]
 fn durable_map_account_id_value_roundtrip() {
-    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const OWNER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let raw = validate_tlv_bytes(&raw_ptr).expect("AccountId pointer envelope");
     let mut host = CoreHost::new();

@@ -8867,95 +8867,6 @@ public struct NativeDaProofSummaryGenerator: DaProofSummaryGenerating {
     }
 }
 
-public struct ToriiSoraFsChunkerHandle: Codable, Sendable, Equatable {
-    public var profileId: UInt32?
-    public var namespace: String?
-    public var name: String?
-    public var semver: String?
-    public var multihashCode: UInt32?
-
-    public init(profileId: UInt32? = nil,
-                namespace: String? = nil,
-                name: String? = nil,
-                semver: String? = nil,
-                multihashCode: UInt32? = nil) {
-        self.profileId = profileId
-        self.namespace = namespace
-        self.name = name
-        self.semver = semver
-        self.multihashCode = multihashCode
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case profileId = "profile_id"
-        case namespace
-        case name
-        case semver
-        case multihashCode = "multihash_code"
-    }
-
-    func normalized() throws -> ToriiSoraFsChunkerHandle {
-        ToriiSoraFsChunkerHandle(
-            profileId: try ToriiSoraFsPinValidation.requiredUInt32(
-                profileId,
-                field: "chunker.profile_id",
-                allowZero: false
-            ),
-            namespace: try ToriiSoraFsPinValidation.requiredString(namespace,
-                                                                   field: "chunker.namespace"),
-            name: try ToriiSoraFsPinValidation.requiredString(name,
-                                                              field: "chunker.name"),
-            semver: try ToriiSoraFsPinValidation.requiredString(semver,
-                                                                field: "chunker.semver"),
-            multihashCode: multihashCode ?? 0
-        )
-    }
-}
-
-public struct ToriiSoraFsStorageClass: Codable, Sendable, Equatable {
-    public var type: String?
-
-    public init(type: String? = nil) {
-        self.type = type
-    }
-
-    public static func from(_ type: String) -> ToriiSoraFsStorageClass {
-        ToriiSoraFsStorageClass(type: type)
-    }
-}
-
-public struct ToriiSoraFsPinPolicy: Codable, Sendable, Equatable {
-    public var minReplicas: UInt32?
-    public var storageClass: ToriiSoraFsStorageClass?
-    public var retentionEpoch: UInt64?
-
-    public init(minReplicas: UInt32? = nil,
-                storageClass: ToriiSoraFsStorageClass? = nil,
-                retentionEpoch: UInt64? = nil) {
-        self.minReplicas = minReplicas
-        self.storageClass = storageClass
-        self.retentionEpoch = retentionEpoch
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case minReplicas = "min_replicas"
-        case storageClass = "storage_class"
-        case retentionEpoch = "retention_epoch"
-    }
-
-    func normalized() throws -> ToriiSoraFsPinPolicy {
-        ToriiSoraFsPinPolicy(
-            minReplicas: try ToriiSoraFsPinValidation.requiredUInt32(
-                minReplicas,
-                field: "pin_policy.min_replicas",
-                allowZero: false
-            ),
-            storageClass: try ToriiSoraFsPinValidation.storageClass(storageClass),
-            retentionEpoch: retentionEpoch ?? 0
-        )
-    }
-}
-
 public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
     public var namespace: String?
     public var name: String?
@@ -8977,12 +8888,19 @@ public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
 
     func normalized(field: String = "alias") throws -> ToriiSoraFsPinAlias {
         ToriiSoraFsPinAlias(
-            namespace: try ToriiSoraFsPinValidation.requiredString(namespace,
-                                                                   field: "\(field).namespace"),
-            name: try ToriiSoraFsPinValidation.requiredString(name,
-                                                              field: "\(field).name"),
-            proofBase64: try ToriiSoraFsPinValidation.requiredBase64(proofBase64,
-                                                                     field: "\(field).proof_base64")
+            namespace: try ToriiSoraFsPinValidation.requiredAliasSegment(
+                namespace,
+                field: "\(field).namespace"
+            ),
+            name: try ToriiSoraFsPinValidation.requiredAliasSegment(
+                name,
+                field: "\(field).name"
+            ),
+            proofBase64: try ToriiSoraFsPinValidation.requiredBase64(
+                proofBase64,
+                field: "\(field).proof_base64",
+                maximumDecodedBytes: ToriiSoraFsPinValidation.maximumAliasProofBytes
+            )
         )
     }
 }
@@ -8990,38 +8908,20 @@ public struct ToriiSoraFsPinAlias: Codable, Sendable, Equatable {
 public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     public var authority: String?
     public var privateKey: String?
-    public var chunker: ToriiSoraFsChunkerHandle?
-    public var pinPolicy: ToriiSoraFsPinPolicy?
-    public var manifestDigestHex: String?
-    public var manifestBase64: String?
-    public var manifestBytes: Data?
-    public var chunkDigestSha3_256Hex: String?
-    public var contentLength: UInt64?
+    public var manifestPayload: String?
     public var submittedEpoch: UInt64?
     public var alias: ToriiSoraFsPinAlias?
     public var successorOfHex: String?
 
     public init(authority: String? = nil,
                 privateKey: String? = nil,
-                chunker: ToriiSoraFsChunkerHandle? = nil,
-                pinPolicy: ToriiSoraFsPinPolicy? = nil,
-                manifestDigestHex: String? = nil,
-                manifestBase64: String? = nil,
-                manifestBytes: Data? = nil,
-                chunkDigestSha3_256Hex: String? = nil,
-                contentLength: UInt64? = nil,
+                manifestPayload: String? = nil,
                 submittedEpoch: UInt64? = nil,
                 alias: ToriiSoraFsPinAlias? = nil,
                 successorOfHex: String? = nil) {
         self.authority = authority
         self.privateKey = privateKey
-        self.chunker = chunker
-        self.pinPolicy = pinPolicy
-        self.manifestDigestHex = manifestDigestHex
-        self.manifestBase64 = manifestBase64
-        self.manifestBytes = manifestBytes
-        self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
-        self.contentLength = contentLength
+        self.manifestPayload = manifestPayload
         self.submittedEpoch = submittedEpoch
         self.alias = alias
         self.successorOfHex = successorOfHex
@@ -9030,46 +8930,20 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
-        case chunker
-        case pinPolicy = "pin_policy"
-        case manifestDigestHex = "manifest_digest_hex"
-        case manifestBase64 = "manifest_b64"
-        case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
-        case contentLength = "content_length"
+        case manifestPayload = "manifest_payload"
         case submittedEpoch = "submitted_epoch"
         case alias
         case successorOfHex = "successor_of_hex"
     }
 
     func normalized() throws -> ToriiSoraFsPinRegisterRequest {
-        guard let chunker else {
-            throw ToriiClientError.invalidPayload("chunker must be provided.")
-        }
-        guard let pinPolicy else {
-            throw ToriiClientError.invalidPayload("pin_policy must be provided.")
-        }
         return ToriiSoraFsPinRegisterRequest(
             authority: try ToriiSoraFsPinValidation.requiredString(authority,
                                                                    field: "authority"),
             privateKey: try ToriiSoraFsPinValidation.requiredString(privateKey,
                                                                     field: "private_key"),
-            chunker: try chunker.normalized(),
-            pinPolicy: try pinPolicy.normalized(),
-            manifestDigestHex: try ToriiSoraFsPinValidation.digest(manifestDigestHex,
-                                                                   field: "manifest_digest_hex"),
-            manifestBase64: try ToriiSoraFsPinValidation.optionalManifestPayload(
-                manifestBase64: manifestBase64,
-                manifestBytes: manifestBytes
-            ),
-            manifestBytes: nil,
-            chunkDigestSha3_256Hex: try ToriiSoraFsPinValidation.digest(
-                chunkDigestSha3_256Hex,
-                field: "chunk_digest_sha3_256_hex"
-            ),
-            contentLength: try ToriiSoraFsPinValidation.requiredUInt64(
-                contentLength,
-                field: "content_length",
-                allowZero: true
+            manifestPayload: try ToriiSoraFsPinValidation.requiredManifestPayload(
+                manifestPayload
             ),
             submittedEpoch: try ToriiSoraFsPinValidation.requiredUInt64(
                 submittedEpoch,
@@ -9077,8 +8951,9 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
                 allowZero: true
             ),
             alias: try alias?.normalized(),
-            successorOfHex: try ToriiSoraFsPinValidation.optionalDigest(successorOfHex,
-                                                                        field: "successor_of_hex")
+            successorOfHex: try ToriiSoraFsPinValidation.optionalSuccessorDigest(
+                successorOfHex
+            )
         )
     }
 }
@@ -9086,16 +8961,7 @@ public struct ToriiSoraFsPinRegisterRequest: Codable, Sendable, Equatable {
 fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equatable {
     var authority: String
     var privateKey: String
-    var chunkerProfileId: UInt32
-    var chunkerNamespace: String
-    var chunkerName: String
-    var chunkerSemver: String
-    var chunkerMultihashCode: UInt32
-    var pinPolicy: ToriiSoraFsPinPolicy
-    var manifestDigestHex: String
-    var manifestBase64: String?
-    var chunkDigestSha3_256Hex: String
-    var contentLength: UInt64
+    var manifestPayload: String
     var submittedEpoch: UInt64
     var alias: ToriiSoraFsPinAlias?
     var successorOfHex: String?
@@ -9103,32 +8969,14 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
     init(_ request: ToriiSoraFsPinRegisterRequest) throws {
         guard let authority = request.authority,
               let privateKey = request.privateKey,
-              let chunker = request.chunker,
-              let chunkerProfileId = chunker.profileId,
-              let chunkerNamespace = chunker.namespace,
-              let chunkerName = chunker.name,
-              let chunkerSemver = chunker.semver,
-              let chunkerMultihashCode = chunker.multihashCode,
-              let pinPolicy = request.pinPolicy,
-              let manifestDigestHex = request.manifestDigestHex,
-              let chunkDigestSha3_256Hex = request.chunkDigestSha3_256Hex,
-              let contentLength = request.contentLength,
+              let manifestPayload = request.manifestPayload,
               let submittedEpoch = request.submittedEpoch else {
             throw ToriiClientError.invalidPayload("normalized SoraFS pin request is incomplete.")
         }
 
         self.authority = authority
         self.privateKey = privateKey
-        self.chunkerProfileId = chunkerProfileId
-        self.chunkerNamespace = chunkerNamespace
-        self.chunkerName = chunkerName
-        self.chunkerSemver = chunkerSemver
-        self.chunkerMultihashCode = chunkerMultihashCode
-        self.pinPolicy = pinPolicy
-        self.manifestDigestHex = manifestDigestHex
-        self.manifestBase64 = request.manifestBase64
-        self.chunkDigestSha3_256Hex = chunkDigestSha3_256Hex
-        self.contentLength = contentLength
+        self.manifestPayload = manifestPayload
         self.submittedEpoch = submittedEpoch
         self.alias = request.alias
         self.successorOfHex = request.successorOfHex
@@ -9137,16 +8985,7 @@ fileprivate struct ToriiSoraFsPinRegisterWireRequest: Encodable, Sendable, Equat
     private enum CodingKeys: String, CodingKey {
         case authority
         case privateKey = "private_key"
-        case chunkerProfileId = "chunker_profile_id"
-        case chunkerNamespace = "chunker_namespace"
-        case chunkerName = "chunker_name"
-        case chunkerSemver = "chunker_semver"
-        case chunkerMultihashCode = "chunker_multihash_code"
-        case pinPolicy = "pin_policy"
-        case manifestDigestHex = "manifest_digest_hex"
-        case manifestBase64 = "manifest_b64"
-        case chunkDigestSha3_256Hex = "chunk_digest_sha3_256_hex"
-        case contentLength = "content_length"
+        case manifestPayload = "manifest_payload"
         case submittedEpoch = "submitted_epoch"
         case alias
         case successorOfHex = "successor_of_hex"
@@ -9231,21 +9070,14 @@ public struct ToriiSoraFsPinRegisterResponse: Codable, Sendable, Equatable {
 }
 
 fileprivate enum ToriiSoraFsPinValidation {
+    static let maximumManifestBytes = 512 * 1024
+    static let maximumAliasProofBytes = 1024 * 1024
+
     static func requiredString(_ value: String?, field: String) throws -> String {
         guard let value else {
             throw ToriiClientError.invalidPayload("\(field) must be provided.")
         }
         return try ToriiRequestValidation.normalizedNonEmpty(value, field: field)
-    }
-
-    static func requiredUInt32(_ value: UInt32?, field: String, allowZero: Bool) throws -> UInt32 {
-        guard let value else {
-            throw ToriiClientError.invalidPayload("\(field) must be provided.")
-        }
-        guard allowZero || value > 0 else {
-            throw ToriiClientError.invalidPayload("\(field) must be positive.")
-        }
-        return value
     }
 
     static func requiredUInt64(_ value: UInt64?, field: String, allowZero: Bool) throws -> UInt64 {
@@ -9272,12 +9104,56 @@ fileprivate enum ToriiSoraFsPinValidation {
         return try ToriiRequestValidation.normalized32ByteHex(value, field: field)
     }
 
-    static func requiredBase64(_ value: String?, field: String) throws -> String {
+    static func optionalSuccessorDigest(_ value: String?) throws -> String? {
+        guard let normalized = try optionalDigest(value, field: "successor_of_hex") else {
+            return nil
+        }
+        guard normalized != String(repeating: "0", count: 64) else {
+            throw ToriiClientError.invalidPayload("successor_of_hex must not be zero.")
+        }
+        return normalized
+    }
+
+    static func requiredManifestPayload(_ value: String?) throws -> String {
+        try requiredBase64(
+            value,
+            field: "manifest_payload",
+            maximumDecodedBytes: maximumManifestBytes
+        )
+    }
+
+    static func requiredAliasSegment(_ value: String?, field: String) throws -> String {
+        guard let value, !value.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be provided.")
+        }
+        let isAllowed = value.utf8.allSatisfy { byte in
+            (byte >= 0x61 && byte <= 0x7A)
+                || (byte >= 0x30 && byte <= 0x39)
+                || byte == 0x2E
+                || byte == 0x2D
+                || byte == 0x5F
+        }
+        guard value.utf8.count <= 128, isAllowed else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must contain 1...128 lowercase ASCII letters, digits, '.', '-', or '_'."
+            )
+        }
+        return value
+    }
+
+    static func requiredBase64(
+        _ value: String?,
+        field: String,
+        maximumDecodedBytes: Int
+    ) throws -> String {
         guard let value else {
             throw ToriiClientError.invalidPayload("\(field) must be provided.")
         }
-        guard !value.isEmpty else {
-            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        let maximumEncodedBytes = ((maximumDecodedBytes + 2) / 3) * 4
+        guard !value.isEmpty, value.utf8.count <= maximumEncodedBytes else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must encode 1...\(maximumDecodedBytes) bytes."
+            )
         }
         guard !value.contains(where: { $0.isWhitespace }) else {
             throw ToriiClientError.invalidPayload("\(field) must be canonical base64 without whitespace.")
@@ -9285,41 +9161,13 @@ fileprivate enum ToriiSoraFsPinValidation {
         guard let decoded = Data(base64Encoded: value), !decoded.isEmpty else {
             throw ToriiClientError.invalidPayload("\(field) must be valid non-empty base64.")
         }
-        return decoded.base64EncodedString()
-    }
-
-    static func optionalManifestPayload(manifestBase64: String?, manifestBytes: Data?) throws -> String? {
-        if manifestBase64 != nil, manifestBytes != nil {
-            throw ToriiClientError.invalidPayload("manifest_b64 and manifest_bytes are mutually exclusive.")
+        guard decoded.count <= maximumDecodedBytes,
+              decoded.base64EncodedString() == value else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must be canonical padded base64 encoding of 1...\(maximumDecodedBytes) bytes."
+            )
         }
-        if let manifestBase64 {
-            return try requiredBase64(manifestBase64, field: "manifest_b64")
-        }
-        guard let manifestBytes else {
-            return nil
-        }
-        guard !manifestBytes.isEmpty else {
-            throw ToriiClientError.invalidPayload("manifest_bytes must be non-empty.")
-        }
-        return manifestBytes.base64EncodedString()
-    }
-
-    static func storageClass(_ storageClass: ToriiSoraFsStorageClass?) throws -> ToriiSoraFsStorageClass {
-        guard let storageClass else {
-            throw ToriiClientError.invalidPayload("pin_policy.storage_class must be provided.")
-        }
-        let normalized = try requiredString(storageClass.type,
-                                            field: "pin_policy.storage_class.type").lowercased()
-        switch normalized {
-        case "hot":
-            return ToriiSoraFsStorageClass(type: "Hot")
-        case "warm":
-            return ToriiSoraFsStorageClass(type: "Warm")
-        case "cold":
-            return ToriiSoraFsStorageClass(type: "Cold")
-        default:
-            throw ToriiClientError.invalidPayload("pin_policy.storage_class.type must be Hot, Warm, or Cold.")
-        }
+        return value
     }
 }
 
@@ -13245,24 +13093,114 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
     private static let coreQueryViewNames: Set<String> = [
         "AccountView", "AssetView", "AssetDefinitionView", "DomainView", "NftView",
     ]
+    // BEGIN GENERATED: kotodama-v1-validator-policy
     private static let reservedIdentifiers: Set<String> = [
-        "authorize", "break", "const", "continue", "else", "enum", "error", "false",
-        "fn", "for", "hajimari", "if", "in", "int", "decimal", "quantity", "kaizen", "kotoage", "let", "match", "module",
-        "return", "seiyaku", "state", "struct", "trigger", "true", "var", "view",
+        "authorize",
+        "break",
+        "const",
+        "continue",
+        "else",
+        "enum",
+        "error",
+        "false",
+        "fn",
+        "for",
+        "hajimari",
+        "始まり",
+        "if",
+        "in",
+        "kaizen",
+        "改善",
+        "kotoage",
+        "言挙げ",
+        "let",
+        "match",
+        "module",
+        "return",
+        "seiyaku",
+        "誓約",
+        "state",
+        "struct",
+        "trigger",
+        "true",
+        "var",
+        "view",
     ]
     private static let reservedDeclarationIdentifiers: Set<String> = [
-        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
-        "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
-        "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
-        "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
-        "AssetHandle", "ProofBlob", "SoracloudRequest", "SoracloudResponse",
-        "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
-        "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
-        "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
-        "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "Json",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "DomainId",
+        "Name",
+        "NftId",
+        "DataSpaceId",
+        "Option",
+        "Result",
+        "List",
+        "StateMap",
+        "Secret",
+        "AccountView",
+        "AssetView",
+        "AssetDefinitionView",
+        "DomainView",
+        "NftView",
+        "QueryPage",
+        "AxtDescriptor",
+        "AssetHandle",
+        "ProofBlob",
+        "SoracloudRequest",
+        "SoracloudResponse",
+        "state_map_get",
+        "__kotodama_list_len",
+        "__kotodama_list_get",
+        "__kotodama_list_try_set",
+        "__kotodama_list_try_push",
+        "__kotodama_list_pop",
+        "__kotodama_list_contains",
+        "__kotodama_list_take",
+        "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round",
+        "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
     ]
+    private static let retiredNumericTypeNames: Set<String> = [
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "num",
+        "Int",
+        "Integer",
+        "float",
+        "f32",
+        "f64",
+        "Decimal",
+        "Fixed",
+        "FixedPoint",
+        "Amount",
+        "amount",
+        "money",
+        "Quantity",
+        "number",
+    ]
+    // END GENERATED: kotodama-v1-validator-policy
 
     fileprivate static func isCanonicalIdentifier(_ value: String) -> Bool {
         guard !value.isEmpty, !reservedIdentifiers.contains(value) else {
@@ -13292,9 +13230,13 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             && !value.hasPrefix("__kotodama_link_")
     }
 
+    fileprivate static func isCanonicalTypeDeclarationIdentifier(_ value: String) -> Bool {
+        isCanonicalDeclarationIdentifier(value) && !retiredNumericTypeNames.contains(value)
+    }
+
     fileprivate static func isCanonicalEntrypointName(_ value: String) -> Bool {
         value == "hajimari" || value == "始まり" || value == "kaizen" || value == "改善"
-            || isCanonicalIdentifier(value)
+            || isCanonicalDeclarationIdentifier(value)
     }
 
     private static func canonicalLeafName(_ kind: ToriiEntrypointValueKindV1) -> String {
@@ -13426,7 +13368,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             switch node {
             case .structType(let descriptor):
                 guard !descriptor.fields.isEmpty,
-                      Self.isCanonicalIdentifier(descriptor.name),
+                      Self.isCanonicalTypeDeclarationIdentifier(descriptor.name),
                       descriptor.fields.allSatisfy(Self.isCanonicalIdentifier),
                       Set(descriptor.fields).count == descriptor.fields.count else {
                     return nil
@@ -14188,7 +14130,7 @@ public struct ToriiContractErrorCodeDescriptor: Codable, Sendable, Equatable {
         namespace = try container.decode(String.self, forKey: .namespace)
         name = try container.decode(String.self, forKey: .name)
         code = try container.decode(UInt32.self, forKey: .code)
-        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(namespace),
+        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace),
               ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
               code != 0 else {
             throw DecodingError.dataCorruptedError(
@@ -14200,7 +14142,7 @@ public struct ToriiContractErrorCodeDescriptor: Codable, Sendable, Equatable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(namespace),
+        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace),
               ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
               code != 0 else {
             throw EncodingError.invalidValue(
@@ -14423,7 +14365,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
 
     private var canonicalFailure: String? {
         if let seiyakuName,
-           !ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(seiyakuName) {
+           !ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(seiyakuName) {
             return "seiyaku_name must be a canonical non-reserved Kotodama declaration"
         }
         if let compilerFingerprint,
@@ -14489,7 +14431,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 codingPath: container.codingPath + [CodingKeys.seiyakuName]
             )
             guard normalized == seiyakuName,
-                  ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(normalized) else {
+                  ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(normalized) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .seiyakuName,
                     in: container,
@@ -14563,7 +14505,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
         if let seiyakuName {
-            guard ToriiEntrypointValueTypeV1.isCanonicalDeclarationIdentifier(seiyakuName) else {
+            guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(seiyakuName) else {
                 throw EncodingError.invalidValue(
                     seiyakuName,
                     .init(codingPath: encoder.codingPath,

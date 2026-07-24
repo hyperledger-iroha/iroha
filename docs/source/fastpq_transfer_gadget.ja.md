@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` とテスト |コア/デフォルト ホストはスコープがアクティブな間 `transfer_v1` をバッチ追加として扱い、`SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` を表面化し、モック WSV ホストはコミット前にエントリをバッファするため、回帰テストで決定的なバランスを確認できます。更新情報。【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713]【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` |状態遷移後に `TransferTranscript` を発行し、`StateBlock::capture_exec_witness` 中に明示的な `public_inputs` を使用して `FastpqTransitionBatch` レコードを構築し、FASTPQ 証明者レーンを実行して、Torii/CLI ツールと Stage6 バックエンドの両方が正規データを受信できるようにします。 `TransitionBatch` 入力。 `TransferAssetBatch` は、連続転送を単一のトランスクリプトにグループ化し、マルチデルタ バッチのポセイドン ダイジェストを省略して、ガジェットがエントリ間で決定的に反復できるようにします。 |
 | `fastpq_prover` | `gadgets::transfer` は、プランナー (`crates/fastpq_prover/src/gadgets/transfer.rs`) のマルチデルタ トランスクリプト (バランス算術 + ポセイドン ダイジェスト) と表面構造化証人 (プレースホルダー ペアの SMT BLOB を含む) を検証するようになりました。 `trace::build_trace` はバッチ メタデータからこれらのトランスクリプトをデコードし、`transfer_transcripts` ペイロードが欠落している転送バッチを拒否し、検証された証人を `Trace::transfer_witnesses` に添付し、`TracePolynomialData::transfer_plan()` はプランナーがガジェット (`crates/fastpq_prover/src/trace.rs`) を消費するまで、集約されたプランを存続させます。行数回帰ハーネスは `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) 経由で出荷されるようになり、最大 65536 のパディング行までのシナリオをカバーしますが、ペアの SMT 配線は TF-3 バッチ ヘルパー マイルストーンの背後に残ります (スワップが完了するまで、プレースホルダーによりトレース レイアウトが安定します)。 |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` ヘルパーを `transfer_v1_batch_begin`、連続する `transfer_asset` 呼び出し、および `transfer_v1_batch_end` に下げます。各タプル引数は、`(AccountId, AccountId, AssetDefinitionId, int)` の形式に従う必要があります。単一転送では既存のビルダーが保持されます。 |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` ヘルパーを `transfer_v1_batch_begin`、連続する `transfer_asset` 呼び出し、および `transfer_v1_batch_end` に下げます。各タプル引数は、`(AccountId, AccountId, AssetDefinitionId, quantity)` の形式に従う必要があります。単一転送では既存のビルダーが保持されます。 |
 
 Kotodama の使用例:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

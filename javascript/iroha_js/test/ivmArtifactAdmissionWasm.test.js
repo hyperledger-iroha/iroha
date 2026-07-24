@@ -86,6 +86,22 @@ test("raw artifact-admission WASM preserves shared-policy rejection details", as
   });
 });
 
+test("raw artifact-admission WASM rejects unmarked Iroha hashes", async () => {
+  for (const field of ["code_hash_hex", "abi_hash_hex"]) {
+    const output = successfulOutput();
+    const finalByte = Number.parseInt(output[field].slice(-2), 16);
+    assert.equal(finalByte & 1, 1);
+    output[field] = `${output[field].slice(0, -2)}${(finalByte ^ 1)
+      .toString(16)
+      .padStart(2, "0")}`;
+    const verifier = await createStaticArtifactAdmissionVerifier(output);
+    assert.throws(
+      () => verifier.verify(Uint8Array.of(1)),
+      new RegExp(`artifact admission ${field} must carry the Iroha Hash marker bit`, "u"),
+    );
+  }
+});
+
 test("raw artifact-admission WASM copies cross-realm bytes and rejects shared memory", async () => {
   const wasmBytes = staticArtifactAdmissionWasm(successfulOutput());
   const foreignBuffer = runInNewContext(`new ArrayBuffer(${wasmBytes.length})`);

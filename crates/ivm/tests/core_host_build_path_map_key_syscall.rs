@@ -29,9 +29,17 @@ fn decimal_i64_map_key_helper_is_not_part_of_abi_v1() {
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(CoreHost::new());
-    vm.load_program(&common::assemble(&code))
-        .expect("load retired-syscall fixture");
-    assert_eq!(vm.run(), Err(VMError::UnknownSyscall(retired)));
+    let mut admitted = IVM::new(u64::MAX);
+    admitted.set_host(CoreHost::new());
+    assert_eq!(
+        admitted.load_program(&common::assemble(&code)),
+        Err(VMError::UnknownSyscall(retired)),
+        "metadata-bearing programs reject the retired number during admission"
+    );
+
+    let mut raw = IVM::new(u64::MAX);
+    raw.set_host(CoreHost::new());
+    raw.load_code(&code)
+        .expect("load raw retired-syscall fixture");
+    assert_eq!(raw.run(), Err(VMError::UnknownSyscall(retired)));
 }

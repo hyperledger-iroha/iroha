@@ -77,8 +77,8 @@ revoked, so a legitimate branch is not stranded when issuance closes.
 
 Bridge ABI 21 exposes the current Kagemusha artifact contract. It reports
 manifest schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`,
-backend `halo2/ipa-pasta-cycle-v4`, transcript
-`kagemusha-pasta-cycle-poseidon-v4`, and the exact StepEq/StepEp circuit
+backend `halo2/ipa-pasta-cycle-compact-v5`, transcript
+`kagemusha-pasta-cycle-poseidon-compact-v5`, and the exact StepEq/StepEp circuit
 identities. There is no product-mode selector.
 
 The authenticated V4 manifest contains exactly two profiles in Eq-then-Ep
@@ -142,9 +142,9 @@ verifier records, the required nullable authenticated `artifact_set`, backend
 construction state, recursive-lineage support, readiness, and blockers. The V4
 recursive roles are exactly
 `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`. Both use registry
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`. Both use registry
 backend `halo2/ipa`, appear or disappear atomically with `artifact_set`, and
 bind the same activation window and proof-size limit as that artifact set. No
 verifier role may share a registry id, key commitment, or public-input schema

@@ -132,11 +132,23 @@ async function readWasmBytes(value) {
   );
 }
 
-function requireSha256Hex(value, context) {
+function requireHex32(value, context) {
   if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
     throw new TypeError(`${context} must be an exact 32-byte hexadecimal string`);
   }
   return value.toLowerCase();
+}
+
+function requireSha256Hex(value, context) {
+  return requireHex32(value, context);
+}
+
+function requireIrohaHashHex(value, context) {
+  const normalized = requireHex32(value, context);
+  if ((Number.parseInt(normalized.slice(-2), 16) & 1) !== 1) {
+    throw new TypeError(`${context} must carry the Iroha Hash marker bit`);
+  }
+  return normalized;
 }
 
 function hex(bytes) {
@@ -228,11 +240,11 @@ function normalizeAdmissionOutput(bytes, status) {
         "artifact admission WebAssembly status disagrees with its successful JSON result",
       );
     }
-    const codeHashHex = requireSha256Hex(
+    const codeHashHex = requireIrohaHashHex(
       parsed.code_hash_hex,
       "artifact admission code_hash_hex",
     );
-    const abiHashHex = requireSha256Hex(
+    const abiHashHex = requireIrohaHashHex(
       parsed.abi_hash_hex,
       "artifact admission abi_hash_hex",
     );

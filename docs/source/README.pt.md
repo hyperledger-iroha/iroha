@@ -77,7 +77,7 @@ Verificações de sincronização de docs
   - Regenerar: `make docs-syscalls`
   - Somente verificar: `bash scripts/check_syscalls_doc.sh`
 - Tabela de ABI de syscalls (`crates/ivm/docs/syscalls.md`)
-  - Somente verificar: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Somente verificar: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Atualizar a seção gerada (e a tabela nos docs de código):
     `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Tabelas de pointer‑ABI (`crates/ivm/docs/pointer_abi.md` e `ivm.md`)

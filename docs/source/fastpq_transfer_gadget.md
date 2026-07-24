@@ -103,12 +103,12 @@ witnesses are rejected before proof construction.
 | `ivm::host` & tests | Core/Default hosts treat `transfer_v1` as a batch append while the scope is active, surface `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, and the mock WSV host buffers entries before committing so regression tests can assert deterministic balance updates.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs:3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Emit `TransferTranscript` after the state transition, build `FastpqTransitionBatch` records with explicit `public_inputs` during `StateBlock::capture_exec_witness`, and run the FASTPQ prover lane so both Torii/CLI tooling and the Stage 6 backend receive canonical `TransitionBatch` inputs. `TransferAssetBatch` groups sequential transfers into a single transcript, omitting the poseidon digest for multi-delta batches so the gadget can iterate across entries deterministically. |
 | `fastpq_prover` | `gadgets::transfer` now validates multi-delta transcripts (balance arithmetic + Poseidon digest), requires real paired SMT witness material, checks chained roots from `public_inputs.old_root` to `public_inputs.new_root`, and surfaces validated witnesses for the planner (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` decodes those transcripts out of batch metadata, rejects transfer batches missing `transfer_transcripts`, rejects malformed witness paths, attaches the validated witnesses to `Trace::transfer_witnesses`, and `TracePolynomialData::transfer_plan()` keeps the aggregated plan alive until the planner consumes the gadget (`crates/fastpq_prover/src/trace.rs`). Row-count regression evidence now comes from execution-captured V1 batches; standalone synthetic row generation has been removed. |
-| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, int)` shape; single transfers keep the existing builder. |
+| Kotodama | Lowers the `transfer_batch((from,to,asset,amount), …)` helper into `transfer_v1_batch_begin`, sequential `transfer_asset` calls, and `transfer_v1_batch_end`. Each tuple argument must follow the `(AccountId, AccountId, AssetDefinitionId, quantity)` shape; single transfers keep the existing builder. |
 
 Example Kotodama usage:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

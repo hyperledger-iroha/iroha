@@ -726,7 +726,7 @@ const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
   .addSignatory("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", 2)
-  .addSignatory("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", 1)
+  .addSignatory("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -775,7 +775,7 @@ const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
   fiId: "banka",
-  toAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+  toAccountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
   amountI64: 10,
   createdAtMs: Date.now(),
   expiresAtMs: Date.now() + 60_000,
@@ -850,7 +850,7 @@ import {
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+  "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const newAccountIdInput =
   "sorauﾛ1PﾜKNﾗ7ｼｺa2WｸｼﾒﾐQﾎbｺﾄocﾆﾁヰJaｱbg6sｾgｲﾖPfX7WAWRY";
 const authority = normalizeAccountId(authorityInput);
@@ -1065,7 +1065,7 @@ const registerAccount = buildRegisterAccountInstruction({
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+  destinationAccountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
   quantity: "5",
 });
 
@@ -2675,13 +2675,13 @@ job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId)`
 is also available for explicit lifecycle control.
 
 Validation-fee authority is ledger-native. Applications obtain bounded policy
-proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored to an
-immutable chain/genesis/policy-chain binding and a durable checkpoint. The ABI
-21 native bridge verifies the Norito proof and returns an immutable projection;
-JavaScript never substitutes application-supplied signatures or keysets for
-that trusted boundary. Persist every promoted checkpoint before requesting the
-next page. `catchUpValidationFeeCurrentPolicyProof` is available when in-memory
-promotion is sufficient.
+proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
+to an immutable chain/genesis/policy-chain binding and a durable checkpoint.
+The ABI 21 native bridge verifies the Norito proof and returns an immutable
+projection; JavaScript never substitutes application-supplied signatures or
+keysets for that trusted boundary. Persist every promoted checkpoint before
+requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
+when in-memory promotion is sufficient.
 
 ```js
 const binding = {
@@ -3871,7 +3871,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,

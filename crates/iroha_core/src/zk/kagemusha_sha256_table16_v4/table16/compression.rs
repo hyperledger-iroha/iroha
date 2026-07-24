@@ -33,7 +33,7 @@ use compression_gates::CompressionGate;
 use compression_util::match_state;
 
 use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedBits, ROUNDS, STATE,
+    AssignedBits, ROUNDS,
     util::{i2lebsp, lebs2ip},
 };
 
@@ -434,45 +434,6 @@ impl<F: PrimeField> State<F> {
             f: None,
             g: None,
             h: None,
-        }
-    }
-
-    pub fn from_iv(assigned_iv: &[RoundWordDense<F>]) -> Self {
-        assert_eq!(assigned_iv.len(), STATE);
-
-        let roundword_a = RoundWordA::new_dense(assigned_iv[0].clone());
-        let a = Some(StateWord::A(roundword_a));
-
-        let roundword_b = RoundWord::new(assigned_iv[1].clone(), None);
-        let b = Some(StateWord::B(roundword_b));
-
-        let roundword_c = RoundWord::new(assigned_iv[2].clone(), None);
-        let c = Some(StateWord::C(roundword_c));
-
-        let roundword_d = assigned_iv[3].clone();
-        let d = Some(StateWord::D(roundword_d));
-
-        let roundword_e = RoundWordE::new_dense(assigned_iv[4].clone());
-        let e = Some(StateWord::E(roundword_e));
-
-        let roundword_f = RoundWord::new(assigned_iv[5].clone(), None);
-        let f = Some(StateWord::F(roundword_f));
-
-        let roundword_g = RoundWord::new(assigned_iv[6].clone(), None);
-        let g = Some(StateWord::G(roundword_g));
-
-        let roundword_h = assigned_iv[7].clone();
-        let h = Some(StateWord::H(roundword_h));
-
-        State {
-            a,
-            b,
-            c,
-            d,
-            e,
-            f,
-            g,
-            h,
         }
     }
 }

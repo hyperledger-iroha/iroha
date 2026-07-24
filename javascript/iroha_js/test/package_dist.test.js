@@ -462,12 +462,21 @@ test("package Nexus browser export has an enforced browser-only dependency graph
       "dist/address.js",
       "dist/blake2b.js",
       "dist/connect.browser.js",
+      "dist/contractAddress.js",
       "dist/crypto.browser.js",
       "dist/curveRegistry.js",
       "dist/ed25519Strict.js",
+      "dist/entrypointSchema.js",
+      "dist/kotodamaIdentifiers.js",
+      "dist/multisig.js",
+      "dist/native.browser.js",
       "dist/nexusApp.js",
+      "dist/norito.js",
+      "dist/normalizers.js",
       "dist/numericV1.js",
+      "dist/ordering.js",
       "dist/transactionCodec.js",
+      "dist/validationError.js",
     ],
   );
   const output = result.outputFiles?.[0];
@@ -510,6 +519,11 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
     creationTimeMs: nexusFixture.transfer_input.creation_time_ms,
     ttlMs: nexusFixture.transfer_input.ttl_ms,
     nonce: nexusFixture.transfer_input.nonce,
+    feePayment: {
+      payer: nexusFixture.transfer_input.fee_payment.payer,
+      chargeLimits: [...nexusFixture.transfer_input.fee_payment.value.charge_limits],
+      gasLimit: nexusFixture.transfer_input.fee_payment.value.gas_limit,
+    },
     metadata: nexusFixture.transfer_input.metadata,
   });
   const receipt = await client.finalizeAndSubmit(

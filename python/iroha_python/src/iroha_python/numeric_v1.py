@@ -49,6 +49,7 @@ class NumericV1Schema:
     scaled: bool
 
 
+# BEGIN GENERATED: kotodama-v1-numeric-policy
 NUMERIC_V1_SCHEMAS: Mapping[str, NumericV1Schema] = MappingProxyType(
     {
         "int": NumericV1Schema(
@@ -66,12 +67,16 @@ NUMERIC_V1_SCHEMAS: Mapping[str, NumericV1Schema] = MappingProxyType(
         "quantity": NumericV1Schema(
             "iroha.numeric.QuantityValueV1",
             bytes.fromhex("e4769984c81ce0e8b678f2eb06274ee3"),
-            0x0013,
+            0x0010,
             True,
         ),
     }
 )
 """Canonical schema metadata keyed by source type name."""
+
+_NUMERIC_V1_MIN_KNOWN_POINTER_TYPE = 0x0001
+_NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE = 0x0012
+# END GENERATED: kotodama-v1-numeric-policy
 
 
 class NumericV1Error(ValueError):
@@ -417,9 +422,9 @@ def _decode_envelope(kind: str, input_value: object) -> NumericValue:
     if len(envelope) < _ENVELOPE_HEADER_BYTES:
         _fail("truncated_envelope", "numeric envelope is truncated")
     pointer_type = int.from_bytes(envelope[:2], "big")
-    if pointer_type == 0x0010:
-        _fail("type_not_allowed", "retired Amount pointer type is permanently reserved")
-    known_allowed = 0x0001 <= pointer_type <= 0x000F or 0x0011 <= pointer_type <= 0x0013
+    known_allowed = (
+        _NUMERIC_V1_MIN_KNOWN_POINTER_TYPE <= pointer_type <= _NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE
+    )
     if not known_allowed:
         _fail("unknown_type", "numeric envelope has an unknown pointer type")
     if pointer_type != schema.pointer_type:

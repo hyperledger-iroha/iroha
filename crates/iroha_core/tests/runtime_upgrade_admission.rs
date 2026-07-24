@@ -2,11 +2,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 
-use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64};
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
 use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
 use iroha_core::{
+    governance::manifest::LaneManifestRegistry,
     prelude::World,
     state::{State, WorldReadOnly},
     tx::AcceptedTransaction,
@@ -51,6 +52,13 @@ fn new_account_in_domain(account_id: &AccountId) -> Account {
 
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("runtime upgrade admission fixture key generation should succeed")
+}
+
+fn install_current_lane_manifest_registry(state: &State) {
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 }
 
 #[test]
@@ -448,6 +456,7 @@ fn activation_allows_v1_in_same_block() {
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
+    install_current_lane_manifest_registry(&state);
 
     let prog_current = minimal_ivm_program(1);
     let chain: ChainId = "chain".parse().unwrap();

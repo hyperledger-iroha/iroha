@@ -6862,13 +6862,13 @@ mod tests {
             provider_id: [0x22; 32],
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_700_000_111,
-            actor: Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into()),
+            actor: Some("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into()),
             message: Some("queued".into()),
         };
         let header = SorafsAuditHeaderV1 {
             sequence: 42,
             occurred_at_unix: payload.occurred_at_unix,
-            signer: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            signer: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
         };
         let event = RepairAuditEventV1 {
@@ -6934,7 +6934,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-902".into()),
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             proposed_penalty: "0.00005".parse().expect("valid quantity"),
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),

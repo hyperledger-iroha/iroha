@@ -10,7 +10,7 @@ use ivm::{
 };
 mod common;
 
-const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
 fn make_vm_with_wsv() -> (IVM, AccountId) {

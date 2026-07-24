@@ -61,6 +61,7 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 pub const MAX_EXPANDED_TYPE_NODES: usize = MAX_TOKENS;
 /// Canonical nominal name for the structurally-specialized V1 query page.
 const QUERY_PAGE_TYPE_NAME: &str = "QueryPage";
+// BEGIN GENERATED: kotodama-v1-semantic-policy
 /// Canonical source-level type spellings offered by language tooling.
 pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
     "int",
@@ -146,6 +147,7 @@ pub const V1_LIST_MEMBER_NAMES: &[&str] = &[
     "take",
     "enumerate",
 ];
+// END GENERATED: kotodama-v1-semantic-policy
 const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 pub(crate) const LIST_LEN_INTRINSIC: &str = "__kotodama_list_len";
 pub(crate) const LIST_GET_INTRINSIC: &str = "__kotodama_list_get";
@@ -12511,6 +12513,9 @@ fn analyze_expr_expected_inner(
                         | Builtin::TestActorAccount
                         | Builtin::TestActorPublicKey
                         | Builtin::TestActorSign
+                        | Builtin::Poseidon2
+                        | Builtin::Poseidon6
+                        | Builtin::Pubkgen
                 )
                 && source_name != builtin.source_name()
             {
@@ -15880,7 +15885,7 @@ mod tests {
 
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
@@ -18584,7 +18589,7 @@ seiyaku UnshieldAmount {{
   fn build() {{
     let _bytes = crypto::zk::build_unshield(
       asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-      destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
       amount: {amount},
       inputs: b"0123456789abcdef0123456789abcdef",
       backend: "halo2/ipa",

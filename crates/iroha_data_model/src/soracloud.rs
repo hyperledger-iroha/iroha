@@ -28431,9 +28431,13 @@ mod tests {
             b"soracloud-full-bootstrap-proof-refresh",
         )
         .expect("bootstrap key");
-        let mut full_bootstrap_key = refresh_key.clone();
-        full_bootstrap_key.mode = iroha_crypto::fhe_bfv::BfvBootstrapKeyMode::FullBootstrapV1;
-        full_bootstrap_key.full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+        let full_bootstrap_key = iroha_crypto::fhe_bfv::full_bootstrap_key_from_material_v1(
+            &params,
+            &public_key,
+            "soracloud-full-bootstrap-proof",
+            sample_full_bootstrap_material(&params),
+        )
+        .expect("full-bootstrap key");
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key: relinearization_key.clone(),
             rotation_keys: Vec::new(),

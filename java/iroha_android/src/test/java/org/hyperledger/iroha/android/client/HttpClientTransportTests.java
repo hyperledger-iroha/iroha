@@ -75,6 +75,8 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
+  private static final String CANONICAL_ALICE_ACCOUNT_ID =
+      "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
@@ -870,12 +872,12 @@ public final class HttpClientTransportTests {
             + "\"dataspace_id\":42,"
             + "\"dataspace_alias\":\"sandbox\","
             + "\"accounts\":[{"
-            + "\"account_id\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
+            + "\"account_id\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
             + "\"asset_id\":\""
             + assetDefinitionId
-            + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+            + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
             + "\",\"asset_definition_id\":\""
             + assetDefinitionId
             + "\",\"quantity\":\"42\""
@@ -906,12 +908,12 @@ public final class HttpClientTransportTests {
     assert dataspace.accounts().size() == 1 : "Expected single account entry";
     final UaidPortfolioResponse.UaidPortfolioAccount account =
         dataspace.accounts().get(0);
-    assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(account.accountId())
+    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(account.accountId())
         : "Account ID mismatch";
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert (assetDefinitionId + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB").equals(asset.assetId())
+    assert (assetDefinitionId + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV").equals(asset.assetId())
         : "Asset ID mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
     assert assetDefinitionId.equals(asset.asset()) : "Legacy asset accessor mismatch";
@@ -1088,7 +1090,7 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\",\"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D\"]"
+            + "\"accounts\":[\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\",\"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =
@@ -1132,7 +1134,7 @@ public final class HttpClientTransportTests {
             + "\"expired_epoch\":null,"
             + "\"revocation\":{\"epoch\":15,\"reason\":\"policy\"}"
             + "},"
-            + "\"accounts\":[\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"],"
+            + "\"accounts\":[\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"],"
             + "\"manifest\":{"
             + "\"version\":\"1\","
             + "\"uaid\":\"uaid:"
@@ -1170,7 +1172,7 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation() != null : "Revocation should be present";
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
-    assert record.accounts().contains("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB") : "Accounts must surface";
+    assert record.accounts().contains("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV") : "Accounts must surface";
     assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
     assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
@@ -1203,7 +1205,7 @@ public final class HttpClientTransportTests {
     assert response.items().size() == 1 : "Expected one identifier policy";
     final IdentifierPolicySummary item = response.items().get(0);
     assert "phone#retail".equals(item.policyId()) : "Policy id mismatch";
-    assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(item.owner()) : "Owner mismatch";
+    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(item.owner()) : "Owner mismatch";
     assert item.active() : "Policy should be active";
     assert item.normalization() == IdentifierNormalization.PHONE_E164
         : "Normalization mismatch";
@@ -1309,7 +1311,7 @@ public final class HttpClientTransportTests {
         + "\"total\":1,"
         + "\"items\":[{"
         + "\"policy_id\":\"phone#retail\","
-        + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
+        + "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"active\":true,"
         + "\"normalization\":\"phone_e164\","
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
@@ -1349,7 +1351,7 @@ public final class HttpClientTransportTests {
     assert response.items().size() == 1 : "Expected one RAM-LFE program policy";
     final RamLfeProgramPolicySummary item = response.items().get(0);
     assert "identifier_lookup_retail".equals(item.programId()) : "Program id mismatch";
-    assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(item.owner()) : "Owner mismatch";
+    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(item.owner()) : "Owner mismatch";
     assert item.active() : "Program policy should be active";
     assert "signed".equals(item.verificationMode()) : "Verification mode mismatch";
     assert "bfv-v1".equals(item.inputEncryption()) : "Input encryption mismatch";
@@ -1382,8 +1384,8 @@ public final class HttpClientTransportTests {
       {
         "ram-lfe program policy list.items[0].owner",
         canonical.replace(
-            "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"",
-            "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \"")
+            "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
+            "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV \"")
       },
       {
         "ram-lfe program policy list.items[0].resolver_public_key",
@@ -1444,7 +1446,7 @@ public final class HttpClientTransportTests {
         + "\"total\":1,"
         + "\"items\":[{"
         + "\"program_id\":\"identifier_lookup_retail\","
-        + "\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\","
+        + "\"owner\":\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\","
         + "\"active\":true,"
         + "\"resolver_public_key\":\"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\","
         + "\"backend\":\"bfv-programmed-sha3-256-v1\","
@@ -1635,7 +1637,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolveRequestParsesResponse() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -1708,7 +1710,8 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolveRequestParsesProgrammedReceiptResponse() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "email#retail",
@@ -1836,7 +1839,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierClaimRecordParserRejectsNonExactClaimFields() {
-    final String accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
 
     final String canonical = identifierClaimRecordJson(
@@ -1933,7 +1936,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierClaimReceiptUsesAccountPath() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -3764,7 +3767,8 @@ public final class HttpClientTransportTests {
   }
 
   private static void resolveAccountAliasRequestParsesResponse() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final String json =
         "{"
             + "\"alias\":\"alice@universal\","
@@ -3807,7 +3811,9 @@ public final class HttpClientTransportTests {
     final String json =
         "{"
             + "\"alias\":\"merchant@private\","
-            + "\"account_id\":\"aid:merchant-123\","
+            + "\"account_id\":\""
+            + CANONICAL_ALICE_ACCOUNT_ID
+            + "\","
             + "\"source\":\"world_state\""
             + "}";
     final StubResponseExecutor executor =
@@ -3824,7 +3830,7 @@ public final class HttpClientTransportTests {
         transport.resolveAccountAlias("merchant@private", auth).join();
 
     assert response.isPresent() : "Restricted alias resolution should be present";
-    assert "aid:merchant-123".equals(response.orElseThrow().accountId())
+    assert CANONICAL_ALICE_ACCOUNT_ID.equals(response.orElseThrow().accountId())
         : "Restricted alias target mismatch";
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Restricted alias request must be captured";
@@ -3947,7 +3953,9 @@ public final class HttpClientTransportTests {
     final String json =
         "{"
             + "\"alias\":\"banking@centralbank.universal\","
-            + "\"account_id\":\"aid:banking-123\","
+            + "\"account_id\":\""
+            + CANONICAL_ALICE_ACCOUNT_ID
+            + "\","
             + "\"source\":\"rekey_record\""
             + "}";
     final StubResponseExecutor executor =
@@ -3963,7 +3971,7 @@ public final class HttpClientTransportTests {
     assert response.isPresent() : "Account alias resolution should be present";
     final AccountAliasResolution resolution = response.orElseThrow();
     assert "banking@centralbank.universal".equals(resolution.alias()) : "Alias mismatch";
-    assert "aid:banking-123".equals(resolution.accountId()) : "Account id mismatch";
+    assert CANONICAL_ALICE_ACCOUNT_ID.equals(resolution.accountId()) : "Account id mismatch";
     assert resolution.index() == null : "Index should be absent when the payload omits it";
     assert "rekey_record".equals(resolution.source()) : "Source mismatch";
   }
@@ -4068,7 +4076,7 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "string#retail",
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -4374,7 +4382,7 @@ public final class HttpClientTransportTests {
       final IdentifierBfvPublicParameters parameters) {
     return new IdentifierPolicySummary(
         "string#retail",
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         true,
         IdentifierNormalization.EXACT,
         "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -4388,7 +4396,7 @@ public final class HttpClientTransportTests {
   private static IdentifierPolicySummary samplePlaintextOnlyIdentifierPolicy() {
     return new IdentifierPolicySummary(
         "string#retail",
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         true,
         IdentifierNormalization.EXACT,
         "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
@@ -5304,7 +5312,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload =
         new IdentifierResolutionPayload(
             "phone#retail",
@@ -5348,7 +5356,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierReceiptVerifierRejectsAdversarialReceipts() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
     final IdentifierResolutionReceipt receipt =
@@ -5404,7 +5412,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolutionReceiptParserRejectsNonExactReceiptTags() {
-    final String accountId = TestAccountIds.ed25519Authority(0x11);
+    final String accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     final IdentifierResolutionPayload payload = sampleIdentifierResolutionPayload(accountId, "66");
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(payload);
 

@@ -45,6 +45,24 @@ pub fn raw_assign_advice<'v, F: Field>(
     }
 }
 
+/// Assign advice to a physical region without retaining its returned value.
+#[inline(always)]
+pub fn raw_assign_advice_discarding_value<F: Field>(
+    region: &mut Region<F>,
+    column: Column<Advice>,
+    offset: usize,
+    value: Value<impl Into<Assigned<F>>>,
+) {
+    #[cfg(feature = "halo2-axiom")]
+    {
+        region.assign_advice_discarding_value(column, offset, value);
+    }
+    #[cfg(feature = "halo2-pse")]
+    {
+        let _ = raw_assign_advice(region, column, offset, value);
+    }
+}
+
 /// Assign fixed to physical region.
 #[inline(always)]
 pub fn raw_assign_fixed<F: Field>(

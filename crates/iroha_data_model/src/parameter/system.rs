@@ -2120,8 +2120,6 @@ mod tests {
             "vrf_commit_window_blocks",
             "vrf_reveal_window_blocks",
             "max_validators",
-            "min_self_bond",
-            "min_nomination_bond",
             "max_nominator_concentration_pct",
             "seat_band_pct",
             "max_entity_correlation_pct",
@@ -2138,6 +2136,14 @@ mod tests {
                 .as_u64()
                 .unwrap_or_else(|| panic!("`{field}` should serialize as number"));
             *value = norito::json::Value::String(number.to_string());
+        }
+        for field in ["min_self_bond", "min_nomination_bond"] {
+            assert!(
+                map.get(field)
+                    .and_then(norito::json::Value::as_str)
+                    .is_some(),
+                "Quantity field `{field}` must retain its canonical JSON string encoding"
+            );
         }
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),

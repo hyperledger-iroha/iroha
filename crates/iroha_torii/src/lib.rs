@@ -58249,8 +58249,11 @@ pub(crate) mod tests_runtime_handlers {
         #[cfg(feature = "app_api")]
         let sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> = None;
         #[cfg(feature = "app_api")]
-        let sorafs_node =
-            sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .data_dir(kura.store_root().join("sorafs"))
+                .build(),
+        );
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::unlimited());
         #[cfg(feature = "app_api")]
@@ -79528,7 +79531,7 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,

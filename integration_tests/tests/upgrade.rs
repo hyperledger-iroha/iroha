@@ -596,6 +596,7 @@ fn executor_with_fuel() -> Result<()> {
                 std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
             ),
         )),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         // The upgraded executor always expects this metadata entry.
         // No additional fuel, assuming the default parameter before override provides plenty of fuel.
         additional_fuel(0),
@@ -616,6 +617,7 @@ fn executor_with_fuel() -> Result<()> {
             mint_a_rose.clone(),
             mint_a_rose.clone(),
         ],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         // Each instruction will use 30_000_000 additional fuel, so this should cover it.
         additional_fuel(90_000_000),
     )?;
@@ -632,6 +634,7 @@ fn executor_with_fuel() -> Result<()> {
             mint_a_rose.clone(),
             mint_a_rose.clone(),
         ],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         // Total fuel (90_000_000) only suffices for additional fuel consumption, so this fails.
         additional_fuel(80_000_000),
     );
@@ -672,6 +675,7 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
                 std::num::NonZeroU64::new(10_000_000_u64).unwrap(),
             ),
         )),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         additional_fuel(0),
     )?;
 

@@ -13,7 +13,6 @@ use ivm::{
     syscalls,
 };
 mod common;
-use common::assemble_syscalls;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let payload = common::payload_for_type(pty, payload);
@@ -37,6 +36,13 @@ fn saturate_input(vm: &mut IVM) {
     while vm.alloc_input_tlv(&filler).is_ok() {}
 }
 
+fn bytes_state_program(number: u32, name: &str) -> Vec<u8> {
+    common::assemble_bytes_state_contract_syscalls(
+        &[u8::try_from(number).expect("state syscall fits compact encoding")],
+        &[name],
+    )
+}
+
 #[test]
 fn wsv_host_state_set_get_del_roundtrip() {
     let wsv = MockWorldStateView::new();
@@ -49,20 +55,21 @@ fn wsv_host_state_set_get_del_roundtrip() {
     vm.set_host(host);
 
     let path_tlv = make_tlv(PointerType::Name, b"bar");
-    let val1 = vec![9u8, 8, 7];
+    let expected = vec![9u8, 8, 7];
+    let val1 = common::encode_bytes_state_value(&expected);
     let val1_tlv = make_tlv(PointerType::NoritoBytes, &val1);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val1 = vm.alloc_input_tlv(&val1_tlv).expect("alloc val");
 
     // SET
-    let set_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "bar");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val1);
     vm.load_program(&set_prog).expect("load set");
     vm.run().expect("state set");
 
     // GET
-    let get_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "bar");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
@@ -71,9 +78,10 @@ fn wsv_host_state_set_get_del_roundtrip() {
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
     assert_eq!(tlv.payload, &val1[..]);
+    assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 
     // DEL
-    let del_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_DEL as u8]);
+    let del_prog = bytes_state_program(syscalls::SYSCALL_STATE_DEL, "bar");
     vm.set_register(10, p_path);
     vm.load_program(&del_prog).expect("load del");
     vm.run().expect("state del");
@@ -126,11 +134,12 @@ fn durable_state_overlay_persists_and_restores() {
 }
 
 #[test]
-fn wsv_host_state_get_wraps_raw_bytes_in_input_when_space_is_available() {
+fn wsv_host_state_get_returns_canonical_record_in_input_when_space_is_available() {
     let mut wsv = MockWorldStateView::new();
-    let expected = b"legacy-inline".to_vec();
-    wsv.sc_set("legacy-inline", expected.clone())
-        .expect("seed raw state");
+    let expected = b"inline".to_vec();
+    let stored = common::encode_bytes_state_value(&expected);
+    wsv.sc_set("inline_value", stored.clone())
+        .expect("seed canonical state");
     let caller = account(
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -139,10 +148,10 @@ fn wsv_host_state_get_wraps_raw_bytes_in_input_when_space_is_available() {
     let host = WsvHost::new_with_subject(wsv, caller, Default::default());
     vm.set_host(host);
 
-    let path_tlv = make_tlv(PointerType::Name, b"legacy-inline");
+    let path_tlv = make_tlv(PointerType::Name, b"inline_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
 
-    let get_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "inline_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
@@ -150,14 +159,15 @@ fn wsv_host_state_get_wraps_raw_bytes_in_input_when_space_is_available() {
     let p_out = vm.register(10);
     assert!(
         (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&p_out),
-        "raw state value should stay in input while there is still input space"
+        "state value should stay in input while there is still input space"
     );
     let tlv = vm
         .memory
         .validate_tlv(p_out)
-        .expect("validate wrapped raw output");
+        .expect("validate canonical output");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(tlv.payload, &expected[..]);
+    assert_eq!(tlv.payload, &stored[..]);
+    assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
 
 #[test]
@@ -173,11 +183,12 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
 
     let path_tlv = make_tlv(PointerType::Name, b"spill");
     let expected = vec![0xCD; 64];
-    let val_tlv = make_tlv(PointerType::NoritoBytes, &expected);
+    let stored = common::encode_bytes_state_value(&expected);
+    let val_tlv = make_tlv(PointerType::NoritoBytes, &stored);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
 
-    let set_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    let set_prog = bytes_state_program(syscalls::SYSCALL_STATE_SET, "spill");
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
@@ -185,7 +196,7 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
 
     saturate_input(&mut vm);
 
-    let get_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spill");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
@@ -197,15 +208,17 @@ fn wsv_host_state_get_spills_to_heap_when_input_bump_is_full() {
     );
     let tlv = vm.validate_tlv(p_out).expect("validate spilled output");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(tlv.payload, &expected[..]);
+    assert_eq!(tlv.payload, &stored[..]);
+    assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
 
 #[test]
-fn wsv_host_state_get_wraps_raw_bytes_and_spills_to_heap_when_input_bump_is_full() {
+fn wsv_host_state_get_spills_canonical_record_when_input_bump_is_full() {
     let mut wsv = MockWorldStateView::new();
-    let expected = b"legacy-state".to_vec();
-    wsv.sc_set("legacy", expected.clone())
-        .expect("seed raw state");
+    let expected = b"spilled-state".to_vec();
+    let stored = common::encode_bytes_state_value(&expected);
+    wsv.sc_set("spilled_value", stored.clone())
+        .expect("seed canonical state");
     let caller = account(
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -214,11 +227,11 @@ fn wsv_host_state_get_wraps_raw_bytes_and_spills_to_heap_when_input_bump_is_full
     let host = WsvHost::new_with_subject(wsv, caller, Default::default());
     vm.set_host(host);
 
-    let path_tlv = make_tlv(PointerType::Name, b"legacy");
+    let path_tlv = make_tlv(PointerType::Name, b"spilled_value");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     saturate_input(&mut vm);
 
-    let get_prog = assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = bytes_state_program(syscalls::SYSCALL_STATE_GET, "spilled_value");
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
@@ -226,11 +239,12 @@ fn wsv_host_state_get_wraps_raw_bytes_and_spills_to_heap_when_input_bump_is_full
     let p_out = vm.register(10);
     assert!(
         (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),
-        "raw state value should spill into heap when input is exhausted"
+        "state value should spill into heap when input is exhausted"
     );
-    let tlv = vm.validate_tlv(p_out).expect("validate spilled raw output");
+    let tlv = vm.validate_tlv(p_out).expect("validate spilled output");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(tlv.payload, &expected[..]);
+    assert_eq!(tlv.payload, &stored[..]);
+    assert_eq!(common::decode_bytes_state_value(tlv.payload), expected);
 }
 
 #[test]

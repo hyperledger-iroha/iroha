@@ -32,21 +32,7 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            iroha_core::state::State::new(
-                world,
-                kura,
-                query,
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            iroha_core::state::State::new(world, kura, query)
-        }
-    };
+    let state = iroha_core::state::State::new_for_testing(world, kura, query);
 
     // Prepare ZK ISIs: mint, register policy, transfer, unshield
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(

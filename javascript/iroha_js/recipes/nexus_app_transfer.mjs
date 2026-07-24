@@ -20,10 +20,10 @@ const signingPublicKey = Buffer.from(
   "hex",
 );
 const walletSignature = Buffer.from(
-  "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05",
+  "a79c4abe27cff185da6be1af15f0b7b36ca8f8729bd671eceed6758ec07a68ef79771ef904484f3ee3f8546f71aa8a40e99b5bf18820e80192491e32cedd9a01",
   "hex",
 );
-const signedTransactionHashHex = "2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb";
+const signedTransactionHashHex = "6f39fd5e193f09f750939f0b089188b9a327a9dda0c8fb3de312c953bf2d93bb";
 
 const connectTransport = {
   async startConnect() {
@@ -77,6 +77,7 @@ const receipt = await client.transferWithWallet(approval.session, {
   sourceAssetId,
   quantity: "12.34",
   destinationAccountId,
+  feePayment: { payer: "authority", chargeLimits: [] },
   metadata: { purpose: "nexus-app-fixture" },
   creationTimeMs: 1_700_000_000_000,
   ttlMs: 30_000,
@@ -88,4 +89,5 @@ if (receipt.signedTransactionHashHex !== signedTransactionHashHex) {
 }
 console.log("wallet URI:", session.walletLaunchUri);
 console.log("signed transaction hash:", receipt.signedTransactionHashHex);
-console.log("final status:", receipt.status?.status ?? receipt.status);
+const finalStatus = receipt.status?.status ?? receipt.status;
+console.log("final status:", finalStatus?.kind ?? finalStatus);

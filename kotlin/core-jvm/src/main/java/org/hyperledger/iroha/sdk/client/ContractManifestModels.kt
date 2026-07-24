@@ -246,24 +246,114 @@ class ContractManifestRecord(
 /** Strict parser for the full Rust `ContractManifest` JSON shape. */
 object ContractManifestJsonParser {
     private val maxU64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+    // BEGIN GENERATED: kotodama-v1-validator-policy
     private val reservedIdentifiers = setOf(
-        "authorize", "break", "const", "continue", "else", "enum", "error", "false",
-        "fn", "for", "hajimari", "if", "in", "int", "decimal", "quantity", "kaizen", "kotoage", "let", "match", "module",
-        "return", "seiyaku", "state", "struct", "trigger", "true", "var", "view",
+        "authorize",
+        "break",
+        "const",
+        "continue",
+        "else",
+        "enum",
+        "error",
+        "false",
+        "fn",
+        "for",
+        "hajimari",
+        "始まり",
+        "if",
+        "in",
+        "kaizen",
+        "改善",
+        "kotoage",
+        "言挙げ",
+        "let",
+        "match",
+        "module",
+        "return",
+        "seiyaku",
+        "誓約",
+        "state",
+        "struct",
+        "trigger",
+        "true",
+        "var",
+        "view",
     )
     private val reservedDeclarationNames = setOf(
-        "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
-        "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
-        "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
-        "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
-        "AssetHandle", "ProofBlob", "SoracloudRequest", "SoracloudResponse",
-        "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
-        "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
-        "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-        "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
-        "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "Json",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "DomainId",
+        "Name",
+        "NftId",
+        "DataSpaceId",
+        "Option",
+        "Result",
+        "List",
+        "StateMap",
+        "Secret",
+        "AccountView",
+        "AssetView",
+        "AssetDefinitionView",
+        "DomainView",
+        "NftView",
+        "QueryPage",
+        "AxtDescriptor",
+        "AssetHandle",
+        "ProofBlob",
+        "SoracloudRequest",
+        "SoracloudResponse",
+        "state_map_get",
+        "__kotodama_list_len",
+        "__kotodama_list_get",
+        "__kotodama_list_try_set",
+        "__kotodama_list_try_push",
+        "__kotodama_list_pop",
+        "__kotodama_list_contains",
+        "__kotodama_list_take",
+        "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round",
+        "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
         "__kotodama_decimal_to_int_round",
     )
+    private val retiredNumericTypeNames = setOf(
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "i128",
+        "isize",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "u128",
+        "usize",
+        "num",
+        "Int",
+        "Integer",
+        "float",
+        "f32",
+        "f64",
+        "Decimal",
+        "Fixed",
+        "FixedPoint",
+        "Amount",
+        "amount",
+        "money",
+        "Quantity",
+        "number",
+    )
+    // END GENERATED: kotodama-v1-validator-policy
     private val valueKindByWire = mapOf(
         "Int" to EntrypointValueKindV1.INT,
         "Decimal" to EntrypointValueKindV1.DECIMAL,
@@ -314,7 +404,7 @@ object ContractManifestJsonParser {
         )
         val seiyakuName = optionalExactString(root, "seiyaku_name", "manifest.seiyaku_name")
         if (seiyakuName != null) {
-            check(canonicalDeclarationIdentifier(seiyakuName)) {
+            check(canonicalTypeDeclarationIdentifier(seiyakuName)) {
                 "manifest.seiyaku_name must be a canonical Kotodama identifier"
             }
         }
@@ -592,7 +682,15 @@ object ContractManifestJsonParser {
         exactKeys(root, setOf("name", "fields"), "entrypoint struct node")
         val name = exactString(required(root, "name", "entrypoint struct node"), "entrypoint struct node.name")
         val fields = stringList(required(root, "fields", "entrypoint struct node"), "entrypoint struct node.fields")
-        check(canonicalSourceIdentifier(name) && fields.isNotEmpty() && fields.all(::canonicalSourceIdentifier)) {
+        check(
+            (
+                canonicalTypeDeclarationIdentifier(name) ||
+                    name == "QueryPage" ||
+                    isCoreQueryViewName(name)
+            ) &&
+                fields.isNotEmpty() &&
+                fields.all(::canonicalSourceIdentifier),
+        ) {
             "entrypoint struct node must use canonical Kotodama identifiers"
         }
         requireUnique(fields, "entrypoint struct node.fields")
@@ -922,7 +1020,7 @@ object ContractManifestJsonParser {
         exactKeys(root, setOf("namespace", "name", "code"), "error code descriptor")
         val namespace = exactString(required(root, "namespace", "error code descriptor"), "error code descriptor.namespace")
         val name = exactString(required(root, "name", "error code descriptor"), "error code descriptor.name")
-        check(canonicalDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name)) {
+        check(canonicalTypeDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name)) {
             "error code namespace and name must be canonical Kotodama identifiers"
         }
         val code = unsignedInteger(
@@ -1115,8 +1213,11 @@ object ContractManifestJsonParser {
             value !in reservedDeclarationNames &&
             !value.startsWith("__kotodama_link_")
 
+    private fun canonicalTypeDeclarationIdentifier(value: String): Boolean =
+        canonicalDeclarationIdentifier(value) && value !in retiredNumericTypeNames
+
     private fun canonicalEntrypointName(value: String): Boolean =
-        value == "hajimari" || value == "始まり" || value == "kaizen" || value == "改善" || canonicalSourceIdentifier(value)
+        value == "hajimari" || value == "始まり" || value == "kaizen" || value == "改善" || canonicalDeclarationIdentifier(value)
 
     private fun requireUnique(values: List<String>, path: String) {
         check(values.toSet().size == values.size) { "$path must not contain duplicate identifiers" }

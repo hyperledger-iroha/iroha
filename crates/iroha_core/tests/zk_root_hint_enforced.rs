@@ -42,15 +42,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
     // Create state and cap recent roots to 3
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
             halo2: cfg::Halo2 {
@@ -84,6 +76,7 @@ fn root_hint_rejects_stale_root_and_allows_recent_root_to_reach_nullifier_valida
                 metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
+            sccp: cfg::Sccp::default(),
             root_history_cap: 3,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

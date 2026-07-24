@@ -15551,7 +15551,7 @@ mod contract_state_tests {
         let transport = make_tlv(PointerType::NoritoBytes, &persisted);
         let error = decode_contract_state_scalar_json(&transport, &ty)
             .expect_err("the WSV decoder must not accept a recreated VM transport envelope");
-        assert!(error.contains("decode state record"), "{error}");
+        assert!(error.contains("decode durable state record"), "{error}");
     }
 
     #[test]
@@ -34827,7 +34827,7 @@ mod repair_query_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const TEST_AUDITOR_I105: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 
     fn report(
         ticket: &str,
@@ -35274,7 +35274,7 @@ mod repair_worker_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const TEST_AUDITOR_I105: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const TEST_WORKER_A_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     const TEST_WORKER_B_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 

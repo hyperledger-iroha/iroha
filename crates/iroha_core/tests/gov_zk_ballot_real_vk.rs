@@ -1,4 +1,4 @@
-#![doc = "Gated test: `CastZkBallot` verifies via real VK path (tiny-add2inst public inputs) with dev toggle OFF.\nRequires Halo2 dev tests. Skipped by default; run with `IROHA_RUN_IGNORED=1`."]
+#![doc = "Gated test: `CastZkBallot` verifies via the production Halo2/IPA vote envelope.\nRequires Halo2 dev tests. Skipped by default; run with `IROHA_RUN_IGNORED=1`."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 #![cfg(feature = "halo2-dev-tests")]
@@ -7,7 +7,7 @@ mod zk_testkit;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
-fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
+fn zk_ballot_verifies_with_registered_production_vote_vk() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!("Skipping: gated (IROHA_RUN_IGNORED!=1)");
         return;
@@ -20,20 +20,31 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
         state::State,
     };
     use iroha_data_model::{
+        Registrable,
         block::BlockHeader,
         isi::{governance::CastZkBallot, verifying_keys, zk::CreateElection},
-        prelude::InstructionBox,
+        permission::Permission,
+        prelude::{Account, Domain, Grant, InstructionBox},
     };
+    use iroha_executor_data_model::permission::governance::{
+        CanManageParliament, CanSubmitGovernanceBallot,
+    };
+    use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
-    // Build State (dev toggle OFF by default)
+    // Build a state with production Halo2 verification enabled.
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(iroha_core::state::World::default(), kura, query);
+    let domain_id: iroha_data_model::domain::DomainId =
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain = Domain::new(domain_id).build(&ALICE_ID);
+    let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let world = iroha_core::state::World::with([domain], [account], []);
+    let mut state = State::new_for_testing(world, kura, query);
     state.gov.min_bond_amount = 0_u64.into();
+    state.zk.halo2.enabled = true;
 
-    // Ensure dev toggle is OFF explicitly
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let mut gov_cfg = state.gov.clone();
     gov_cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
         backend: bundle.backend.to_string(),
@@ -47,6 +58,10 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
     let mut stx = sblock.transaction();
 
     let vk_id = bundle.vk_id.clone();
+    let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(manage_vk, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageVerifyingKeys");
     let exec = Executor::default();
     let reg_instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -55,6 +70,17 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_instr)
         .expect("register vk");
+    let parliament_permission: Permission = CanManageParliament.into();
+    Grant::account_permission(parliament_permission, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageParliament");
+    let ballot_permission: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "ref-vk".to_string(),
+    }
+    .into();
+    Grant::account_permission(ballot_permission, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanSubmitGovernanceBallot");
 
     // Create election with 1 option, use the same backend tag
     let create = CreateElection {
@@ -78,8 +104,8 @@ fn zk_ballot_verifies_with_registered_vk_add2inst_public() {
         },
     );
 
-    // Cast ballot with base64-encoded ZK1
-    let proof_b64 = bundle.proof_b64.clone();
+    // Cast ballot with a base64-encoded OpenVerifyEnvelope.
+    let proof_b64 = bundle.proof_b64();
     let public_inputs = norito::json::object([(
         "root_hint",
         norito::json::to_value(&hex::encode(bundle.root_bytes())).expect("serialize root_hint"),

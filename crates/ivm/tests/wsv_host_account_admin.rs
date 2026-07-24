@@ -67,7 +67,7 @@ fn add_signatory_syscall_updates_account() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(256);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     let acct = make_account_tlv(&alice);
@@ -99,7 +99,7 @@ fn remove_signatory_syscall_updates_account() {
     wsv.add_account_unchecked(alice.clone());
     assert!(wsv.add_signatory(&alice, &alice, signatory_key.to_string()));
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(256);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     let acct = make_account_tlv(&alice);
@@ -129,7 +129,7 @@ fn set_account_quorum_syscall_updates_account() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(256);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     let acct = make_account_tlv(&alice);
@@ -152,7 +152,7 @@ fn set_account_detail_with_permissions() {
     );
     let bob = account(
         "wonder",
-        "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
 
     let mut wsv = MockWorldStateView::new();
@@ -160,7 +160,7 @@ fn set_account_detail_with_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
 
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(256);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     // Register domain wonder and bob account

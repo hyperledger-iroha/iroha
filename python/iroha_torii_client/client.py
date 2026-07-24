@@ -3077,9 +3077,9 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+        "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
 }
 
 

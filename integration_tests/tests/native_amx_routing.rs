@@ -40,7 +40,7 @@ use iroha::{
         peer::PeerId,
         prelude::Quantity,
         query::block::prelude::FindBlocks,
-        transaction::{SignedTransaction, TransactionEntrypoint},
+        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
@@ -1109,6 +1109,7 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
                     &submitter.account,
                 )?,
             ],
+            FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -1147,6 +1148,7 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
                 "native AMX routing receipt convergence tick".to_owned(),
             )
             .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
         Ok(())
@@ -1198,6 +1200,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
                     &submitter.account,
                 )?,
             ],
+            FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();

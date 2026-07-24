@@ -4151,17 +4151,16 @@ fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::co
 where
     T: DecodeAll + Encode,
 {
-    let mut slice: &[u8] = bytes;
-    let value = T::decode_all(&mut slice)
+    let (value, used) = norito::core::decode_field_prefix::<T>(bytes)
         .map_err(|e| norito::core::Error::Message(format!("codec decode error: {e}")))?;
     let canonical = value.encode();
-    if bytes.len() < canonical.len() {
+    if used != canonical.len() || bytes.len() < used {
         return Err(norito::core::Error::LengthMismatch);
     }
-    if bytes[..canonical.len()] != canonical {
+    if bytes[..used] != canonical {
         return Err(norito::core::Error::Message("payload mismatch".into()));
     }
-    Ok((value, canonical.len()))
+    Ok((value, used))
 }
 
 macro_rules! impl_decode_from_slice_via_codec {
@@ -4224,7 +4223,6 @@ impl_decode_from_slice_via_codec!(LaneBlockDescriptorV1);
 impl_decode_from_slice_via_codec!(LaneBlockProposalV1);
 impl_decode_from_slice_via_codec!(LaneBlockVoteBodyV1);
 impl_decode_from_slice_via_codec!(LaneBlockQcV1);
-impl_decode_from_slice_via_codec!(LaneBlockCertificateV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(NativeAmxPhase);
@@ -5486,7 +5484,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_certificate_decodes_atomically_from_slice() {
+    fn lane_block_certificate_decodes_exactly_and_rejects_trailing_bytes() {
         let proposal = sample_lane_block_proposal();
         let qc = |phase| LaneBlockQcV1 {
             body: proposal.vote_body(phase),
@@ -5505,15 +5503,18 @@ mod tests {
             commit_qc,
         };
         let encoded = certificate.encode();
-        let mut framed = encoded.clone();
-        framed.extend_from_slice(b"next-frame");
 
-        let (decoded, used) = LaneBlockCertificateV1::decode_from_slice(&framed)
-            .expect("atomic lane certificate decodes from its canonical prefix");
+        let (decoded, used) =
+            norito::core::decode_field_canonical::<LaneBlockCertificateV1>(&encoded)
+                .expect("canonical lane certificate decodes exactly");
 
         assert_eq!(decoded, certificate);
         assert_eq!(used, encoded.len());
-        assert_eq!(&framed[used..], b"next-frame");
+
+        let mut tailed = encoded;
+        tailed.extend_from_slice(b"next-frame");
+        norito::core::decode_field_canonical::<LaneBlockCertificateV1>(&tailed)
+            .expect_err("unframed trailing bytes must be rejected");
     }
 
     fn sample_proposal() -> Proposal {

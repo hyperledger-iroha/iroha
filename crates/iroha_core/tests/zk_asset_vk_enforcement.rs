@@ -71,15 +71,7 @@ fn prepare_state() -> (
 ) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        iroha_core::state::World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(iroha_core::state::World::new(), kura, query);
+    let mut state = State::new_for_testing(iroha_core::state::World::new(), kura, query);
 
     // These tests need backend dispatch to distinguish VK-binding failures from proof failures.
     state.zk.halo2.enabled = true;

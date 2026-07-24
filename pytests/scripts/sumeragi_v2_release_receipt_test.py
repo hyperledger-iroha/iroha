@@ -246,7 +246,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+        "568269f0431494b4f29092f461822f50a0a060cf596e3b126ba34da4a19e1180"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -1189,7 +1189,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "cargo_home_path": str(isolated_cargo_home.resolve()),
             "repo_cargo_config_sha256": sha256(ROOT_DIR / ".cargo" / "config.toml"),
             "tlc_profile": "ci",
-            "tlaps_threads": "4",
+            "tlaps_threads": "1",
         },
     )
 
@@ -1240,8 +1240,50 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         formal_toolchain_fields[f"{name}_path"] = str(path.resolve())
         formal_toolchain_fields[f"{name}_sha256"] = sha256(path)
     formal_toolchain_fields["tlc_profile"] = "ci"
-    formal_toolchain_fields["tlaps_threads"] = "4"
+    formal_toolchain_fields["tlaps_threads"] = "1"
     write_tsv(formal_toolchain, formal_toolchain_fields)
+    formal_tlaps_resource_summary = formal_dir / "tlaps_resource_summary.json"
+    resource_summary = {
+        "child_exit_code": 0,
+        "ended_utc": "2026-07-22T00:00:01.000Z",
+        "event": "summary",
+        "exit_reason": "completed",
+        "exit_status": 0,
+        "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+        "peak_memory_bytes": 4096,
+        "peak_physical_footprint_bytes": 4096,
+        "peak_rss_bytes": 4096,
+        "sample_count": 1,
+        "sample_interval_seconds": 0.25,
+        "schema_version": 1,
+        "started_utc": "2026-07-22T00:00:00.000Z",
+        "supervisor_pid": 1234,
+    }
+    formal_tlaps_resource_summary.write_bytes(canonical_json(resource_summary))
+    formal_tlaps_resource_jsonl = formal_dir / "tlaps_resource.jsonl"
+    formal_tlaps_resource_jsonl.write_bytes(
+        canonical_json(
+            {
+                "event": "start",
+                "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+                "sample_interval_seconds": 0.25,
+                "schema_version": 1,
+            }
+        )
+        + canonical_json(
+            {
+                "accounting_method": "physical_footprint",
+                "event": "sample",
+                "memory_bytes": 4096,
+                "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+                "physical_footprint_bytes": 4096,
+                "process_count": 1,
+                "rss_bytes": 4096,
+                "schema_version": 1,
+            }
+        )
+        + canonical_json(resource_summary)
+    )
     formal_completion = formal_dir / "COMPLETED.tsv"
     write_tsv(
         formal_completion,
@@ -1259,6 +1301,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
+            "tlaps_resource_jsonl_sha256": sha256(formal_tlaps_resource_jsonl),
+            "tlaps_resource_summary_sha256": sha256(formal_tlaps_resource_summary),
         },
     )
 
@@ -1489,6 +1533,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_cross_tool_evidence": formal_cross_tool_evidence,
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
+        "formal_tlaps_resource_jsonl": formal_tlaps_resource_jsonl,
+        "formal_tlaps_resource_summary": formal_tlaps_resource_summary,
         "formal_verus_tool": tool_paths["verus"],
         "corridor_cargo_tool": tool_paths["cargo"],
         "corridor_cargo_home": isolated_cargo_home,
@@ -1776,7 +1822,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+        "568269f0431494b4f29092f461822f50a0a060cf596e3b126ba34da4a19e1180"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -1820,6 +1866,8 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "formal_cross_tool_evidence": "formal_cross_tool_evidence",
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
+        "formal_tlaps_resource_jsonl": "formal_tlaps_resource_jsonl",
+        "formal_tlaps_resource_summary": "formal_tlaps_resource_summary",
         "seed_matrix_completion": "seed_completion",
         "seed_matrix_summary": "seed_summary",
         "seed_matrix_localnet_manifest_index": "seed_localnet_manifest_index",
@@ -1904,6 +1952,31 @@ def test_receipt_rejects_stale_cross_tool_evidence(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "formal cross-tool evidence digest mismatch" in result.stderr
+
+
+def test_receipt_rejects_resource_summary_above_the_formal_memory_ceiling(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    summary = evidence["formal_tlaps_resource_summary"]
+    completion = evidence["formal_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    document["peak_memory_bytes"] = document["memory_limit_bytes"] + 1
+    rewrite_json(summary, document)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["tlaps_resource_summary_sha256"] = sha256(summary)
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "not a successful bounded release run" in result.stderr
 
 
 def test_receipt_rejects_substituted_cross_tool_evidence(
@@ -2601,6 +2674,8 @@ def test_receipt_rejects_cross_source_completion(
         ("formal_verus_evidence", "formal Verus evidence digest mismatch"),
         ("formal_verus_log", "formal Verus log digest mismatch"),
         ("formal_toolchain", "formal toolchain digest mismatch"),
+        ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
+        ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
         ("formal_verus_tool", "formal verus tool digest mismatch"),
         ("corridor_summary", "corridor summary digest mismatch"),
         ("corridor_required", "corridor production inventory digest mismatch"),

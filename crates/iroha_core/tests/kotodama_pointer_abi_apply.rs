@@ -9,17 +9,13 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{
     IVM, KotodamaCompiler, ProgramMetadata,
     kotodama::compiler::{CompilerMode, CompilerOptions},
 };
 use mv::storage::StorageReadOnly;
 use std::{collections::BTreeSet, sync::Arc};
-
-fn fixture_account(hex_public_key: &str) -> AccountId {
-    let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(public_key)
-}
 
 fn pointer_abi_test_compiler() -> KotodamaCompiler {
     KotodamaCompiler::new_with_options(CompilerOptions {
@@ -125,10 +121,8 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let program = compiler.compile_source(&src).expect("compile kotodama");
 
     // Prepare VM with CoreHost
-    let from =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    let to =
-        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let from = ALICE_ID.clone();
+    let to = BOB_ID.clone();
     let query_asset_def = parsed_asset_definition_literal(&sample_asset_literal);
     let query_state = state_with_asset_definitions(&from, &[query_asset_def]);
     let query_view = query_state.view();
@@ -147,10 +141,27 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         eprintln!("queued[{i}]: {instr:?}");
     }
 
-    // Build a minimal State and apply setup ISIs then queued ISIs
+    // Seed the opaque canonical asset definition directly. Ordinary
+    // domain-owned registration intentionally rejects domainless address IDs;
+    // this test exercises the generated asset operations, not registration.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
+    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
+        .expect("canonical asset definition literal");
+    let account_domain = Domain::new(account_domain_id).build(&from);
+    let asset_domain_record = Domain::new(asset_domain).build(&from);
+    let from_account = Account::new(from.clone()).build(&from);
+    let to_account = Account::new(to.clone()).build(&to);
+    let asset_definition = AssetDefinition::numeric(asset_def.clone())
+        .with_name(asset_name.to_string())
+        .build(&from);
+    let world = World::with(
+        [account_domain, asset_domain_record],
+        [from_account, to_account],
+        [asset_definition],
+    );
+    let state = State::new_for_testing(world, kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -161,30 +172,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    // Setup: register domains required by account ids and asset definition.
-    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
-        .expect("canonical asset definition literal");
-    let reg_account_domain =
-        RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
-    let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain.clone())));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(asset_def.clone()).with_name(asset_name.to_string()),
-    ));
     let executor = tx.world.executor().clone();
-    for instr in [
-        InstructionBox::from(reg_account_domain),
-        InstructionBox::from(reg_asset_domain),
-        InstructionBox::from(reg_from),
-        InstructionBox::from(reg_to),
-        InstructionBox::from(reg_asset_def),
-    ] {
-        executor
-            .execute_instruction(&mut tx, &from, instr)
-            .expect("setup should succeed");
-    }
 
     // Apply deterministic ISIs mirroring the sample program
     assert_eq!(queued.len(), 3, "expected three enqueued instructions");
@@ -260,12 +248,12 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         .compile_source(&src)
         .expect("compile pointer state transfer");
 
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     let query_asset_def = parsed_asset_definition_literal(&asset_literal);
     let query_state = state_with_asset_definitions(&authority, &[query_asset_def]);
     let query_view = query_state.view();
     let mut host = CoreHostImpl::new(authority.clone());
+    host.set_local_contract_debug_execution();
     host.set_query_state(&query_view);
     let mut vm = IVM::new(50_000_000);
     vm.load_program(&program).expect("load program");
@@ -314,10 +302,24 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
             .expect("setup should succeed");
     }
 
-    let queued = host
-        .apply_queued(&mut tx, &authority)
-        .expect("apply queued transfer");
+    let queued = host.drain_instructions();
     assert_eq!(queued.len(), 1, "expected one queued transfer");
+    let transfer = queued[0]
+        .as_any()
+        .downcast_ref::<TransferBox>()
+        .expect("queued instruction must be a transfer");
+    let TransferBox::Asset(transfer) = transfer else {
+        panic!("queued instruction must be an asset transfer");
+    };
+    assert_eq!(
+        transfer.source,
+        AssetId::of(asset_def.clone(), authority.clone())
+    );
+    assert_eq!(transfer.destination, authority);
+    assert_eq!(
+        transfer.object.as_numeric(),
+        Quantity::from(1_u32).as_numeric()
+    );
     tx.apply();
     block.commit().expect("commit block");
 
@@ -361,14 +363,15 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
         }}
     "#
     );
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
 
     let write_program = pointer_abi_test_compiler()
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
-    write_vm.set_host(CoreHost::new(authority.clone()));
+    let mut write_host = CoreHost::new(authority.clone());
+    write_host.set_local_contract_debug_execution();
+    write_vm.set_host(write_host);
     write_vm.load_program(&write_program).expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
@@ -393,6 +396,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
     let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
@@ -412,10 +416,8 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
         "coin".parse().unwrap(),
     );
     let asset_literal = asset_def.canonical_address();
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    let vault =
-        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let authority = ALICE_ID.clone();
+    let vault = BOB_ID.clone();
     let vault_literal = vault.to_string();
 
     let write_src = format!(
@@ -451,7 +453,9 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
-    write_vm.set_host(CoreHost::new(authority.clone()));
+    let mut write_host = CoreHost::new(authority.clone());
+    write_host.set_local_contract_debug_execution();
+    write_vm.set_host(write_host);
     write_vm.load_program(&write_program).expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
@@ -476,6 +480,7 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
     let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
@@ -491,10 +496,8 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
 #[test]
 fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     let asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    let vault =
-        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let authority = ALICE_ID.clone();
+    let vault = BOB_ID.clone();
     let authority_literal = authority.to_string();
     let vault_literal = vault.to_string();
 
@@ -518,7 +521,8 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
           state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
-            let ev = json {{ provider: AccountId::parse("{authority_literal}"), base_amount: 1000 }};
+            let quantity event_base_amount = 1000;
+            let ev = json {{ provider: AccountId::parse("{authority_literal}"), base_amount: event_base_amount }};
             let provider = ev.get_account_id(Name::parse("provider")).unwrap_or(AccountId::parse("{authority_literal}"));
             let quantity zero = 0;
             let base_amount = ev.get_quantity(Name::parse("base_amount")).unwrap_or(zero);
@@ -536,7 +540,9 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
         .compile_source(&write_src)
         .expect("compile writer");
     let mut write_vm = IVM::new(50_000_000);
-    write_vm.set_host(CoreHost::new(authority.clone()));
+    let mut write_host = CoreHost::new(authority.clone());
+    write_host.set_local_contract_debug_execution();
+    write_vm.set_host(write_host);
     write_vm.load_program(&write_program).expect("load writer");
     select_kotodama_entrypoint(&mut write_vm, &write_program, "main");
     write_vm.run().expect("writer run");
@@ -561,6 +567,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
         .expect("compile reader");
     let mut read_vm = IVM::new(50_000_000);
     let mut read_host = CoreHostImpl::new(authority.clone());
+    read_host.set_local_contract_debug_execution();
     read_host.set_durable_state_snapshot_from_world(&view.world);
     read_host.set_query_state(&view);
     read_vm.load_program(&read_program).expect("load reader");
@@ -640,8 +647,7 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
             .expect("seed_bin entrypoint")
             .entry_pc;
 
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     let authority_literal = authority.to_string();
     let accounts = Arc::new(vec![authority.clone()]);
 
@@ -655,11 +661,12 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
     }));
     let init_arguments = prepare_kotodama_arguments(&program, "init_pool", &init_args);
     let mut init_vm = IVM::new(50_000_000);
-    let init_host = CoreHost::with_accounts_and_argument_record(
+    let mut init_host = CoreHost::with_accounts_and_argument_record(
         authority.clone(),
         Arc::clone(&accounts),
         Some(init_arguments.clone()),
     );
+    init_host.set_local_contract_debug_execution();
     init_vm.load_program(&program).expect("load dlmm_pool");
     init_vm
         .set_program_counter(init_pool_pc)
@@ -704,6 +711,7 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         Arc::clone(&accounts),
         Some(seed_arguments.clone()),
     );
+    seed_host.set_local_contract_debug_execution();
     seed_host.set_durable_state_snapshot_from_world(&view.world);
     seed_host.set_query_state(&view);
     seed_vm.load_program(&program).expect("load dlmm_pool");

@@ -791,7 +791,7 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let source = format!(
         r#"
 seiyaku Test {{
-  fn run() {{}}
+  kotoage fn run() authorize("Execute") {{}}
   trigger asset_added -> run {{
     on data asset added {{
       asset_definition "{asset_definition}";
@@ -876,7 +876,11 @@ seiyaku Test {{
         pipeline_action.filter,
         PipelineEventFilterBox::Block(BlockEventFilter::new().for_status(BlockStatus::Approved))
     );
-    assert_eq!(pipeline_action.authority, authority);
+    assert_eq!(
+        pipeline_action.authority,
+        contract_address.subject_id(),
+        "a manifest trigger without an explicit authority must execute as the immutable contract subject"
+    );
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
         &contract_address,

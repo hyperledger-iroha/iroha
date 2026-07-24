@@ -87,7 +87,7 @@ fn kotodama_sm3_hash_returns_expected_digest() {
     let message = b"kotodama-sm3";
     let expected = Sm3Digest::hash(message);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(&mut vm, &code, "sm_hash", &[("msg", message)], &[]);
 
     vm.run().expect("vm run");
@@ -197,7 +197,7 @@ fn kotodama_sm2_verify_accepts_valid_signature() {
     let sig_bytes = private.sign(message).to_bytes();
     let pk_bytes = public.to_sec1_bytes(false);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -224,7 +224,7 @@ fn kotodama_sm2_verify_rejects_malformed_signature() {
     sig_bytes[0] ^= 0xFF;
     let pk_bytes = public.to_sec1_bytes(false);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -251,7 +251,7 @@ fn kotodama_sm2_verify_rejects_signature_for_other_message() {
     let pk_bytes = public.to_sec1_bytes(false);
     let other_message = b"kotodama-sm2-nonce-reuse";
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -287,7 +287,7 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     let wrong_dist = b"other-dist";
 
     // Success with matching distid
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -305,7 +305,7 @@ fn kotodama_sm2_verify_with_distid_enforces_identifier() {
     assert_eq!(vm.register(10), 1, "matching distid should verify");
 
     // Failure with mismatched distid
-    let mut vm_fail = IVM::new(1_000_000);
+    let mut vm_fail = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm_fail,
         &code,
@@ -337,7 +337,7 @@ fn kotodama_sm4_gcm_seal_matches_vector() {
     let expected_cipher = decode("6468017fde4979a107326ee77d8a265c").expect("hex cipher");
     let expected_tag = decode("cadf422b1af7ec6df46004dc8d3ba855").expect("hex tag");
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -382,7 +382,7 @@ fn kotodama_sm4_gcm_open_returns_plaintext() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -420,7 +420,7 @@ fn kotodama_sm4_gcm_open_rejects_bad_tag() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -448,7 +448,7 @@ fn kotodama_sm4_ccm_seal_matches_vector() {
     let expected_cipher = decode("a9550cebab5f227d9590e8979caafd1f").expect("hex cipher");
     let expected_tag = decode("03a1f305").expect("hex tag");
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -496,7 +496,7 @@ fn kotodama_sm4_ccm_open_returns_plaintext() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,
@@ -537,7 +537,7 @@ fn kotodama_sm4_ccm_open_rejects_bad_tag() {
     let mut cipher_tag = cipher.clone();
     cipher_tag.extend_from_slice(&tag);
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     install_sm_entrypoint(
         &mut vm,
         &code,

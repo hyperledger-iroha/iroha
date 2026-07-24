@@ -228,6 +228,7 @@ impl<F: PrimeField> SpreadTableChip<F> {
         }
     }
 
+    #[cfg(test)]
     pub fn configure(
         meta: &mut ConstraintSystem<F>,
         input_tag: Column<Advice>,

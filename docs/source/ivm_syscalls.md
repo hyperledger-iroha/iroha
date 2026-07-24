@@ -70,9 +70,9 @@ Notes
   with `E_NORITO_INVALID`.
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
 - Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
-- `IntValueV1`, `DecimalValueV1`, and `QuantityValueV1` use pointer types
-  `0x0011`, `0x0012`, and `0x0013`. Pointer ID `0x0010` is permanently retired
-  and rejected as disallowed; `0x0014` is unassigned and rejected as unknown.
+- `QuantityValueV1`, `IntValueV1`, and `DecimalValueV1` use pointer types
+  `0x0010`, `0x0011`, and `0x0012`. Pointer ID `0x0013` is unassigned and
+  rejected as unknown.
   Their unconditional syscall blocks are `0x010100..=0x010113`,
   `0x010120..=0x01012F`, and `0x010140..=0x01014F`. Exact division distinguishes
   repeating results from terminating results needing scale above 28; rounded

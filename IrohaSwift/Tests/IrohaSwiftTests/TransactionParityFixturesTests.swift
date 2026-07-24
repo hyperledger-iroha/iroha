@@ -359,7 +359,6 @@ final class TransactionParityFixturesTests: XCTestCase {
             "canonical.prefix.hex",
             "canonical.hash",
             "payload.prehash",
-            "pinned.sdk.defective.hash",
             "versioned.base64",
         ]
         var result: [String: String] = [:]

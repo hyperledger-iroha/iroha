@@ -473,18 +473,11 @@ pub fn render_fixture() -> String {
             canonical_int_envelope.clone(),
         ),
         invalid(
-            "retired_amount_pointer_type",
-            "envelope",
-            "int",
-            "type_not_allowed",
-            envelope(PointerType::RetiredAmount as u16, 1, &canonical_int_frame),
-        ),
-        invalid(
             "unassigned_pointer_type",
             "envelope",
             "int",
             "unknown_type",
-            envelope(0x0014, 2, &canonical_int_frame),
+            envelope(0x0013, 2, &canonical_int_frame),
         ),
         invalid(
             "known_nonnumeric_pointer_precedes_version",

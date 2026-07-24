@@ -30,7 +30,7 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
     throw new Error("Native binding required; test override is unavailable");
   },
 });
-const ACCOUNT_ID = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const ACCOUNT_ID = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const SEED_11_ED25519_PUBLIC_KEY_HEX =
   "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const MULTISIG_SIGNER_ID =

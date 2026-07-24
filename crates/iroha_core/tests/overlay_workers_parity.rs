@@ -16,12 +16,12 @@ mod snapshots;
 fn run_with_workers(
     workers: usize,
     txs: Vec<SignedTransaction>,
+    alice_id: &AccountId,
+    bob_id: &AccountId,
 ) -> (String, iroha_core::state::State) {
     // Build a fresh world with a domain, two accounts, and a numeric asset definition
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -29,9 +29,9 @@ fn run_with_workers(
         ),
         NumericSpec::default(),
     )
-    .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    .build(alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -67,7 +67,7 @@ fn run_with_workers(
 #[test]
 fn overlay_parallel_workers_parity() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -88,7 +88,7 @@ fn overlay_parallel_workers_parity() {
             "k1".parse().unwrap(),
             iroha_primitives::json::Json::new("v1"),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -99,21 +99,21 @@ fn overlay_parallel_workers_parity() {
             "dk".parse().unwrap(),
             iroha_primitives::json::Json::new(3u32),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -124,12 +124,12 @@ fn overlay_parallel_workers_parity() {
             5_u32,
             bob_id.clone(),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
     ];
 
     // Run with workers=0 (Rayon default) and workers=2
-    let (json0, state0) = run_with_workers(0, txs.clone());
-    let (json2, state2) = run_with_workers(2, txs);
+    let (json0, state0) = run_with_workers(0, txs.clone(), &alice_id, &bob_id);
+    let (json2, state2) = run_with_workers(2, txs, &alice_id, &bob_id);
 
     // Compare event JSON and balances
     assert_eq!(

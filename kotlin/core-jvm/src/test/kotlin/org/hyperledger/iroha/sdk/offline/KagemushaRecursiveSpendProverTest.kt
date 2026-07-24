@@ -5,6 +5,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -20,6 +22,36 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 
 class KagemushaRecursiveSpendProverTest {
+    @Test
+    fun heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val worker = Thread {
+            try {
+                KagemushaRecursiveSpendProver.withHeavyProofPermitForTest {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                }
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        worker.start()
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        assertFailsWith<KagemushaRecursiveSpendProver.ProofWorkerBusyException> {
+            KagemushaRecursiveSpendProver.withHeavyProofPermitForTest {}
+        }
+        release.countDown()
+        worker.join(5_000)
+        assertFalse(worker.isAlive)
+        failure.get()?.let { throw it }
+
+        KagemushaRecursiveSpendProver.withHeavyProofPermitForTest {
+            KagemushaRecursiveSpendProver.withHeavyProofPermitForTest {}
+        }
+    }
+
     @Test
     fun exactAbi21IsRequired() {
         assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(21))
@@ -481,12 +513,18 @@ class KagemushaRecursiveSpendProverTest {
     fun artifactContractAndInventoryAreCurrentOnly() {
         assertEquals(21, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
+        assertEquals(1024 * 1024, KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.requireChunk(
+                ByteArray(KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES + 1),
+            )
+        }
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
         assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
         assertEquals(
-            16 * 1024 * 1024,
+            21_764,
             KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4,
         )
         assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2)
@@ -1164,13 +1202,13 @@ class KagemushaRecursiveSpendProverTest {
         )
         val stepEq = verifier(
             "kagemusha_recursive_step_eq_v4_verifier_record",
-            "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+            "kagemusha-recursive-spend-step-eq-compact-layout-v5",
             4,
             30,
         )
         val stepEp = verifier(
             "kagemusha_recursive_step_ep_v4_verifier_record",
-            "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+            "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
             5,
             30,
         )
@@ -1218,7 +1256,7 @@ class KagemushaRecursiveSpendProverTest {
             readiness(
                 recursiveStepEqVerifier = verifier(
                     "kagemusha_recursive_step_eq_v4_verifier_record",
-                    "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+                    "kagemusha-recursive-spend-step-eq-compact-layout-v5",
                     4,
                     20,
                 ),

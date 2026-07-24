@@ -23,21 +23,7 @@ fn proof_event_includes_call_hash() {
     let world = iroha_core::state::World::with([domain], [acc], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            iroha_core::state::State::new(
-                world,
-                kura,
-                query,
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            iroha_core::state::State::new(world, kura, query)
-        }
-    };
+    let state = iroha_core::state::State::new_for_testing(world, kura, query);
 
     // Build a tx with a VerifyProof instruction for an unsupported real backend.
     let pr = iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3]);

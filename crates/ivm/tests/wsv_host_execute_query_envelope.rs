@@ -60,18 +60,9 @@ fn run_instruction(vm: &mut IVM, env: norito::json::Value) {
     let tlv = make_tlv(PointerType::Json as u16, &body);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    // Program: SCALL SMARTCONTRACT_EXECUTE_INSTRUCTION; HALT
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = ivm::ProgramMetadata::default().encode();
-    prog.extend_from_slice(&code);
+    let prog = common::assemble_ledger_write_contract_syscalls(&[
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+    ]);
     vm.load_program(&prog).unwrap();
     vm.run().expect("exec instruction envelope");
 }
@@ -297,7 +288,7 @@ fn query_list_accounts_for_domain_returns_linked_subjects() {
     );
     let bob_wonderland = account(
         "wonderland",
-        "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42",
+        "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
     );
 
     let mut wsv = MockWorldStateView::new();

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -58,33 +59,54 @@ function canonicalHashLiteral(hex) {
 }
 
 function locatePinnedIvmRlib() {
-  const dependencyDirectory = path.join(REPOSITORY_ROOT, "target/release/deps");
-  const candidates = readdirSync(dependencyDirectory)
-    .filter((name) => /^libivm-[0-9a-f]+\.rlib$/u.test(name))
-    .map((name) => path.join(dependencyDirectory, name))
-    .filter(
-      (candidate) =>
-        sha256(readFileSync(candidate)) === FIXTURE.generation_provenance.ivm_rlib_sha256,
+  const explicit = process.env.IROHA_JS_IVM_RLIB;
+  if (explicit !== undefined) {
+    const candidate = path.resolve(REPOSITORY_ROOT, explicit);
+    assert.equal(
+      sha256(readFileSync(candidate)),
+      FIXTURE.generation_provenance.ivm_rlib_sha256,
+      "IROHA_JS_IVM_RLIB must name the exact fixture-pinned IVM rlib",
     );
+    return candidate;
+  }
+
+  const cargoTargetDirectory =
+    process.env.CARGO_TARGET_DIR === undefined
+      ? path.join(REPOSITORY_ROOT, "target")
+      : path.resolve(REPOSITORY_ROOT, process.env.CARGO_TARGET_DIR);
+  const dependencyDirectories = ["release", "debug"]
+    .map((profile) => path.join(cargoTargetDirectory, profile, "deps"))
+    .filter(existsSync);
+  const candidates = dependencyDirectories.flatMap((dependencyDirectory) =>
+    readdirSync(dependencyDirectory)
+      .filter((name) => /^libivm-[0-9a-f]+\.rlib$/u.test(name))
+      .map((name) => path.join(dependencyDirectory, name))
+      .filter(
+        (candidate) =>
+          sha256(readFileSync(candidate)) ===
+          FIXTURE.generation_provenance.ivm_rlib_sha256,
+      ),
+  );
   assert.equal(
     candidates.length,
     1,
-    "the exact pinned current-source IVM release rlib must be available",
+    "the exact pinned current-source IVM rlib must be available",
   );
   return candidates[0];
 }
 
 function compileRustOracle(directory) {
   const executable = path.join(directory, "verify-current-ivm-artifact");
+  const ivmRlib = locatePinnedIvmRlib();
   execFileSync(
-    "rustc",
+    process.env.RUSTC ?? "rustc",
     [
       "--edition=2024",
       path.join(FIXTURE_DIRECTORY, "verify_current_rust_contract_artifact.rs"),
       "-L",
-      `dependency=${path.join(REPOSITORY_ROOT, "target/release/deps")}`,
+      `dependency=${path.dirname(ivmRlib)}`,
       "--extern",
-      `ivm=${locatePinnedIvmRlib()}`,
+      `ivm=${ivmRlib}`,
       "-o",
       executable,
     ],
@@ -95,6 +117,18 @@ function compileRustOracle(directory) {
 
 test("real current compiler artifact is source-bound and passes the browser structural boundary", () => {
   const sourceBindings = [
+    [
+      "javascript/iroha_js/test/fixtures/current_rust_contract_artifact.ko",
+      "contract_source_git_blob",
+    ],
+    [
+      "scripts/regenerate_current_rust_contract_artifact.py",
+      "artifact_generator_git_blob",
+    ],
+    [
+      "javascript/iroha_js/test/fixtures/verify_current_rust_contract_artifact.rs",
+      "rust_verifier_rs_git_blob",
+    ],
     ["crates/ivm/src/contract_artifact.rs", "contract_artifact_rs_git_blob"],
     ["crates/ivm_abi/src/syscalls.rs", "ivm_syscalls_rs_git_blob"],
     ["crates/kotodama_lang/src/compiler.rs", "kotodama_compiler_rs_git_blob"],

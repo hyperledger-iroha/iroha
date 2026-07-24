@@ -2,9 +2,12 @@
 use std::vec::Vec;
 
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
-use iroha_data_model::prelude::*;
+use iroha_data_model::{prelude::*, smart_contract::manifest::EntryPointKind};
 use iroha_primitives::{bigint::BigInt, json::Json, numeric_abi::IntValueV1};
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
+use ivm::{
+    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+    EmbeddedStateType, IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls,
+};
 use ivm_abi::metadata::LITERAL_SECTION_MAGIC;
 use ivm_abi::state_value::{
     StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
@@ -85,6 +88,20 @@ pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
     decode_i64_word(vm, vm.register(register))
 }
 
+/// Encode raw bytes as a schema-bound Kotodama V1 `Bytes` state record.
+pub fn encode_bytes_state_value(value: &[u8]) -> Vec<u8> {
+    encode_pointer_state_value(StateValueKindV1::Bytes, PointerType::Blob, value)
+}
+
+/// Decode a schema-bound Kotodama V1 `Bytes` state record.
+pub fn decode_bytes_state_value(payload: &[u8]) -> Vec<u8> {
+    let envelope = decode_pointer_state_value(payload, StateValueKindV1::Bytes);
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(&envelope)
+        .expect("bytes state record must contain a valid pointer envelope");
+    assert_eq!(tlv.type_id, PointerType::Blob);
+    tlv.payload.to_vec()
+}
+
 /// Decode one non-negative pointer-backed Kotodama `int` return as `u64`.
 pub fn decode_u64_register(vm: &IVM, register: usize) -> u64 {
     decode_int_register(vm, register)
@@ -139,6 +156,68 @@ pub fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec
         panic!("pointer state record must contain exactly one pointer atom");
     };
     envelope.clone()
+}
+
+fn assemble_contract_syscalls_with_states(
+    numbers: &[u8],
+    states: Vec<EmbeddedStateDescriptor>,
+    write_keys: Vec<String>,
+) -> Vec<u8> {
+    let interface = EmbeddedContractInterfaceV1 {
+        seiyaku_name: "SyscallFixture".to_owned(),
+        compiler_fingerprint: "ivm-integration-tests".to_owned(),
+        abi_hash: syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![EmbeddedEntrypointDescriptor {
+            name: "execute".to_owned(),
+            kind: EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("Execute".to_owned()),
+            read_keys: Vec::new(),
+            write_keys,
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+        states,
+        error_codes: Vec::new(),
+    };
+    let mut program = ProgramMetadata::default().encode();
+    program.extend_from_slice(&interface.encode_section());
+    for &number in numbers {
+        program.extend_from_slice(
+            &encoding::wide::encode_sys(instruction::wide::system::SCALL, number).to_le_bytes(),
+        );
+    }
+    program.extend_from_slice(&HALT);
+    program
+}
+
+/// Assemble an admitted contract fixture that may perform dynamic ledger writes.
+pub fn assemble_ledger_write_contract_syscalls(numbers: &[u8]) -> Vec<u8> {
+    assemble_contract_syscalls_with_states(numbers, Vec::new(), vec!["*".to_owned()])
+}
+
+/// Assemble an admitted contract fixture over declared `Bytes` durable state.
+pub fn assemble_bytes_state_contract_syscalls(numbers: &[u8], state_names: &[&str]) -> Vec<u8> {
+    let states = state_names
+        .iter()
+        .map(|name| EmbeddedStateDescriptor {
+            name: (*name).to_owned(),
+            ty: EmbeddedStateType::Bytes,
+        })
+        .collect();
+    let write_keys = state_names
+        .iter()
+        .map(|name| format!("state:{name}"))
+        .collect();
+    assemble_contract_syscalls_with_states(numbers, states, write_keys)
 }
 
 fn assemble_words(words: &[u32]) -> Vec<u8> {

@@ -1,14 +1,29 @@
-use std::ops::Neg;
+use std::{
+    ops::Neg,
+    sync::{Mutex, MutexGuard, OnceLock},
+    thread,
+};
 
 use crate::CurveAffine;
 use ff::Field;
 use ff::PrimeField;
 use group::Group;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
+use rayon::slice::ParallelSliceMut;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 
 const BATCH_SIZE: usize = 64;
+// Each large-MSM window owns two `2^(c - 1)` bucket tables. Running every
+// window concurrently makes that working set scale with the host's core
+// count, even though the final accumulator order is fixed. A process-wide pool
+// of two long-lived workers retains useful parallelism while bounding both
+// simultaneous bucket storage and per-thread allocator caches across every
+// large MSM in the process.
+const MAX_PARALLEL_WINDOW_SHARDS: usize = 2;
+static LARGE_MSM_WINDOW_POOL: OnceLock<ThreadPool> = OnceLock::new();
+static LARGE_MSM_ADMISSION: Mutex<()> = Mutex::new(());
 // Cost model weights tuned from `benches/msm.rs` on representative x86_64 and
 // aarch64 hosts. Bucket aggregation is slightly cheaper than per-scalar
 // scheduling, while the doubling ladder is dominated by the other two terms.
@@ -66,6 +81,56 @@ fn optimal_window_size(num_points: usize, scalar_bits: usize) -> usize {
     }
 
     best_c
+}
+
+fn parallel_window_shard_len(number_of_windows: usize) -> usize {
+    number_of_windows
+        .div_ceil(MAX_PARALLEL_WINDOW_SHARDS)
+        .max(1)
+}
+
+fn large_msm_window_pool() -> &'static ThreadPool {
+    LARGE_MSM_WINDOW_POOL.get_or_init(|| {
+        ThreadPoolBuilder::new()
+            .num_threads(MAX_PARALLEL_WINDOW_SHARDS)
+            .thread_name(|index| format!("halo2-msm-window-{index}"))
+            .build()
+            .expect("failed to construct bounded large-MSM window pool")
+    })
+}
+
+fn enter_large_msm() -> MutexGuard<'static, ()> {
+    // This mutex protects only admission, not mutable shared state. A panic
+    // cannot leave an invariant-corrupt value behind, so poison recovery is
+    // safe and avoids disabling every subsequent proof in the process.
+    LARGE_MSM_ADMISSION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn run_large_msm_admitted<R: Send>(operation: impl FnOnce() -> R + Send) -> R {
+    // `ThreadPool::install` cooperatively executes work from the caller's
+    // Rayon pool while it waits for a different pool. Holding the admission
+    // mutex across such an install can therefore deadlock: a stolen outer
+    // commitment may enter another large MSM and wait for the mutex held by
+    // the suspended caller. Dispatch through a scoped OS thread so the source
+    // Rayon worker performs an ordinary blocking join and cannot steal another
+    // admitted MSM. The operation may still borrow its inputs because the
+    // dispatcher is scoped.
+    thread::scope(|scope| {
+        let dispatcher = thread::Builder::new()
+            .name("halo2-msm-dispatch".to_owned())
+            .spawn_scoped(scope, move || {
+                let _admission = enter_large_msm();
+                large_msm_window_pool().install(operation)
+            })
+            .expect("failed to construct large-MSM dispatcher");
+
+        match dispatcher.join() {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
 }
 
 fn get_booth_index(window_index: usize, window_size: usize, el: &[u8]) -> i32 {
@@ -522,60 +587,79 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
         return msm_parallel(coeffs, bases);
     }
 
-    // coeffs to byte representation
-    let coeffs: Vec<_> = coeffs.par_iter().map(|a| a.to_repr()).collect();
-    // copy bases into `Affine` to skip in on curve check for every access
-    let bases_local: Vec<_> = bases.par_iter().map(Affine::from).collect();
+    // One large MSM already consumes every worker in the bounded window pool.
+    // Admit callers inside the non-cooperative dispatcher before allocating
+    // preprocessing buffers, so parallel outer commitment loops cannot retain
+    // one scalar/base copy per waiter or deadlock through Rayon work stealing.
+    run_large_msm_admitted(|| {
+        // coeffs to byte representation
+        let coeffs: Vec<_> = coeffs.par_iter().map(|a| a.to_repr()).collect();
+        // copy bases into `Affine` to skip in on curve check for every access
+        let bases_local: Vec<_> = bases.par_iter().map(Affine::from).collect();
 
-    // number of windows
-    let number_of_windows = C::Scalar::NUM_BITS as usize / c + 1;
-    // accumumator for each window
-    let mut acc = vec![C::Curve::identity(); number_of_windows];
-    acc.par_iter_mut().enumerate().rev().for_each(|(w, acc)| {
-        // jacobian buckets for already scheduled points
-        let mut j_bucks = vec![Bucket::<C>::None; 1 << (c - 1)];
+        // number of windows
+        let number_of_windows = C::Scalar::NUM_BITS as usize / c + 1;
+        // accumumator for each window
+        let mut acc = vec![C::Curve::identity(); number_of_windows];
+        let shard_len = parallel_window_shard_len(number_of_windows);
+        acc.par_chunks_mut(shard_len)
+            .enumerate()
+            .rev()
+            .for_each(|(shard_index, acc_shard)| {
+                let window_offset = shard_index * shard_len;
+                for (shard_window, acc) in acc_shard
+                    .iter_mut()
+                    .enumerate()
+                    .rev()
+                {
+                    let w = window_offset + shard_window;
 
-        // schedular for affine addition
-        let mut sched = Schedule::new(c);
+                    // jacobian buckets for already scheduled points
+                    let mut j_bucks = vec![Bucket::<C>::None; 1 << (c - 1)];
 
-        for (base_idx, coeff) in coeffs.iter().enumerate() {
-            let buck_idx = get_booth_index(w, c, coeff.as_ref());
+                    // schedular for affine addition
+                    let mut sched = Schedule::new(c);
 
-            if buck_idx != 0 {
-                // parse bucket index
-                let sign = buck_idx.is_positive();
-                let buck_idx = buck_idx.unsigned_abs() as usize - 1;
+                    for (base_idx, coeff) in coeffs.iter().enumerate() {
+                        let buck_idx = get_booth_index(w, c, coeff.as_ref());
 
-                if sched.contains(buck_idx) {
-                    // greedy accumulation
-                    // we use original bases here
-                    j_bucks[buck_idx].add_assign(&bases[base_idx], sign);
-                } else {
-                    // also flushes the schedule if full
-                    sched.add(&bases_local, base_idx, buck_idx, sign);
+                        if buck_idx != 0 {
+                            // parse bucket index
+                            let sign = buck_idx.is_positive();
+                            let buck_idx = buck_idx.unsigned_abs() as usize - 1;
+
+                            if sched.contains(buck_idx) {
+                                // greedy accumulation
+                                // we use original bases here
+                                j_bucks[buck_idx].add_assign(&bases[base_idx], sign);
+                            } else {
+                                // also flushes the schedule if full
+                                sched.add(&bases_local, base_idx, buck_idx, sign);
+                            }
+                        }
+                    }
+
+                    // flush the schedule
+                    sched.execute(&bases_local);
+
+                    // summation by parts
+                    // e.g. 3a + 2b + 1c = a +
+                    //                    (a) + b +
+                    //                    ((a) + b) + c
+                    let mut running_sum = C::Curve::identity();
+                    for (j_buck, a_buck) in j_bucks.iter().zip(sched.buckets.iter()).rev() {
+                        running_sum += j_buck.add(a_buck);
+                        *acc += running_sum;
+                    }
+
+                    // shift accumulator to the window position
+                    for _ in 0..c * w {
+                        *acc = acc.double();
+                    }
                 }
-            }
-        }
-
-        // flush the schedule
-        sched.execute(&bases_local);
-
-        // summation by parts
-        // e.g. 3a + 2b + 1c = a +
-        //                    (a) + b +
-        //                    ((a) + b) + c
-        let mut running_sum = C::Curve::identity();
-        for (j_buck, a_buck) in j_bucks.iter().zip(sched.buckets.iter()).rev() {
-            running_sum += j_buck.add(a_buck);
-            *acc += running_sum;
-        }
-
-        // shift accumulator to the window position
-        for _ in 0..c * w {
-            *acc = acc.double();
-        }
-    });
-    acc.into_iter().sum::<_>()
+            });
+        acc.into_iter().sum::<_>()
+    })
 }
 
 #[cfg(test)]
@@ -599,6 +683,119 @@ mod test {
         assert_eq!(super::optimal_window_size(4096, bits), 10);
         assert_eq!(super::optimal_window_size(65_536, bits), 13);
         assert_eq!(super::optimal_window_size(250_000, bits), 15);
+    }
+
+    #[test]
+    fn bounded_window_shards_match_reference_msm() {
+        use rand::{SeedableRng, rngs::StdRng};
+
+        const POINTS: usize = 1 << 12;
+        let window_size = super::optimal_window_size(POINTS, Fr::NUM_BITS as usize);
+        assert!(window_size >= 10);
+        let number_of_windows = Fr::NUM_BITS as usize / window_size + 1;
+        let shard_len = super::parallel_window_shard_len(number_of_windows);
+        assert!(number_of_windows > super::MAX_PARALLEL_WINDOW_SHARDS);
+        assert!(
+            number_of_windows.div_ceil(shard_len) <= super::MAX_PARALLEL_WINDOW_SHARDS
+        );
+
+        let mut rng = StdRng::seed_from_u64(0x4d53_4d42_4154_4348);
+        let points = (0..POINTS)
+            .map(|_| G1Affine::random(&mut rng))
+            .collect::<Vec<_>>();
+        let random_scalars = (0..POINTS)
+            .map(|_| Fr::random(&mut rng))
+            .collect::<Vec<_>>();
+        let edge_scalars = (0..POINTS)
+            .map(|index| match index % 4 {
+                0 => Fr::ZERO,
+                1 => Fr::ONE,
+                2 => -Fr::ONE,
+                _ => Fr::from(index as u64),
+            })
+            .collect::<Vec<_>>();
+
+        for scalars in [&random_scalars, &edge_scalars] {
+            assert_eq!(
+                super::msm_best(scalars, &points),
+                super::msm_parallel(scalars, &points)
+            );
+        }
+    }
+
+    #[test]
+    fn large_msm_window_pool_has_bounded_width() {
+        assert_eq!(
+            super::large_msm_window_pool().current_num_threads(),
+            super::MAX_PARALLEL_WINDOW_SHARDS
+        );
+    }
+
+    #[test]
+    fn large_msm_admission_serializes_concurrent_callers() {
+        use std::{
+            sync::{
+                Arc, Barrier,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+
+        const CALLERS: usize = 8;
+        let start = Arc::new(Barrier::new(CALLERS));
+        let active = AtomicUsize::new(0);
+        let max_active = AtomicUsize::new(0);
+
+        std::thread::scope(|scope| {
+            for _ in 0..CALLERS {
+                let start = Arc::clone(&start);
+                let active = &active;
+                let max_active = &max_active;
+                scope.spawn(move || {
+                    start.wait();
+                    let _admission = super::enter_large_msm();
+                    let active_now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(active_now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(5));
+                    assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                });
+            }
+        });
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn large_msm_dispatch_does_not_steal_source_pool_work() {
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            time::Duration,
+        };
+
+        let source_work_ran = AtomicBool::new(false);
+        let source_work_ran_during_dispatch = AtomicBool::new(false);
+        let source_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("source pool should build");
+
+        source_pool.install(|| {
+            rayon::join(
+                || {
+                    super::run_large_msm_admitted(|| {
+                        std::thread::sleep(Duration::from_millis(20));
+                        source_work_ran_during_dispatch.store(
+                            source_work_ran.load(Ordering::SeqCst),
+                            Ordering::SeqCst,
+                        );
+                    });
+                },
+                || source_work_ran.store(true, Ordering::SeqCst),
+            );
+        });
+
+        assert!(source_work_ran.load(Ordering::SeqCst));
+        assert!(!source_work_ran_during_dispatch.load(Ordering::SeqCst));
     }
 
     #[test]

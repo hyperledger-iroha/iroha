@@ -126,7 +126,7 @@ if actual_kotlin_methods != kotlin_methods:
         f"missing={sorted(kotlin_methods - actual_kotlin_methods)} "
         f"extra={sorted(actual_kotlin_methods - kotlin_methods)}"
     )
-for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 20"):
+for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 21"):
     if needle not in text["native"]:
         errors.append(f"candidate lab Kotlin JNI contract is missing {needle}")
 
@@ -469,7 +469,7 @@ for needle in (
 
 source_seal = text["source_seal"]
 for needle in (
-    "iroha.kagemusha.full-source-tree-sha256.v1",
+    "iroha.kagemusha.full-source-tree-sha256.v2",
     '"status",',
     '"--porcelain=v1",',
     '"-z",',

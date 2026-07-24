@@ -593,6 +593,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     test_client
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(multisig_seed_account_id, domain, spec.clone()).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register multisig account for cancel test")?;
     let multisig_account_id = canonical_multisig_account_id(&spec);
@@ -666,6 +667,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
         .submit_blocking::<InstructionBox>(
             MultisigPropose::new(multisig_account_id.clone(), cancel_instructions, None).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("submit cancel wrapper proposal for cancel route test")?;
     let approve_cancel = wait_for_multisig_cancel_action(
@@ -688,6 +690,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
                 expected_cancel_proposal_id.parse().unwrap(),
             )
             .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("submit cancel wrapper approval for cancel route test")?;
 
@@ -766,6 +769,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
                 .cloned()
                 .map(|account_id| Account::new(account_id.clone()))
                 .map(Register::account),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register multisig CLI signatories")?;
 
@@ -783,6 +787,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(multisig_seed_account_id, domain.clone(), spec.clone())
                 .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register multisig account for CLI hash listing test")?;
     let multisig_account_id = canonical_multisig_account_id(&spec);
@@ -828,6 +833,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         proposer_client
             .submit_blocking::<InstructionBox>(
                 MultisigPropose::new(multisig_account_id.clone(), instructions, None).into(),
+                FeePaymentIntent::authority(Vec::new(), None),
             )
             .wrap_err_with(|| format!("submit multisig proposal `{proposal_id}` for CLI test"))?;
         expected_proposal_ids.push(proposal_id);
@@ -1024,6 +1030,7 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(seed_account, domain.clone(), spec).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
@@ -1080,6 +1087,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(seed_account, domain.clone(), spec.clone()).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register multisig account with one missing signatory")?;
 
@@ -1116,6 +1124,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
     let propose = MultisigPropose::new(multisig_account_id.clone(), instructions.clone(), None);
     let proposal_tx = proposer_client.build_transaction_from_items(
         core::iter::once::<InstructionBox>(propose.into()),
+        FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     assert_eq!(
@@ -1148,6 +1157,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
         MultisigApprove::new(multisig_account_id.clone(), instructions_hash).into();
     let approve_tx = approver_client.build_transaction_from_items(
         core::iter::once::<InstructionBox>(approve),
+        FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     assert_eq!(
@@ -1285,6 +1295,7 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(seed_account, domain.clone(), spec).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
@@ -1401,6 +1412,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(seed_account.clone(), domain.clone(), spec.clone())
                 .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
     let multisig_account_id = canonical_multisig_account_id(&spec);
@@ -1414,6 +1426,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
         .submit_blocking::<InstructionBox>(
             AddSignatory::new(multisig_account_id, missing_signer.1.public_key().clone()).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
     let created_via_key: Name = "iroha:created_via".parse().unwrap();
@@ -1464,6 +1477,7 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
         .submit_blocking::<InstructionBox>(
             MultisigRegister::with_account(seed_account.clone(), domain.clone(), spec.clone())
                 .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
     let multisig_account_id = canonical_multisig_account_id(&spec);
@@ -1477,6 +1491,7 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
     let _err = alt_client(ghost_authority, &test_client)
         .submit_blocking::<InstructionBox>(
             AddSignatory::new(multisig_account_id, missing_signer.1.public_key().clone()).into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect_err("missing authority must not add signatory");
 
@@ -1582,6 +1597,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
                 .cloned()
                 .map(|id| Account::new(id.clone()))
                 .map(Register::account),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register multisig test residents")?;
 
@@ -1679,6 +1695,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
     );
     let proposal_tx = proposer_client.build_transaction_from_items(
         core::iter::once::<InstructionBox>(propose.into()),
+        FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     assert_eq!(
@@ -1836,6 +1853,7 @@ fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()
             .cloned()
             .map(|id| Account::new(id.clone()))
             .map(Register::account),
+        FeePaymentIntent::authority(Vec::new(), None),
     )?;
 
     let mut sigs = signatories.clone();

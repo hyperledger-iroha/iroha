@@ -41,8 +41,8 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let query = LiveQueryStore::start_test();
 
     // Minimal world: one domain, two accounts, one asset def
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
+    let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
@@ -71,7 +71,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
         chain_id.clone(),
         bob_id.clone(),
@@ -82,7 +82,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         "k".parse().unwrap(),
         iroha_primitives::json::Json::new("v"),
     )])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(bob_keypair.private_key());
     let acc: Vec<_> = vec![tx1, tx2]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
@@ -166,8 +166,8 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let query = LiveQueryStore::start_test();
 
     // Minimal world: one domain, two accounts, one asset def
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
+    let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
@@ -196,7 +196,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
         chain_id.clone(),
         bob_id.clone(),
@@ -207,7 +207,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         "k".parse().unwrap(),
         iroha_primitives::json::Json::new("v"),
     )])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(bob_keypair.private_key());
     let acc: Vec<_> = vec![tx1, tx2]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))

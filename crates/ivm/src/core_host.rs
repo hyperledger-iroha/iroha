@@ -12,7 +12,6 @@ use std::str::FromStr;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{
     Hash as IrohaHash, Sm3Digest,
     blake2::{
@@ -51,7 +50,7 @@ use crate::{
     mock_wsv::{MockWorldStateView, SpaceDirectoryAxtPolicy},
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
-    schema_registry::{DefaultRegistry, SchemaInfo, SchemaRegistry},
+    schema_registry::{DefaultRegistry, SchemaRegistry},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
 };
@@ -801,60 +800,6 @@ impl CoreHost {
         } else {
             VMError::UnknownSyscall(number)
         }
-    }
-
-    fn build_schema_fallback(&self, schema: &str, payload: &[u8]) -> njson::Value {
-        let info = self.schema.info(schema);
-        let mut schema_meta = njson::Map::new();
-        schema_meta.insert("name".to_owned(), njson::Value::from(schema));
-        schema_meta.insert(
-            "id".to_owned(),
-            info.map(|SchemaInfo { id, .. }| njson::Value::from(hex::encode(id)))
-                .unwrap_or(njson::Value::Null),
-        );
-        schema_meta.insert(
-            "version".to_owned(),
-            info.map(|SchemaInfo { version, .. }| njson::Value::from(version))
-                .unwrap_or(njson::Value::Null),
-        );
-
-        let base = Self::schema_base_name(schema);
-        let known_versions = self
-            .schema
-            .list_versions(base)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(name, info)| Self::schema_info_to_json(name, info))
-            .collect();
-
-        let mut root = njson::Map::new();
-        root.insert("schema".to_owned(), njson::Value::Object(schema_meta));
-        root.insert(
-            "payload_base64".to_owned(),
-            njson::Value::from(BASE64_STANDARD.encode(payload)),
-        );
-        root.insert(
-            "payload_len".to_owned(),
-            njson::Value::from(payload.len() as u64),
-        );
-        root.insert(
-            "known_versions".to_owned(),
-            njson::Value::Array(known_versions),
-        );
-        njson::Value::Object(root)
-    }
-
-    fn schema_base_name(name: &str) -> &str {
-        let trimmed_digits = name.trim_end_matches(|c: char| c.is_ascii_digit());
-        trimmed_digits.trim_end_matches(['v', 'V', '.'])
-    }
-
-    fn schema_info_to_json(name: String, info: SchemaInfo) -> njson::Value {
-        let mut map = njson::Map::new();
-        map.insert("name".to_owned(), njson::Value::from(name));
-        map.insert("id".to_owned(), njson::Value::from(hex::encode(info.id)));
-        map.insert("version".to_owned(), njson::Value::from(info.version));
-        njson::Value::Object(map)
     }
 
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
@@ -1971,22 +1916,7 @@ impl IVMHost for CoreHost {
                     vm.set_register(10, p);
                     Ok(gas)
                 } else {
-                    let fallback = self.build_schema_fallback(&schema, b_tlv.payload);
-                    let json = Json::from(&fallback);
-                    let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                    Self::validate_codec_output_payload_len(body.len())?;
-                    let gas = Self::schema_gas(input_len, body.len());
-                    preflight_reserved_syscall_gas(vm, gas)?;
-                    let mut out = Vec::with_capacity(7 + body.len() + 32);
-                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&body);
-                    let h: [u8; 32] = IrohaHash::new(&body).into();
-                    out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
-                    Ok(gas)
+                    Err(VMError::NoritoInvalid)
                 }
             }
             syscalls::SYSCALL_SCHEMA_INFO | syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
@@ -2003,14 +1933,15 @@ impl IVMHost for CoreHost {
                 let input_len = tlv.payload.len();
                 let name = self.decode_name_payload(tlv.payload)?;
                 let raw = name.as_ref();
-                let base = raw
-                    .trim_end_matches(|c: char| c.is_ascii_digit())
-                    .trim_end_matches(['v', 'V']);
+                let family = self
+                    .schema
+                    .resolve_family(raw)
+                    .ok_or(VMError::NoritoInvalid)?;
                 let (cur_name, cur_info) =
-                    self.schema.current(base).ok_or(VMError::NoritoInvalid)?;
+                    self.schema.current(&family).ok_or(VMError::NoritoInvalid)?;
                 let list = self
                     .schema
-                    .list_versions(base)
+                    .list_versions(&family)
                     .ok_or(VMError::NoritoInvalid)?;
                 let current = {
                     let mut map = njson::Map::new();
@@ -2420,7 +2351,7 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_GET_AUTHORITY | syscalls::SYSCALL_SYSVAR_AUTHORITY => {
                 // Return the domainless account subject so contracts can compare
                 // authority() against AccountId literals and stored AccountId state.
-                const ACCOUNT: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+                const ACCOUNT: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
                 let authority = AccountId::parse_encoded(ACCOUNT)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| VMError::NoritoInvalid)?;
@@ -2532,7 +2463,7 @@ mod tests {
         EmbeddedStateType, LITERAL_SECTION_MAGIC, ProgramMetadata,
     };
 
-    fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
+    fn state_interface(name: &str, ty: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
         EmbeddedContractInterfaceV1 {
             seiyaku_name: "StateMapHostFixture".to_owned(),
             compiler_fingerprint: "ivm-core-host-tests".to_owned(),
@@ -2557,13 +2488,20 @@ mod tests {
             }],
             states: vec![EmbeddedStateDescriptor {
                 name: name.to_owned(),
-                ty: EmbeddedStateType::StateMap {
-                    key: Box::new(key),
-                    value: Box::new(EmbeddedStateType::Bytes),
-                },
+                ty,
             }],
             error_codes: Vec::new(),
         }
+    }
+
+    fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
+        state_interface(
+            name,
+            EmbeddedStateType::StateMap {
+                key: Box::new(key),
+                value: Box::new(EmbeddedStateType::Bytes),
+            },
+        )
     }
 
     fn load_state_map_schema(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
@@ -2702,6 +2640,57 @@ mod tests {
         .encode();
         program.extend_from_slice(&code);
         program
+    }
+
+    fn assemble_state_runtime_program(
+        words: &[u32],
+        name: &str,
+        ty: EmbeddedStateType,
+        write: bool,
+    ) -> Vec<u8> {
+        let access_key = if matches!(&ty, EmbeddedStateType::StateMap { .. }) {
+            format!("state:{name}[*]")
+        } else {
+            format!("state:{name}")
+        };
+        let mut interface = state_interface(name, ty);
+        let entrypoint = interface
+            .entrypoints
+            .first_mut()
+            .expect("state fixture has one entrypoint");
+        if write {
+            entrypoint.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage;
+            entrypoint.permission = Some("Execute".to_owned());
+            entrypoint.write_keys.push(access_key);
+        } else {
+            entrypoint.read_keys.push(access_key);
+        }
+        let mut program = ProgramMetadata::default().encode();
+        program.extend_from_slice(&interface.encode_section());
+        for word in words {
+            program.extend_from_slice(&word.to_le_bytes());
+        }
+        program
+    }
+
+    fn assemble_state_map_read_program(words: &[u32], name: &str) -> Vec<u8> {
+        assemble_state_runtime_program(
+            words,
+            name,
+            EmbeddedStateType::StateMap {
+                key: Box::new(EmbeddedStateType::Bytes),
+                value: Box::new(EmbeddedStateType::Bytes),
+            },
+            false,
+        )
+    }
+
+    fn assemble_state_value_read_program(words: &[u32], name: &str) -> Vec<u8> {
+        assemble_state_runtime_program(words, name, EmbeddedStateType::Bytes, false)
+    }
+
+    fn assemble_state_value_write_program(words: &[u32], name: &str) -> Vec<u8> {
+        assemble_state_runtime_program(words, name, EmbeddedStateType::Bytes, true)
     }
 
     fn assemble_program_with_literals(literals: &[&[u8]]) -> (Vec<u8>, Vec<u64>) {
@@ -3298,10 +3287,13 @@ mod tests {
         let prefix_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
-        vm.load_program(&assemble_program(&[
-            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
-            encoding::wide::encode_halt(),
-        ]))
+        vm.load_program(&assemble_state_map_read_program(
+            &[
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_halt(),
+            ],
+            prefix.as_ref(),
+        ))
         .expect("load program");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
@@ -3335,10 +3327,13 @@ mod tests {
         let prefix_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
-        vm.load_program(&assemble_program(&[
-            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
-            encoding::wide::encode_halt(),
-        ]))
+        vm.load_program(&assemble_state_map_read_program(
+            &[
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_halt(),
+            ],
+            prefix.as_ref(),
+        ))
         .expect("load program");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
@@ -3373,10 +3368,13 @@ mod tests {
         let prefix_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &prefix_payload))
             .expect("allocate prefix");
-        vm.load_program(&assemble_program(&[
-            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
-            encoding::wide::encode_halt(),
-        ]))
+        vm.load_program(&assemble_state_map_read_program(
+            &[
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_halt(),
+            ],
+            prefix.as_ref(),
+        ))
         .expect("load program");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, u64::MAX);
@@ -3422,13 +3420,16 @@ mod tests {
                 &norito::to_bytes(&key).expect("encode key"),
             ))
             .expect("alloc key");
-        let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_GET as u8,
-            ),
-            encoding::wide::encode_halt(),
-        ]);
+        let program = assemble_state_value_read_program(
+            &[
+                encoding::wide::encode_sys(
+                    instruction::wide::system::SCALL,
+                    syscalls::SYSCALL_STATE_GET as u8,
+                ),
+                encoding::wide::encode_halt(),
+            ],
+            key.as_ref(),
+        );
         vm.load_program(&program).expect("load program");
         vm.set_register(10, key_ptr);
         vm.set_register(11, 0xfeed);
@@ -3469,10 +3470,13 @@ mod tests {
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &key_payload))
             .expect("allocate key");
-        vm.load_program(&assemble_program(&[
-            encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_LEN),
-            encoding::wide::encode_halt(),
-        ]))
+        vm.load_program(&assemble_state_value_read_program(
+            &[
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_LEN),
+                encoding::wide::encode_halt(),
+            ],
+            key.as_ref(),
+        ))
         .expect("load program");
         vm.set_register(10, key_ptr);
         let quote = host
@@ -3491,13 +3495,16 @@ mod tests {
     #[test]
     fn unaffordable_state_set_does_not_decode_or_mutate_before_quote_debit() {
         let mut vm = IVM::new(u64::MAX);
-        let program = assemble_program(&[
-            encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                syscalls::SYSCALL_STATE_SET as u8,
-            ),
-            encoding::wide::encode_halt(),
-        ]);
+        let program = assemble_state_value_write_program(
+            &[
+                encoding::wide::encode_sys(
+                    instruction::wide::system::SCALL,
+                    syscalls::SYSCALL_STATE_SET as u8,
+                ),
+                encoding::wide::encode_halt(),
+            ],
+            "declared",
+        );
         vm.load_program(&program).expect("load program");
         let path_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
@@ -4918,7 +4925,7 @@ mod tests {
     fn fastpq_batch_validates_transfer_entries() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000);
-        let from_account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+        let from_account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
         let from = make_pointer_tlv(PointerType::AccountId, from_account.as_bytes());
         vm.memory.preload_input(0, &from).expect("preload from");
         let to_account = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";

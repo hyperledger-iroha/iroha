@@ -33,6 +33,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     use iroha_executor_data_model::permission::governance::{
         CanManageParliament, CanSubmitGovernanceBallot,
     };
+    use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::StorageReadOnly;
 
@@ -45,11 +46,14 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query);
-    let bundle1 = zk_testkit::add2inst_public_bundle(5, 8);
-    let bundle2 = zk_testkit::add2inst_public_bundle(6, 8);
-    let bundle3 = zk_testkit::add2inst_public_bundle(7, 8);
+    state.zk.halo2.enabled = true;
+    let bundle1 = zk_testkit::vote_merkle8_bundle();
+    let bundle2 = zk_testkit::vote_merkle8_bundle();
+    let bundle3 = zk_testkit::vote_merkle8_bundle();
     let root_hint = hex::encode(bundle1.root_bytes());
     let mut gov_cfg = state.gov.clone();
+    // This test isolates lock-record monotonicity rather than asset escrow accounting.
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 100;
     gov_cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
@@ -64,6 +68,10 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let mut stx = sblock.transaction();
 
     let vk_id = bundle1.vk_id.clone();
+    let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
+    Grant::account_permission(manage_vk, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant CanManageVerifyingKeys");
     let exec = Executor::default();
     let reg_instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
@@ -106,7 +114,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         },
     );
 
-    let proof_b64 = bundle1.proof_b64.clone();
+    let proof_b64 = bundle1.proof_b64();
 
     // Cast ballot with public inputs including owner/amount/duration
     let pub_inputs = norito::json::object([
@@ -150,6 +158,30 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         Some(DataEvent::Governance(GovernanceEvent::LockCreated(_)))
     )));
 
+    // Nullifier behavior is covered independently. Clear the consumed commitment here so this
+    // test can isolate the monotonic lock-update path while every submission still carries a
+    // production `halo2/ipa` envelope.
+    let mut election = stx
+        .world
+        .elections_mut()
+        .get("ref-zk-lock")
+        .cloned()
+        .expect("election present");
+    assert_eq!(
+        election.ballot_nullifiers.len(),
+        1,
+        "one accepted ballot must consume exactly one nullifier"
+    );
+    let consumed = *election
+        .ballot_nullifiers
+        .iter()
+        .next()
+        .expect("consumed nullifier");
+    assert!(election.ballot_nullifiers.remove(&consumed));
+    stx.world
+        .elections_mut()
+        .insert("ref-zk-lock".to_string(), election);
+
     // Cast another ballot extending duration (should emit LockExtended)
     let pub_inputs2 = norito::json::object([
         (
@@ -173,7 +205,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let pub_inputs2 = norito::json::to_json(&pub_inputs2).expect("serialize zk public inputs");
     let cast2 = CastZkBallot {
         election_id: "ref-zk-lock".to_string(),
-        proof_b64: bundle2.proof_b64.clone(),
+        proof_b64: bundle2.proof_b64(),
         public_inputs_json: pub_inputs2,
     };
     cast2.execute(&ALICE_ID, &mut stx).expect("extend ok");
@@ -182,6 +214,27 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::LockExtended(_)))
     )));
+
+    let mut election = stx
+        .world
+        .elections_mut()
+        .get("ref-zk-lock")
+        .cloned()
+        .expect("election present");
+    assert_eq!(
+        election.ballot_nullifiers.len(),
+        1,
+        "one accepted re-vote must consume exactly one nullifier"
+    );
+    let consumed = *election
+        .ballot_nullifiers
+        .iter()
+        .next()
+        .expect("consumed nullifier");
+    assert!(election.ballot_nullifiers.remove(&consumed));
+    stx.world
+        .elections_mut()
+        .insert("ref-zk-lock".to_string(), election);
 
     // Attempt to reduce amount/duration (must be rejected)
     let shrink_inputs = norito::json::object([
@@ -206,7 +259,7 @@ fn zk_ballot_creates_and_extends_lock_on_verified_proof() {
     let shrink_inputs = norito::json::to_json(&shrink_inputs).expect("serialize shrink inputs");
     let shrink = CastZkBallot {
         election_id: "ref-zk-lock".to_string(),
-        proof_b64: bundle3.proof_b64.clone(),
+        proof_b64: bundle3.proof_b64(),
         public_inputs_json: shrink_inputs,
     };
     let err = shrink

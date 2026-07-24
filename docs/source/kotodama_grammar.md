@@ -346,6 +346,23 @@ annotations remain type-first.
 
 The V1 type vocabulary is:
 
+<!-- BEGIN GENERATED: kotodama-v1-source-policy -->
+| Source policy | Canonical V1 values |
+| --- | --- |
+| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `StateMap`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage` |
+| Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
+| Ordinary value/function identifier examples | `amount` |
+| Retired literal suffixes with safe fix-its | `amt` (remove the suffix), `qty` (remove the suffix) |
+
+| Source type | Rust nominal type | Pointer ID | Schema name | Schema hash |
+| --- | --- | --- | --- | --- |
+| `int` | `Int` | `0x0011` | `iroha.numeric.IntValueV1` | `07c039457363b9e1d36bbd31d93dec4a` |
+| `decimal` | `Decimal` | `0x0012` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
+| `quantity` | `Quantity` | `0x0010` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
+
+`0x0013` is unassigned and rejected as unknown; it is not an ABI tombstone.
+<!-- END GENERATED: kotodama-v1-source-policy -->
+
 - `int`
 - `decimal`
 - `quantity`

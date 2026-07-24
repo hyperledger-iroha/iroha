@@ -17229,9 +17229,14 @@ seiyaku TypedPoolViews {
   state AssetDefinitionId QuoteAsset;
   state AccountId PoolAccount;
 
-  kotoage fn bind(AssetDefinitionId quote_asset, AccountId pool_account) authorize("AssetOps") {
-    QuoteAsset = quote_asset;
-    PoolAccount = pool_account;
+  hajimari(AssetDefinitionId initial_quote_asset, AccountId initial_pool_account) {
+    QuoteAsset = initial_quote_asset;
+    PoolAccount = initial_pool_account;
+  }
+
+  kotoage fn bind(AssetDefinitionId bound_quote_asset, AccountId bound_pool_account) authorize("AssetOps") {
+    QuoteAsset = bound_quote_asset;
+    PoolAccount = bound_pool_account;
   }
 
   view fn quote_asset() -> AssetDefinitionId {
@@ -17260,7 +17265,7 @@ seiyaku OuterCaller {
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let pool_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"quote_asset":"{}","pool_account":"{}"}}"#,
+            r#"{{"bound_quote_asset":"{}","bound_pool_account":"{}"}}"#,
             actual_asset, actual_account
         ))
         .expect("pool bind payload");
@@ -17337,7 +17342,7 @@ seiyaku OuterCaller {
     #[test]
     fn execute_query_rejects_oversized_singular_response_before_output_allocation() {
         crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("oversized-query-authority");
+        let authority: AccountId = fixture_account("alice");
         let mut metadata = Metadata::default();
         metadata.insert(
             "oversized".parse().expect("metadata key"),
@@ -17390,7 +17395,7 @@ seiyaku OuterCaller {
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id, Quantity::from(42_u32));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -17400,6 +17405,21 @@ seiyaku OuterCaller {
         let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
         let mut vm = IVM::new(10_000);
+        let balance_request =
+            QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {
+                id: asset_id,
+            }));
+        let gas_ctx = QueryGasContext::from_request(&balance_request);
+        let expected_execution = execute_query_on_state_with_budget(
+            &view,
+            &authority,
+            balance_request,
+            Some(
+                CoreHost::query_execution_budget(&gas_ctx, vm.remaining_gas())
+                    .expect("balance query execution budget"),
+            ),
+        )
+        .expect("measure balance query execution");
 
         let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
         let asset_def_ptr = store_tlv(
@@ -17416,12 +17436,13 @@ seiyaku OuterCaller {
             .expect("get balance");
         assert_eq!(
             gas,
-            CoreHost::QUERY_GAS_BASE_SINGULAR
-                .saturating_add(CoreHost::QUERY_GAS_PER_ITEM)
-                .saturating_add(
-                    CoreHost::QUERY_GAS_PER_BYTE
-                        .saturating_mul(u64::try_from(balance_payload.len()).expect("gas length"))
-                )
+            CoreHost::query_gas_cost(
+                &gas_ctx,
+                expected_execution.processed_items,
+                expected_execution.processed_bytes.saturating_add(
+                    u64::try_from(balance_payload.len()).expect("balance payload length")
+                ),
+            )
         );
         let tlv = vm
             .memory
@@ -17893,7 +17914,7 @@ seiyaku OuterCaller {
         .expect("measure bounded query execution");
         let projected_account = AccountView {
             id: expected_ids[0].clone(),
-            metadata: Json::default(),
+            metadata: Json::new(Metadata::default()),
         };
         let encoded_page = norito::to_bytes(
             &QueryPageV1::from_window(0, vec![projected_account.clone()], true)
@@ -19796,17 +19817,19 @@ seiyaku OpaqueInstructionSubmission {
 }
 "#;
         // This is intentionally the non-deployable local harness profile: the
-        // compiler-internal instruction escape must remain unavailable there too.
+        // public source resolver must not expose an opaque instruction escape.
         let error =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 mode: ivm::kotodama::compiler::CompilerMode::Test,
                 ..ivm::kotodama::compiler::CompilerOptions::default()
             })
             .compile_source_with_manifest(source)
-            .expect_err("opaque instruction submission must remain compiler-internal");
+            .expect_err("opaque instruction submission must remain source-inaccessible");
 
+        let rendered = error.to_string();
         assert!(
-            error.to_string().contains("compiler-internal"),
+            rendered.contains("error[K2002]")
+                && rendered.contains("unknown function or builtin `execute_instruction`"),
             "unexpected compile error: {error}"
         );
     }
@@ -21248,6 +21271,19 @@ seiyaku Callee {
 "#,
             1,
         );
+        let callee_artifact_bytes = {
+            let view = state.view();
+            let code_hash = *view
+                .world()
+                .contract_instances()
+                .get(&callee_contract)
+                .expect("installed callee contract binding");
+            view.world()
+                .contract_code()
+                .get(&code_hash)
+                .expect("installed callee contract artifact")
+                .len()
+        };
 
         let (result, vm, durable_state_overlay) = call_contract_syscall(
             &state,
@@ -21265,10 +21301,14 @@ seiyaku Callee {
             .validate_tlv(vm.register(10))
             .expect("returned NoritoBytes tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let expected_gas = ivm::gas::syscall_byte_gas(
-            ivm::gas::G_CALL_CONTRACT,
-            callee_contract.as_ref().as_bytes().len() + "value".len(),
-            tlv.payload.len(),
+        let request_bytes = callee_contract.as_ref().as_bytes().len() + "value".len();
+        let return_boundary_bytes = tlv.payload.len().saturating_add(
+            iroha_data_model::smart_contract::entrypoint::ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1,
+        );
+        let expected_gas = CoreHost::nested_contract_host_gas(
+            request_bytes,
+            callee_artifact_bytes,
+            return_boundary_bytes,
         );
         assert_eq!(gas, expected_gas);
         let schema = exact_return_type(
@@ -22297,6 +22337,10 @@ seiyaku ViewCaller {
 seiyaku EffectfulView {
   state int Counter;
 
+  hajimari() {
+    Counter = 0;
+  }
+
   kotoage fn seed(int value) authorize("NestedView") {
     Counter = value;
   }
@@ -22838,11 +22882,6 @@ seiyaku Callee {
                 "no_args",
                 Some((PointerType::NoritoBytes, valid_record.as_slice())),
             ),
-            (
-                "wrong schema hash",
-                "echo",
-                Some((PointerType::NoritoBytes, wrong_record.as_slice())),
-            ),
         ] {
             let error = invoke(entrypoint, argument, None)
                 .expect_err("non-canonical nested argument transport must fail");
@@ -22854,6 +22893,17 @@ seiyaku Callee {
                 "{label} produced unexpected error: {error:?}"
             );
         }
+
+        let error = invoke(
+            "echo",
+            Some((PointerType::NoritoBytes, wrong_record.as_slice())),
+            None,
+        )
+        .expect_err("schema-substituted nested argument record must fail");
+        assert!(
+            matches!(error.as_unmetered(), ivm::VMError::PermissionDenied),
+            "a schema-authentication mismatch must fail closed: {error:?}"
+        );
 
         for private_register in [10, 11, 12] {
             let error = invoke("no_args", None, Some(private_register))
@@ -26360,7 +26410,40 @@ seiyaku DurableOwner {
         let mut host = CoreHost::from_state(authority, &state);
         host.set_contract_runtime_context(Some(context));
 
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "AdversarialFrontier".to_owned(),
+            compiler_fingerprint: "iroha-core-host-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "attack".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: Some("CanAttack".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states: vec![ivm::EmbeddedStateDescriptor {
+                name: frontier.to_string(),
+                ty: ivm::EmbeddedStateType::Bytes,
+            }],
+            error_codes: Vec::new(),
+        };
+        let mut program = ivm::ProgramMetadata::default().encode();
+        program.extend_from_slice(&interface.encode_section());
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(10_000);
+        vm.load_program(&program)
+            .expect("load self-describing adversarial contract");
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&frontier));
         let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
         let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
@@ -26397,21 +26480,25 @@ seiyaku DurableOwner {
             "a pre-guard scoped shadow remains physically stored but inaccessible"
         );
 
-        let mut unscoped_host = CoreHost::from_state(fixture_account("bob"), &state);
+        let mut generic_host = CoreHost::from_state(fixture_account("bob"), &state);
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
         assert_eq!(
-            unscoped_host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "legacy unscoped execution must not write the raw consensus marker"
+            generic_host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_STATE_SET,
+            }),
+            "generic execution must reject durable-state writes before namespace dispatch"
         );
         vm.set_register(10, path_ptr);
         assert_eq!(
-            unscoped_host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Err(ivm::VMError::PermissionDenied),
-            "legacy unscoped execution must not tombstone the raw consensus marker"
+            generic_host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_STATE_DEL,
+            }),
+            "generic execution must reject durable-state deletion before namespace dispatch"
         );
-        assert!(unscoped_host.durable_state_overlay.is_empty());
+        assert!(generic_host.durable_state_overlay.is_empty());
 
         for syscall in [
             ivm_sys::SYSCALL_STATE_GET,
@@ -26445,9 +26532,16 @@ seiyaku DurableOwner {
         );
 
         vm.set_register(10, path_ptr);
+        let path_len = vm
+            .memory
+            .validate_tlv(path_ptr)
+            .expect("frontier path TLV")
+            .payload
+            .len();
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm),
-            Ok(CoreHost::state_count_gas(0))
+            Ok(CoreHost::state_count_gas(path_len)),
+            "gas must cover the caller-visible prefix without revealing hidden marker work"
         );
         assert_eq!(
             vm.register(10),
@@ -29788,7 +29882,23 @@ seiyaku PreparedBoundaryArguments {
         );
         assert_eq!(ivm::argument_record_decode_count(), 1);
         let binding_pointer = constrained_vm.register(10);
-        assert_eq!(binding_pointer, ivm::Memory::INPUT_START);
+        let trigger_event_name: Name = TRIGGER_EVENT_PUBLIC_INPUT_KEY
+            .parse()
+            .expect("trigger event public-input name");
+        let published_name_envelope_len =
+            make_tlv(PointerType::Name as u16, &norito_blob(&trigger_event_name)).len();
+        let published_name_input_bytes = u64::try_from(published_name_envelope_len)
+            .expect("bounded published Name envelope length")
+            .checked_add(7)
+            .expect("bounded aligned published Name envelope length")
+            & !7;
+        assert_eq!(
+            binding_pointer,
+            ivm::Memory::INPUT_START
+                .checked_add(published_name_input_bytes)
+                .expect("published Name and binding pointer fit INPUT"),
+            "the compiler wrapper publishes the public-input Name before the host binding"
+        );
         assert_eq!(
             constrained_vm
                 .memory
@@ -29820,7 +29930,9 @@ seiyaku PreparedBoundaryArguments {
                 PointerType::Blob,
                 b"after-materialization-preflight",
             ),
-            ivm::Memory::INPUT_START + expected_input_cursor,
+            binding_pointer
+                .checked_add(expected_input_cursor)
+                .expect("binding envelope and next INPUT allocation fit"),
             "failed materialization preflight must not consume INPUT for the small bytes value"
         );
     }

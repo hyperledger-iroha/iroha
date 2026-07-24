@@ -115,8 +115,8 @@ use iroha_data_model::{
             DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
         },
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-            RegisterSmartContractCode, RemoveSmartContractBytes,
+            ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
         },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
@@ -759,6 +759,8 @@ pub struct JsReplicationOrder {
     pub schema_version: u8,
     /// Order identifier encoded as lowercase hex.
     pub order_id_hex: String,
+    /// Manifest CID encoded as lowercase hex.
+    pub manifest_cid_hex: String,
     /// Manifest CID encoded as UTF-8 when possible.
     pub manifest_cid_utf8: Option<String>,
     /// Manifest CID encoded as base64.
@@ -6143,6 +6145,7 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
         metadata,
     } = order;
 
+    let manifest_cid_hex = hex::encode(&manifest_cid);
     let manifest_cid_base64 = STANDARD.encode(&manifest_cid);
     let manifest_cid_utf8 = String::from_utf8(manifest_cid).ok();
     let target_replicas = u32::from(target_replicas);
@@ -6159,6 +6162,7 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
     Ok(JsReplicationOrder {
         schema_version: version,
         order_id_hex: hex::encode(order_id),
+        manifest_cid_hex,
         manifest_cid_utf8,
         manifest_cid_base64,
         manifest_digest_hex: hex::encode(manifest_digest),
@@ -7625,7 +7629,9 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     let requires_explicit_parser = matches!(
         &value,
         json::Value::Object(map)
-            if map.contains_key("Register") || map.contains_key("Settlement")
+            if map.contains_key("Register")
+                || map.contains_key("Settlement")
+                || map.contains_key("CancelSmartContractCodeUpload")
     );
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
@@ -7648,6 +7654,39 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
             if let Some(batch_value) = map.remove("TransferAssetBatch") {
                 return transfer_asset_batch_from_json(batch_value);
+            }
+            if let Some(cancel_value) = map.remove("CancelSmartContractCodeUpload") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "CancelSmartContractCodeUpload instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = cancel_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "CancelSmartContractCodeUpload must be an object",
+                    ));
+                };
+                let code_hash = parse_hash_value(
+                    required_value(&mut fields, "code_hash", "CancelSmartContractCodeUpload")?,
+                    "CancelSmartContractCodeUpload.code_hash",
+                )?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "CancelSmartContractCodeUpload contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return Ok(InstructionBox::from(CancelSmartContractCodeUpload {
+                    code_hash,
+                }));
             }
 
             if let Some(register_value) = map.remove("Register") {
@@ -10067,12 +10106,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
     {
-        let mut manifest_value = json::to_value(&register_code.manifest).map_err(norito_to_napi)?;
-        if let Some(map) = manifest_value.as_object_mut()
-            && map.get("provenance").is_some_and(json::Value::is_null)
-        {
-            map.remove("provenance");
-        }
+        let manifest_value = json::to_value(&register_code.manifest).map_err(norito_to_napi)?;
         let mut inner = json::Map::new();
         inner.insert("manifest".to_owned(), manifest_value);
         let mut outer = json::Map::new();
@@ -20811,6 +20845,7 @@ seiyaku Privacy {
                 plan.chunk_profile,
                 chunker_registry::DEFAULT_MULTIHASH_CODE,
             ))
+            .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)

@@ -864,7 +864,10 @@ impl<'a> CstAstLowerer<'a> {
         let mut items = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let item_start = self.pos;
-            let declaration_start = self.tokens[item_start].range.start;
+            let Some(item_token) = self.tokens.get(item_start) else {
+                break;
+            };
+            let declaration_start = item_token.range.start;
             let item_kind = self.syntax_item_kind(item_start);
             let syntax_item = self.syntax_start(item_kind, declaration_start);
             let result = (|| -> ParseResult<()> {
@@ -4528,7 +4531,7 @@ mod tests {
 
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
@@ -5320,7 +5323,7 @@ mod tests {
 
     #[test]
     fn retired_numeric_literal_suffixes_are_rejected() {
-        for suffix in ["i64", "u128", "amt", "float", "money"] {
+        for suffix in ["i64", "u128", "amt", "qty", "float", "money"] {
             let source = format!("fn main() {{ let value = 1{suffix}; }}");
             let error = parse_module(&source).expect_err("numeric suffix must fail closed");
             assert!(

@@ -878,6 +878,11 @@ def build_test_evidence(module, tmp_path: Path):
         formal_dir, tmp_path
     )["sha256"]
     for name in module.RELEASE_PROOF_MODULES:
+        (log_dir / f"{name}.preflight.log").write_text(
+            "frontend summary passed\n"
+            f"{module._tlapm_preflight_marker(name, source_manifest_sha256)}\n",
+            encoding="utf-8",
+        )
         (log_dir / f"{name}.log").write_text(
             "[INFO]: All 1 obligation proved.\n"
             f"{module._tlapm_runner_marker(name, source_manifest_sha256)}\n",
@@ -1133,6 +1138,11 @@ def build_cross_tool_fixture(module, tmp_path: Path):
         formal_dir, tmp_path
     )["sha256"]
     for name in module.RELEASE_PROOF_MODULES:
+        (log_dir / f"{name}.preflight.log").write_text(
+            "frontend summary passed\n"
+            f"{module._tlapm_preflight_marker(name, formal_manifest_sha256)}\n",
+            encoding="utf-8",
+        )
         (log_dir / f"{name}.log").write_text(
             "[INFO]: All 1 obligation proved.\n"
             f"{module._tlapm_runner_marker(name, formal_manifest_sha256)}\n",
@@ -3506,6 +3516,11 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     def fresh_tlaps_evidence():
         manifest = module._formal_source_manifest(formal_dir, tmp_path)["sha256"]
         for name in module.RELEASE_PROOF_MODULES:
+            (log_dir / f"{name}.preflight.log").write_text(
+                "frontend summary passed\n"
+                f"{module._tlapm_preflight_marker(name, manifest)}\n",
+                encoding="utf-8",
+            )
             (log_dir / f"{name}.log").write_text(
                 "[INFO]: All 1 obligation proved.\n"
                 f"{module._tlapm_runner_marker(name, manifest)}\n",

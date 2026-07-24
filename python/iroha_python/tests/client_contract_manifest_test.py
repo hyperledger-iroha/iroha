@@ -458,6 +458,8 @@ def test_contract_manifest_decodes_checked_in_canonical_kotodama_manifests(
         "seiyaku",
         "match",
         "int",
+        "Amount",
+        "amount",
         "state_map_get",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",

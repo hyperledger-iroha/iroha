@@ -45,7 +45,7 @@ fn invalid_json_literal_reports_error() {
     let src = r#"
         seiyaku InvalidJson {
           kotoage fn main() authorize("SetAccountDetail") {
-            ledger::account::set_detail(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), key: Name::parse("cursor"), value: Json::parse("{\"unterminated\":}"));
+            ledger::account::set_detail(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), key: Name::parse("cursor"), value: Json::parse("{\"unterminated\":}"));
           }
         }
     "#;
@@ -81,7 +81,7 @@ fn build_unshield_inline_rejects_non_literal_quantity() {
         seiyaku NonLiteralAmount {
           kotoage fn main(quantity amount) authorize("Unshield") {
             let inputs = b"0123456789abcdef0123456789abcdef";
-            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amount, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: amount, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
           }
         }
     "#;
@@ -101,8 +101,8 @@ fn build_unshield_inline_accepts_contextual_and_explicit_constant_quantities() {
           const quantity AMOUNT = 7;
           kotoage fn main() authorize("Unshield") {
             let inputs = b"0123456789abcdef0123456789abcdef";
-            let _contextual = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: 5, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
-            let _constant = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: AMOUNT, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
+            let _contextual = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: 5, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
+            let _constant = crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: AMOUNT, inputs: inputs, backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;
@@ -119,7 +119,7 @@ fn build_unshield_inline_rejects_runtime_int_and_decimal_amounts() {
             r#"
             seiyaku WrongNominalAmount {{
               kotoage fn main({amount_type} amount) authorize("Unshield") {{
-                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amount, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
+                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: amount, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
               }}
             }}
             "#
@@ -155,7 +155,7 @@ fn build_unshield_inline_rejects_wrong_inputs_length() {
     let src = r#"
         seiyaku ShortUnshieldInputs {
           kotoage fn main() authorize("Unshield") {
-            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: 1, inputs: b"short", backend: "ipa", proof: b"proof", verification_key: b"vk");
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: 1, inputs: b"short", backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;
@@ -173,7 +173,7 @@ fn build_unshield_inline_rejects_negative_amount() {
     let src = r#"
         seiyaku NegativeUnshieldAmount {
           kotoage fn main() authorize("Unshield") {
-            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: -1, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: -1, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
           }
         }
     "#;
@@ -199,7 +199,7 @@ fn build_unshield_inline_rejects_fractional_and_overwide_quantities() {
             r#"
             seiyaku InvalidProofScalar {{
               kotoage fn main() authorize("Unshield") {{
-                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: {amount}, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
+                crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), amount: {amount}, inputs: b"0123456789abcdef0123456789abcdef", backend: "ipa", proof: b"proof", verification_key: b"vk");
               }}
             }}
             "#

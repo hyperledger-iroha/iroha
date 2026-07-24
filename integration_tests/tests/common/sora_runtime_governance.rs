@@ -1031,6 +1031,7 @@ pub async fn setup_runtime_governance_fixture(
             citizens
                 .iter()
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("submit runtime-governance citizen account registrations")?;
     wait_for_tx_applied(
@@ -1117,7 +1118,7 @@ pub async fn setup_runtime_governance_fixture(
             .submit(
                 RegisterCitizen {
                     owner: account_id.clone(),
-                    amount: CITIZEN_BOND,
+                    amount: CITIZEN_BOND.into(),
                 },
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1553,7 +1554,7 @@ pub async fn enact_runtime_upgrade_round(
                 CastPlainBallot {
                     referendum_id: runtime_referendum_id.clone(),
                     owner: account_id.clone(),
-                    amount: BALLOT_LOCK,
+                    amount: BALLOT_LOCK.into(),
                     duration_blocks: BALLOT_DURATION_BLOCKS,
                     direction: u8::from(idx >= THIRD_REFERENDUM_APPROVE_VOTERS),
                 },

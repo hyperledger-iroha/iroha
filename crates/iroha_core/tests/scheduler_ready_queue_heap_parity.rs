@@ -15,12 +15,12 @@ mod snapshots;
 fn run_with_ready_heap(
     ready_heap: bool,
     txs: Vec<SignedTransaction>,
+    alice_id: &AccountId,
+    bob_id: &AccountId,
 ) -> (String, iroha_core::state::State) {
     // Build world: two accounts, one asset def, balances seeded
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -28,9 +28,9 @@ fn run_with_ready_heap(
         ),
         NumericSpec::default(),
     )
-    .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    .build(alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(alice_id);
     // Seed asset balances
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
@@ -71,7 +71,7 @@ fn run_with_ready_heap(
 #[test]
 fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -88,7 +88,7 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -99,14 +99,14 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
             3_u32,
             bob_id.clone(),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Burn::asset_quantity(1_u32, b_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -117,18 +117,20 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
             "k".parse().unwrap(),
             iroha_primitives::json::Json::new("v"),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
     ];
 
-    let (json_heap, state_heap) = run_with_ready_heap(true, txs.clone());
-    let (json_wave, state_wave) = run_with_ready_heap(false, txs);
+    let (json_heap, state_heap) = run_with_ready_heap(true, txs.clone(), &alice_id, &bob_id);
+    let (json_wave, state_wave) = run_with_ready_heap(false, txs, &alice_id, &bob_id);
 
     assert_eq!(json_heap, json_wave, "event sequences must match");
     let bal = |state: &iroha_core::state::State, id: &AssetId| {
-        state.view().world().assets().get(id).map_or_else(
-            || iroha_primitives::numeric::Numeric::new(0, 0),
-            |v| v.clone().into_inner().into(),
-        )
+        state
+            .view()
+            .world()
+            .assets()
+            .get(id)
+            .map_or_else(Quantity::zero, |v| v.clone().into_inner())
     };
     assert_eq!(bal(&state_heap, &a_coin), bal(&state_wave, &a_coin));
     assert_eq!(bal(&state_heap, &b_coin), bal(&state_wave, &b_coin));

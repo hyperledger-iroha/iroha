@@ -84,6 +84,11 @@ impl<C: CurveAffine> Committed<C> {
 
         // Obtain final h(X) polynomial
         let mut h_poly = domain.extended_to_coeff(h_poly);
+        // This is the final scalar-field FFT in the proof. Earlier recursive
+        // transforms can leave a 4n thread-local scratch buffer cached, and the
+        // h-piece MSMs cannot reuse it, so evict it before their working set is
+        // allocated.
+        crate::fft::recursive::clear_scratch::<C::Scalar>();
         let quotient_len = usize::try_from(domain.get_n()).expect("domain size fits usize")
             * domain.get_quotient_poly_degree();
         h_poly.truncate(quotient_len);

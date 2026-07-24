@@ -651,6 +651,7 @@ async fn taira_localnet_bootstrap_validators() -> Result<()> {
         let baseline = harness.primary_client.get_status()?.blocks_non_empty;
         harness.primary_client.submit::<InstructionBox>(
             Log::new(Level::INFO, "taira bootstrap probe".to_string()).into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         wait_for_blocks_non_empty(
             &harness.primary_client,

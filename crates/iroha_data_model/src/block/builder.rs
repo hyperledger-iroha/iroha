@@ -309,15 +309,11 @@ mod tests {
         // Minimal header
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let chain: ChainId = "test-chain".parse().unwrap();
-        let authority = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .expect("public key"),
-        );
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
+        let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
 
         // Two txs
         let tx1 = TransactionBuilder::new(

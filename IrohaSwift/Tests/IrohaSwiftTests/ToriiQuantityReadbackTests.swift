@@ -4,7 +4,7 @@ import XCTest
 /// Adversarial coverage for nominal quantity values embedded in explorer instruction readbacks.
 final class ToriiQuantityReadbackTests: XCTestCase {
     private let source =
-        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     private let destination =
         "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
 
@@ -70,7 +70,7 @@ final class ToriiQuantityReadbackTests: XCTestCase {
     private func item(kind: String, payload: String) throws -> ToriiExplorerInstructionItem {
         let json = """
         {
-            "authority":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "created_at":"2025-01-01T00:00:00Z",
             "kind":"\(kind)",
             "r#box":{

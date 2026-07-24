@@ -54,6 +54,8 @@ class ContractManifestTest {
             fullResponse().replaceFirst("#ABA2", "#0000"),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"match\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
+            fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
+            fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             fullResponse().replaceFirst("\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
             fullResponse().replaceFirst(

@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - Регенерация: `make docs-syscalls`
   - Тик тикшерергә: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI таблицаһы (йәшник/вм/докс/syscalls.мд)
-  - Тик тикшерергә: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Тик тикшерергә: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Яңыртыу генерацияланған бүлек (һәм код docs таблицаһы): `cargo run -p ivm --bin gen_syscalls_doc -- --write` .
 - Хәҙерге АБИ таблицалары (йәшниктәр/вм/доктар/пункт_аби.мд һәм ivm.md)
   - Тикшерергә генә: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

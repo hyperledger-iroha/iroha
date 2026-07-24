@@ -15,10 +15,10 @@ final class ConnectSessionBalanceTests: XCTestCase {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
-        let stream = session.balanceStream(accountID: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        let stream = session.balanceStream(accountID: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         var iterator = stream.makeAsyncIterator()
         let first = try await iterator.next()
-        XCTAssertEqual(first?.accountID, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        XCTAssertEqual(first?.accountID, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         XCTAssertEqual(first?.sequence, 1)
         XCTAssertEqual(first?.assets.first?.assetId, encodedUsdAssetID)
         XCTAssertEqual(first?.queueDiagnostics?.state, .healthy)
@@ -38,7 +38,7 @@ final class ConnectSessionBalanceTests: XCTestCase {
 
         var received: [ConnectBalanceSnapshot] = []
         let cancellable = session
-            .balancePublisher(accountID: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", scheduler: nil)
+            .balancePublisher(accountID: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", scheduler: nil)
             .sink(receiveCompletion: { completion in
                 if case .failure(let error) = completion {
                     XCTFail("Unexpected error \(error)")
@@ -78,7 +78,7 @@ final class ConnectSessionBalanceTests: XCTestCase {
         let events = [
             ConnectEvent(sequence: 1,
                          direction: .walletToApp,
-                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                                                                           assets: [ConnectBalanceAsset(assetId: encodedUsdAssetID,
                                                                                                        quantity: "10")],
                                                                           lastUpdatedMs: 1))),

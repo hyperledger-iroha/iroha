@@ -5072,16 +5072,17 @@ mod tests {
 
         // Common fixtures
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let account_a = AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                .parse()
-                .unwrap(),
-        );
-        let account_b = AccountId::new(
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-                .parse()
-                .unwrap(),
-        );
+        let fixture_account = |seed: u8| {
+            let (public_key, _) = iroha_crypto::KeyPair::try_from_seed(
+                vec![seed; 32],
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("fixture seed derives a checked Ed25519 keypair")
+            .into_parts();
+            AccountId::new(public_key)
+        };
+        let account_a = fixture_account(0xAA);
+        let account_b = fixture_account(0xBB);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),

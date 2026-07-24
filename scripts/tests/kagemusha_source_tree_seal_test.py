@@ -26,6 +26,10 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.name", "Kagemusha Test")
         self.git("config", "user.email", "kagemusha@example.invalid")
+        (self.root / ".gitignore").write_text("/Cargo.lock\n", encoding="utf-8")
+        (self.root / "Cargo.lock").write_text(
+            "# fixture lockfile consumed by --locked\n", encoding="utf-8"
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -93,6 +97,31 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
             seal.compute_fingerprint(self.root)
         self.git("add", "extra.txt")
         with self.assertRaisesRegex(seal.SourceSealError, "must be clean"):
+            seal.compute_fingerprint(self.root)
+
+    def test_fingerprint_binds_ignored_root_cargo_lock(self) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        first = seal.compute_fingerprint(self.root)
+
+        (self.root / "Cargo.lock").write_text(
+            "# changed ignored lockfile consumed by --locked\n", encoding="utf-8"
+        )
+
+        self.assertEqual(seal.status(self.root), b"")
+        self.assertNotEqual(first, seal.compute_fingerprint(self.root))
+
+    def test_rejects_missing_or_symlinked_root_cargo_lock(self) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        (self.root / "Cargo.lock").unlink()
+        with self.assertRaises(OSError):
+            seal.compute_fingerprint(self.root)
+
+        os.symlink("tracked.txt", self.root / "Cargo.lock")
+        with self.assertRaisesRegex(
+            seal.SourceSealError, "required ignored build input"
+        ):
             seal.compute_fingerprint(self.root)
 
     def test_rejects_hardlinked_tracked_source(self) -> None:

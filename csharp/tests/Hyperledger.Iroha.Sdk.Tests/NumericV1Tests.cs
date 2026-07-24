@@ -113,7 +113,7 @@ public sealed class NumericV1Tests
         var quantity = NumericV1.QuantityValue.Parse("1.25");
         var quantityEnvelope = NumericV1.EncodeQuantityEnvelope(quantity);
         Assert.Equal(0x00, quantityEnvelope[0]);
-        Assert.Equal(0x13, quantityEnvelope[1]);
+        Assert.Equal(0x10, quantityEnvelope[1]);
         Assert.Equal(quantity, NumericV1.DecodeQuantityFrame(NumericV1.EncodeQuantityFrame(quantity)));
         Assert.Equal(quantity, NumericV1.DecodeQuantityEnvelope(quantityEnvelope));
 
@@ -143,13 +143,13 @@ public sealed class NumericV1Tests
             NumericV1.ErrorCode.PayloadHashMismatch,
             () => NumericV1.DecodeIntEnvelope(badHash));
 
-        var retired = NumericV1.EncodeIntEnvelope(NumericV1.IntValue.Parse("1"));
-        retired[0] = 0;
-        retired[1] = 0x10;
-        retired[2] = 2;
+        var unassigned = NumericV1.EncodeIntEnvelope(NumericV1.IntValue.Parse("1"));
+        unassigned[0] = 0;
+        unassigned[1] = 0x13;
+        unassigned[2] = 2;
         AssertNumericError(
-            NumericV1.ErrorCode.TypeNotAllowed,
-            () => NumericV1.DecodeIntEnvelope(retired));
+            NumericV1.ErrorCode.UnknownType,
+            () => NumericV1.DecodeIntEnvelope(unassigned));
 
         var knownWrong = NumericV1.EncodeIntEnvelope(NumericV1.IntValue.Parse("1"));
         knownWrong[0] = 0;

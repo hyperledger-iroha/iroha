@@ -279,7 +279,7 @@ fn dump_parameters(block: &SignedBlock) {
         .and_then(SumeragiNposParameters::from_custom_parameter);
     let epoch_length = npos
         .as_ref()
-        .map_or(0, SumeragiNposParameters::epoch_length_blocks);
+        .map_or(0, |params| params.epoch_length_blocks().get());
     println!(
         "event=params sumeragi={:?} smart_contract={:?} block_max_tx={} epoch_length_blocks={epoch_length}",
         params.sumeragi(),

@@ -55,7 +55,7 @@ final class NumericV1Tests: XCTestCase {
 
         let quantity = try KotodamaQuantity("1.25")
         let quantityEnvelope = try KotodamaNumericV1Codec.encodeQuantityEnvelope(quantity)
-        XCTAssertEqual(Array(quantityEnvelope.prefix(2)), [0x00, 0x13])
+        XCTAssertEqual(Array(quantityEnvelope.prefix(2)), [0x00, 0x10])
         XCTAssertEqual(
             try KotodamaNumericV1Codec.decodeQuantityEnvelope(
                 quantityEnvelope
@@ -136,12 +136,12 @@ final class NumericV1Tests: XCTestCase {
             _ = try KotodamaNumericV1Codec.decodeIntEnvelope(badHash)
         }
 
-        var retired = try KotodamaNumericV1Codec.encodeIntEnvelope(KotodamaInt("1"))
-        retired[0] = 0
-        retired[1] = 0x10
-        retired[2] = 2
-        assertCode(.typeNotAllowed) {
-            _ = try KotodamaNumericV1Codec.decodeIntEnvelope(retired)
+        var unassigned = try KotodamaNumericV1Codec.encodeIntEnvelope(KotodamaInt("1"))
+        unassigned[0] = 0
+        unassigned[1] = 0x13
+        unassigned[2] = 2
+        assertCode(.unknownType) {
+            _ = try KotodamaNumericV1Codec.decodeIntEnvelope(unassigned)
         }
 
         var knownWrong = try KotodamaNumericV1Codec.encodeIntEnvelope(KotodamaInt("1"))

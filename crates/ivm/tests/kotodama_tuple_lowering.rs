@@ -11,6 +11,9 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
                 // types make the call named-only in Kotodama V1.
                 return g(a: a, b: b);
             }
+            view fn main() -> (int, int) {
+                return f(a: 1, b: 2);
+            }
         }
     "#;
     let prog = parse(src).expect("parse");
@@ -44,6 +47,9 @@ fn lower_return_tuple_emits_returnn() {
                 let t = (a, b);
                 // Return three elements via tuple composition
                 return (t.0, t.1, c);
+            }
+            view fn main() -> (int, int, int) {
+                return h(a: 1, b: 2, c: 3);
             }
         }
     "#;

@@ -73,11 +73,11 @@ public final class UaidJsonParserTests {
               "dataspace_alias": "primary",
               "accounts": [
                 {
-                  "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "label": "alice",
                   "assets": [
                     {
-                      "asset_id": "%s#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                      "asset_id": "%s#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "asset_definition_id": "%s",
                       "quantity": "15"
                     }
@@ -101,11 +101,11 @@ public final class UaidJsonParserTests {
     assert "primary".equals(dataspace.dataspaceAlias()) : "dataspace alias mismatch";
     assert dataspace.accounts().size() == 1 : "account list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAccount account = dataspace.accounts().get(0);
-    assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(account.accountId()) : "account id mismatch";
+    assert "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".equals(account.accountId()) : "account id mismatch";
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert (assetDefinitionId + "#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB").equals(asset.assetId()) : "asset id mismatch";
+    assert (assetDefinitionId + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV").equals(asset.assetId()) : "asset id mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "definition id mismatch";
     assert assetDefinitionId.equals(asset.asset()) : "legacy definition alias mismatch";
     assert asset.scope() == null : "modern payload should not synthesize a legacy scope";
@@ -123,7 +123,7 @@ public final class UaidJsonParserTests {
               "dataspace_id": 7,
               "accounts": [
                 {
-                  "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                  "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "assets": [
                     {
                       "asset": "%s",
@@ -192,7 +192,7 @@ public final class UaidJsonParserTests {
               "manifest_hash": "deadbeef",
               "status": "Active",
               "lifecycle": { "activated_epoch": 1.5 },
-              "accounts": ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"],
+              "accounts": ["sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"],
               "manifest": {}
             }
           ]

@@ -47,6 +47,7 @@ _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SAFE_PATH_RE = re.compile(r"/[A-Za-z0-9_./+:-]+")
 _RUNNER_ENV_RE = re.compile(r"[A-Z][A-Z0-9_]*")
 _RUNNER_TOOL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+_RUNNER_ABORT_TERM_GRACE_SECONDS = 30
 _RUNNER_ENV_ALLOWLIST = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
@@ -569,26 +570,43 @@ def _publish_completion_marker(
 
 
 def _abort(process: subprocess.Popen[bytes]) -> None:
+    """Stop the owned runner after nested guards have cleaned child sessions.
+
+    The TLAPS resource guard may spend several seconds terminating and reaping
+    its separately sessioned child group. Keep the outer runner alive long
+    enough for that cleanup before escalating to SIGKILL.
+    """
+
     try:
         os.killpg(process.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
+    except (ProcessLookupError, PermissionError):
+        # Darwin reports EPERM for a process group containing only an unreaped
+        # zombie. No live member can receive a signal in that state.
+        try:
+            process.wait(timeout=0)
+        except subprocess.TimeoutExpired:
+            pass
         return
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + _RUNNER_ABORT_TERM_GRACE_SECONDS
     while time.monotonic() < deadline:
         process.poll()
         try:
             os.killpg(process.pid, 0)
-        except (OSError, ProcessLookupError):
+        except (ProcessLookupError, PermissionError):
+            try:
+                process.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                pass
             return
         time.sleep(0.05)
     try:
         os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
+    except (ProcessLookupError, PermissionError):
         pass
     try:
         process.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        pass
+        raise BootstrapError("owned release runner did not exit after SIGKILL")
 
 
 def _run_bounded(
@@ -670,36 +688,68 @@ def _run_release_runner(
 
     The runner owns Cargo, rustc, validator, formal, chaos, and soak processes.
     Their in-scope operations have their own protocol and harness deadlines;
-    this bootstrap must never turn a slow or stuck child into apparently valid
-    evidence by signalling the process group. A runner which never terminates
-    therefore remains visibly incomplete and cannot reach either completion
-    marker. Direct regular-file descriptors avoid relay backpressure and ensure
-    that bootstrap interruption cannot close a pipe reader underneath the
-    still-active runner or any of its descendants.
+    direct regular-file descriptors avoid relay backpressure. The runner starts
+    a private session so bootstrap interruption can terminate only that owned
+    process group, preventing incomplete formal jobs from surviving as orphans.
     """
 
     argv = [str(executable), *arguments]
-    try:
-        process = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_descriptor,
-            stderr=stderr_descriptor,
-            close_fds=True,
-            start_new_session=True,
+    process: subprocess.Popen[bytes] | None = None
+    received_signal = 0
+
+    def interruption_error() -> BootstrapError:
+        return BootstrapError(
+            "release bootstrap interrupted by signal "
+            f"{signal.Signals(received_signal).name}"
         )
-    except OSError as error:
-        raise RunnerLaunchError(
-            f"could not execute protected command {executable}"
-        ) from error
-    # Intentionally do not signal the runner on bootstrap interruption. Its
-    # absent external terminal marker is the fail-closed result, while the
-    # inherited regular-file descriptors remain valid in the active process
-    # tree for post-mortem evidence.
-    returncode = process.wait()
-    return CommandResult(returncode, b"", b"")
+
+    def interrupted(signum: int, _frame: object) -> None:
+        nonlocal received_signal
+        if received_signal:
+            return
+        received_signal = signum
+        # Popen may already have forked the new session but not yet returned it
+        # to the assignment below. Do not unwind that constructor: once it
+        # returns, the recorded signal is raised from the cleanup-protected
+        # region with the exact process handle available to `_abort`.
+        if process is not None:
+            raise interruption_error()
+
+    watched_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in watched_signals
+    }
+    for signum in watched_signals:
+        signal.signal(signum, interrupted)
+    try:
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_descriptor,
+                stderr=stderr_descriptor,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except OSError as error:
+            if received_signal:
+                raise interruption_error() from error
+            raise RunnerLaunchError(
+                f"could not execute protected command {executable}"
+            ) from error
+        if received_signal:
+            raise interruption_error()
+        returncode = process.wait()
+        return CommandResult(returncode, b"", b"")
+    except BaseException:
+        if process is not None:
+            _abort(process)
+        raise
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 def _open_runner_log(directory_fd: int, name: str) -> int:
@@ -2163,8 +2213,6 @@ def bootstrap(args: argparse.Namespace) -> int:
     evidence, evidence_fd = _prepare_evidence_directory(args.evidence_dir, candidate)
     evidence_directory_stat = os.fstat(evidence_fd)
     success = False
-    runner_started = False
-    runner_finished = False
     runner_stdout_descriptor: int | None = None
     runner_stderr_descriptor: int | None = None
     runner_logs: dict[str, LargeFileSnapshot] = {}
@@ -2489,22 +2537,16 @@ def bootstrap(args: argparse.Namespace) -> int:
             self_digest_variables[0]: marker.sha256,
             self_digest_variables[1]: marker.sha256,
         }
-        runner_started = True
-        try:
-            assert runner_stdout_descriptor is not None
-            assert runner_stderr_descriptor is not None
-            runner = _run_release_runner(
-                archives["bash"].path,
-                [str(runner_path), "--release"],
-                cwd=candidate,
-                environment=runner_environment,
-                stdout_descriptor=runner_stdout_descriptor,
-                stderr_descriptor=runner_stderr_descriptor,
-            )
-        except RunnerLaunchError:
-            runner_started = False
-            raise
-        runner_finished = True
+        assert runner_stdout_descriptor is not None
+        assert runner_stderr_descriptor is not None
+        runner = _run_release_runner(
+            archives["bash"].path,
+            [str(runner_path), "--release"],
+            cwd=candidate,
+            environment=runner_environment,
+            stdout_descriptor=runner_stdout_descriptor,
+            stderr_descriptor=runner_stderr_descriptor,
+        )
         runner_status = runner.returncode if runner.returncode >= 0 else 128 - runner.returncode
         runner_logs = {
             "stdout": _seal_runner_log(
@@ -2823,12 +2865,7 @@ def bootstrap(args: argparse.Namespace) -> int:
         except OSError:
             if success:
                 raise BootstrapError("could not close successful bootstrap evidence")
-        if not success and runner_started and not runner_finished:
-            print(
-                "warning: preserving bootstrap evidence because the release runner may still be active",
-                file=sys.stderr,
-            )
-        elif not success:
+        if not success:
             _cleanup(evidence)
 
 

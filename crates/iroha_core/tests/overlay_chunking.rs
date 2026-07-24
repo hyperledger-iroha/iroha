@@ -4,10 +4,11 @@
 #![allow(clippy::cast_possible_truncation)]
 //! `overlay_chunk_instructions` to a tiny value to force many chunks.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -28,6 +29,10 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
         query,
         ChainId::from("chain"),
     );
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Configure tiny chunk size (e.g., 2 instructions per chunk)
     let mut cfg = state.view().pipeline().clone();

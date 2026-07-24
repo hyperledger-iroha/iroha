@@ -251,7 +251,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let pk3: PublicKey = "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42"
+    let pk3: PublicKey = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
         .parse()
         .unwrap();
     let alice = test_account(domain.clone(), pk1);
@@ -327,7 +327,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let pk2: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
-    let pk3: PublicKey = "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42"
+    let pk3: PublicKey = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
         .parse()
         .unwrap();
     let alice = test_account(domain.clone(), pk1);

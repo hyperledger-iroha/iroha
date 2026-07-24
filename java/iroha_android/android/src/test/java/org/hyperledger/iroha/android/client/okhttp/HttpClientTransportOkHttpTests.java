@@ -33,6 +33,8 @@ import org.junit.Test;
 
 /** OkHttp-backed submission/parity tests for {@link org.hyperledger.iroha.android.client.HttpClientTransport}. */
 public final class HttpClientTransportOkHttpTests {
+  private static final String CANONICAL_ALICE_ACCOUNT_ID =
+      "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 
   @Test
   public void submitsTransactionWithOkHttpExecutorAndNotifiesObservers() throws Exception {
@@ -55,8 +57,11 @@ public final class HttpClientTransportOkHttpTests {
 
       final TransactionPayload payload =
           TransactionPayload.builder()
+              .setFeePayment(
+                  org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
+                      java.util.Collections.emptyList(), 1L))
               .setChainId("00000001")
-              .setAuthority("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
+              .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
               .setTimeToLiveMs(5_000L)
@@ -107,7 +112,9 @@ public final class HttpClientTransportOkHttpTests {
               .setResponseCode(200)
               .setBody(
                   "{\"alias\":\"alice@universal\","
-                      + "\"account_id\":\"sorauaccount\","
+                      + "\"account_id\":\""
+                      + CANONICAL_ALICE_ACCOUNT_ID
+                      + "\","
                       + "\"index\":3,"
                       + "\"source\":\"directory\"}"));
       server.start();
@@ -126,8 +133,8 @@ public final class HttpClientTransportOkHttpTests {
       assertTrue("account alias resolution must be present", response.isPresent());
       final AccountAliasResolution resolution = response.orElseThrow();
       assertEquals("alice@universal", resolution.alias());
-      assertEquals("sorauaccount", resolution.accountId());
-      assertEquals(Long.valueOf(3L), resolution.index());
+      assertEquals(CANONICAL_ALICE_ACCOUNT_ID, resolution.accountId());
+      assertEquals(java.math.BigInteger.valueOf(3L), resolution.index());
       assertEquals("directory", resolution.source());
 
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
@@ -175,7 +182,9 @@ public final class HttpClientTransportOkHttpTests {
               .setResponseCode(200)
               .setBody(
                   "{\"alias\":\"banking@centralbank.universal\","
-                      + "\"account_id\":\"aid:banking-123\","
+                      + "\"account_id\":\""
+                      + CANONICAL_ALICE_ACCOUNT_ID
+                      + "\","
                       + "\"source\":\"rekey_record\"}"));
       server.start();
 
@@ -194,7 +203,7 @@ public final class HttpClientTransportOkHttpTests {
       assertTrue("account alias resolution must be present", response.isPresent());
       final AccountAliasResolution resolution = response.orElseThrow();
       assertEquals("banking@centralbank.universal", resolution.alias());
-      assertEquals("aid:banking-123", resolution.accountId());
+      assertEquals(CANONICAL_ALICE_ACCOUNT_ID, resolution.accountId());
       assertNull("index must be null when omitted", resolution.index());
       assertEquals("rekey_record", resolution.source());
 

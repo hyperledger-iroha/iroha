@@ -307,7 +307,9 @@ class TransactionFixtureParityTest {
 
     @Test
     fun `signed transaction decoder round-trips multisig signatures`() {
-        val payload = AndroidFixtureSupport.loadPayloadFixtures().first().materializePayload(adapter)
+        val payload = AndroidFixtureSupport.loadPayloadFixtures()
+            .first { it.name == "typed_fee_payment_gas_limit" }
+            .materializePayload(adapter)
         val payloadBytes = adapter.encodeTransaction(payload)
         val memberPublicKey = TestEd25519Keys.publicKey(0x41)
         val memberSignature = ByteArray(64) { ((0x80 + it) and 0xFF).toByte() }
@@ -375,6 +377,12 @@ class TransactionFixtureParityTest {
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
+                    "fee_payment" to mapOf(
+                        "payer" to "authority",
+                        "value" to mapOf(
+                            "charge_limits" to emptyList<Map<String, Any?>>(),
+                        ),
+                    ),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(

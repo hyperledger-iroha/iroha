@@ -241,7 +241,7 @@ mod tests {
         };
         let serialized = json::to_json(&policy).expect("serialize policy to JSON");
         assert!(
-            serialized.contains("\"mode\":{\"mode\":\"ImplicitReceive\""),
+            serialized.contains("\"mode\":{\"mode\":\"implicit_receive\""),
             "serialized policy must carry tagged enum value: {serialized}"
         );
 

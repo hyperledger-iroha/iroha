@@ -85,7 +85,7 @@ class NumericV1Test {
 
         val quantity = KotodamaQuantity.parse("1.25")
         val quantityEnvelope = NumericV1Codec.encodeQuantityEnvelope(quantity)
-        assertEquals(listOf(0x00, 0x13), quantityEnvelope.take(2).map { it.toInt() and 0xFF })
+        assertEquals(listOf(0x00, 0x10), quantityEnvelope.take(2).map { it.toInt() and 0xFF })
         assertEquals(quantity, NumericV1Codec.decodeQuantityFrame(NumericV1Codec.encodeQuantityFrame(quantity)))
         assertEquals(quantity, NumericV1Codec.decodeQuantityEnvelope(quantityEnvelope))
 
@@ -107,9 +107,9 @@ class NumericV1Test {
             .also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
         assertCode(NumericV1ErrorCode.PAYLOAD_HASH_MISMATCH) { NumericV1Codec.decodeIntEnvelope(badHash) }
 
-        val retired = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
-            .also { it[0] = 0; it[1] = 0x10.toByte(); it[2] = 2 }
-        assertCode(NumericV1ErrorCode.TYPE_NOT_ALLOWED) { NumericV1Codec.decodeIntEnvelope(retired) }
+        val unassigned = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
+            .also { it[0] = 0; it[1] = 0x13.toByte(); it[2] = 2 }
+        assertCode(NumericV1ErrorCode.UNKNOWN_TYPE) { NumericV1Codec.decodeIntEnvelope(unassigned) }
 
         val knownWrong = NumericV1Codec.encodeIntEnvelope(KotodamaInt.parse("1"))
             .also { it[0] = 0; it[1] = 0x01; it[2] = 2 }

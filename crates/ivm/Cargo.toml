@@ -101,10 +101,6 @@ metal = [
 ## Expose the optional circuit-params hook from halo2. Enabled when downstream
 ## users compile us alongside backends that expect the associated `Params` type.
 halo2-params = []
-## Allow development fallback behavior for schema decode helpers when running
-## experiments without registry-backed schema resolution. Disable this in
-## strict/production builds.
-schema_fallback = []
 ## Feature gate for the register-file incremental Merkle update path.
 merkle_incremental = []
 ## Accepts Norito derive internal cfg used to pick schema-hash strategy.

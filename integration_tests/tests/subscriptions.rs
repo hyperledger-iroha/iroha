@@ -495,6 +495,10 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 move || {
                     client.submit_blocking(
                         ExecuteTrigger::new(usage_trigger_id).with_args(usage_args),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                     )
                 }
             })

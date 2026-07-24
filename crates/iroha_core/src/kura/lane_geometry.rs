@@ -46,7 +46,8 @@ use super::{
     LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
-    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LaneBlockApplicationReceiptArtifact,
+    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE,
+    LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE, LaneBlockApplicationReceiptArtifact,
     LaneBlockApplicationReceiptArtifactFormat, LaneBlockExecutionInputArtifact,
     LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord, RecoveredLaneBlockPayload,
     Result, create_dir_all_with_context, sync_dir,
@@ -4264,6 +4265,24 @@ impl Kura {
                 }
                 continue;
             }
+            if let Some(frontier_read) =
+                self.read_latest_certified_lane_block_frontier_locked(&entry, true)?
+            {
+                self.recover_certified_lane_block_pair_from_frontier_locked(
+                    &entry,
+                    &frontier_read.frontier.artifact,
+                    None,
+                )?;
+                self.confirm_latest_certified_lane_block_frontier_read_locked(
+                    &entry,
+                    &frontier_read.snapshot,
+                )?;
+                self.note_certified_frontier_artifact_validation(
+                    storage_lane_id,
+                    &frontier_read.frontier,
+                    &frontier_read.snapshot,
+                );
+            }
             let lane_artifacts_guard =
                 Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
             let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
@@ -4305,7 +4324,8 @@ impl Kura {
                         path.clone(),
                     )
                 })?;
-                if name.ends_with(".tmp") {
+                if name.ends_with(".tmp") || name == LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE
+                {
                     return Err(Error::IO(
                         std::io::Error::new(
                             ErrorKind::WouldBlock,
@@ -4329,6 +4349,7 @@ impl Kura {
                         | LANE_ARTIFACTS_INDEX_FILE
                         | CERTIFIED_LANE_BLOCKS_DATA_FILE
                         | CERTIFIED_LANE_BLOCKS_INDEX_FILE
+                        | LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE
                         | AUTONOMOUS_LANE_BLOCKS_DATA_FILE
                         | AUTONOMOUS_LANE_BLOCKS_INDEX_FILE
                         | LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE
@@ -4936,6 +4957,24 @@ impl Kura {
                 Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
             let (receipt_data, receipt_index) =
                 Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+            if let Some(frontier_read) =
+                self.read_latest_certified_lane_block_frontier_locked(&entry, true)?
+            {
+                self.recover_certified_lane_block_pair_from_frontier_locked(
+                    &entry,
+                    &frontier_read.frontier.artifact,
+                    None,
+                )?;
+                self.confirm_latest_certified_lane_block_frontier_read_locked(
+                    &entry,
+                    &frontier_read.snapshot,
+                )?;
+                self.note_certified_frontier_artifact_validation(
+                    storage_lane_id,
+                    &frontier_read.frontier,
+                    &frontier_read.snapshot,
+                );
+            }
             let fixed_progress_pairs: [(&Path, &Path, &str); 6] = [
                 (
                     &lane_data,
@@ -5017,7 +5056,8 @@ impl Kura {
                         path.clone(),
                     )
                 })?;
-                if name.ends_with(".tmp") {
+                if name.ends_with(".tmp") || name == LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE
+                {
                     return Err(Error::IO(
                         std::io::Error::new(
                             ErrorKind::WouldBlock,
@@ -5045,6 +5085,7 @@ impl Kura {
                         | LANE_ARTIFACTS_INDEX_FILE
                         | CERTIFIED_LANE_BLOCKS_DATA_FILE
                         | CERTIFIED_LANE_BLOCKS_INDEX_FILE
+                        | LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE
                         | LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE
                         | LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE
                         | LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE
@@ -8079,10 +8120,35 @@ impl Kura {
                     "retired lane has an ambiguous work temp sidecar",
                 ));
             }
+            if name == LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE {
+                return Err(self.geometry_error(
+                    ErrorKind::WouldBlock,
+                    "retired lane has an unresolved latest-certified frontier build",
+                ));
+            }
             if is_autonomous_lane_view_state_file(name) {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "retired autonomous lane view state is not valid first-release state",
+                ));
+            }
+            if !matches!(
+                name,
+                LANE_ARTIFACTS_DATA_FILE
+                    | LANE_ARTIFACTS_INDEX_FILE
+                    | CERTIFIED_LANE_BLOCKS_DATA_FILE
+                    | CERTIFIED_LANE_BLOCKS_INDEX_FILE
+                    | LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE
+                    | LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE
+                    | LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE
+                    | LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE
+                    | LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE
+                    | LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE
+                    | LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE
+            ) {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "retired lane has an unknown first-release artifact file",
                 ));
             }
         }
@@ -14452,6 +14518,63 @@ mod tests {
         );
         assert!(!temp_data_path.exists());
         assert!(!temp_index_path.exists());
+    }
+
+    #[test]
+    fn first_release_retirement_repairs_frontier_only_certified_work_before_snapshot() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("frontier-only-certified-work");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            &root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended.entry(retiring_lane).expect("retiring lane entry");
+        let retiring_incarnation = extended_incarnations[&retiring_lane];
+        let work = install_merge_applied_retirement_work(&kura, retiring_incarnation);
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(retiring_entry, &root);
+        let (frontier_path, _) =
+            Kura::latest_certified_lane_block_frontier_paths_for_entry(retiring_entry, &root);
+        assert!(
+            frontier_path.is_file(),
+            "durable frontier must precede the pair"
+        );
+        fs::remove_file(&data_path).expect("simulate lost certified data after frontier publish");
+        fs::remove_file(&index_path).expect("simulate lost certified index after frontier publish");
+
+        kura.first_release_lane_retirement_admissible_for_test(
+            retiring_lane,
+            retiring_entry.dataspace_id,
+            retiring_incarnation,
+        )
+        .expect("retirement scan must repair the exact frontier certificate before its snapshot");
+
+        assert!(data_path.is_file(), "frontier recovery must recreate data");
+        assert!(
+            index_path.is_file(),
+            "frontier recovery must recreate index"
+        );
+        assert_eq!(
+            kura.read_certified_lane_block_artifact(
+                retiring_lane,
+                work.certified.proposal.descriptor.lane_block_height,
+            )
+            .as_ref(),
+            Some(&work.certified),
+            "retirement recovery must restore the frontier certificate exactly"
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

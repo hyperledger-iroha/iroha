@@ -128,7 +128,13 @@ fn decode_artifact_invariant_across_metadata_fields() {
     let mut artifact = m.encode();
     artifact.extend_from_slice(&code);
     let err = IvmCache::decode_artifact(&artifact).expect_err("oversize vector length rejects");
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(
+        err,
+        VMError::ProgramVectorLengthTooLarge {
+            vector_length: 65,
+            max_allowed: ivm::VECTOR_LENGTH_MAX,
+        }
+    );
 }
 
 #[test]
@@ -143,12 +149,29 @@ fn decode_artifact_rejects_legacy_or_unknown_minor_version() {
         abi_version: 1,
     };
 
-    for vmin in [0u8, 2, 7, 42] {
+    let mut legacy = base.clone();
+    legacy.version_minor = 0;
+    let mut legacy_artifact = legacy.encode();
+    legacy_artifact.extend_from_slice(&code);
+    assert_eq!(
+        IvmCache::decode_artifact(&legacy_artifact)
+            .expect_err("the 1.1 predecoder surface rejects generic 1.0 artifacts"),
+        VMError::InvalidMetadata
+    );
+
+    for vmin in [2u8, 7, 42] {
         let mut m = base.clone();
         m.version_minor = vmin;
         let mut artifact = m.encode();
         artifact.extend_from_slice(&code);
         let err = IvmCache::decode_artifact(&artifact).expect_err("invalid minor should reject");
-        assert_eq!(err, VMError::InvalidMetadata, "minor {vmin}");
+        assert_eq!(
+            err,
+            VMError::UnsupportedProgramVersion {
+                major: 1,
+                minor: vmin,
+            },
+            "minor {vmin}"
+        );
     }
 }

@@ -137,18 +137,7 @@ pub fn encode_order_json(json: &[u8]) -> Option<Vec<u8>> {
 
 /// Helper: decode Norito bytes (Order) into minified JSON using the default registry.
 pub fn decode_order_to_json(bytes: &[u8]) -> Option<Vec<u8>> {
-    let registry = DefaultRegistry::new();
-    if let Some(v) = registry.decode_to_json("Order", bytes) {
-        return Some(v);
-    }
-
-    // Fallback: attempt to decode using other known versions of the Order schema.
-    registry
-        .list_versions("Order")
-        .into_iter()
-        .flatten()
-        .filter_map(|(name, _)| if name == "Order" { None } else { Some(name) })
-        .find_map(|name| registry.decode_to_json(&name, bytes))
+    DefaultRegistry::new().decode_to_json("Order", bytes)
 }
 
 #[cfg(test)]
@@ -162,5 +151,16 @@ mod tests {
         let dec = decode_order_to_json(&enc).expect("decode");
         let s = std::str::from_utf8(&dec).unwrap();
         assert!(s.contains("qty") && s.contains("side"));
+    }
+
+    #[test]
+    fn order_decoder_rejects_another_registered_schema() {
+        let bytes = DefaultRegistry::new()
+            .encode_json("OrderByTime", br#"{"qty":10,"side":"buy","tif":30}"#)
+            .expect("encode the distinct OrderByTime schema");
+        assert!(
+            decode_order_to_json(&bytes).is_none(),
+            "an Order decoder must not probe another registered schema"
+        );
     }
 }

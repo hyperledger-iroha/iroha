@@ -551,7 +551,8 @@ fn parse_entrypoint_hash_literal(
     let raw = value
         .as_str()
         .ok_or_else(|| invalid_value(op, field, "a canonical lowercase entrypoint hash"))?;
-    let hash = raw
+    let canonical = raw.to_ascii_lowercase();
+    let hash = canonical
         .parse::<HashOf<crate::transaction::signed::TransactionEntrypoint>>()
         .map_err(|_| invalid_value(op, field, "a canonical lowercase entrypoint hash"))?;
     if hash.to_string() != raw {
@@ -1903,7 +1904,7 @@ mod tests {
     fn sample_hash_literal(seed: u8) -> String {
         let mut bytes = [seed; Hash::LENGTH];
         bytes[Hash::LENGTH - 1] |= 1;
-        hex::encode_upper(bytes)
+        hex::encode(bytes)
     }
 
     fn zero_hash<T>() -> HashOf<T> {
@@ -2312,7 +2313,7 @@ mod tests {
             Err(CommittedTxPredicateJsonError::TooManyNodes(_))
         ));
 
-        let uppercase_hash = sample_hash_literal(0x51).to_uppercase();
+        let uppercase_hash = sample_hash_literal(0xab).to_ascii_uppercase();
         let noncanonical_hash =
             binary_predicate_expr("eq", "entrypoint_hash", Value::String(uppercase_hash));
         assert!(matches!(

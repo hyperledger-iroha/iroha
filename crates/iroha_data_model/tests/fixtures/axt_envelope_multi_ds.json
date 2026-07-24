@@ -1268,8 +1268,8 @@
             "origin_dsid": 1
           },
           "budget": {
-            "remaining": 2,
-            "per_use": 1
+            "remaining": "2",
+            "per_use": "1"
           },
           "handle_era": 5,
           "sub_nonce": 3,
@@ -1961,7 +1961,7 @@
           ],
           "expiry_slot": 120
         },
-        "amount": 2500,
+        "amount": "2500",
         "amount_commitment": null
       },
       {
@@ -1974,7 +1974,7 @@
             "origin_dsid": 7
           },
           "budget": {
-            "remaining": 5,
+            "remaining": "5",
             "per_use": null
           },
           "handle_era": 9,
@@ -2601,7 +2601,7 @@
           ],
           "expiry_slot": 98
         },
-        "amount": 9001,
+        "amount": "9001",
         "amount_commitment": null
       }
     ],
@@ -2616,8 +2616,8 @@
             "origin_dsid": 1
           },
           "budget": {
-            "remaining": 2,
-            "per_use": 1
+            "remaining": "2",
+            "per_use": "1"
           },
           "handle_era": 5,
           "sub_nonce": 3,
@@ -3309,7 +3309,7 @@
           ],
           "expiry_slot": 120
         },
-        "amount": 2500,
+        "amount": "2500",
         "amount_commitment": null
       },
       {
@@ -3322,7 +3322,7 @@
             "origin_dsid": 7
           },
           "budget": {
-            "remaining": 5,
+            "remaining": "5",
             "per_use": null
           },
           "handle_era": 9,
@@ -3949,7 +3949,7 @@
           ],
           "expiry_slot": 98
         },
-        "amount": 9001,
+        "amount": "9001",
         "amount_commitment": null
       }
     ]

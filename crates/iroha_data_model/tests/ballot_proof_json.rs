@@ -3,6 +3,7 @@
 
 #[test]
 fn ballot_proof_json_base64() {
+    use base64::Engine as _;
     use iroha_data_model::isi::governance::BallotProof;
     let v = BallotProof {
         backend: "halo2/pasta/tiny-add".into(),
@@ -41,7 +42,7 @@ fn ballot_proof_json_base64() {
     assert_eq!(round.envelope_bytes, v.envelope_bytes);
     assert_eq!(round.root_hint, v.root_hint);
     assert_eq!(round.nullifier, v.nullifier);
-    assert_eq!(round.amount.as_deref(), Some("900"));
+    assert_eq!(round.amount, Some(900_u64.into()));
     assert_eq!(round.duration_blocks, Some(32));
     assert_eq!(round.direction.as_deref(), Some("Abstain"));
 }

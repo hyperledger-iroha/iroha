@@ -663,8 +663,9 @@ require_regex(
 )
 require_regex(
     "kagami",
-    r"\]:\s*\[KagemushaValidatedArtifactPayloadV4;\s*8\]\s*=",
-    "exact Kagami [PayloadV4; 8] validated inventory",
+    r"fn\s+validate_artifacts_sequentially[\s\S]{0,500}?for\s+artifact\s+in\s+artifacts"
+    r"[\s\S]{0,200}?drop\(validate\(artifact\)\?\)",
+    "sequential Kagami artifact validation with immediate payload drop",
 )
 
 swift_roles = quoted_inventory(
@@ -844,6 +845,8 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -947,7 +950,7 @@ for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS")
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 59-symbol required bridge inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 61-symbol required bridge inventory mismatch "
         f"(found {len(actual_required_bridge_symbols)})"
     )
 
@@ -955,44 +958,36 @@ for label in ("xcframework_build", "mobile_check_test"):
     actual_manifest_symbols = parse_manifest_symbol_inventory(label)
     if actual_manifest_symbols != required_bridge_symbols:
         errors.append(
-            f"{paths[label]}: exact ordered 59-symbol required bridge inventory mismatch "
+            f"{paths[label]}: exact ordered 61-symbol required bridge inventory mismatch "
             f"(found {len(actual_manifest_symbols)})"
         )
 
 require_regex(
     "rust",
-    r"read_kagemusha_pasta_cycle_artifact_v4\s*\([\s\S]{0,220}?&self\.authenticated_release",
-    "authenticated-release V4 artifact reads",
+    r"impl\s+iroha_core::zk::kagemusha_artifact_source_v4::"
+    r"KagemushaAuthenticatedArtifactSourceV4[\s\S]{0,800}?"
+    r"fn\s+with_framed_artifact[\s\S]{0,800}?self\.with_selected_file",
+    "authenticated-release V4 pinned artifact source",
 )
 require_regex(
     "rust",
-    r"KagemushaPastaCycleProverArtifactsV4::new\s*\(\s*&self\.authenticated_release,"
-    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
-    r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,"
-    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
-    r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,",
-    "authenticated-release exact-eight V4 prover construction",
+    r"qualify_kagemusha_authenticated_artifact_source_v4\s*\(\s*qualification_source\s*\)",
+    "complete authenticated-release V4 source qualification",
 )
 require_regex(
     "rust",
-    r"KagemushaPastaCycleVerifierArtifactsV4::new\s*\(\s*&self\.authenticated_release,"
-    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
-    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,"
-    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
-    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
-    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,",
-    "authenticated-release exact-six V4 verifier construction",
+    r"KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source\s*\("
+    r"[\s\S]{0,120}?Arc::clone\(&self\.qualified_source\)",
+    "qualified source-backed V4 verifier construction",
 )
 require_regex(
     "rust",
-    r"for\s+profile\s+in\s+&manifest\.profiles[\s\S]{0,500}?authenticated_payload",
-    "sequential authentication of all eight installed artifacts",
+    r"KagemushaPastaCycleOpaqueProverV4::from_qualified_artifact_source\s*\("
+    r"[\s\S]{0,120}?Arc::clone\(&self\.qualified_source\)",
+    "qualified source-backed V4 prover construction",
 )
+if "KagemushaPastaCycleProverArtifactsV4::new" in texts["rust"]:
+    errors.append(f"{paths['rust']}: in-memory all-role V4 prover construction is forbidden")
 
 for symbol in c_symbols:
     require_regex("rust", rf"fn\s+{re.escape(symbol)}\s*\(", f"Rust C export {symbol}")
@@ -1147,7 +1142,7 @@ if mode == "--self-test":
             '    "connect_norito_encode_transfer_signed_transaction",\n'
             '    "connect_norito_free",',
         ),
-        "exact ordered 59-symbol required bridge inventory mismatch",
+        "exact ordered 61-symbol required bridge inventory mismatch",
     )
 
     def inject_v3_alias(fixture: Path) -> None:

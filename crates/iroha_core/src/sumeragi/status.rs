@@ -2261,6 +2261,7 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+    set_committed_lane_blocks(Vec::new());
     bump_v2_watchdog_revision();
 }
 
@@ -5321,6 +5322,26 @@ pub struct CommittedLaneBlockSnapshot {
 }
 
 impl CommittedLaneBlockSnapshot {
+    /// Build an operator snapshot from one fully validated committed lane session.
+    pub(crate) fn from_committed_session_with_execution_status(
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        execution_status: CommittedLaneBlockExecutionStatus,
+    ) -> Self {
+        let descriptor = &session.proposal.descriptor;
+        Self {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            descriptor_hash: descriptor.descriptor_hash,
+            proposal_hash: session.proposal.proposal_hash,
+            execution_status,
+            proposal: session.proposal.clone(),
+            prepare_qc: session.prepare_qc.clone(),
+            commit_qc: session.commit_qc.clone(),
+        }
+    }
+
     /// Whether the committed lane block has enough payload material for execution.
     #[must_use]
     pub const fn executable_payload_available(&self) -> bool {
@@ -6544,6 +6565,8 @@ fn validate_committed_lane_block_snapshot(
 
 /// Replace the committed standalone lane-block snapshot used by Nexus diagnostics.
 pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     entries.retain(
         |entry| match validate_committed_lane_block_snapshot(entry) {
             Ok(()) => true,

@@ -67,7 +67,9 @@ certificate round.
   `SumeragiV2LivenessProofs.tla`,
   `SumeragiV2CertifiedRequestHashAuthorityProofs.tla`,
   `SumeragiV2DurableDecisionRecoveryProofs.tla`, and
-  `SumeragiV2AsyncLivenessProofs.tla`, with
+  the bounded `SumeragiV2Async*Proofs.tla` shard chain behind the
+  declaration-free `SumeragiV2AsyncLivenessProofs.tla` compatibility façade,
+  with
   `SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla` as its child,
   model the production scheduler and transport abstractions, own the typed
   fair-action-to-`AsyncNext` refinement proof, and state the conditional
@@ -738,7 +740,31 @@ change bounded-search semantics.
 The strict TLAPS runner checks every deductive module,
 then generates evidence bound to the exact ordered module list, every proof
 log, the pinned tool identity, and a SHA-256 manifest of every TLA+ source.
-The checked-in ledger cannot contain stale tool-run counts.
+The former 57,058-line async proof root is a mechanically sealed chain of 21
+physical modules. Twenty proof-bearing shards run separately; the one debt
+shard contains exactly `TimeoutViewProgressObligation`,
+`LockedBodyReproposalProgressObligation`, and
+`RotatingLeaderProgressObligation`. The façade preserves existing qualified
+references without declaring anything. The checker rejects missing, reordered,
+duplicate, oversized, forward-referencing, or unexpectedly proofless shards;
+each shard is capped at 256 KiB, 5,500 lines, and 150 local theorems, and each
+theorem at 600 lines and 256 structured steps. Evidence resolves every
+façade-facing ledger symbol to its unique provider shard and provider log.
+
+The checked-in ledger cannot contain stale tool-run counts. Before each backend
+run, TLAPM performs a strict no-backend summary preflight. Each proof-bearing
+shard then runs in a fresh process with one worker, disabled fingerprints, and
+its own disposable cache. The complete wave executes inside an owned process
+group under a 2 GiB bounded polling ceiling with a target 250 ms cadence. Each `ps` or macOS
+`footprint` probe is limited to 200 ms; an inspection timeout fails closed and
+terminates the exact owned process group. This portable userspace guard is not
+an operating-system hard allocation limit. A separate lifeline session cleans
+the body after supervisor death, while inherited lock descriptors keep the
+per-user heavy-job lock shared with Kagemusha V4 candidate generation until
+cleanup finishes. Release receipts bind the resulting JSONL samples and
+canonical resource summary. The inherited one-shot launch capability prevents
+stale environment markers from skipping the wrapper; it is not a security
+boundary against a malicious same-UID process.
 
 The structural checker rejects top-level TLA+ assumptions/axioms, unledgered
 omitted proofs, Verus assume/admit/trusted-body escapes, non-theorem ledger

@@ -2,9 +2,11 @@
 """Compute the canonical Kagemusha full-source-tree SHA-256.
 
 The seal covers every path in the clean Git index, including its executable
-mode and exact regular-file bytes or symlink target bytes.  Ignored build
-outputs are outside the source tree.  A fingerprint is returned only while the
-checkout HEAD and full porcelain status remain unchanged and clean.
+mode and exact regular-file bytes or symlink target bytes. It additionally
+binds the ignored root ``Cargo.lock`` consumed by ``cargo build --locked``;
+other ignored build outputs remain outside the source tree. A fingerprint is
+returned only while the checkout HEAD and full porcelain status remain
+unchanged and clean.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ import sys
 from dataclasses import dataclass
 
 
-DOMAIN = b"iroha.kagemusha.full-source-tree-sha256.v1\0"
+DOMAIN = b"iroha.kagemusha.full-source-tree-sha256.v2\0"
 ALLOWED_MODES = {b"100644", b"100755", b"120000"}
+REQUIRED_IGNORED_BUILD_INPUTS = (b"Cargo.lock",)
 
 
 class SourceSealError(RuntimeError):
@@ -228,6 +231,67 @@ def _symlink_bytes(path: bytes, entry: IndexEntry) -> bytes:
     return payload
 
 
+def _required_ignored_regular_hash(
+    path: bytes,
+    display_path: bytes,
+    source_hasher: "hashlib._Hash",
+) -> bytes:
+    """Seal one mandatory ignored Cargo build input with stable file identity."""
+
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_mode & 0o111 != 0
+    ):
+        raise SourceSealError(
+            "required ignored build input must be a singly linked, "
+            f"non-executable regular file: {os.fsdecode(display_path)}"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened_before = os.fstat(descriptor)
+        encoded_size = opened_before.st_size.to_bytes(8, "big")
+        source_hasher.update(encoded_size)
+        input_hasher = hashlib.sha256(encoded_size)
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            source_hasher.update(chunk)
+            input_hasher.update(chunk)
+        opened_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after = os.lstat(path)
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    if not (
+        identity(before)
+        == identity(opened_before)
+        == identity(opened_after)
+        == identity(after)
+    ):
+        raise SourceSealError(
+            f"required ignored build input changed while read: {os.fsdecode(display_path)}"
+        )
+    if total != opened_after.st_size:
+        raise SourceSealError(
+            f"required ignored build input was truncated: {os.fsdecode(display_path)}"
+        )
+    return input_hasher.digest()
+
+
 def compute_identity(root: pathlib.Path) -> SourceIdentity:
     root = _repository_root(root)
     head_before = _head(root)
@@ -247,6 +311,26 @@ def compute_identity(root: pathlib.Path) -> SourceIdentity:
             _field(hasher, payload)
         else:
             _regular_hash(absolute, entry.mode == b"100755", entry, hasher)
+    ignored_input_digests: dict[bytes, bytes] = {}
+    for relative in REQUIRED_IGNORED_BUILD_INPUTS:
+        _field(hasher, b"required-ignored-build-input-v1")
+        _field(hasher, relative)
+        _field(hasher, b"100644")
+        ignored_input_digests[relative] = _required_ignored_regular_hash(
+            os.path.join(root_bytes, relative), relative, hasher
+        )
+    if _head(root) != head_before or status(root):
+        raise SourceSealError("Kagemusha source HEAD or tree changed while sealing")
+    for relative, expected_digest in ignored_input_digests.items():
+        actual_digest = _required_ignored_regular_hash(
+            os.path.join(root_bytes, relative),
+            relative,
+            hashlib.sha256(b"ignored-input-recheck"),
+        )
+        if actual_digest != expected_digest:
+            raise SourceSealError(
+                f"required ignored build input changed while sealing: {os.fsdecode(relative)}"
+            )
     if _head(root) != head_before or status(root):
         raise SourceSealError("Kagemusha source HEAD or tree changed while sealing")
     return SourceIdentity(

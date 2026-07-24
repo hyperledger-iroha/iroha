@@ -3417,7 +3417,7 @@ impl IVM {
         else {
             return false;
         };
-        self.ensure_owned_tlv_range(value, total).is_ok()
+        self.memory.inspect_region(value, total).is_ok()
             && self.ensure_public_memory(value, total).is_err()
     }
 
@@ -3736,7 +3736,7 @@ impl IVM {
 
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
-        self.ensure_owned_public_tlv_range(ptr, 7)?;
+        self.ensure_public_memory(ptr, 7)?;
         let hdr = self
             .memory
             .load_region(ptr, 7)
@@ -3747,7 +3747,12 @@ impl IVM {
             .and_then(|size| size.checked_add(iroha_crypto::Hash::LENGTH))
             .ok_or(VMError::NoritoInvalid)?;
         let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
-        self.ensure_owned_public_tlv_range(ptr, total)?;
+        // Privacy is a public-boundary invariant, not an owned-region
+        // side-effect. Check the complete self-described range before
+        // rejecting invalid provenance so stack-shaped envelopes cannot
+        // declassify a private payload through a boolean decoder result.
+        self.ensure_public_memory(ptr, total)?;
+        self.ensure_owned_tlv_range(ptr, total)?;
         let envelope = self
             .memory
             .load_region(ptr, total)
@@ -9397,7 +9402,7 @@ mod tests {
         vm.set_register(7, 99);
         let mismatched_allocation = vm
             .memory
-            .load_region(0, 1)
+            .load_region(Memory::HEAP_START, 1)
             .expect("mismatched memory is readable")
             .as_ptr();
         crate::memory::reset_memory_clone_count();
@@ -9412,7 +9417,7 @@ mod tests {
         assert_eq!(vm.memory.stack_limit(), Memory::STACK_ALIGNMENT);
         assert!(std::ptr::eq(
             vm.memory
-                .load_region(0, 1)
+                .load_region(Memory::HEAP_START, 1)
                 .expect("mismatched memory remains readable")
                 .as_ptr(),
             mismatched_allocation

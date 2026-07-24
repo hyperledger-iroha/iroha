@@ -216,8 +216,8 @@ async function main() {
       cwd: consumerRoot,
     });
     for (const expected of [
-      "payload hash: 1c39c49925ffafee69598d90d5073cb48bbfa1795cc15b41afb67d2cc3b69669",
-      "signed transaction hash: 2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb",
+      "payload hash: 2519723601cf2e75576c7f7886e32179eb83f624717552e600108db6e4127f65",
+      "signed transaction hash: 6f39fd5e193f09f750939f0b089188b9a327a9dda0c8fb3de312c953bf2d93bb",
       "final status: Committed",
     ]) {
       if (!recipe.stdout.includes(expected)) {

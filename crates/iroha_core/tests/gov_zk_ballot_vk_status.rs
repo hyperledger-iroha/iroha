@@ -20,6 +20,7 @@ fn zk_ballot_rejects_when_vk_not_active() {
         proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
+    use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
@@ -40,7 +41,7 @@ fn zk_ballot_rejects_when_vk_not_active() {
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 100;
     gov_cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
-        backend: "halo2/pasta/tiny-add".to_string(),
+        backend: iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_string(),
         name: "ballot_current".to_string(),
     });
     state.set_gov(gov_cfg);
@@ -64,60 +65,91 @@ fn zk_ballot_rejects_when_vk_not_active() {
     iroha_data_model::prelude::Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant parliament manage");
+    let ballot_permission: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "ref-vk".to_string(),
+    }
+    .into();
+    iroha_data_model::prelude::Grant::account_permission(ballot_permission, ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant ballot submission");
 
-    // Register Active VK (with inline bytes to pass bytes-available gate)
-    let backend = "halo2/pasta/tiny-add";
-    let vk_id = VerifyingKeyId::new(backend, "ballot_current");
-    let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-    let commitment = iroha_core::zk::hash_vk(&vk_box);
-    let mut vk_record = VerifyingKeyRecord::new(
+    // Register distinct active ballot and tally VK records. The dummy inline bytes are sufficient
+    // because the assertion is reached before cryptographic verification.
+    let backend = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
+    let ballot_vk_id = VerifyingKeyId::new(backend, "ballot_current");
+    let ballot_vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+    let ballot_commitment = iroha_core::zk::hash_vk(&ballot_vk_box);
+    let mut ballot_vk_record = VerifyingKeyRecord::new(
         1,
-        "ballot_current",
+        "vote-ballot",
         BackendTag::Halo2IpaPasta,
         "pallas",
         [0x44; 32],
-        commitment,
+        ballot_commitment,
     );
-    vk_record.vk_len = 3;
-    vk_record.status = ConfidentialStatus::Active;
-    vk_record.key = Some(vk_box);
-    vk_record.gas_schedule_id = Some("halo2_default".into());
-    let vk_key = vk_record.key.clone();
+    ballot_vk_record.vk_len = 3;
+    ballot_vk_record.status = ConfidentialStatus::Active;
+    ballot_vk_record.key = Some(ballot_vk_box.clone());
+    ballot_vk_record.gas_schedule_id = Some("halo2_default".into());
+
+    let tally_vk_id = VerifyingKeyId::new(backend, "tally_current");
+    let tally_vk_box = VerifyingKeyBox::new(backend.into(), vec![4, 5, 6]);
+    let tally_commitment = iroha_core::zk::hash_vk(&tally_vk_box);
+    let mut tally_vk_record = VerifyingKeyRecord::new(
+        1,
+        "vote-tally",
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        [0x55; 32],
+        tally_commitment,
+    );
+    tally_vk_record.vk_len = 3;
+    tally_vk_record.status = ConfidentialStatus::Active;
+    tally_vk_record.key = Some(tally_vk_box);
+    tally_vk_record.gas_schedule_id = Some("halo2_default".into());
+
     let exec = Executor::default();
     let reg_instr: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
-        id: vk_id.clone(),
-        record: vk_record,
+        id: ballot_vk_id.clone(),
+        record: ballot_vk_record,
     }
     .into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_instr)
-        .expect("register vk");
+        .expect("register ballot vk");
+    let reg_instr: InstructionBox = iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
+        id: tally_vk_id.clone(),
+        record: tally_vk_record,
+    }
+    .into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), reg_instr)
+        .expect("register tally vk");
 
-    // Create election referencing the same VK
+    // Create the election while both role-specific keys are active.
     let create = CreateElection {
         election_id: "ref-vk".to_string(),
         options: 1,
         eligible_root: [0u8; 32],
         start_ts: 0,
         end_ts: 0,
-        vk_ballot: vk_id.clone(),
-        vk_tally: vk_id.clone(),
+        vk_ballot: ballot_vk_id.clone(),
+        vk_tally: tally_vk_id,
         domain_tag: "gov:ballot:v1".to_string(),
     };
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
     let mut vk_record2 = VerifyingKeyRecord::new(
         2,
-        "ballot_current",
+        "vote-ballot",
         BackendTag::Halo2IpaPasta,
         "pallas",
         [0x44; 32],
-        commitment,
+        ballot_commitment,
     );
     vk_record2.vk_len = 3;
     vk_record2.status = ConfidentialStatus::Proposed;
-    vk_record2.key = vk_key;
+    vk_record2.key = Some(ballot_vk_box);
     vk_record2.gas_schedule_id = Some("halo2_default".into());
     let upd_instr: InstructionBox = iroha_data_model::isi::verifying_keys::UpdateVerifyingKey {
-        id: vk_id.clone(),
+        id: ballot_vk_id,
         record: vk_record2,
     }
     .into();
@@ -140,9 +172,11 @@ fn zk_ballot_rejects_when_vk_not_active() {
         proof_b64,
         public_inputs_json: "{}".to_string(),
     };
-    let result = cast.execute(&ALICE_ID, &mut stx);
+    let err = cast
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("ballot with non-active VK must be rejected");
     assert!(
-        result.is_err(),
-        "ballot with non-active VK must be rejected"
+        format!("{err}").contains("verifying key is not Active"),
+        "status rejection must occur before proof decoding: {err}"
     );
 }

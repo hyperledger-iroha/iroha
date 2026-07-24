@@ -40,7 +40,7 @@ fn register_peer_then_unregister() {
     let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     const SAMPLE_PEER: &str =
@@ -84,7 +84,7 @@ fn create_enable_disable_remove_trigger() {
     let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    let mut vm = IVM::new(100);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
     // Missing name -> invalid

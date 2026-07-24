@@ -15,10 +15,10 @@ fn kotodama_register_account_and_unregister_asset() {
         seiyaku RegisterAndUnregisterEntities {
         kotoage fn main() authorize("ManageEntities") {
           ledger::domain::register(DomainId::parse("default.universal"));
-          ledger::account::register(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
+          ledger::account::register(AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
           ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           ledger::asset::unregister(AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-          ledger::account::unregister(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
+          ledger::account::unregister(AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"));
         }
         }
     "#;

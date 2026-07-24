@@ -1,9 +1,36 @@
 # Roadmap
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Memory-containment follow-ups
+
+- Produce production candidate evidence from a clean signed checkout. Build the
+  exact source-sealed release binary with
+  `scripts/build_kagemusha_v4_candidate_bundle.py` on an admitted host with at
+  least 24 GiB of installed memory, then run that binary's `generate-candidate`
+  command through `scripts/run_kagemusha_v4_generation.py` and retain the
+  generation JSONL/summary beside the published candidate and sealed-build
+  report. Keep the non-raiseable 256 MiB guard, file-backed proving-key
+  serialization, and checked 232 MiB static admission estimate unchanged. A
+  non-shipping memory-benchmark report is diagnostic calibration, not candidate
+  or release evidence. Do not restore high-degree generation or a release-sized
+  proving-key `Vec`.
+- Complete mobile-device concurrency and memory-pressure evidence for init,
+  append, verify, and redeem operations. The matrix must demonstrate bounded
+  peak memory, retry after the native busy result, transient verifier/prover
+  sequencing, and no partially advanced wallet lifecycle when a proof worker
+  is busy.
+- Continue splitting or simplifying the `iroha_data_model` compile and
+  monomorphization surface. The first source-level decoder de-duplication cut
+  the exact serialized no-run reproducer from 12.191 GiB to 11.466 GiB and cut
+  its eight-object rlib from 570,253,400 to 470,810,416 bytes. Eight codegen
+  units remains the lowest measured profile (16 and 64 were neutral; one unit
+  regressed to 19.322 GiB), but one Cargo job cannot cap this still-large single
+  frontend process. Isolate additional derive families or split bounded model
+  modules, then repeat the exact reproducer under a Linux cgroup hard limit.
 
 Mixed-executable-batch follow-up is limited to completing the full workspace
 suite and the complete platform SDK suites on toolchains with their required
@@ -83,10 +110,11 @@ artifacts: `ParamsIPA`, processed proving key, processed verifying key, and
 final-key selector-zero bootstrap witness for each parity. Bounded circuit
 parameters are authenticated inline in the two profiles rather than represented
 as additional streamed artifacts.
-The unreleased recursive state boundary and vector layout have deliberately
-advanced to V2 without changing bridge ABI 21 or manifest V4. The boundary is
-the complete 890-limb canonical state, including the public append-only
-`next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 4,027 limbs.
+The unreleased recursive state boundary carrier remains V2 without changing
+bridge ABI 21 or manifest V4, while its nested compact profile is V5. The
+boundary is the complete 138-limb canonical state, including the public
+append-only `next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 64
+field elements.
 There is no fallback for the former layout. All earlier V4 candidate keys,
 bootstrap witnesses, proofs, manifests, and schema digests are invalid and must
 be regenerated after the frontier substitution matrix passes.
@@ -124,8 +152,8 @@ installed release before returning that proof-bound frontier. Promotion remains
 blocked until the focused adversarial circuit, bridge, and SDK matrix verifies
 these obligations and fresh artifacts are generated from the resulting layout.
 Each parity must retain one fixed circuit shape across initialization and
-one-/two-parent transitions. The V4 candidate authenticates its degree-20/21
-base-circuit configuration and dynamic public layout, two mandatory
+one-/two-parent transitions. The V4 candidate authenticates its compact
+degree-16 base-circuit configuration and fixed 64-element public layout, two mandatory
 real-or-bootstrap parent slots, canonical bootstrap-witness artifacts,
 in-circuit presence selectors, fixed post-proof and branch folds, and fixed
 deferred-equation stage plans. Circuit parameters stay inside the signed
@@ -143,32 +171,20 @@ production promotion corridor before publishing an authenticated V4 release.
 The review schema and native fail-closed validator do not substitute for that
 external review evidence. Until then, authoritative production availability
 stays false.
-The degree-20 release-generation workflow must also remain fail-closed outside
-the Kagemusha staged resource supervisor. The 2026-07-22 host incident exposed
-speculative second and third advice phases in a circuit with no
-challenge-dependent witness work: Halo2 re-synthesized phase-zero work and
-retained unused full-domain columns for those empty phases. Release generation
-now authenticates exactly one real phase with the reviewed `[8]` advice and
-`[1]` lookup profile and is capped at 16 GiB with reserved host headroom.
-Promotion remains blocked until a clean,
-signed-checkout run completes under that ceiling and produces a successful
-resource receipt; a cap stop is diagnostic evidence, not permission to raise
-the limit or publish partial artifacts.
-The historical ABI-19/V3 path had a 1,600-byte per-step limit and 21,764-byte
-proof payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
+The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
 authenticated profiles pin measured per-parity proof bounds and its manifest
-pins the pair bound, with defensive ceilings of 1 MiB per step and 16 MiB per
-pair. Those ceilings are not shipping limits or availability signals;
+pins the pair bound, with defensive ceilings of 8 KiB per step and exactly
+21,764 bytes per canonical pair. Those ceilings are not availability signals;
 promotion must pin measured values and pass independent review and device
 evidence.
 
 Torii readiness carries a required nullable authenticated `artifact_set` bound
 to exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively.
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively.
 A null set requires both recursive records and backend construction to be
 unavailable with exactly one `recursive_v4_registry_unavailable` or
 `recursive_v4_registry_malformed` blocker; a present set forbids both.
@@ -894,23 +910,13 @@ Eq/Ep registry records. Top-up additionally requires active issuance; full
 redemption does not. Flat requests and semantic lineage DAGs alone do not make
 an operation executable, and backend construction without the exact registry
 bindings does not open lineage. The
-`lineage-key-artifacts` command now fails before Halo2 keygen when
-deterministic fixed-window layout estimates exceed the memory guard or when the
-direct verifier-slice row footprint cannot fit the canonical Halo2 domain,
-instead of silently entering unbounded configure/keygen on laptops. The
-production verifier profile has been realigned to direct `255 x 1` fixed
-windows, so the recursive verifier assigns window bases directly and the
-fixed-window manifest carries zero shared table families. A measured LEN=4
-one-hop run now reports 49,725 required usable rows against 3,838 usable rows at
-canonical `k = 12`; the minimum compatible domain would be `k = 16`, which is
-not acceptable with the current column-heavy shape. The row-oriented primitives
-still cover non-direct profiles: scalar decomposition, table derivation,
-selector trees, deterministic doubling, selected-point accumulation, and MSM
-running sums all reuse row configs instead of rebuilding per-window/per-term
-columns. Remaining work is to redesign the verifier-slice layout so it is both
-row- and memory-feasible, then revalidate full init/append artifact generation
-and remove the artifact-generation guard as a hard stop for witnessless
-Reserved-lineage artifacts.
+retired direct fixed-window `lineage-key-artifacts` experiment failed before
+Halo2 keygen when its old column-heavy verifier slice could not fit the bounded
+domain. Its conclusion that degree 16 was unacceptable applied only to that
+pre-compact shape. The current nested compact V5 profile instead fixes degree
+16 with `[8]` advice and `[1]` lookup-advice columns and remains fail-closed
+behind the generation and physical-evidence gates listed above; the retired
+shape is not a fallback.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
@@ -2447,9 +2453,12 @@ excluded from the first release.
   invalid-proof backend verification behind an explicit ignored test, with SDK
   parity guarding that the backend-heavy soft-invalid check cannot drift back
   into the default bridge test.
-  `iroha_data_model` still has a single stripped-debuginfo compile phase that
-  can peak around `10.5 GiB` RSS, so future work should split or simplify that
-  compile surface rather than reintroducing broad Cargo parallelism or
+  The exact serialized bridge reproducer confirmed the independent
+  `iroha_data_model` compiler hotspot. Sharing canonical/prefix decoder control
+  flow reduced its eight-unit kernel high-water mark to `11.466 GiB`, 742.2 MiB
+  below the comparable pre-refactor 16-unit run, but Jobs=1 cannot reduce this
+  remaining one-process footprint. Continue splitting its derive and model
+  surface rather than reintroducing broad Cargo parallelism or
   one-file-one-binary integration-test discovery.
 - Native asset locks are now first-class ISIs for escrow-style conditional
   custody, including optional release authority, expiry, partial drawdown,

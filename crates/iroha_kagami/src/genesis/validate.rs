@@ -266,7 +266,7 @@ mod tests {
                 "instructions": [{
                     "Mint": {
                         "Asset": {
-                            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                            "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                             "object": "13"
                         }
                     }

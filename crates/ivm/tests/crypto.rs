@@ -102,7 +102,7 @@ fn test_poseidon6() {
 }
 
 #[test]
-fn poseidon_hashes_private_tuples_to_public_commitments() {
+fn poseidon_rejects_private_tuples_without_a_declassification_path() {
     let poseidon2_word = encoding::wide::encode_poseidon2(9, 10, 11);
     let program = common::assemble_zk(&words(&[poseidon2_word, HALT_WORD]), 2);
     let mut vm = IVM::new(u64::MAX);
@@ -111,11 +111,8 @@ fn poseidon_hashes_private_tuples_to_public_commitments() {
     vm.set_register(11, 0xfedc_ba98_7654_3210);
     vm.registers.set_tag(10, true);
     vm.registers.set_tag(11, true);
-    vm.run().unwrap();
-    assert_eq!(
-        vm.register(9),
-        poseidon2(0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210)
-    );
+    assert_eq!(vm.run(), Err(ivm::VMError::PrivacyViolation));
+    assert_eq!(vm.register(9), 0);
     assert!(!vm.registers.tag(9));
 
     let inputs = [3, 5, 8, 13, 21, 34];
@@ -127,8 +124,8 @@ fn poseidon_hashes_private_tuples_to_public_commitments() {
         vm.set_register(10 + offset, value);
         vm.registers.set_tag(10 + offset, true);
     }
-    vm.run().unwrap();
-    assert_eq!(vm.register(9), poseidon6(inputs));
+    assert_eq!(vm.run(), Err(ivm::VMError::PrivacyViolation));
+    assert_eq!(vm.register(9), 0);
     assert!(!vm.registers.tag(9));
 }
 

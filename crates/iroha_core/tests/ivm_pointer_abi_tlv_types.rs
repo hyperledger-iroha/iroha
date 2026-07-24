@@ -3,13 +3,9 @@
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
-
-fn fixture_account(hex_public_key: &str) -> AccountId {
-    let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(public_key)
-}
 
 fn program_scall(sys: u32) -> Vec<u8> {
     let mut code = Vec::new();
@@ -46,13 +42,11 @@ fn wrong_type_for_asset_def_rejected() {
     // Transfer asset expects (&AccountId, &AccountId, &AssetDefinitionId, amount)
     let program = program_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED);
     let mut vm = IVM::new(u64::MAX);
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority.clone()));
 
     let from = to_bytes(&authority).expect("encode account");
-    let to =
-        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let to = BOB_ID.clone();
     let to = to_bytes(&to).expect("encode account");
     // Wrong type: Name TLV instead of AssetDefinitionId
     let wrong: Name = "not_an_asset".parse().unwrap();
@@ -94,8 +88,7 @@ fn wrong_type_for_asset_def_rejected() {
 fn wrong_type_for_set_account_detail_value_rejected() {
     let program = program_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL);
     let mut vm = IVM::new(u64::MAX);
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority.clone()));
     let acc_payload = to_bytes(&authority).expect("encode account");
     let acc = tlv_envelope(PointerType::AccountId as u16, &acc_payload);

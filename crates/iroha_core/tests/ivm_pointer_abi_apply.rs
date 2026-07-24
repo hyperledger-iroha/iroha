@@ -9,17 +9,13 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{
     IVM, PointerType, ProgramMetadata, encoding, instruction, kotodama::compiler::Compiler,
     syscalls as ivm_sys,
 };
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
-
-fn fixture_account(hex_public_key: &str) -> AccountId {
-    let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(public_key)
-}
 
 fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
@@ -62,10 +58,8 @@ fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT
-    let from =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-    let to =
-        fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+    let from = ALICE_ID.clone();
+    let to = BOB_ID.clone();
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
@@ -404,8 +398,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let domain_id = DomainId::parse_fully_qualified(&domain_raw).expect("valid domain");
     let ratio: u64 = ratio_raw.parse().expect("valid ratio");
 
-    let authority =
-        fixture_account("ed0120CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
+    let authority = ALICE_ID.clone();
     let compiler = Compiler::new();
     let src = format!(
         r#"

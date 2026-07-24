@@ -134,8 +134,10 @@ fn account(domain: &str, public_key: &str) -> AccountId {
     AccountId::new(public_key)
 }
 
-const ACCOUNT_A_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const ACCOUNT_A_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ACCOUNT_B_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+const PORTAL_CALLER_PUBLIC_KEY: &str =
+    "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const TEST_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
 fn parse_account_literal(raw: &str) -> AccountId {
@@ -221,10 +223,7 @@ fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller = account(
-        "default",
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
-    );
+    let caller = account("default", PORTAL_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
 
     let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
@@ -310,10 +309,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller = account(
-        "default",
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
-    );
+    let caller = account("default", PORTAL_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
 
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);

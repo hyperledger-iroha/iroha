@@ -102,12 +102,12 @@ prover የስሪት መለያውን ሲያስፈጽም የወደፊት ስሪቶ
 | `ivm::host` & ሙከራዎች | የኮር/ነባሪ አስተናጋጆች `transfer_v1`ን እንደ ባች አባሪ አድርገው ወሰናቸው ገባሪ በሆነበት ጊዜ፣ ላዩን `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`፣ እና የይስሙላ WSV አስተናጋጅ ማቋቋሚያ ግቤቶችን ከመፈጸማቸው በፊት የማገገሚያ ሙከራዎች ወሳኙን ሚዛን ሊያረጋግጡ ይችላሉ። ዝመናዎች።【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | ኢሚት `TransferTranscript` ከግዛቱ ሽግግር በኋላ የ`FastpqTransitionBatch` መዝገቦችን በግልፅ `public_inputs` በ `StateBlock::capture_exec_witness` ጊዜ ይገንቡ እና የ FASTPQ prover ሌይን ያሂዱ ስለዚህም ሁለቱም Torii/CLIonic መሳሪያ ይቀበላሉ `TransitionBatch` ግብዓቶች. `TransferAssetBatch` ቡድኖች በቅደም ተከተል ወደ አንድ ግልባጭ ያስተላልፋሉ፣ የፖሲዶን ዳይጀስት ለብዙ-ዴልታ ስብስቦች በመተው መግብር በወሳኝ ሁኔታ ግቤቶችን ይደግማል። |
 | `fastpq_prover` | `gadgets::transfer` አሁን የብዝሃ-ዴልታ ግልባጮችን (ሚዛን አርቲሜቲክ + ፖሲዶን ዲጀስት) እና የተዋቀሩ ምስክሮችን (ቦታ ያዥ የተጣመሩ SMT ብሎቦችን ጨምሮ) ለእቅድ አውጪው (`crates/fastpq_prover/src/gadgets/transfer.rs`) ያረጋግጣል። `trace::build_trace` ግልባጭዎቹን ከባች ሜታዳታ ውጪ ያዘጋጃል፣የጠፋውን የ`transfer_transcripts` ክፍያ ጭነት ውድቅ ያደርጋል፣የተረጋገጡትን ምስክሮች ከ `Trace::transfer_witnesses` ጋር አያይዘዋል፣እና `TracePolynomialData::transfer_plan()` የተቀናጀውን ፕላን ህያው ያደርገዋል። (`crates/fastpq_prover/src/trace.rs`)። የረድፍ ቆጠራ ሪግሬሽን ማሰሪያው አሁን በ`fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) በኩል ይላካል፣ እስከ 65536 የታሸጉ ረድፎችን ይሸፍናል፣ የተጣመረው የኤስኤምቲ ሽቦ ግን ከTF-3 ባች አጋዥ ምእራፍ ጀርባ ይቆያል (ቦታ ያዢዎች የመከታተያ አቀማመጥ እስኪያቆዩ ድረስ)። |
-| Kotodama | የ`transfer_batch((from,to,asset,amount), …)` ረዳትን ወደ `transfer_v1_batch_begin`፣ ተከታታይ የ`transfer_asset` ጥሪዎች እና `transfer_v1_batch_end` ዝቅ ያደርጋል። እያንዳንዱ tuple ክርክር `(AccountId, AccountId, AssetDefinitionId, int)` ቅርጽ መከተል አለበት; ነጠላ ዝውውሮች ነባሩን ግንበኛ ያቆያሉ። |
+| Kotodama | የ`transfer_batch((from,to,asset,amount), …)` ረዳትን ወደ `transfer_v1_batch_begin`፣ ተከታታይ የ`transfer_asset` ጥሪዎች እና `transfer_v1_batch_end` ዝቅ ያደርጋል። እያንዳንዱ tuple ክርክር `(AccountId, AccountId, AssetDefinitionId, quantity)` ቅርጽ መከተል አለበት; ነጠላ ዝውውሮች ነባሩን ግንበኛ ያቆያሉ። |
 
 ምሳሌ Kotodama አጠቃቀም፡-
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

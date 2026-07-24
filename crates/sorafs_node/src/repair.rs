@@ -5683,7 +5683,7 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -5953,7 +5953,7 @@ mod tests {
         let config =
             enable_repair_config(RepairConfig::default()).with_default_state_dir(&temp_path);
         let manager = RepairManager::new_with_config(config.clone());
-        let auditor_account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+        let auditor_account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 
         manager
             .record_auditor_nonce(auditor_account, 42)
@@ -7845,7 +7845,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.events[0].actor.as_deref(),
-            Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            Some("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         );
         assert_eq!(snapshot.events[1].actor.as_deref(), Some("worker-e"));
         assert_eq!(snapshot.events[2].actor.as_deref(), Some("worker-e"));

@@ -14,7 +14,7 @@ Layout (current)
   - 7: `vector_length: u8`
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
-  - 17..49: `abi_hash: [u8; 32]` (canonical descriptor hash for `abi_version`)
+  - 17..49: `abi_hash: [u8; 32]` (Iroha Hash v1 commitment to the canonical descriptor for `abi_version`)
 <!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
@@ -22,9 +22,10 @@ Mode bits
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
-- `abi_hash`: authenticated SHA-256 commitment to the exact canonical ABI
-  descriptor selected by `abi_version`; admission validates it before prefix or
-  instruction decoding.
+- `abi_hash`: authenticated Iroha Hash v1 commitment (Blake2b-256 with the
+  final byte's least-significant bit set to 1) to the exact canonical ABI
+  descriptor selected by `abi_version`; admission validates it before prefix
+  or instruction decoding.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 selects the runtime default).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -114,7 +115,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 98679112b5a065a4dc962c5cfe128d0c545ed948f915ea8804767d369e4ef64f |
+| ABI v1 | 38823fb30c83cbf4a47f8898de1a7d7ec153a14f2b76c3d0b3461c620083b6b3 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

@@ -3762,6 +3762,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 },
                 BOB_ID.clone(),
             ))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
     };
@@ -4311,6 +4312,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                             InstructionBox::from(forward_swap),
                             InstructionBox::from(reverse_swap),
                         ],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
                         Metadata::default(),
                     );
                     let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();

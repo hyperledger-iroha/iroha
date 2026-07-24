@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
-    instruction::wide,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
@@ -56,18 +55,9 @@ fn run_env_result(vm: &mut IVM, env: norito::json::Value) -> Result<(), VMError>
     let tlv = make_tlv(PointerType::Json as u16, &body);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    // Build a tiny program: SCALL SMARTCONTRACT_EXECUTE_INSTRUCTION; HALT
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            wide::system::SCALL,
-            syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = ivm::ProgramMetadata::default().encode();
-    prog.extend_from_slice(&code);
+    let prog = common::assemble_ledger_write_contract_syscalls(&[
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+    ]);
     vm.load_program(&prog).unwrap();
     vm.run()
 }

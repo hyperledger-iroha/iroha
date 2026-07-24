@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::proof::VerifyingKeyId;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{
@@ -71,18 +71,9 @@ fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64,
         .expect("preload json envelope");
     vm.set_register(10, Memory::INPUT_START + offset);
 
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
-    let mut program = ivm::ProgramMetadata::default().encode();
-    program.extend_from_slice(&code);
+    let program = common::assemble_ledger_write_contract_syscalls(&[
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+    ]);
     vm.load_program(&program).expect("load program");
     vm.run().expect(label);
 }
@@ -164,7 +155,7 @@ fn zk_register_shield_permissions_and_events() {
     let shield_payload = json_object([
         ("asset", json_value(&ad.to_string())),
         ("from", json_value(&alice)),
-        ("amount", json_value(&3u64)),
+        ("amount", json_value(&Quantity::from(3u64))),
         ("note_commitment", note_commitment.clone()),
         ("enc_payload", enc_payload),
     ]);
@@ -213,7 +204,7 @@ fn unshield_requires_verify_even_with_permission() {
 
     // Build Unshield instruction envelope and attempt without prior ZK_VERIFY_UNSHIELD
     use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-    let proof = ProofBox::new("halo2/ipa".into(), Vec::new());
+    let proof = ProofBox::new("halo2/ipa".into(), vec![0x01]);
     let vk_ref = VerifyingKeyId::new("halo2/ipa", "unshield_vk");
     let attach = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_ref);
     let attach_val = norito::json::to_value(&attach).expect("attach to json");
@@ -228,7 +219,7 @@ fn unshield_requires_verify_even_with_permission() {
             json_object([
                 ("asset", json_value(&ad.to_string())),
                 ("to", json_value(&alice)),
-                ("public_amount", json_value(&1u64)),
+                ("public_amount", json_value(&Quantity::from(1u64))),
                 ("inputs", inputs_val),
                 ("proof", attach_val),
                 ("root_hint", norito::json::Value::Null),
@@ -241,21 +232,16 @@ fn unshield_requires_verify_even_with_permission() {
     );
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(
-            ivm::instruction::wide::system::SCALL,
-            syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut prog = ivm::ProgramMetadata::default().encode();
-    prog.extend_from_slice(&code);
+    let prog = common::assemble_ledger_write_contract_syscalls(&[
+        syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION as u8,
+    ]);
     vm.load_program(&prog).unwrap();
     // Expect PermissionDenied due to missing verify
     let res = vm.run();
-    assert!(matches!(res, Err(ivm::VMError::PermissionDenied)));
+    assert!(
+        matches!(&res, Err(ivm::VMError::PermissionDenied)),
+        "missing verify latch must deny an otherwise valid instruction: {res:?}"
+    );
 }
 
 #[test]

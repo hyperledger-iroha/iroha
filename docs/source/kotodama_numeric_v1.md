@@ -487,10 +487,10 @@ traversal, then decodes only that authenticated snapshot.
 Pointer type IDs are:
 
 ```text
-0x0010  retired Amount (known, permanently disallowed)
+0x0010  QuantityValueV1
 0x0011  IntValueV1
 0x0012  DecimalValueV1
-0x0013  QuantityValueV1
+0x0013  unassigned (rejected as unknown)
 ```
 
 Numeric comparison and equality operate on the mathematical value after
@@ -1054,8 +1054,10 @@ use that helper or another binary floating-point projection.
 
 ABI V1 has not previously been released as a compatibility contract. This
 definition replaces every pre-release V1 numeric layout and syscall surface.
-Old ABI hashes and artifacts are rejected before execution. Retired pointer IDs
-remain reserved so they cannot be reinterpreted.
+Old ABI hashes and artifacts are rejected before execution. The numeric pointer
+surface assigns only `Quantity = 0x0010`, `Int = 0x0011`, and
+`Decimal = 0x0012`; `0x0013` is unassigned and rejected as unknown rather than
+retained as an ABI tombstone.
 
 Merge and release require:
 

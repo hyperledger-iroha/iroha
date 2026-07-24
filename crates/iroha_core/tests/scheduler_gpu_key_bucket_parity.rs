@@ -17,12 +17,12 @@ mod snapshots;
 fn run_with_gpu_bucket(
     gpu_key_bucket: bool,
     txs: Vec<SignedTransaction>,
+    alice_id: &AccountId,
+    bob_id: &AccountId,
 ) -> (String, iroha_core::state::State) {
     // Build a fresh world with a domain, two accounts, and a numeric asset definition
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
+    let domain: Domain = Domain::new(domain_id.clone()).build(alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -30,9 +30,9 @@ fn run_with_gpu_bucket(
         ),
         NumericSpec::default(),
     )
-    .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    .build(alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -67,7 +67,7 @@ fn run_with_gpu_bucket(
 #[test]
 fn scheduler_gpu_key_bucket_parity() {
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -88,7 +88,7 @@ fn scheduler_gpu_key_bucket_parity() {
             "k1".parse().unwrap(),
             iroha_primitives::json::Json::new("v1"),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -99,7 +99,7 @@ fn scheduler_gpu_key_bucket_parity() {
             "dk".parse().unwrap(),
             iroha_primitives::json::Json::new(3u32),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         // Mint/Transfer on same asset to induce a dependency edge
         TransactionBuilder::new(
             chain_id.clone(),
@@ -107,7 +107,7 @@ fn scheduler_gpu_key_bucket_parity() {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         TransactionBuilder::new(
             chain_id.clone(),
             alice_id.clone(),
@@ -118,7 +118,7 @@ fn scheduler_gpu_key_bucket_parity() {
             5_u32,
             bob_id.clone(),
         )])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
         // Burn on bob to touch a different key
         TransactionBuilder::new(
             chain_id.clone(),
@@ -126,12 +126,12 @@ fn scheduler_gpu_key_bucket_parity() {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        .sign(alice_keypair.private_key()),
     ];
 
     // Compare with gpu_key_bucket OFF vs ON
-    let (json_off, state_off) = run_with_gpu_bucket(false, txs.clone());
-    let (json_on, state_on) = run_with_gpu_bucket(true, txs);
+    let (json_off, state_off) = run_with_gpu_bucket(false, txs.clone(), &alice_id, &bob_id);
+    let (json_on, state_on) = run_with_gpu_bucket(true, txs, &alice_id, &bob_id);
 
     assert_eq!(
         json_off, json_on,

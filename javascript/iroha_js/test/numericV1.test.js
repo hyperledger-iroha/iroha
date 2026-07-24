@@ -91,7 +91,7 @@ test("numeric V1 frames and pointer envelopes roundtrip all domains", () => {
       NumericV1.encodeIntEnvelope, NumericV1.decodeIntEnvelope],
     [0x0012, new KotodamaDecimal("-1.25"), NumericV1.encodeDecimalFrame, NumericV1.decodeDecimalFrame,
       NumericV1.encodeDecimalEnvelope, NumericV1.decodeDecimalEnvelope],
-    [0x0013, new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
+    [0x0010, new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
       NumericV1.encodeQuantityEnvelope, NumericV1.decodeQuantityEnvelope],
   ];
   for (const [pointerType, value, encodeFrame, decodeFrame, encodeEnvelope, decodeEnvelope] of values) {
@@ -120,11 +120,11 @@ test("numeric V1 rejects noncanonical and authenticated mutations", () => {
   badHash[badHash.length - 1] ^= 1;
   assert.throws(() => NumericV1.decodeIntEnvelope(badHash), { code: "payload_hash_mismatch" });
 
-  const retired = NumericV1.encodeIntEnvelope(1n).slice();
-  retired[0] = 0;
-  retired[1] = 0x10;
-  retired[2] = 2;
-  assert.throws(() => NumericV1.decodeIntEnvelope(retired), { code: "type_not_allowed" });
+  const unassigned = NumericV1.encodeIntEnvelope(1n).slice();
+  unassigned[0] = 0;
+  unassigned[1] = 0x13;
+  unassigned[2] = 2;
+  assert.throws(() => NumericV1.decodeIntEnvelope(unassigned), { code: "unknown_type" });
 
   const knownWrong = NumericV1.encodeIntEnvelope(1n).slice();
   knownWrong[0] = 0;

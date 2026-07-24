@@ -1,7 +1,7 @@
 //! Lossless, recovering Kotodama lexer.
 
 use crate::{
-    diagnostic::{Diagnostic, DiagnosticPhase, SourcePosition, SourceSpan},
+    diagnostic::{Diagnostic, DiagnosticFix, DiagnosticPhase, SourcePosition, SourceSpan},
     lexer::{TokenKind, V1_PUNCTUATION_KINDS, v1_keyword_kind},
     source::{FrontendBudget, SourceFile, TextRange},
 };
@@ -83,17 +83,31 @@ fn keyword_kind(text: &str) -> SyntaxKind {
 struct Scanner<'source> {
     text: &'source str,
     pos: usize,
+    previous_significant: Option<SyntaxKind>,
 }
 
 #[derive(Clone, Copy)]
 struct LexicalError {
     code: &'static str,
     message: &'static str,
+    strip_numeric_suffix: bool,
 }
 
 impl LexicalError {
     const fn new(code: &'static str, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            strip_numeric_suffix: false,
+        }
+    }
+
+    fn retired_numeric_suffix(suffix: &str) -> Self {
+        Self {
+            code: "E_RETIRED_NUMERIC_SUFFIX",
+            message: "numeric literal suffixes are not part of Kotodama V1; use an unsuffixed literal in an int, decimal, or quantity context",
+            strip_numeric_suffix: matches!(suffix, "amt" | "qty"),
+        }
     }
 }
 
@@ -109,6 +123,7 @@ impl<'source> Scanner<'source> {
         Self {
             text: source.text(),
             pos: 0,
+            previous_significant: None,
         }
     }
 
@@ -167,7 +182,7 @@ impl<'source> Scanner<'source> {
     }
 
     /// Scan an unsuffixed integer or exact base-10 decimal token.
-    fn scan_number(&mut self) -> ScannedNumber {
+    fn scan_number(&mut self, tuple_index: bool) -> ScannedNumber {
         if self.starts_with("0x") || self.starts_with("0X") {
             self.pos += 2;
             while self
@@ -196,11 +211,11 @@ impl<'source> Scanner<'source> {
         }
 
         let mut has_fraction = false;
-        if self.starts_with(".") {
+        if self.starts_with(".") && !tuple_index {
             let after_dot = self.rest()[1..].chars().next();
             if after_dot.is_some_and(|character| character.is_ascii_digit() || character == '_') {
                 has_fraction = true;
-            } else {
+            } else if !tuple_index {
                 self.bump();
                 return ScannedNumber::Invalid(LexicalError::new(
                     "E_DECIMAL_MALFORMED",
@@ -244,10 +259,10 @@ impl<'source> Scanner<'source> {
             .current()
             .is_some_and(|character| character.is_ascii_alphabetic())
         {
+            let suffix_start = self.pos;
             self.scan_identifier();
-            return ScannedNumber::Invalid(LexicalError::new(
-                "E_RETIRED_NUMERIC_SUFFIX",
-                "numeric literal suffixes are not part of Kotodama V1; use an unsuffixed literal in an int, decimal, or quantity context",
+            return ScannedNumber::Invalid(LexicalError::retired_numeric_suffix(
+                &self.text[suffix_start..self.pos],
             ));
         }
         if has_fraction || has_exponent {
@@ -262,10 +277,10 @@ impl<'source> Scanner<'source> {
             .current()
             .is_some_and(|character| character.is_ascii_alphabetic())
         {
+            let suffix_start = self.pos;
             self.scan_identifier();
-            ScannedNumber::Invalid(LexicalError::new(
-                "E_RETIRED_NUMERIC_SUFFIX",
-                "numeric literal suffixes are not part of Kotodama V1; use an unsuffixed literal in an int, decimal, or quantity context",
+            ScannedNumber::Invalid(LexicalError::retired_numeric_suffix(
+                &self.text[suffix_start..self.pos],
             ))
         } else {
             ScannedNumber::Integer
@@ -432,7 +447,8 @@ impl<'source> Scanner<'source> {
                 (kind, None)
             }
         } else if character.is_ascii_digit() {
-            match self.scan_number() {
+            let tuple_index = self.previous_significant == Some(SyntaxKind::Dot);
+            match self.scan_number(tuple_index) {
                 ScannedNumber::Integer => (SyntaxKind::Number, None),
                 ScannedNumber::Decimal => (SyntaxKind::Decimal, None),
                 ScannedNumber::Invalid(error) => (SyntaxKind::ErrorToken, Some(error)),
@@ -461,6 +477,9 @@ impl<'source> Scanner<'source> {
             )
         };
         let end = self.pos;
+        if !kind.is_trivia() && kind != SyntaxKind::Eof {
+            self.previous_significant = Some(kind);
+        }
         (
             GreenToken::source(
                 kind,
@@ -574,12 +593,21 @@ pub fn lex(source: &SourceFile, budget: FrontendBudget) -> Lexed {
             _ => {}
         }
         if let Some(error) = lexical_error {
-            record_diagnostic(
-                &mut diagnostics,
-                &mut omitted_diagnostics,
-                budget,
-                diagnostic(source, error.code, error.message, token.range),
-            );
+            let mut emitted = diagnostic(source, error.code, error.message, token.range);
+            if error.strip_numeric_suffix {
+                let literal = source
+                    .slice(token.range)
+                    .expect("scanner token range must remain within the source");
+                let replacement = literal
+                    .strip_suffix("amt")
+                    .or_else(|| literal.strip_suffix("qty"))
+                    .expect("numeric suffix fix is only enabled for amt or qty");
+                emitted.fix = emitted.primary_span.clone().map(|span| DiagnosticFix {
+                    span,
+                    replacement: replacement.to_owned(),
+                });
+            }
+            record_diagnostic(&mut diagnostics, &mut omitted_diagnostics, budget, emitted);
         }
         let end = token.kind == SyntaxKind::Eof;
         tokens.push(token);
@@ -702,12 +730,57 @@ mod tests {
     }
 
     #[test]
+    fn chained_tuple_projection_keeps_following_dots_as_punctuation() {
+        let source = SourceFile::new(SourceId(0), "tuple-projection.ko", "value.0.1.field");
+        let lexed = lex(&source, FrontendBudget::v1());
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let kinds = lexed
+            .tokens
+            .iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                SyntaxKind::Ident,
+                SyntaxKind::Dot,
+                SyntaxKind::Number,
+                SyntaxKind::Dot,
+                SyntaxKind::Number,
+                SyntaxKind::Dot,
+                SyntaxKind::Ident,
+                SyntaxKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn comment_period_does_not_turn_a_following_decimal_into_a_tuple_index() {
+        let source = SourceFile::new(
+            SourceId(0),
+            "comment-decimal.ko",
+            "let value = // exact.\n  1.25;",
+        );
+        let lexed = lex(&source, FrontendBudget::v1());
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        assert!(
+            lexed
+                .tokens
+                .iter()
+                .any(|token| token.kind == SyntaxKind::Decimal
+                    && source.slice(token.range) == Some("1.25"))
+        );
+    }
+
+    #[test]
     fn decimal_and_retired_suffix_failures_have_dedicated_codes() {
         for (spelling, code) in [
             ("1.amt", "E_DECIMAL_MALFORMED"),
             ("1e", "E_DECIMAL_EXPONENT"),
             ("1.25amt", "E_RETIRED_NUMERIC_SUFFIX"),
+            ("1.25qty", "E_RETIRED_NUMERIC_SUFFIX"),
             ("0x10amt", "E_RETIRED_NUMERIC_SUFFIX"),
+            ("0x10qty", "E_RETIRED_NUMERIC_SUFFIX"),
         ] {
             let source = SourceFile::new(SourceId(0), "invalid-decimal.ko", spelling);
             let lexed = lex(&source, FrontendBudget::v1());
@@ -717,8 +790,25 @@ mod tests {
     }
 
     #[test]
-    fn retired_numeric_suffixes_do_not_offer_compatibility_fixes() {
-        for spelling in ["1i64", "1u128", "1amt", "1.25amt"] {
+    fn amount_and_quantity_suffixes_offer_unsuffixed_literal_fixes() {
+        for (spelling, replacement) in [
+            ("1amt", "1"),
+            ("1.25amt", "1.25"),
+            ("1qty", "1"),
+            ("1.25qty", "1.25"),
+        ] {
+            let source = SourceFile::new(SourceId(0), "retired-suffix.ko", spelling);
+            let lexed = lex(&source, FrontendBudget::v1());
+            assert_eq!(lexed.diagnostics[0].code, "E_RETIRED_NUMERIC_SUFFIX");
+            let fix = lexed.diagnostics[0]
+                .fix
+                .as_ref()
+                .expect("amt and qty suffixes have a safe removal fix");
+            assert_eq!(fix.span.byte_range, Some(lexed.tokens[0].range));
+            assert_eq!(fix.replacement, replacement);
+        }
+
+        for spelling in ["1i64", "1u128"] {
             let source = SourceFile::new(SourceId(0), "retired-suffix.ko", spelling);
             let lexed = lex(&source, FrontendBudget::v1());
             assert_eq!(lexed.diagnostics[0].code, "E_RETIRED_NUMERIC_SUFFIX");

@@ -131,7 +131,7 @@ fn duplicate_proof_in_same_block_is_rejected() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -212,7 +212,7 @@ fn verifyproof_isi_records_proof() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -257,7 +257,7 @@ fn verifyproof_rejects_when_exceeding_size_cap() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new_for_testing(world, kura, query_handle);
 
     let mut zk_cfg = state.zk.clone();
     zk_cfg.max_proof_size_bytes = 3;
@@ -305,7 +305,7 @@ fn verifyproof_rejects_when_block_cap_hit() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
+    let mut state = State::new_for_testing(world, kura, query_handle);
 
     let mut zk_cfg = state.zk.clone();
     zk_cfg.max_confidential_ops_per_block = 1;
@@ -367,7 +367,7 @@ fn preverify_rejects_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -410,7 +410,7 @@ fn preverify_rejects_proof_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -440,7 +440,7 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -476,7 +476,7 @@ fn preverify_rejects_pending_production_backend_labels_before_lookup() {
         let world = test_world::world_with_test_accounts();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -518,7 +518,7 @@ fn preverify_rejects_production_claim_backend_labels_before_lookup() {
         let world = test_world::world_with_test_accounts();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -555,7 +555,7 @@ fn preverify_rejects_commitment_only_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -587,7 +587,7 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -639,7 +639,7 @@ fn preverify_rejects_pending_production_verifier_records_from_legacy_state() {
         let world = test_world::world_with_test_accounts();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -666,11 +666,11 @@ fn preverify_rejects_pending_production_verifier_records_from_legacy_state() {
             let mut seed_stx = block.transaction();
             seed_stx
                 .world
-                .verifying_keys
+                .verifying_keys_mut_for_testing()
                 .insert(vk_id.clone(), vk_record.clone());
             seed_stx
                 .world
-                .verifying_keys_by_circuit
+                .verifying_keys_by_circuit_mut_for_testing()
                 .insert((vk_record.circuit_id.clone(), vk_record.version), vk_id);
             seed_stx.apply();
         }
@@ -697,7 +697,7 @@ fn verifyproof_requires_registered_verifying_key() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -722,7 +722,7 @@ fn verifyproof_rejects_proof_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -746,7 +746,7 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -771,7 +771,7 @@ fn verifyproof_rejects_unsupported_backend_before_lookup() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -795,7 +795,7 @@ fn verifyproof_rejects_inactive_registered_verifying_key() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -833,7 +833,7 @@ fn verifyproof_rejects_envelope_vk_hash_mismatch() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -873,7 +873,7 @@ fn verifyproof_rejects_duplicate_proof_record() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -915,7 +915,7 @@ fn preverify_rejects_empty_proof_as_malformed() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -973,7 +973,7 @@ fn preverify_rejects_proof_too_big() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
@@ -1033,7 +1033,7 @@ fn verifyproof_records_rejected_malformed_halo2_envelope() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world, kura, query_handle);
+    let state = State::new_for_testing(world, kura, query_handle);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);

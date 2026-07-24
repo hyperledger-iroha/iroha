@@ -5686,7 +5686,10 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "noritoDecodeBlockProofs"
+    "encodeAccountIdNoritoValue"
+  | "encodeAssetDefinitionIdNoritoValue"
+  | "encodeNumericNoritoValue"
+  | "noritoDecodeBlockProofs"
   | "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
   | "noritoEncodeInstruction"
@@ -13583,6 +13586,21 @@ export function sm2FixtureFromSeed(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
 ): Sm2Fixture;
 
+/** @internal Exact compact-length AccountId value encoding for typed policy codecs. */
+export function encodeAccountIdNoritoValue(
+  value: string,
+  context?: string,
+): Uint8Array;
+/** @internal Exact compact-length AssetDefinitionId value encoding for typed policy codecs. */
+export function encodeAssetDefinitionIdNoritoValue(
+  value: string,
+  context?: string,
+): Uint8Array;
+/** @internal Exact compact-length Numeric value encoding for typed policy codecs. */
+export function encodeNumericNoritoValue(
+  value: NumericLike,
+  context?: string,
+): Uint8Array;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -15408,6 +15426,7 @@ export const NumericV1: {
   readonly INT_MAX: bigint;
   readonly MAX_MANTISSA_BYTES: 64;
   readonly MAX_SCALE: 28;
+  // BEGIN GENERATED: kotodama-v1-numeric-policy
   readonly schemas: {
     readonly int: {
       readonly name: "iroha.numeric.IntValueV1";
@@ -15424,10 +15443,11 @@ export const NumericV1: {
     readonly quantity: {
       readonly name: "iroha.numeric.QuantityValueV1";
       readonly hash: string;
-      readonly pointerType: 0x0013;
+      readonly pointerType: 0x0010;
       readonly scaled: true;
     };
   };
+  // END GENERATED: kotodama-v1-numeric-policy
   encodeIntFrame(value: KotodamaInt | bigint | string): Uint8Array;
   encodeDecimalFrame(value: KotodamaDecimal | string): Uint8Array;
   encodeQuantityFrame(value: KotodamaQuantity | string): Uint8Array;

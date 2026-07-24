@@ -63,7 +63,6 @@ test("ToriiClient rejects every noncanonical canonical-auth credential before fe
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 11) });
   const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
   const invalidCredentials = [
-    targetAccountId,
     ` ${AUTH_ALIAS}`,
     `${AUTH_ALIAS} `,
     "Operator-1@hbl.sbp",
@@ -84,7 +83,7 @@ test("ToriiClient rejects every noncanonical canonical-auth credential before fe
         error?.name === "ValidationError" &&
         error?.code === ValidationErrorCode.INVALID_OBJECT &&
         error?.path === "canonicalAuth.accountId" &&
-        /exact canonical ASCII account alias/u.test(error.message),
+        /exact canonical I105 account or ASCII account alias/u.test(error.message),
       accountId,
     );
   }

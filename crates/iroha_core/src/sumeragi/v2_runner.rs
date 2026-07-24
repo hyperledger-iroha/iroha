@@ -868,6 +868,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             recovered_applied_height,
             Arc::clone(&output_guard),
         )?;
+        let mut committed_lane_status_publisher = CommittedLaneStatusPublisher::default();
+        committed_lane_status_publisher.publish_if_changed(&lane_work);
         // Seed executor lock ownership from replay before consuming startup
         // effects. Otherwise a recovered lock would look like a live first-lock
         // transition and could retire safe work reconstructed from the same WAL.
@@ -927,6 +929,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let mut admitted_discovered_commit_qc = false;
 
         let finality = loop {
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
             cleanup_supervisor.reap_finished();
             if output_guard.restart_required() {
                 return Err(V2RunnerError::RestartRequired);
@@ -1136,6 +1139,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .map_err(V2RunnerError::Service)?;
             }
 
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
             if executor.ready_to_finish() {
                 let _ = retry_exact_output_and_apply_sidecar_admissions(
                     &mut lane_work,
@@ -1144,6 +1148,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
                 let _ = lane_work.service_next_historical_recovery()?;
                 if lane_work.has_pending_historical_recovery() {
+                    committed_lane_status_publisher.publish_if_changed(&lane_work);
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }
@@ -1161,6 +1166,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     lane_work.durable_lane_rollover_authority(&durable_artifact)?
                 else {
                     dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
+                    committed_lane_status_publisher.publish_if_changed(&lane_work);
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 };
@@ -1187,6 +1193,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     )
                     .map_err(V2RunnerError::Service)?;
                 if lane_work.has_pending_committed_output_handoff() {
+                    committed_lane_status_publisher.publish_if_changed(&lane_work);
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }
@@ -1224,6 +1231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                         "Sumeragi v2 finalized with retained local cleanup state"
                     );
                 }
+                committed_lane_status_publisher.publish_if_changed(&lane_work);
                 break (receipt, artifact);
             }
 
@@ -1233,6 +1241,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 // progress until their certificate and receipt are durable;
                 // the recovery-specific executor rejects every
                 // network-producing global reducer effect.
+                committed_lane_status_publisher.publish_if_changed(&lane_work);
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
             }
@@ -1257,6 +1266,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             )?;
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
 
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
         };
 
@@ -1306,6 +1316,38 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
         staged_genesis_nexus_amx_context = None;
+    }
+}
+
+#[derive(Default)]
+pub(super) struct CommittedLaneStatusPublisher {
+    published_revision: Option<(u64, u64, u64)>,
+}
+
+impl CommittedLaneStatusPublisher {
+    pub(super) fn publish_if_changed(&mut self, lane_work: &V2LaneWorkAdapter) -> bool {
+        self.publish_if_changed_with(
+            || lane_work.committed_lane_block_status_revision(),
+            || lane_work.committed_lane_block_status_snapshot(),
+        )
+    }
+
+    fn publish_if_changed_with(
+        &mut self,
+        mut observe_revision: impl FnMut() -> (u64, u64, u64),
+        project: impl FnOnce() -> Vec<super::status::CommittedLaneBlockSnapshot>,
+    ) -> bool {
+        let revision = observe_revision();
+        if self.published_revision == Some(revision) {
+            return false;
+        }
+        let snapshot = project();
+        if observe_revision() != revision {
+            return false;
+        }
+        super::status::set_committed_lane_blocks(snapshot);
+        self.published_revision = Some(revision);
+        true
     }
 }
 
@@ -2983,6 +3025,48 @@ mod tests {
             CertifiedMergeSidecarMessage,
         },
     };
+
+    #[test]
+    fn committed_lane_status_publisher_retries_revision_drift_without_publication() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let revision = Cell::new((1_u64, 1_u64, 1_u64));
+        let mut publisher = CommittedLaneStatusPublisher::default();
+
+        assert!(publisher.publish_if_changed_with(|| revision.get(), Vec::new));
+        assert_eq!(publisher.published_revision, Some((1, 1, 1)));
+
+        revision.set((2, 1, 1));
+        let projection_ran = Cell::new(false);
+        assert!(
+            !publisher.publish_if_changed_with(
+                || revision.get(),
+                || {
+                    projection_ran.set(true);
+                    revision.set((3, 1, 1));
+                    Vec::new()
+                },
+            ),
+            "a projection spanning two revisions must not replace the global status root"
+        );
+        assert!(projection_ran.get());
+        assert_eq!(
+            publisher.published_revision,
+            Some((1, 1, 1)),
+            "revision drift must retain the prior acknowledgement for retry"
+        );
+        assert!(
+            super::super::status::committed_lane_blocks_snapshot().is_empty(),
+            "revision drift must retain the prior global status root"
+        );
+
+        assert!(
+            publisher.publish_if_changed_with(|| revision.get(), Vec::new),
+            "the next stable runner edge must retry the newer revision"
+        );
+        assert_eq!(publisher.published_revision, Some((3, 1, 1)));
+        super::super::status::clear_v2_status();
+    }
 
     #[test]
     fn bounded_sidecar_admission_turn_applies_only_its_budget() {

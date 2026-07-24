@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - რეგენერაცია: `make docs-syscalls`
   - შეამოწმეთ მხოლოდ: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI ცხრილი (crates/ivm/docs/syscalls.md)
-  - შეამოწმეთ მხოლოდ: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - შეამოწმეთ მხოლოდ: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - განაახლეთ გენერირებული სექცია (და კოდი დოკუმენტების ცხრილი): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer-ABI ცხრილები (crates/ivm/docs/pointer_abi.md და ivm.md)
   - შეამოწმეთ მხოლოდ: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

@@ -151,7 +151,7 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -179,7 +179,7 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
             amount: Some(Quantity::from(100_u64)),
         },

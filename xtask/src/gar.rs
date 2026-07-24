@@ -493,7 +493,7 @@ mod tests {
         fs::create_dir_all(&acks_dir)?;
 
         let operator =
-            AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
         let other_operator =

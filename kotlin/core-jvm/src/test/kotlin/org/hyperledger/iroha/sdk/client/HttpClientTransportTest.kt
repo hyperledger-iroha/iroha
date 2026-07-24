@@ -44,6 +44,8 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private val canonicalAliceAccountId =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     private val validEd25519PublicKeyHex = TestEd25519Keys.publicKeyHex(0x22)
     private val ed25519IdentityKeyHex = "01" + "00".repeat(31)
 
@@ -2576,7 +2578,7 @@ class HttpClientTransportTest {
             body = """
                 {
                   "alias": "alice@universal",
-                  "account_id": "aid:alice-123",
+                  "account_id": "$canonicalAliceAccountId",
                   "index": 42,
                   "source": "directory"
                 }
@@ -2592,7 +2594,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertEquals("alice@universal", parsed.alias)
-        assertEquals("aid:alice-123", parsed.accountId)
+        assertEquals(canonicalAliceAccountId, parsed.accountId)
         assertEquals(BigInteger.valueOf(42), parsed.index)
         assertEquals("directory", parsed.source)
 
@@ -2613,7 +2615,7 @@ class HttpClientTransportTest {
             body = """
                 {
                   "alias": "merchant@private",
-                  "account_id": "aid:merchant-123",
+                  "account_id": "$canonicalAliceAccountId",
                   "source": "world_state"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
@@ -2633,7 +2635,7 @@ class HttpClientTransportTest {
         val response = transport.resolveAccountAlias("merchant@private", auth).join()
 
         assertTrue(response.isPresent)
-        assertEquals("aid:merchant-123", response.get().accountId)
+        assertEquals(canonicalAliceAccountId, response.get().accountId)
         val request = assertNotNull(executor.lastRequest)
         assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
@@ -3080,7 +3082,7 @@ class HttpClientTransportTest {
             body = """
                 {
                   "alias": "banking@centralbank.universal",
-                  "account_id": "aid:banking-123",
+                  "account_id": "$canonicalAliceAccountId",
                   "source": "rekey_record"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
@@ -3095,7 +3097,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertEquals("banking@centralbank.universal", parsed.alias)
-        assertEquals("aid:banking-123", parsed.accountId)
+        assertEquals(canonicalAliceAccountId, parsed.accountId)
         assertNull(parsed.index)
         assertEquals("rekey_record", parsed.source)
     }
@@ -3724,8 +3726,7 @@ class HttpClientTransportTest {
             opaqueId = "opaque:" + "11".repeat(32),
             receiptHash = "22".repeat(32),
             uaid = "uaid:" + "33".repeat(31) + "35",
-            accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x11), "ed25519")
-                .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         )
 
     private fun sampleIdentifierVerifierPolicy(

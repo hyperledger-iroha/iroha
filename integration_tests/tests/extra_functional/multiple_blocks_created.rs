@@ -65,6 +65,7 @@ async fn multiple_blocks_created() -> Result<()> {
                 InstructionBox::from(create_account),
                 InstructionBox::from(create_asset),
             ],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             <_>::default(),
         );
         let submit_res: eyre::Result<()> =
@@ -114,6 +115,7 @@ async fn multiple_blocks_created() -> Result<()> {
                     u64::try_from(value).expect("generated quantity fits u64"),
                     AssetId::new(asset_definition_id.clone(), account_id.clone()),
                 )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 <_>::default(),
             );
             submit_handles.push(spawn_blocking(move || {

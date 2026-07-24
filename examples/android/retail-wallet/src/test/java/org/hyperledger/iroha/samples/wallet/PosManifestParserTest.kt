@@ -19,7 +19,7 @@ class PosManifestParserTest {
         assertEquals("pos-retail-v1", manifest.manifestId)
         assertEquals(7, manifest.sequence)
         assertEquals(
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             manifest.operator
         )
         assertEquals(1384, manifest.payloadBase64.length)

@@ -97,7 +97,7 @@ public final class NumericV1Tests {
     final NumericV1.QuantityValue quantity = NumericV1.QuantityValue.parse("1.25");
     final byte[] quantityEnvelope = NumericV1.encodeQuantityEnvelope(quantity);
     assertEquals(0x00, quantityEnvelope[0] & 0xFF);
-    assertEquals(0x13, quantityEnvelope[1] & 0xFF);
+    assertEquals(0x10, quantityEnvelope[1] & 0xFF);
     assertEquals(quantity, NumericV1.decodeQuantityFrame(NumericV1.encodeQuantityFrame(quantity)));
     assertEquals(quantity, NumericV1.decodeQuantityEnvelope(quantityEnvelope));
 
@@ -122,11 +122,11 @@ public final class NumericV1Tests {
     badHash[badHash.length - 1] ^= 1;
     assertCode(NumericV1.ErrorCode.PAYLOAD_HASH_MISMATCH, () -> NumericV1.decodeIntEnvelope(badHash));
 
-    final byte[] retired = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
-    retired[0] = 0;
-    retired[1] = 0x10;
-    retired[2] = 2;
-    assertCode(NumericV1.ErrorCode.TYPE_NOT_ALLOWED, () -> NumericV1.decodeIntEnvelope(retired));
+    final byte[] unassigned = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
+    unassigned[0] = 0;
+    unassigned[1] = 0x13;
+    unassigned[2] = 2;
+    assertCode(NumericV1.ErrorCode.UNKNOWN_TYPE, () -> NumericV1.decodeIntEnvelope(unassigned));
 
     final byte[] knownWrong = NumericV1.encodeIntEnvelope(NumericV1.IntValue.parse("1"));
     knownWrong[0] = 0;

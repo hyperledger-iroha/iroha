@@ -9,8 +9,8 @@ use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use ivm::{
-    EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType, IVM, IVMHost,
-    PointerType, ProgramMetadata, syscalls,
+    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+    EmbeddedStateType, IVM, IVMHost, PointerType, ProgramMetadata, VMError, syscalls,
 };
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -47,7 +47,21 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
-        entrypoints: Vec::new(),
+        entrypoints: vec![EmbeddedEntrypointDescriptor {
+            name: "inspect".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
         states: vec![EmbeddedStateDescriptor {
             name: name.to_owned(),
             ty: EmbeddedStateType::StateMap {
@@ -59,6 +73,7 @@ fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
     };
     let mut artifact = ProgramMetadata::default().encode();
     artifact.extend_from_slice(&interface.encode_section());
+    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     vm.load_program(&artifact)
         .expect("load schema-bound StateMap metadata");
 }
@@ -154,6 +169,60 @@ fn schema_encode_decode_roundtrip() {
     let original: norito::json::Value =
         norito::json::from_str(json.get()).expect("parse original schema json");
     assert_eq!(roundtrip, original);
+}
+
+#[test]
+fn production_schema_host_rejects_unknown_and_malformed_inputs_for_both_abis() {
+    let unknown_name: Name = "UnknownSchema".parse().expect("unknown schema name");
+    let unknown_name_body = norito::to_bytes(&unknown_name).expect("encode unknown schema name");
+    let unknown_json =
+        Json::from_str_norito(r#"{"value":1}"#).expect("parse adversarial generic JSON");
+    let unknown_json_body = norito::to_bytes(&unknown_json).expect("encode generic JSON");
+
+    for syscall in [
+        syscalls::SYSCALL_SCHEMA_ENCODE,
+        syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
+    ] {
+        let mut host = CoreHost::new(ALICE_ID.clone());
+        let mut vm = IVM::new(0);
+        load_metadata(&mut vm);
+        let schema_ptr =
+            preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &unknown_name_body));
+        let json_ptr = preload_input(
+            &mut vm,
+            256,
+            &make_tlv(PointerType::Json, &unknown_json_body),
+        );
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, json_ptr);
+        assert_eq!(host.syscall(syscall, &mut vm), Err(VMError::NoritoInvalid));
+        assert_eq!(vm.register(10), schema_ptr);
+        assert_eq!(vm.register(11), json_ptr);
+    }
+
+    let order_name: Name = "Order".parse().expect("known schema name");
+    let order_name_body = norito::to_bytes(&order_name).expect("encode known schema name");
+    for (schema_body, payload) in [
+        (unknown_name_body.as_slice(), unknown_json_body.as_slice()),
+        (order_name_body.as_slice(), unknown_json_body.as_slice()),
+    ] {
+        for syscall in [
+            syscalls::SYSCALL_SCHEMA_DECODE,
+            syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
+        ] {
+            let mut host = CoreHost::new(ALICE_ID.clone());
+            let mut vm = IVM::new(0);
+            load_metadata(&mut vm);
+            let schema_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, schema_body));
+            let bytes_ptr =
+                preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, payload));
+            vm.set_register(10, schema_ptr);
+            vm.set_register(11, bytes_ptr);
+            assert_eq!(host.syscall(syscall, &mut vm), Err(VMError::NoritoInvalid));
+            assert_eq!(vm.register(10), schema_ptr);
+            assert_eq!(vm.register(11), bytes_ptr);
+        }
+    }
 }
 
 #[test]

@@ -131,7 +131,7 @@ fn capacity_declaration_cli_writes_request_payload() {
     fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
 
     let request_out = temp.path().join("declaration_request.json");
-    let authority_str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let authority_str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let private_key_str = "ed25519:deadbeefcafebabe";
 
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
@@ -182,7 +182,7 @@ fn capacity_declaration_cli_reads_private_key_from_file() {
 
     let request_out = temp.path().join("declaration_request.json");
     let private_key_path = temp.path().join("capacity-private-key.txt");
-    let authority_str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let authority_str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let private_key_str = "ed25519:filedeadbeefcafebabe";
     fs::write(&private_key_path, format!("  {private_key_str}\n")).expect("write key");
 

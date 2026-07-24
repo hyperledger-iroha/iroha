@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` ובדיקות | מארחי ליבה/ברירת מחדל מתייחסים ל-`transfer_v1` כתוספת אצווה בזמן שה-scope פעיל, משטחים `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, ומארח ה-WSV המדומה מאחסן ערכים לפני ביצוע כך שמבחני רגרסיה יכולים לקבוע איזון דטרמיניסטי עדכונים.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | פלט `TransferTranscript` לאחר המעבר למצב, בנה רשומות `FastpqTransitionBatch` עם `public_inputs` מפורש במהלך `StateBlock::capture_exec_witness`, והפעל את נתיב ההוכחה של FASTPQ כך שגם Torii/CLI6 הגיבוי הכלי Canontage כניסות `TransitionBatch`. `TransferAssetBatch` מקבץ העברות רציפות לתמלול יחיד, תוך השמטת תקציר ה-poseidon עבור אצווה מרובה-דלתא, כך שהגאדג'ט יוכל לחזור על ערכים באופן דטרמיניסטי. |
 | `fastpq_prover` | `gadgets::transfer` מאמת כעת תמלילים מרובי-דלתא (חשבון איזון + תקציר פוסידון) ומציג עדים מובנים (כולל כתמי SMT מותאמים עם מצייני מיקום) עבור המתכנן (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` מפענח את התמלילים מתוך מטא-נתונים של אצווה, דוחה אצות העברה חסרות מטען `transfer_transcripts`, מצרף את העדים המאושרים ל-`Trace::transfer_witnesses`, ו-`TracePolynomialData::transfer_plan()` שומרת על כל התוכנית המתוכננת. (`crates/fastpq_prover/src/trace.rs`). רתמת הרגרסיה של ספירת השורות נשלחת כעת דרך `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`), ומכסה תרחישים של עד 65536 שורות מרופדות, בעוד שחיווט ה-SMT המזווג נשאר מאחורי אבן הדרך TF-3 של עוזר האצווה (מחזיקי מיקום מחזיקים בנחיתות של פריסת העקבות הזו). |
-| Kotodama | מוריד את העזר `transfer_batch((from,to,asset,amount), …)` ל-`transfer_v1_batch_begin`, שיחות `transfer_asset` רציפות ו-`transfer_v1_batch_end`. כל ארגומנט tuple חייב לעקוב אחר הצורה `(AccountId, AccountId, AssetDefinitionId, int)`; העברות בודדות שומרות על הקבלן הקיים. |
+| Kotodama | מוריד את העזר `transfer_batch((from,to,asset,amount), …)` ל-`transfer_v1_batch_begin`, שיחות `transfer_asset` רציפות ו-`transfer_v1_batch_end`. כל ארגומנט tuple חייב לעקוב אחר הצורה `(AccountId, AccountId, AssetDefinitionId, quantity)`; העברות בודדות שומרות על הקבלן הקיים. |
 
 דוגמה לשימוש ב-Kotodama:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

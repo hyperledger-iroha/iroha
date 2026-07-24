@@ -12,7 +12,7 @@ use crate::SerdeFormat;
 use crate::arithmetic::CurveAffine;
 use crate::helpers::{
     SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
-    write_polynomial_slice,
+    write_polynomial_slice, write_polynomial_slice_streaming,
 };
 use crate::poly::{Coeff, EvaluationDomain, LagrangeCoeff, PinnedEvaluationDomain, Polynomial};
 use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
@@ -40,6 +40,9 @@ pub use verifier::*;
 use evaluation::Evaluator;
 
 use std::io;
+
+// Version byte + domain degree + selector-compression flag + fixed-column count.
+const VERIFYING_KEY_SERIALIZED_HEADER_BYTES: usize = 1 + 4 + 1 + 4;
 
 /// This is a verifying key which allows for the verification of proofs for a
 /// particular circuit.
@@ -203,18 +206,18 @@ fn write_polynomial_vec_consuming<W: io::Write, F: SerdePrimeField, B>(
     polynomials: Vec<Polynomial<F, B>>,
     writer: &mut W,
     format: SerdeFormat,
-) {
-    writer
-        .write_all(&(polynomials.len() as u32).to_be_bytes())
-        .unwrap();
+) -> io::Result<()> {
+    writer.write_all(&(polynomials.len() as u32).to_be_bytes())?;
     for poly in polynomials {
-        poly.write(writer, format);
+        poly.write_consuming(writer, format)?;
     }
+    Ok(())
 }
 
 impl<C: CurveAffine> VerifyingKey<C> {
     fn bytes_length(&self) -> usize {
-        8 + (self.fixed_commitments.len() * C::default().to_bytes().as_ref().len())
+        VERIFYING_KEY_SERIALIZED_HEADER_BYTES
+            + (self.fixed_commitments.len() * C::default().to_bytes().as_ref().len())
             + self.permutation.bytes_length()
             + self.selectors.len()
                 * (self
@@ -382,42 +385,22 @@ where
         Ok(())
     }
 
-    /// Writes this proving key while dropping each owned field immediately
-    /// after it is serialized.
+    /// Streams a proving key without consuming it and propagates every sink error.
     ///
-    /// The byte order is exactly the same as [`Self::write`] and
-    /// [`Self::into_bytes`]. This is intended for bounded file-backed writers
-    /// that retain their first real I/O error while presenting an infallible
-    /// [`io::Write`] surface: the polynomial serializers used by this crate
-    /// historically unwrap nested writes. The caller must check its writer's
-    /// retained error after this method returns.
-    pub fn write_consuming<W: io::Write>(
-        self,
+    /// This produces the same bytes as [`Self::write`] while leaving the key
+    /// available for a subsequent consuming proof.
+    pub fn write_streaming<W: io::Write>(
+        &self,
         writer: &mut W,
         format: SerdeFormat,
     ) -> io::Result<()> {
-        let Self {
-            vk,
-            l0,
-            l_last,
-            l_active_row,
-            fixed_values,
-            fixed_polys,
-            permutation,
-            ev: _,
-        } = self;
-        vk.write(writer, format)?;
-        drop(vk);
-        l0.write(writer, format);
-        drop(l0);
-        l_last.write(writer, format);
-        drop(l_last);
-        l_active_row.write(writer, format);
-        drop(l_active_row);
-        write_polynomial_vec_consuming(fixed_values, writer, format);
-        write_polynomial_vec_consuming(fixed_polys, writer, format);
-        permutation.write_consuming(writer, format);
-        Ok(())
+        self.vk.write(writer, format)?;
+        self.l0.write_streaming(writer, format)?;
+        self.l_last.write_streaming(writer, format)?;
+        self.l_active_row.write_streaming(writer, format)?;
+        write_polynomial_slice_streaming(&self.fixed_values, writer, format)?;
+        write_polynomial_slice_streaming(&self.fixed_polys, writer, format)?;
+        self.permutation.write_streaming(writer, format)
     }
 
     /// Reads a proving key from a buffer.
@@ -468,7 +451,37 @@ where
         bytes
     }
 
-    /// Writes a proving key to a vector of bytes while dropping fields as they are serialized.
+    /// Writes a proving key directly to a sink while dropping fields as they are serialized.
+    ///
+    /// Unlike [`Self::to_bytes`], this consumes the key and never allocates a
+    /// second release-sized byte vector. Callers writing large processed keys
+    /// should prefer this method and provide their final file or framed sink.
+    pub fn write_consuming<W: io::Write>(
+        self,
+        writer: &mut W,
+        format: SerdeFormat,
+    ) -> io::Result<()> {
+        let Self {
+            vk,
+            l0,
+            l_last,
+            l_active_row,
+            fixed_values,
+            fixed_polys,
+            permutation,
+            ev: _,
+        } = self;
+        vk.write(writer, format)?;
+        l0.write_consuming(writer, format)?;
+        l_last.write_consuming(writer, format)?;
+        l_active_row.write_consuming(writer, format)?;
+        write_polynomial_vec_consuming(fixed_values, writer, format)?;
+        write_polynomial_vec_consuming(fixed_polys, writer, format)?;
+        permutation.write_consuming(writer, format)?;
+        Ok(())
+    }
+
+    /// Writes a proving key to a vector while dropping fields as they are serialized.
     pub fn into_bytes(self, format: SerdeFormat) -> Vec<u8> {
         let mut bytes = Vec::<u8>::with_capacity(self.bytes_length());
         self.write_consuming(&mut bytes, format)
@@ -517,3 +530,302 @@ type ChallengeY<F> = ChallengeScalar<F, Y>;
 #[derive(Clone, Copy, Debug)]
 struct X;
 type ChallengeX<F> = ChallengeScalar<F, X>;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Advice, Circuit, Column, ConstraintSystem, Error, KeygenWithExtractorError, Selector,
+        SerdeFormat, keygen_pk, keygen_pk_consuming_with, keygen_pk2, keygen_vk,
+        keygen_vk_consuming_with, keygen_vk_custom,
+    };
+    use crate::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        halo2curves::bn256::G1Affine,
+        poly::{Rotation, commitment::ParamsProver, ipa::commitment::ParamsIPA},
+    };
+    use group::ff::Field;
+    use std::{
+        io,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    struct FailingWriter {
+        accepted: usize,
+        fail_after: usize,
+    }
+
+    impl io::Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.accepted >= self.fail_after {
+                return Err(io::Error::new(io::ErrorKind::StorageFull, "sink is full"));
+            }
+            let accepted = bytes.len().min(self.fail_after - self.accepted);
+            self.accepted += accepted;
+            Ok(accepted)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct EmptyCircuit;
+
+    impl<F: Field> Circuit<F> for EmptyCircuit {
+        type Config = ();
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            *self
+        }
+
+        fn configure(_meta: &mut ConstraintSystem<F>) -> Self::Config {}
+
+        fn synthesize(
+            &self,
+            _config: Self::Config,
+            _layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CircuitLifetime {
+        synthesized: AtomicBool,
+        dropped: AtomicBool,
+    }
+
+    struct TrackedCircuit {
+        lifetime: Option<Arc<CircuitLifetime>>,
+        fail_synthesis: bool,
+    }
+
+    impl Drop for TrackedCircuit {
+        fn drop(&mut self) {
+            if let Some(lifetime) = &self.lifetime {
+                lifetime.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct TrackedConfig {
+        left: Column<Advice>,
+        right: Column<Advice>,
+        selector: Selector,
+    }
+
+    impl<F: Field> Circuit<F> for TrackedCircuit {
+        type Config = TrackedConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self {
+                lifetime: None,
+                fail_synthesis: self.fail_synthesis,
+            }
+        }
+
+        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+            let left = meta.advice_column();
+            let right = meta.advice_column();
+            let selector = meta.selector();
+            meta.enable_equality(left);
+            meta.enable_equality(right);
+            meta.create_gate("tracked selector", |meta| {
+                let selector = meta.query_selector(selector);
+                let left = meta.query_advice(left, Rotation::cur());
+                let right = meta.query_advice(right, Rotation::cur());
+                vec![selector * (left - right)]
+            });
+            TrackedConfig {
+                left,
+                right,
+                selector,
+            }
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            if let Some(lifetime) = &self.lifetime {
+                lifetime.synthesized.store(true, Ordering::SeqCst);
+            }
+            if self.fail_synthesis {
+                return Err(Error::Synthesis);
+            }
+            layouter.assign_region(
+                || "tracked region",
+                |mut region| {
+                    config.selector.enable(&mut region, 0)?;
+                    let left = region.assign_advice(config.left, 0, Value::known(F::ONE));
+                    left.copy_advice(&mut region, config.right, 0);
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn tracked_circuit(fail_synthesis: bool) -> (TrackedCircuit, Arc<CircuitLifetime>) {
+        let lifetime = Arc::new(CircuitLifetime::default());
+        (
+            TrackedCircuit {
+                lifetime: Some(Arc::clone(&lifetime)),
+                fail_synthesis,
+            },
+            lifetime,
+        )
+    }
+
+    #[test]
+    fn consuming_keygen_preserves_bytes_and_drops_circuits_on_all_paths() {
+        let params = ParamsIPA::<G1Affine>::new(3);
+        let reference = TrackedCircuit {
+            lifetime: None,
+            fail_synthesis: false,
+        };
+        let borrowed_vk = keygen_vk(&params, &reference).expect("borrowed VK generation");
+        let borrowed_pk =
+            keygen_pk(&params, borrowed_vk.clone(), &reference).expect("borrowed PK generation");
+        let combined_pk = keygen_pk2(&params, &reference, false).expect("combined PK generation");
+        assert_eq!(
+            borrowed_pk.to_bytes(SerdeFormat::Processed),
+            combined_pk.to_bytes(SerdeFormat::Processed),
+            "streaming permutation VK commitments before fixed expansion and reusing a supplied \
+             VK domain must preserve processed key bytes"
+        );
+        let compressed_vk =
+            keygen_vk_custom(&params, &reference, true).expect("compressed VK generation");
+        let compressed_combined_pk =
+            keygen_pk2(&params, &reference, true).expect("compressed combined PK generation");
+        assert_eq!(
+            compressed_vk.to_bytes(SerdeFormat::Processed),
+            compressed_combined_pk
+                .get_vk()
+                .to_bytes(SerdeFormat::Processed),
+            "permutation-first VK generation must preserve compressed-selector bytes"
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_vk, extracted) = keygen_vk_consuming_with(&params, circuit, |circuit| {
+            let lifetime = circuit.lifetime.as_ref().expect("tracked circuit");
+            assert!(lifetime.synthesized.load(Ordering::SeqCst));
+            assert!(!lifetime.dropped.load(Ordering::SeqCst));
+            Ok::<_, &'static str>("vk metadata")
+        })
+        .expect("consuming VK generation");
+        assert_eq!(extracted, "vk metadata");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            borrowed_vk.to_bytes(SerdeFormat::Processed),
+            consuming_vk.to_bytes(SerdeFormat::Processed)
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let (consuming_pk, extracted) =
+            keygen_pk_consuming_with(&params, borrowed_vk.clone(), circuit, |circuit| {
+                let lifetime = circuit.lifetime.as_ref().expect("tracked circuit");
+                assert!(lifetime.synthesized.load(Ordering::SeqCst));
+                assert!(!lifetime.dropped.load(Ordering::SeqCst));
+                Ok::<_, &'static str>("pk metadata")
+            })
+            .expect("consuming PK generation");
+        assert_eq!(extracted, "pk metadata");
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            borrowed_pk.to_bytes(SerdeFormat::Processed),
+            consuming_pk.to_bytes(SerdeFormat::Processed)
+        );
+
+        let (circuit, lifetime) = tracked_circuit(false);
+        let extractor_failure =
+            keygen_pk_consuming_with(&params, borrowed_vk.clone(), circuit, |_| {
+                Err::<(), _>("metadata rejected")
+            });
+        assert!(matches!(
+            extractor_failure,
+            Err(KeygenWithExtractorError::Extractor("metadata rejected"))
+        ));
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+
+        let (circuit, lifetime) = tracked_circuit(true);
+        let extractor_called = Arc::new(AtomicBool::new(false));
+        let extractor_called_in_closure = Arc::clone(&extractor_called);
+        let synthesis_failure =
+            keygen_pk_consuming_with(&params, borrowed_vk, circuit, move |_| {
+                extractor_called_in_closure.store(true, Ordering::SeqCst);
+                Ok::<_, &'static str>(())
+            });
+        assert!(matches!(
+            synthesis_failure,
+            Err(KeygenWithExtractorError::Keygen(Error::Synthesis))
+        ));
+        assert!(!extractor_called.load(Ordering::SeqCst));
+        assert!(lifetime.dropped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn processed_key_byte_estimates_match_serialized_lengths() {
+        // Eight rows keep this regression test small while leaving enough room for
+        // Halo2's blinding rows.
+        let params = ParamsIPA::<G1Affine>::new(3);
+        let vk = keygen_vk(&params, &EmptyCircuit).expect("verifying-key generation should work");
+
+        let expected_vk_bytes = vk.bytes_length();
+        let vk_bytes = vk.to_bytes(SerdeFormat::Processed);
+        assert_eq!(expected_vk_bytes, vk_bytes.len());
+        assert_eq!(expected_vk_bytes, vk_bytes.capacity());
+
+        let pk = keygen_pk(&params, vk, &EmptyCircuit).expect("proving-key generation should work");
+        let expected_pk_bytes = pk.bytes_length();
+        let pk_bytes = pk.to_bytes(SerdeFormat::Processed);
+        assert_eq!(expected_pk_bytes, pk_bytes.len());
+        assert_eq!(expected_pk_bytes, pk_bytes.capacity());
+
+        let vk = keygen_vk(&params, &EmptyCircuit).expect("verifying-key generation should work");
+        let pk = keygen_pk(&params, vk, &EmptyCircuit).expect("proving-key generation should work");
+        let mut borrowed_stream = Vec::new();
+        pk.write_streaming(&mut borrowed_stream, SerdeFormat::Processed)
+            .expect("non-consuming proving-key stream should succeed");
+        assert_eq!(pk_bytes, borrowed_stream);
+
+        let fail_after = pk.get_vk().to_bytes(SerdeFormat::Processed).len() + 1;
+        let mut failing_borrowed = FailingWriter {
+            accepted: 0,
+            fail_after,
+        };
+        let failure = pk
+            .write_streaming(&mut failing_borrowed, SerdeFormat::Processed)
+            .expect_err("a full non-consuming sink must be reported to the caller");
+        assert_eq!(failure.kind(), io::ErrorKind::StorageFull);
+        assert_eq!(pk_bytes, pk.to_bytes(SerdeFormat::Processed));
+
+        let mut streamed = Vec::new();
+        pk.write_consuming(&mut streamed, SerdeFormat::Processed)
+            .expect("consuming proving-key write should succeed");
+        assert_eq!(pk_bytes, streamed);
+
+        let vk = keygen_vk(&params, &EmptyCircuit).expect("verifying-key generation should work");
+        let pk = keygen_pk(&params, vk, &EmptyCircuit).expect("proving-key generation should work");
+        let fail_after = pk.get_vk().to_bytes(SerdeFormat::Processed).len() + 1;
+        let mut failing = FailingWriter {
+            accepted: 0,
+            fail_after,
+        };
+        let failure = pk
+            .write_consuming(&mut failing, SerdeFormat::Processed)
+            .expect_err("a full sink must be reported to the caller");
+        assert_eq!(failure.kind(), io::ErrorKind::StorageFull);
+    }
+}

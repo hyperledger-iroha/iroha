@@ -63,7 +63,8 @@ use super::{
 use crate::{
     kura::{
         CertifiedLaneBlockArtifact, Kura, LaneBlockApplicationReceiptArtifact,
-        LaneBlockPayloadAvailability, sumeragi_v2_validator_storage_supported,
+        LaneBlockApplicationReceiptArtifactFormat, LaneBlockPayloadAvailability,
+        sumeragi_v2_validator_storage_supported,
     },
     lane_consensus::{
         CommittedLaneBlockSession, LaneBlockSessionCache, LaneBlockSessionInsertOutcome,
@@ -99,6 +100,49 @@ const MAX_FETCH_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_PROOF_BYTES: usize = 96;
 const MAX_AUTHENTICATED_MERGE_QCS: usize = 64;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
+
+fn classify_committed_lane_block_execution_status(
+    receipt_conflicts: impl FnOnce() -> bool,
+    matching_receipt: impl FnOnce() -> Option<LaneBlockApplicationReceiptArtifactFormat>,
+    predecessor_is_applied: impl FnOnce() -> bool,
+    matching_preflight_has_rejections: impl FnOnce() -> Option<bool>,
+    matching_execution_input_is_available: impl FnOnce() -> bool,
+    payload_is_recoverable: impl FnOnce() -> bool,
+) -> super::status::CommittedLaneBlockExecutionStatus {
+    use super::status::CommittedLaneBlockExecutionStatus as Status;
+
+    if receipt_conflicts() {
+        return Status::ApplicationReceiptConflictsWithPreflight;
+    }
+    if let Some(format) = matching_receipt() {
+        return match format {
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
+                Status::StateAppliedByDirectExecution
+            }
+            LaneBlockApplicationReceiptArtifactFormat::Current
+            | LaneBlockApplicationReceiptArtifactFormat::MergeExecution => {
+                Status::StateAppliedByCanonicalBlock
+            }
+        };
+    }
+    if !predecessor_is_applied() {
+        return Status::AwaitingPredecessorApplication;
+    }
+    if let Some(has_rejections) = matching_preflight_has_rejections() {
+        return if has_rejections {
+            Status::PayloadPreflightRejectedAwaitingStateApplication
+        } else {
+            Status::PayloadPreflightedAwaitingStateApplication
+        };
+    }
+    if matching_execution_input_is_available() {
+        return Status::PayloadRecoveredAwaitingStateApplication;
+    }
+    if payload_is_recoverable() {
+        return Status::PayloadAvailableAwaitingExecutor;
+    }
+    Status::AwaitingExecutablePayload
+}
 
 fn preferred_merge_candidates<T: Clone>(
     authorized_digest: Option<Hash>,
@@ -849,6 +893,7 @@ pub(crate) struct V2LaneWorkAdapter {
     /// current global carrier and therefore must never be filtered by a
     /// current-height lock or Decision.
     historical_recovery_sessions: VecDeque<CommittedLaneBlockSession>,
+    committed_lane_status_revision: u64,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, u64, Hash)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
@@ -1041,6 +1086,7 @@ impl V2LaneWorkAdapter {
             pending_committed_lanes: VecDeque::new(),
             committed_lane_outputs: VecDeque::new(),
             historical_recovery_sessions: VecDeque::new(),
+            committed_lane_status_revision: 0,
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
             merge_entries: BTreeMap::new(),
@@ -1147,6 +1193,166 @@ impl V2LaneWorkAdapter {
             repaired = repaired.saturating_add(1);
         }
         Ok(repaired)
+    }
+
+    /// Project the latest exact certified block for every active lane.
+    ///
+    /// Durable sessions are merged with every volatile committed-session owner
+    /// before selecting one latest lane-local height. More than one certified
+    /// proposal at that height is double-finalization evidence across views and
+    /// suppresses the lane. Classification is then performed once per unique
+    /// selected session against exact durable evidence.
+    pub(crate) fn committed_lane_block_status_snapshot(
+        &self,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        let mut latest_by_lane =
+            BTreeMap::<(LaneId, DataSpaceId, Hash), (CommittedLaneBlockSession, bool)>::new();
+        let durable_sessions = self
+            .state
+            .latest_certified_lane_block_frontier_sessions_snapshot_cached();
+        {
+            let mut retain_latest = |session: &CommittedLaneBlockSession| {
+                if let Err(error) = validate_committed_lane_block_session(session) {
+                    let descriptor = &session.proposal.descriptor;
+                    iroha_logger::warn!(
+                        lane = %descriptor.lane_id.as_u32(),
+                        dataspace = %descriptor.dataspace_id.as_u64(),
+                        lane_block_height = descriptor.lane_block_height,
+                        lane_block_view = descriptor.lane_block_view,
+                        ?error,
+                        "dropping malformed committed lane session from operator status"
+                    );
+                    return;
+                }
+                let descriptor = &session.proposal.descriptor;
+                if !self.lane_route_active(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.proposal_height,
+                ) {
+                    return;
+                }
+                let key = (
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                );
+                let replace = latest_by_lane.get(&key).is_none_or(|(existing, _)| {
+                    let existing = &existing.proposal.descriptor;
+                    descriptor.lane_block_height > existing.lane_block_height
+                });
+                if replace {
+                    latest_by_lane.insert(key, (session.clone(), false));
+                } else if let Some((existing, ambiguous)) = latest_by_lane.get_mut(&key) {
+                    let existing_descriptor = &existing.proposal.descriptor;
+                    if descriptor.lane_block_height == existing_descriptor.lane_block_height
+                        && session.proposal != existing.proposal
+                    {
+                        if !*ambiguous {
+                            iroha_logger::warn!(
+                                lane = %descriptor.lane_id.as_u32(),
+                                dataspace = %descriptor.dataspace_id.as_u64(),
+                                lane_block_height = descriptor.lane_block_height,
+                                retained_lane_block_view = existing_descriptor.lane_block_view,
+                                conflicting_lane_block_view = descriptor.lane_block_view,
+                                retained_proposal = %existing.proposal.proposal_hash,
+                                conflicting_proposal = %session.proposal.proposal_hash,
+                                "suppressing double-finalized lane height from operator status"
+                            );
+                        }
+                        *ambiguous = true;
+                    }
+                }
+            };
+            for session in &durable_sessions {
+                retain_latest(session);
+            }
+            for session in &self.pending_committed_lanes {
+                retain_latest(session);
+            }
+            for output in &self.committed_lane_outputs {
+                retain_latest(&output.session);
+            }
+            for session in &self.historical_recovery_sessions {
+                retain_latest(session);
+            }
+        }
+
+        let current_state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let mut current_state_hash = None;
+        latest_by_lane
+            .into_values()
+            .filter_map(|(session, ambiguous)| (!ambiguous).then_some(session))
+            .map(|session| {
+                let proposal = &session.proposal;
+                let descriptor = &proposal.descriptor;
+                let execution_status = classify_committed_lane_block_execution_status(
+                    || {
+                        self.kura
+                            .lane_block_application_receipt_conflicts_with_preflight_without_sidecar_repair(
+                                proposal,
+                            )
+                    },
+                    || {
+                        self.kura
+                            .read_lane_block_application_receipt(
+                                descriptor.lane_id,
+                                descriptor.lane_block_height,
+                            )
+                            .filter(|receipt| receipt.proposal == *proposal)
+                            .map(|receipt| receipt.format)
+                    },
+                    || {
+                        self.state
+                            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                                proposal,
+                            )
+                    },
+                    || {
+                        let preflight = self.kura.read_lane_block_execution_preflight(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                        )?;
+                        if preflight.proposal != *proposal
+                            || preflight.preflight_state_height != current_state_height
+                        {
+                            return None;
+                        }
+                        let state_hash = *current_state_hash
+                            .get_or_insert_with(|| self.state.lane_execution_state_hash());
+                        (preflight.preflight_state_hash == Some(state_hash))
+                            .then(|| preflight.has_rejections())
+                    },
+                    || {
+                        self.kura
+                            .read_lane_block_execution_input(
+                                descriptor.lane_id,
+                                descriptor.lane_block_height,
+                            )
+                            .is_some_and(|input| input.proposal == *proposal)
+                    },
+                    || self.kura.lane_block_payload_is_recoverable(proposal),
+                );
+                super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                    &session,
+                    execution_status,
+                )
+            })
+            .collect()
+    }
+
+    /// Cheap semantic revision used to coalesce operator-status projection.
+    pub(crate) fn committed_lane_block_status_revision(&self) -> (u64, u64, u64) {
+        (
+            self.committed_lane_status_revision,
+            self.kura.committed_lane_status_revision(),
+            self.state.state_view_generation(),
+        )
+    }
+
+    fn note_committed_lane_status_change(&mut self) {
+        self.committed_lane_status_revision = self.committed_lane_status_revision.wrapping_add(1);
     }
 
     /// Bind locally planned lane proposals to the exact global block body.
@@ -1759,9 +1965,9 @@ impl V2LaneWorkAdapter {
                 persisted = persisted.saturating_add(1);
                 continue;
             }
-            self.kura
-                .persist_committed_lane_block_session(&session, &pops)
-                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            self.state
+                .persist_committed_lane_block_session_lifecycle_bound(&session, &pops)
+                .map_err(V2LaneWorkError::Persistence)?;
             if self
                 .state
                 .certified_lane_block_session_is_applied_or_snapshot_anchored_cached(&session)
@@ -2055,15 +2261,10 @@ impl V2LaneWorkAdapter {
             .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height);
         let durable_proposal = match durable {
             Some(durable) if durable.proposal == session.proposal => durable.proposal,
-            Some(_) => {
-                return Err(V2LaneWorkError::Persistence(
-                    "historical lane certificate conflicts with the durable lane slot".to_owned(),
-                ));
-            }
-            None => {
-                self.kura
-                    .persist_committed_lane_block_session(session, &pops)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+            Some(_) | None => {
+                self.state
+                    .persist_committed_lane_block_session_lifecycle_bound(session, &pops)
+                    .map_err(V2LaneWorkError::Persistence)?;
                 session.proposal.clone()
             }
         };
@@ -3390,6 +3591,7 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
         self.historical_recovery_sessions.push_back(session);
+        self.note_committed_lane_status_change();
         V2LaneIngressOutcome::Inserted
     }
 
@@ -3688,6 +3890,10 @@ impl V2LaneWorkAdapter {
     }
 
     fn retain_committed_lane_outputs_for_subject(&mut self, subject: wire::BlockSubject) {
+        let before = (
+            self.pending_committed_lanes.len(),
+            self.committed_lane_outputs.len(),
+        );
         self.pending_committed_lanes.retain(|session| {
             session
                 .proposal
@@ -3702,6 +3908,14 @@ impl V2LaneWorkAdapter {
                 .payload_block_hint
                 .is_some_and(|hint| hint.proposal_block_hash == subject.block_hash)
         });
+        if before
+            != (
+                self.pending_committed_lanes.len(),
+                self.committed_lane_outputs.len(),
+            )
+        {
+            self.note_committed_lane_status_change();
+        }
     }
 
     fn schedule_committed_lane_outputs(&mut self) {
@@ -3785,6 +3999,7 @@ impl V2LaneWorkAdapter {
                 .len()
                 .saturating_add(self.historical_recovery_sessions.len()),
         );
+        let mut status_changed = false;
         for session in self.lane_sessions.drain_committed_sessions_up_to(remaining) {
             if session.proposal.descriptor.proposal_height < self.context.height {
                 if !self
@@ -3798,6 +4013,7 @@ impl V2LaneWorkAdapter {
                         )
                 {
                     self.historical_recovery_sessions.push_back(session);
+                    status_changed = true;
                 }
                 continue;
             }
@@ -3807,6 +4023,10 @@ impl V2LaneWorkAdapter {
                     next_validator: 0,
                 });
             self.pending_committed_lanes.push_back(session);
+            status_changed = true;
+        }
+        if status_changed {
+            self.note_committed_lane_status_change();
         }
         self.schedule_committed_lane_outputs();
     }
@@ -6164,6 +6384,7 @@ fn proposal_from_ownership(
 /// Shared durable-lane fixtures and lane-work unit tests.
 pub(super) mod tests {
     use std::{
+        cell::Cell,
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         sync::{
@@ -6195,7 +6416,10 @@ pub(super) mod tests {
             LaneFastpqProofMaterial, LaneId, LaneStorageProfile, LaneVisibility,
         },
         peer::PeerId,
-        transaction::{TransactionBuilder, TransactionEntrypoint, signed::TransactionResultInner},
+        transaction::{
+            TransactionBuilder, TransactionEntrypoint,
+            signed::{TransactionResult, TransactionResultInner},
+        },
         trigger::DataTriggerSequence,
     };
     use mv::storage::StorageReadOnly;
@@ -8042,6 +8266,14 @@ pub(super) mod tests {
                 .lane_block_application_receipt_available(&proposal),
             "Kura-ahead recovery must not manufacture a WSV application receipt"
         );
+        let pending_status = adapter.committed_lane_block_status_snapshot();
+        assert_eq!(pending_status.len(), 1);
+        assert_eq!(pending_status[0].proposal, proposal);
+        assert_eq!(
+            pending_status[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor,
+            "recoverable payload must remain visible before canonical application"
+        );
 
         let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
@@ -8055,6 +8287,16 @@ pub(super) mod tests {
             adapter
                 .kura
                 .lane_block_application_receipt_available(&proposal)
+        );
+        adapter.committed_lane_outputs.clear();
+        adapter.historical_recovery_sessions.clear();
+        assert!(adapter.pending_committed_lanes.is_empty());
+        let committed_status = adapter.committed_lane_block_status_snapshot();
+        assert_eq!(committed_status.len(), 1);
+        assert_eq!(committed_status[0].proposal, proposal);
+        assert_eq!(
+            committed_status[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
         );
         assert!(
             adapter
@@ -8072,6 +8314,479 @@ pub(super) mod tests {
                 1,
                 Some(proposal.descriptor.descriptor_hash),
             )]
+        );
+    }
+
+    #[test]
+    fn committed_lane_status_classification_is_exhaustive_and_priority_ordered() {
+        use super::super::status::CommittedLaneBlockExecutionStatus as Status;
+
+        let cases = [
+            (
+                true,
+                Some(LaneBlockApplicationReceiptArtifactFormat::DirectExecution),
+                false,
+                Some(true),
+                true,
+                true,
+                Status::ApplicationReceiptConflictsWithPreflight,
+            ),
+            (
+                false,
+                Some(LaneBlockApplicationReceiptArtifactFormat::DirectExecution),
+                false,
+                Some(true),
+                false,
+                false,
+                Status::StateAppliedByDirectExecution,
+            ),
+            (
+                false,
+                Some(LaneBlockApplicationReceiptArtifactFormat::Current),
+                false,
+                Some(true),
+                false,
+                false,
+                Status::StateAppliedByCanonicalBlock,
+            ),
+            (
+                false,
+                Some(LaneBlockApplicationReceiptArtifactFormat::MergeExecution),
+                false,
+                Some(true),
+                false,
+                false,
+                Status::StateAppliedByCanonicalBlock,
+            ),
+            (
+                false,
+                None,
+                false,
+                Some(false),
+                true,
+                true,
+                Status::AwaitingPredecessorApplication,
+            ),
+            (
+                false,
+                None,
+                true,
+                Some(true),
+                true,
+                true,
+                Status::PayloadPreflightRejectedAwaitingStateApplication,
+            ),
+            (
+                false,
+                None,
+                true,
+                Some(false),
+                true,
+                true,
+                Status::PayloadPreflightedAwaitingStateApplication,
+            ),
+            (
+                false,
+                None,
+                true,
+                None,
+                true,
+                true,
+                Status::PayloadRecoveredAwaitingStateApplication,
+            ),
+            (
+                false,
+                None,
+                true,
+                None,
+                false,
+                true,
+                Status::PayloadAvailableAwaitingExecutor,
+            ),
+            (
+                false,
+                None,
+                true,
+                None,
+                false,
+                false,
+                Status::AwaitingExecutablePayload,
+            ),
+        ];
+        for (
+            receipt_conflicts,
+            matching_receipt,
+            predecessor_is_applied,
+            matching_preflight,
+            matching_input,
+            recoverable_payload,
+            expected,
+        ) in cases
+        {
+            assert_eq!(
+                classify_committed_lane_block_execution_status(
+                    || receipt_conflicts,
+                    || matching_receipt,
+                    || predecessor_is_applied,
+                    || matching_preflight,
+                    || matching_input,
+                    || recoverable_payload,
+                ),
+                expected
+            );
+        }
+
+        let lower_priority_calls = Cell::new(0_u8);
+        assert_eq!(
+            classify_committed_lane_block_execution_status(
+                || true,
+                || {
+                    lower_priority_calls.set(lower_priority_calls.get().saturating_add(1));
+                    None
+                },
+                || {
+                    lower_priority_calls.set(lower_priority_calls.get().saturating_add(1));
+                    true
+                },
+                || {
+                    lower_priority_calls.set(lower_priority_calls.get().saturating_add(1));
+                    None
+                },
+                || {
+                    lower_priority_calls.set(lower_priority_calls.get().saturating_add(1));
+                    true
+                },
+                || {
+                    lower_priority_calls.set(lower_priority_calls.get().saturating_add(1));
+                    true
+                },
+            ),
+            Status::ApplicationReceiptConflictsWithPreflight
+        );
+        assert_eq!(
+            lower_priority_calls.get(),
+            0,
+            "higher-priority evidence must short-circuit every lower readiness probe"
+        );
+    }
+
+    #[test]
+    fn committed_lane_status_merges_volatile_owners_and_keeps_latest_exact_session() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let incarnation = adapter
+            .state
+            .lane_incarnation_at_height(lane_id, 1)
+            .expect("canonical lane incarnation is active");
+        let session = |proposal: LaneBlockProposalV1| CommittedLaneBlockSession {
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+            proposal,
+        };
+        let first = session(proposal_for_route(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            1,
+            1,
+        ));
+        let latest = session(proposal_for_route_at_view(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            1,
+            2,
+            3,
+        ));
+
+        adapter.pending_committed_lanes.push_back(first.clone());
+        assert_eq!(
+            adapter.committed_lane_block_status_snapshot()[0].proposal,
+            first.proposal
+        );
+        adapter.pending_committed_lanes.clear();
+
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session: latest.clone(),
+                next_validator: 0,
+            });
+        assert_eq!(
+            adapter.committed_lane_block_status_snapshot()[0].proposal,
+            latest.proposal
+        );
+        adapter.committed_lane_outputs.clear();
+
+        adapter
+            .historical_recovery_sessions
+            .push_back(first.clone());
+        assert_eq!(
+            adapter.committed_lane_block_status_snapshot()[0].proposal,
+            first.proposal
+        );
+
+        adapter.pending_committed_lanes.push_back(first);
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session: latest.clone(),
+                next_validator: 0,
+            });
+        adapter
+            .historical_recovery_sessions
+            .push_back(latest.clone());
+        let snapshot = adapter.committed_lane_block_status_snapshot();
+        assert_eq!(
+            snapshot.len(),
+            1,
+            "duplicate owners classify one session once"
+        );
+        assert_eq!(snapshot[0].proposal, latest.proposal);
+        assert_eq!(snapshot[0].prepare_qc, latest.prepare_qc);
+        assert_eq!(snapshot[0].commit_qc, latest.commit_qc);
+        assert_eq!(
+            snapshot[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+        );
+
+        let mut malformed = latest.clone();
+        malformed.proposal.proposal_hash = Hash::new(b"malformed status proposal");
+        malformed.proposal.descriptor.lane_block_height = 9;
+        adapter.historical_recovery_sessions.push_back(malformed);
+        assert_eq!(
+            adapter.committed_lane_block_status_snapshot()[0].lane_block_height,
+            2,
+            "a malformed higher session must not replace exact committed identity"
+        );
+
+        let alternative_proof = CommittedLaneBlockSession {
+            proposal: latest.proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&latest.proposal, &keys[1..], CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&latest.proposal, &keys[1..], CertPhase::Commit),
+        };
+        adapter
+            .historical_recovery_sessions
+            .push_back(alternative_proof);
+        assert_eq!(
+            adapter.committed_lane_block_status_snapshot().len(),
+            1,
+            "QC signer-subset variants for one exact proposal are not ambiguous"
+        );
+
+        let mut conflicting_ownership = ownership_from_proposal(&latest.proposal);
+        conflicting_ownership.accepted_transaction_hashes =
+            vec![Hash::new(b"same-slot conflicting status payload")];
+        let conflicting_replay = conflicting_ownership
+            .compute_replay_hashes()
+            .expect("conflicting ownership replay material");
+        conflicting_ownership.subject_hash = conflicting_replay.subject_hash;
+        conflicting_ownership.payload_ownership_hash = conflicting_replay.payload_ownership_hash;
+        conflicting_ownership.rbc_instance_hash = conflicting_replay.rbc_instance_hash;
+        conflicting_ownership.lane_block_descriptor_hash =
+            Some(conflicting_replay.lane_block_descriptor_hash);
+        let conflicting_proposal = proposal_from_ownership(
+            &conflicting_ownership,
+            latest
+                .proposal
+                .payload_block_hint
+                .expect("fixture proposal has a canonical block hint")
+                .proposal_block_hash,
+        )
+        .expect("construct same-slot conflicting proposal");
+        assert_ne!(conflicting_proposal, latest.proposal);
+        adapter
+            .pending_committed_lanes
+            .push_back(CommittedLaneBlockSession {
+                prepare_qc: lane_qc_for_phase(&conflicting_proposal, &keys, CertPhase::Prepare),
+                commit_qc: lane_qc_for_phase(&conflicting_proposal, &keys, CertPhase::Commit),
+                proposal: conflicting_proposal.clone(),
+            });
+        assert!(
+            adapter.committed_lane_block_status_snapshot().is_empty(),
+            "different certified proposals at one lane height/view must fail closed"
+        );
+        adapter
+            .pending_committed_lanes
+            .retain(|session| session.proposal != conflicting_proposal);
+
+        let higher_view_proposal = proposal_for_route_at_view(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            1,
+            2,
+            4,
+        );
+        adapter
+            .pending_committed_lanes
+            .push_back(CommittedLaneBlockSession {
+                prepare_qc: lane_qc_for_phase(&higher_view_proposal, &keys, CertPhase::Prepare),
+                commit_qc: lane_qc_for_phase(&higher_view_proposal, &keys, CertPhase::Commit),
+                proposal: higher_view_proposal.clone(),
+            });
+        assert!(
+            adapter.committed_lane_block_status_snapshot().is_empty(),
+            "different Commit-certified proposals at one lane height must fail closed across views"
+        );
+        adapter
+            .pending_committed_lanes
+            .retain(|session| session.proposal != higher_view_proposal);
+
+        mark_lane_reset(&adapter, lane_id, 1);
+        assert!(
+            adapter.committed_lane_block_status_snapshot().is_empty(),
+            "sessions at or before the current reset watermark must be hidden"
+        );
+    }
+
+    #[test]
+    fn committed_lane_status_order_is_deterministic_across_active_lanes() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let extra_lane = LaneId::new(1);
+        let extra_dataspace = DataSpaceId::new(7);
+        enable_multilane_nexus(&mut adapter, &keys, extra_lane, extra_dataspace);
+        let routes = [
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (extra_lane, extra_dataspace),
+        ];
+        for (lane_id, dataspace_id) in routes.into_iter().rev() {
+            let incarnation = adapter
+                .state
+                .lane_incarnation_at_height(lane_id, 1)
+                .expect("active lane incarnation");
+            let proposal =
+                proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 1, 1);
+            adapter
+                .pending_committed_lanes
+                .push_back(CommittedLaneBlockSession {
+                    prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+                    commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+                    proposal,
+                });
+        }
+        let snapshot = adapter.committed_lane_block_status_snapshot();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|entry| (entry.lane_id, entry.dataspace_id))
+                .collect::<Vec<_>>(),
+            routes,
+            "status ordering must follow the active lane key, not insertion order"
+        );
+    }
+
+    #[test]
+    fn committed_lane_status_publisher_tracks_evidence_revisions_and_clear() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let mut publisher = super::super::v2_runner::CommittedLaneStatusPublisher::default();
+        assert!(publisher.publish_if_changed(&adapter));
+        assert!(
+            super::super::status::committed_lane_blocks_snapshot().is_empty(),
+            "startup must first publish the recovered empty root"
+        );
+        assert!(
+            !publisher.publish_if_changed(&adapter),
+            "an unchanged runner turn must not rescan or republish lane status"
+        );
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .pending_committed_lanes
+            .push_back(CommittedLaneBlockSession {
+                prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+                commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+                proposal: proposal.clone(),
+            });
+        adapter.note_committed_lane_status_change();
+
+        assert!(
+            publisher.publish_if_changed(&adapter),
+            "a newly committed volatile session must publish on the next bounded runner edge"
+        );
+        let published = super::super::status::committed_lane_blocks_snapshot();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].proposal, proposal);
+        assert_eq!(
+            published[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
+        );
+        assert!(
+            !publisher.publish_if_changed(&adapter),
+            "publication must acknowledge the exact adapter/Kura revision"
+        );
+
+        adapter
+            .kura
+            .store_block(block)
+            .expect("publish exact canonical payload evidence");
+        assert!(publisher.publish_if_changed(&adapter));
+        assert_eq!(
+            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
+        );
+
+        let recovered = adapter
+            .kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover exact lane payload");
+        adapter
+            .kura
+            .persist_lane_block_execution_input(&recovered)
+            .expect("persist exact execution input");
+        assert!(publisher.publish_if_changed(&adapter));
+        assert_eq!(
+            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+        );
+
+        let input = adapter
+            .kura
+            .read_lane_block_execution_input(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("read exact execution input");
+        let clean_result =
+            TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::default()));
+        adapter
+            .kura
+            .persist_lane_block_execution_preflight(
+                &input,
+                u64::try_from(adapter.state.committed_height()).expect("fixture state height"),
+                Some(adapter.state.lane_execution_state_hash()),
+                vec![clean_result],
+            )
+            .expect("persist current exact clean preflight");
+        assert!(publisher.publish_if_changed(&adapter));
+        assert_eq!(
+            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
+        );
+
+        adapter
+            .kura
+            .persist_lane_block_application_receipt(&proposal)
+            .expect("persist exact canonical receipt");
+        assert!(publisher.publish_if_changed(&adapter));
+        assert_eq!(
+            super::super::status::committed_lane_blocks_snapshot()[0].execution_status,
+            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+        );
+
+        super::super::status::clear_v2_status();
+        assert!(
+            super::super::status::committed_lane_blocks_snapshot().is_empty(),
+            "v2 shutdown/reset must not retain the previous runtime's status root"
         );
     }
 
@@ -11740,13 +12455,13 @@ pub(super) mod tests {
                 proposal,
             });
         adapter.limits.session_capacity = NonZeroUsize::new(1).expect("non-zero capacity");
-        for session in sessions {
+        for session in &sessions {
             adapter.pending_committed_lanes.push_back(session.clone());
             adapter
                 .committed_lane_outputs
                 .push_back(PendingCommittedLaneOutput {
                     next_validator: session.commit_qc.validator_set.len(),
-                    session,
+                    session: session.clone(),
                 });
         }
 
@@ -11768,6 +12483,20 @@ pub(super) mod tests {
                 .as_ref()
                 .is_some_and(|hint| hint.proposal_block_hash == winning_subject.block_hash)
         }));
+
+        adapter.pending_committed_lanes.clear();
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                next_validator: sessions[0].commit_qc.validator_set.len(),
+                session: sessions[0].clone(),
+            });
+        let revision_before_output_only_prune = adapter.committed_lane_status_revision;
+        adapter.retain_committed_lane_outputs_for_subject(winning_subject);
+        assert_ne!(
+            adapter.committed_lane_status_revision, revision_before_output_only_prune,
+            "removing only an output-owner copy must invalidate the status projection"
+        );
     }
 
     #[test]
