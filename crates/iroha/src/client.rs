@@ -8023,7 +8023,8 @@ mod offline_client_tests {
         nonce: u64,
     }
 
-    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 = 65_536;
+    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 =
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4;
 
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::new(
@@ -8370,7 +8371,7 @@ mod offline_client_tests {
             .active_recursive_step_ep_verifier
             .as_mut()
             .expect("fixture StepEp verifier")
-            .max_proof_bytes = artifact_proof_limit + 1;
+            .max_proof_bytes = artifact_proof_limit - 1;
         let mut reused_commitment = first_release_readiness(&requested);
         let transfer_commitment = reused_commitment
             .active_transfer_verifier
