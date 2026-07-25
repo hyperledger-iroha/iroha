@@ -11176,7 +11176,7 @@ mod evidence_http_tests {
         ];
 
         for alias in cases {
-            Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            let _ = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 manifest_payload: &manifest_payload,
