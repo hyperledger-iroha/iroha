@@ -10,7 +10,7 @@ use iroha_data_model::{
     domain::DomainId,
     fastpq::{FastpqPublicInputs, TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_zkp_halo2::poseidon::{self, PoseidonByteHasher};
 

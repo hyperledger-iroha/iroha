@@ -1669,26 +1669,6 @@ pub mod sorafs {
             pub const BAN: Option<Duration> = Some(Duration::from_secs(30));
         }
 
-        /// Denylist bootstrap defaults.
-        pub mod denylist {
-            use std::{path::PathBuf, time::Duration};
-
-            /// Optional filesystem path to the denylist JSON file.
-            #[must_use]
-            pub fn path() -> Option<PathBuf> {
-                None
-            }
-
-            /// Maximum TTL applied to standard denial entries when `expires_at` is omitted.
-            pub const STANDARD_TTL: Duration = Duration::from_secs(24 * 180 * 60 * 60);
-            /// Maximum TTL applied to emergency canons.
-            pub const EMERGENCY_TTL: Duration = Duration::from_secs(24 * 30 * 60 * 60);
-            /// Required review window for emergency canons.
-            pub const EMERGENCY_REVIEW_WINDOW: Duration = Duration::from_secs(24 * 7 * 60 * 60);
-            /// Permanent entries must cite a governance reference by default.
-            pub const REQUIRE_GOVERNANCE_REFERENCE: bool = true;
-        }
-
         /// Default staged anonymity policy applied to SoraNet transports.
         pub const DEFAULT_ANONYMITY_POLICY: &str = "anon-guard-pq";
         /// Default rollout phase label for the staged PQ activation.

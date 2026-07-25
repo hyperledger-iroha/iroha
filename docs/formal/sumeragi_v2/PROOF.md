@@ -989,11 +989,11 @@ height-context identity to the signed origin.
 The final successor/recovery closure adds six exact regressions without adding
 a module. The per-source route-attempt, exact PrepareQC recovery, locked-body
 reproposal, runner/worker, sidecar, and daemon closure yields the current
-572-test, 39-module inventory. The complete source-sealed pre-network corridor
+582-test, 39-module inventory. The complete source-sealed pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 The canonical module/test TSV inventory SHA-256 is
-`b0c56e1793b9bd1f830f31294a3b2371c5595468b114bf47e8969f78d1f3dc57`.
+`8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

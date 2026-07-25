@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(args.first(), Some(&OsString::from("build")));
         assert_eq!(
             args.get(args.len() - expected_tail.len()..),
-            Some(&expected_tail)
+            Some(expected_tail.as_slice())
         );
     }
 

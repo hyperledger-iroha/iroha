@@ -197,7 +197,7 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "2c161330a64361ec04eacf1e42fa985591536e8083a1b1bdbb1c1eca2180a50d"
+    "9b5694c5cd93f216a85e60c2c5aa932867ecbc4bb3604cbff3e1e46c4ec64121"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -238,6 +238,22 @@ ASYNC_LIVENESS_DEBT_THEOREMS = (
     "TimeoutViewProgressObligation",
     "LockedBodyReproposalProgressObligation",
     "RotatingLeaderProgressObligation",
+)
+ASYNC_TEMPORAL_CLOSURE_PROOF_MODULES = (
+    "SumeragiV2AsyncRankClosureProofs",
+    "SumeragiV2ProgressWitnessPreservationProofs",
+    "SumeragiV2DecisionWitnessPreservationProofs",
+    "SumeragiV2HistoricalLockedBodyWitnessPreservationProofs",
+    "SumeragiV2ProgressWitnessFinalClosureProofs",
+    "SumeragiV2HeightProductivityFrontierProofs",
+    "SumeragiV2HeightResetBoundaryClosureProofs",
+    "SumeragiV2LockedBodyReproposalProgressProofs",
+    "SumeragiV2TimeoutViewProgressProofs",
+    "SumeragiV2RotatingLeaderProgressProofs",
+    "SumeragiV2AdequateLeaderServiceClosureProofs",
+    "SumeragiV2ApplicationCompletionProofs",
+    "SumeragiV2ExactDecisionStageServiceClosureProofs",
+    "SumeragiV2AsyncTemporalClosureProofs",
 )
 
 # Exact source seal for the bounded effect-capacity ownership mutation matrix.
@@ -429,10 +445,10 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "1a640160d6eef841c7b9daf67bc19adec07b8119e256d320a10c65760d3bc971"
     ),
     "post_decision_complete_timeout_guard_bug.cfg": (
-        "e54b0559538313323d62cf965b8b3f30f14453bae63614f57c3a435f2f2f2cf3"
+        "c89abe5f7002a75398ab629c29d44bf1ecaabdf88d89e699b09c390126350cf6"
     ),
     "post_decision_local_timeout_successor_bug.cfg": (
-        "913fbacb89970cecb2dd1dace0dc74e34309fe8afcf96268e54d82ff47325067"
+        "664cc1b0835249bf00c9c11850ca71ec1f44d535521b94c1255639e33c3d6f8d"
     ),
     "post_decision_resume_timeout_guard_bug.cfg": (
         "ca0829121c8670f62dde0e45c66d3f25a29823e11c2a043ad406ab436e3eb471"
@@ -444,13 +460,13 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "ff012051c21e24f9cdddf0195aa8aaa04a77ba74dc3230bf940569c9fcbcd4cf"
     ),
     "post_decision_timeout_fixed.cfg": (
-        "2ee87f8889fae071aba746c8b44ea47cd12096bc2f5865044f14a2999c4c1c9d"
+        "f609d628853ce714bea15f8a0311cccf4c01cc3984fb9f1ae2112ca2ed44ee73"
     ),
     "post_decision_timeout_receive_bug.cfg": (
-        "a96d7c3d2c441243807dbc805178ba07b6ca5436669047fc87df16fa1f932e4d"
+        "5570219ab51b8e1fea28c45c18115466130c7c656f090f96df74f1fa5caf3c1d"
     ),
     "post_decision_timeout_successor_bug.cfg": (
-        "0dc25a64a4e66fb3e00cb9be781d6995d3fb3967798997d5e4c7c2a627db7177"
+        "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
     ),
     POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
         "465d3818a9767d033362278940e4057dd67ff32b927e65b1f671678b5ec53d34"
@@ -463,9 +479,11 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
 CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS = (
     "SumeragiV2CertifiedResponseRegistrationMutation.tla",
     "certified_response_registration_duplicate_fixed.cfg",
+    "certified_response_registration_commit_fanout_fixed.cfg",
     "certified_response_registration_duplicate_missing_guard.cfg",
     "certified_response_registration_historical_fixed.cfg",
     "certified_response_registration_restart_fixed.cfg",
+    "certified_response_registration_commit_fanout_route_only_bug.cfg",
     "certified_response_registration_restart_missing_guard.cfg",
 )
 CERTIFIED_RESPONSE_REGISTRATION_RUNNER = (
@@ -473,25 +491,31 @@ CERTIFIED_RESPONSE_REGISTRATION_RUNNER = (
 )
 CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
     "SumeragiV2CertifiedResponseRegistrationMutation.tla": (
-        "7ea5530100512c59bc4af1537725aade91d0e10d39f76c3aff6316fc1323c84f"
+        "748ba311a119e3c925f22474a16f04df554c4d5d91be57fa4fb6dbe1e01e923e"
     ),
     "certified_response_registration_duplicate_fixed.cfg": (
-        "2cea574ca69c20f2562b4133d44b6f83b1040f86a72b98eae284cc471a6656d2"
+        "a8fb966b97bc7c4398a8ed49f23417a82369252802fe6b8ce1c4b28b886d3d71"
+    ),
+    "certified_response_registration_commit_fanout_fixed.cfg": (
+        "761195e50a0d09b9ef88563f70f6ca44c130f420d061363b31766155aeb18bac"
     ),
     "certified_response_registration_duplicate_missing_guard.cfg": (
-        "78dc4167845a9c9eb72a795b8e6cc4b2195b0e8342efe43202d630f307335ee5"
+        "d3a76a8c91bf425d20d79eff29863d5e116a22c8fde79b98dc1f2c711d5b350d"
     ),
     "certified_response_registration_historical_fixed.cfg": (
-        "c6252f2789604dc20cf3fed5ceee76c4e1f5675478aa41c2239b7c572b3c54ca"
+        "edd47670a5e7badb402095ed668b41b4582523997a2a0d7d9cb826e4324963cc"
     ),
     "certified_response_registration_restart_fixed.cfg": (
-        "2bb9d00faccb2b4ec2dddb7fb65144a78d7b21da623019858beef52823168ca6"
+        "5490a870ba6902d211b92f6bbc12258ace06239c09cd71b2581564554d7f7cdc"
+    ),
+    "certified_response_registration_commit_fanout_route_only_bug.cfg": (
+        "364d236e0751f878704aafb32e72d09704a844061ba21ecbfa29bff5c277c1f6"
     ),
     "certified_response_registration_restart_missing_guard.cfg": (
-        "7a0e118c6418ac644a48a5d2feab3697232b25fa1577e54f35bb93ef8321e2ee"
+        "bd71a1ba2684f95127d4244eb9b45ab63f1c982374c4b258318368f8611df0fe"
     ),
     CERTIFIED_RESPONSE_REGISTRATION_RUNNER: (
-        "5c616d3692574e014f4ce33068efdb51566c7c57e4ade2eefc579761fa667b10"
+        "acc87e8f9a6939cc7ea1effbc5ea5560d6399abf811a03d8c67fa4974a6f0b05"
     ),
 }
 
@@ -545,7 +569,7 @@ DECISION_RECOVERY_LIFECYCLE_SHA256 = {
         "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
     ),
     DECISION_RECOVERY_LIFECYCLE_RUNNER: (
-        "d4837ddd87807b853d6f0df64348117268e2f32c49fe86d6f1dec1e144fe740e"
+        "e44def67d2442401d806d21213cf5974dbec85a80b7151b18f368fd18b15e4c0"
     ),
 }
 
@@ -1825,7 +1849,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
     ),
     CrossToolObligationContract(
         obligation_id="progress-witness-production-refinement",
-        module="SumeragiV2AsyncLivenessProofs",
+        module="SumeragiV2AsyncTemporalClosureProofs",
         ledger_symbol="ProgressWitnessProductionRefinementObligation",
         tla_theorem="ProgressWitnessCrossToolRefinement",
         tla_statement=(
@@ -3626,6 +3650,7 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
     *ASYNC_LIVENESS_PROOF_SHARDS,
+    *ASYNC_TEMPORAL_CLOSURE_PROOF_MODULES,
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -3752,12 +3777,20 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "GenerationScopedVoteDeliveryObligation",
     ),
     "progress-witness-preservation": (
-        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
         "ProgressWitnessObligation",
     ),
     "progress-witness-production-refinement": (
-        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
         "ProgressWitnessProductionRefinementObligation",
+    ),
+    "adequate-leader-exact-closure-residual": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualObligation",
+    ),
+    "exact-decision-off-scheduler-residual-convergence": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
     ),
     "protected-service-rank-stage4-ready-causal": (
         "SumeragiV2AsyncLivenessProofs",
@@ -3814,6 +3847,18 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "height-liveness": (
         "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
+    ),
+    "autoscale-lifecycle-production-refinement": (
+        "SumeragiV2AutoscaleLifecycle",
+        "AutoscaleLifecycleProductionRefinementObligation",
+    ),
+    "native-application-evidence-production-refinement": (
+        "SumeragiV2NativeApplicationEvidence",
+        "NativeApplicationEvidenceProductionRefinementObligation",
+    ),
+    "autonomous-reservation-carrier-production-refinement": (
+        "SumeragiV2AutonomousReservationCarrier",
+        "AutonomousReservationCarrierProductionRefinementObligation",
     ),
     "cryptography": ("trusted-boundary", "cryptography"),
     "durability-system-call": ("trusted-boundary", "os-fsync"),
@@ -3877,6 +3922,7 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2CertifiedRequestHashAuthorityProofs",
     "SumeragiV2DurableDecisionRecoveryProofs",
     *(module for module, _ in ASYNC_LIVENESS_SHARDS),
+    *ASYNC_TEMPORAL_CLOSURE_PROOF_MODULES,
     ASYNC_LIVENESS_FACADE,
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     "SumeragiV2AutoscaleLifecycle",
@@ -4070,7 +4116,6 @@ ASYNC_LIVENESS_OBLIGATIONS = {
     "post-decision-timeout-exclusion": "PostDecisionTimeoutExclusionObligation",
     "decision-recovery-across-restart": "DecisionRecoveryAcrossRestartObligation",
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryObligation",
-    "progress-witness-preservation": "ProgressWitnessObligation",
     "post-gst-deadlock-freedom": "DeadlockFreedomObligation",
     "protected-service-rank-stage4-ready-causal": (
         "ProtectedStage4RankProgressFromFairScheduler"
@@ -4160,7 +4205,7 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "DecisionRecoveryAcrossRestartObligation",
     ),
     "progress-witness-production-refinement": (
-        "SumeragiV2AsyncLivenessProofs",
+        "SumeragiV2AsyncTemporalClosureProofs",
         "ProgressWitnessProductionRefinementObligation",
     ),
     "async-type-invariant": (
@@ -4749,10 +4794,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 572
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 582
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "b0c56e1793b9bd1f830f31294a3b2371c5595468b114bf47e8969f78d1f3dc57"
+    "8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817"
 )
 _GENESIS_HEADER_BINDING_TEST_SHA256 = (
     "8d847d27cdea09a87f5ee4ec940f60f9fa73fb85ca9a965d2a3fcac19eb3b41e"
@@ -4783,7 +4828,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::authoritative_runtime_gate_tests",
         29,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 33),
+    ("production-merge-sidecar", "merge_sidecar::tests", 39),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
@@ -4803,7 +4848,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 30),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 34),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
@@ -5168,6 +5213,16 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "merge_sidecar::tests::request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix",
     "merge_sidecar::tests::authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression",
     "merge_sidecar::tests::rejected_request_does_not_consume_server_stream_state",
+    "merge_sidecar::tests::height_rollover_retries_only_each_sources_current_in_flight_chunk",
+    "merge_sidecar::tests::durable_requester_restart_advances_sequence_and_carries_close_floor",
+    "merge_sidecar::tests::durable_requester_crash_before_send_closes_unobserved_sequence",
+    "merge_sidecar::tests::durable_responder_restart_preserves_same_hub_gate_budget",
+    "merge_sidecar::tests::durable_responder_restart_allows_new_source_while_recovered_source_is_offline",
+    "merge_sidecar::tests::durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability",
+    "sumeragi::v2_lane_work::tests::sidecar_lifecycle_journal_failure_latches_restart_before_request_dispatch",
+    "sumeragi::v2_lane_work::tests::sidecar_close_journal_failure_latches_restart_and_blocks_queued_chunk",
+    "sumeragi::v2_lane_work::tests::sidecar_close_ack_journal_failure_latches_restart_before_completion",
+    "sumeragi::v2_lane_work::tests::sidecar_timeout_journal_failure_latches_restart_before_retry_dispatch",
     "sumeragi::v2_worker::tests::delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route",
     "sumeragi::v2_worker::tests::ordinary_reply_closed_flush_retains_current_item_while_sibling_source_progresses",
     "sumeragi::v2_worker::tests::ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once",
@@ -5320,7 +5375,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 # source, or disconnecting a writer-flush receipt elsewhere in the same item.
 _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": "68c84b7900832bd2e5fb1677e80150d91f20390c98fa1e7552435c9b41062df1",
-    "MergeSidecarTransport::with_reply_source_capacity": "aac782ad057c78637406059b551766b02e8f39780b0626b5c386eeac9a23923e",
+    "MergeSidecarTransport::with_limits": "0",
     "MergeSidecarTransport::release_unsent_request": "7a6360374a2065e41977fb7849fcf29e058e010b1c550b0f1cd919c07d3b59c4",
     "MergeSidecarTransport::park_authorized_server_request_attempts": "a7f6ad8f3a595fe655f0535b11d2564a2a783d60df1cc6bebeadb704606e96f6",
     "MergeSidecarTransport::park_inactive_outbound_attempts": "8d9c91dcd7a7ca934c573075d2bfd415a0dd4c3cd5042842ab45359dcb994ae1",
@@ -5339,9 +5394,47 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "MergeSidecarTransport::admit_server_request": "db84160a8a005f903984f2dfa6242196ba9c49b2d6adf221fd9127c4393a540d",
     "MergeSidecarTransport::cancel_unmaterialized_server_request": "2b6e03e20fc319f76b089f5d25f5915f7af852fe74ecc61219ddb154777dbf94",
     "MergeSidecarTransport::enqueue_response": "0a7f2d98bf24da85c8482e256b106f6584825d8416e3df8e5a7499cecc9b3774",
-    "MergeSidecarTransport::drain_outbound_chunks": "e1e624cffa6c79cb1b218568245b8b986ed3d55c356a41538994c8faa958dbf8",
+    "MergeSidecarTransport::drain_outbound_chunks_durable": "0",
     "MergeSidecarTransport::acknowledge_outbound_chunk": "22f8baed821c66db6b6ffee5a0c0df0733c8cc6fe906141805ab0498a8002417",
     "MergeSidecarTransport::tick_bounded": "01dfd53e8af56a17e26d04a6538d4861f868b536406cfc66dd30aa3128a50ccf",
+}
+
+# Complete seals for the crash-safe semantic request lifecycle. Process-local
+# reply capabilities are deliberately absent: only stable peer ownership,
+# sequence floors, terminal/pending cursors, and immutable pending-chunk
+# identities may survive a restart.
+_PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
+    "RequestStreamState::allocate": "0",
+    "RequestStreamState::close": "0",
+    "RequestStreamState::emit_close": "0",
+    "RequestStreamState::acknowledge_close": "0",
+    "ServerRequestSource::budget_source": "0",
+    "ServerRequestSource::shares_budget_with": "0",
+    "MergeSidecarLifecycleJournal::open": "0",
+    "MergeSidecarLifecycleJournal::remove_stale_temp": "0",
+    "MergeSidecarLifecycleJournal::load": "0",
+    "MergeSidecarLifecycleJournal::persist": "0",
+    "MergeSidecarTransport::lifecycle_geometry": "0",
+    "MergeSidecarTransport::lifecycle_max_snapshot_bytes": "0",
+    "MergeSidecarTransport::lifecycle_snapshot": "0",
+    "MergeSidecarTransport::restore_lifecycle_snapshot": "0",
+    "MergeSidecarTransport::open_durable": "0",
+    "MergeSidecarTransport::persist_lifecycle_state": "0",
+    "MergeSidecarTransport::rehydrate_with_exact_geometry": "0",
+    "MergeSidecarTransport::allocate_request_sequence": "0",
+    "MergeSidecarTransport::close_request_sequence": "0",
+    "MergeSidecarTransport::begin_close": "0",
+    "MergeSidecarTransport::begin_request": "0",
+    "MergeSidecarTransport::acknowledge_close": "0",
+    "MergeSidecarTransport::preflight_server_request_stream": "0",
+    "MergeSidecarTransport::advance_server_close_floor": "0",
+    "MergeSidecarTransport::admit_server_close": "0",
+    "MergeSidecarTransport::server_gate_attempt_count_after_close": "0",
+    "MergeSidecarTransport::source_gate_count_after_close": "0",
+    "MergeSidecarTransport::drain_outbound_chunks_inner": "0",
+    "MergeSidecarTransport::finish_completed": "0",
+    "MergeSidecarTransport::discard_invalid": "0",
+    "MergeSidecarTransport::retain_pending_blocks": "0",
 }
 
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
@@ -10635,6 +10728,18 @@ def _proof_obligation_architecture_errors(
             forbidden=("Spec", "NextV2", "AdvanceContext"),
             exact_statement=exact_statement,
         )
+    check_direct_theorem(
+        "progress-witness-preservation",
+        "ProgressWitnessObligation",
+        module="SumeragiV2AsyncTemporalClosureProofs",
+        required_spec="AsyncSpecAt",
+        forbidden=("Spec", "NextV2", "AdvanceContext"),
+        exact_statement=(
+            "\\A initialContext: "
+            "AsyncProgressWitnessAndHistoricalRecoveryProperty("
+            "AsyncSpecAt(initialContext))"
+        ),
+    )
     for obligation_id, (symbol, property_wrapper) in CHAIN_SAFETY_OBLIGATIONS.items():
         check_closed_theorem(
             obligation_id,
@@ -11740,7 +11845,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
               ),
               "DeadlockFreedomProperty": (
                 r"DeadlockFreedomWithLocalWorkProperty( specification, "
-                r"PostGstProductiveActionEnabled)"
+                r"PostGstSchedulerActionEnabled)"
               ),
               "DeadlockFreedomWithLocalWorkProperty": (
                 r"specification => [](gst /\ ~ResponsiveNodesDecide "
@@ -11767,7 +11872,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"IF now < deadline THEN deadline - now ELSE 0"
               ),
               "PostGstProductiveStep": (
-                r"PostGstProductiveStepWith(FALSE)"
+                r"/\ gst /\ PostGstProductiveSchedulerStep "
+                r"/\ PostGstProductiveEffect"
               ),
               "PostGstProductiveStepWith": (
                 r"/\ gst /\ AsyncNext /\ \/ HeightProtocolEvidenceGrows "
@@ -11786,6 +11892,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"\/ DeadlineDistance(asyncRetransmitDeadlines'[node], "
                 r"asyncNow') < DeadlineDistance("
                 r"asyncRetransmitDeadlines[node], asyncNow) "
+                r"\/ \E node \in AsyncTimedServiceNodes: "
                 r"\/ DeadlineDistance(asyncNodeServiceDeadlines'[node], "
                 r"asyncNow') < DeadlineDistance("
                 r"asyncNodeServiceDeadlines[node], asyncNow) "
@@ -11797,13 +11904,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"DeadlineDistance(packet.deadline, asyncNow)"
               ),
               "ProtectedServiceRankDecreaseStep": (
-                r"\E candidate \in AsyncCandidateSet, stage \in 2..6, "
-                r"position \in Nat: "
+                r"\E candidate \in ActiveScheduledCandidates: "
+                r"LET rank == CandidateServiceRank(candidate) IN "
                 r"/\ ResponsiveProtectedCandidateOwned(candidate) "
-                r"/\ CandidateServiceRank(candidate) = <<stage, position>> "
+                r"/\ rank[1] \in 2..6 "
+                r"/\ rank[2] \in Nat "
                 r"/\ \/ ~ResponsiveProtectedCandidateOwned(candidate)' "
                 r"\/ ServiceRankLess(CandidateServiceRank(candidate)', "
-                r"<<stage, position>>)"
+                r"rank)"
               ),
               "ResponsiveProtectedCandidateOwned": (
                 r"/\ candidate.node \in AsyncCurrentResponsiveVoters "
@@ -11837,7 +11945,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"<<5, position>>))"
               ),
               "ResponsiveProtectedServeJobOwned": (
-                r"/\ node \in AsyncCurrentResponsiveVoters "
+                r"/\ node \in AsyncArchiveIoServiceNodes "
                 r"/\ job \in AsyncServeJobSet "
                 r"/\ job \in SequenceSet(asyncIoQueues[node])"
               ),
@@ -11848,17 +11956,19 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
               ),
               "ServeJobRank": r"<<5, ServeJobIndex(node, job)>>",
               "ProtectedServeRankDecreaseStep": (
-                r"\E node \in AsyncCurrentResponsiveVoters, "
-                r"job \in AsyncServeJobSet, position \in Nat: "
+                r"\E node \in AsyncArchiveIoServiceNodes, "
+                r"job \in ActiveIoJobs: "
+                r"LET rank == ServeJobRank(node, job) IN "
                 r"/\ ResponsiveProtectedServeJobOwned(node, job) "
-                r"/\ ServeJobRank(node, job) = <<5, position>> "
+                r"/\ rank[1] = 5 "
+                r"/\ rank[2] \in Nat "
                 r"/\ \/ ~ResponsiveProtectedServeJobOwned(node, job)' "
                 r"\/ ServiceRankLess(ServeJobRank(node, job)', "
-                r"<<5, position>>)"
+                r"rank)"
               ),
               "ProtectedServeRankProgressProperty": (
-                r"specification => \A node \in "
-                r"AsyncCurrentResponsiveVoters, job \in AsyncServeJobSet, "
+                r"specification => \A node \in Responsive, "
+                r"job \in AsyncServeJobSet, "
                 r"position \in Nat: (gst /\ "
                 r"ResponsiveProtectedServeJobOwned(node, job) /\ "
                 r"ServeJobRank(node, job) = <<5, position>>) ~> "
@@ -11871,8 +11981,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"/\ ProtectedServeRankProgressProperty(specification)"
               ),
               "ProtectedServeStarvationProperty": (
-                r"specification => \A node \in "
-                r"AsyncCurrentResponsiveVoters, job \in AsyncServeJobSet: "
+                r"specification => \A node \in Responsive, "
+                r"job \in AsyncServeJobSet: "
                 r"(gst /\ ResponsiveProtectedServeJobOwned(node, job)) "
                 r"~> ~ResponsiveProtectedServeJobOwned(node, job)"
               ),
@@ -12640,15 +12750,9 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "HistoricalLockedCommitRecoveryWitness": (
             "\\/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {} "
             "\\/ \\E request \\in pendingLockCommit: "
-            "/\\ request.node = node "
-            "/\\ request.qc = qc "
+            "HistoricalLockedCommitWalMatches(node, qc, request) "
             "\\/ \\E candidate \\in AsyncCandidateSet: "
-            "/\\ candidate.node = node "
-            "/\\ candidate.height = qc.context.height "
-            "/\\ candidate.view = qc.view "
-            "/\\ candidate.subject = qc.subject "
-            '/\\ candidate.kind = "BeginLockCommit" '
-            "/\\ CandidateScheduled(candidate) "
+            "HistoricalBeginLockRecoveryCandidate(node, qc, candidate) "
             "\\/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)"
         ),
         "DecisionPipelineCandidate": (
@@ -12738,31 +12842,39 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ envelope.vote.context = context "
                 "/\\ envelope.vote.height = height "
                 "/\\ envelope.vote.signer \\in CurrentVoters "
-                "/\\ AuthenticatedHighRef(envelope.vote.highRank, "
-                "envelope.vote.highSubject) "
+                "/\\ ExactPrepareQcMatchesRef( "
+                "envelope.vote.highestPrepareQc, "
+                "envelope.vote.highRank, envelope.vote.highSubject) "
                 "/\\ envelope.vote.highRank <= envelope.vote.view"
             ),
             "ProposalJustified": (
                 "\\/ /\\ proposal.view = 0 "
+                "/\\ proposal.timeoutCertificate = NoTimeoutCertificate "
+                "/\\ proposal.highestPrepareQc = NoPrepareQC "
                 "/\\ proposal.justifyRank = NoRank "
                 "/\\ proposal.justifySubject = context.parent "
                 "\\/ /\\ proposal.view > 0 "
-                "/\\ \\E installed \\in installedTCs: "
-                "/\\ installed.node = node "
-                "/\\ installed.tc.context = context "
-                "/\\ installed.tc.view + 1 = proposal.view "
-                "/\\ TCValid(installed.tc) "
-                "/\\ proposal.justifyRank = TcHighRank(installed.tc) "
-                "/\\ proposal.justifySubject = TcHighSubject(installed.tc) "
-                "/\\ proposal.justifyRank < proposal.view "
-                "/\\ AuthenticatedHighRef(proposal.justifyRank, "
-                "proposal.justifySubject)"
+                "/\\ lastInstalledTc[node] # NoTimeoutCertificate "
+                "/\\ [node |-> node, tc |-> lastInstalledTc[node]] "
+                "\\in installedTCs "
+                "/\\ lastInstalledTc[node].context = context "
+                "/\\ lastInstalledTc[node].view + 1 = proposal.view "
+                "/\\ TCValid(lastInstalledTc[node]) "
+                "/\\ proposal.timeoutCertificate = lastInstalledTc[node] "
+                "/\\ proposal.highestPrepareQc = "
+                "lastInstalledTc[node].highestPrepareQc "
+                "/\\ proposal.justifyRank = "
+                "PrepareQcRank(proposal.highestPrepareQc) "
+                "/\\ proposal.justifySubject = "
+                "PrepareQcSubject(proposal.highestPrepareQc) "
+                "/\\ proposal.justifyRank < proposal.view"
             ),
             "SafeToPrepare": (
                 "\\/ lockRank[node] = NoRank "
                 "\\/ proposal.subject = lockSubject[node] "
-                "\\/ /\\ proposal.justifyRank > lockRank[node] "
-                "/\\ proposal.justifySubject = proposal.subject"
+                "\\/ /\\ proposal.highestPrepareQc # NoPrepareQC "
+                "/\\ proposal.highestPrepareQc.view > lockRank[node] "
+                "/\\ proposal.highestPrepareQc.subject = proposal.subject"
             ),
         }
         for symbol, exact_body in exact_core_operators.items():
@@ -12915,14 +13027,16 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "SignTimeout": (
                     "DeliverTimeout",
                     "IF SignTimeoutFormsTC(command) "
-                    'THEN <<CausalCandidate("Completion", "PersistInstallTC", '
-                    "command)>> ELSE <<>>",
+                    'THEN <<CausalCandidateWithEvidence( "Completion", '
+                    '"PersistInstallTC", command, '
+                    "ExactFormedTcForTimeoutCommand(command))>> ELSE <<>>",
                 ),
                 "DeliverTimeout": (
                     "DeliverTC",
                     "IF DeliverTimeoutFormsTC(command) "
-                    'THEN <<CausalCandidate("Completion", "PersistInstallTC", '
-                    "command)>> ELSE <<>>",
+                    'THEN <<CausalCandidateWithEvidence( "Completion", '
+                    '"PersistInstallTC", command, '
+                    "ExactFormedTcForTimeoutCommand(command))>> ELSE <<>>",
                 ),
                 "DeliverTC": (
                     "BeginInstallTC",
@@ -12957,6 +13071,14 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     if not async_path.is_file():
         return errors
     async_source = _async_liveness_source(formal_dir)
+    temporal_closure_path = (
+        formal_dir / "SumeragiV2AsyncTemporalClosureProofs.tla"
+    )
+    temporal_closure_source = (
+        temporal_closure_path.read_text(encoding="utf-8")
+        if temporal_closure_path.is_file()
+        else ""
+    )
 
     # A responsive crash clears process-local body work before Restart advances
     # the consumer generation.  Pin the generation-free ghost projection of
@@ -12998,8 +13120,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ installed.node = authority.node "
                 "/\\ installed.tc.context = qc.context "
                 "/\\ installed.tc.view >= qc.view "
-                "/\\ TcHighRank(installed.tc) = qc.view "
-                "/\\ TcHighSubject(installed.tc) = qc.subject "
+                "/\\ installed.tc.highestPrepareQc = qc "
                 "\\/ \\E vote \\in currentCommitIntents: "
                 "/\\ vote.signer = authority.node "
                 "/\\ vote.context = currentContext "
@@ -13256,6 +13377,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "HistoricalLockedBodyRecoveryStage": (
                 "\\/ HistoricalLockedBodyRecoveryTerminal(node, qc) "
                 "\\/ HistoricalLockedCommitRecoveryWitness(node, qc) "
+                "\\/ HistoricalLockedBodyRecoveryAuthority(node, qc) "
                 "\\/ HistoricalLockedCertifiedRequestActive(node, qc) "
                 "\\/ HistoricalLockedBodyRestartAuthority(node, qc) "
                 "\\/ HistoricalLockedBodyFetchOwned(node, qc) "
@@ -13532,7 +13654,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ HistoricalLockedCertifiedRequestActive(node, qc) "
                 "/\\ HistoricalLockedBodyServeHeadOwned(server, node, qc) "
                 "/\\ CertifiedServeCanRespond( "
-                "Head(asyncIoQueues[server]).candidate.item) "
+                "server, Head(asyncIoQueues[server]).candidate.item) "
                 "/\\ [AsyncNext]_AsyncAllVars "
                 "/\\ ServiceIoWorkerWork(server) "
                 "=> /\\ HistoricalLockedCertifiedRequestActive(node, qc)' "
@@ -13855,6 +13977,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PostDecisionTimeoutControlExcluded": (
             "\\A node: ~NoDecisionForNode(node) "
             "=> /\\ ~BeginTimeout(node) "
+            "/\\ \\A roundView: ~FormTC(node, roundView) "
             "/\\ \\A tc: ~BeginInstallTC(node, tc)"
         ),
         "PostDecisionTimeoutTrafficConsumeOnly": (
@@ -13950,19 +14073,16 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ [node |-> node, qc |-> qc] \\in decisions"
         ),
         "DecisionRawRequestPreimage": (
-            "[round |-> [height |-> qc.context.height, view |-> qc.view], "
-            "subject |-> qc.subject, certificate |-> qc, requester |-> node]"
+            "AsyncCertifiedRequestPreimage(node, qc)"
         ),
         "DecisionRawRequestSignature": (
-            "[signer |-> node, "
-            "preimage |-> DecisionRawRequestPreimage(node, qc)]"
+            "AsyncCertifiedRequestSignature(node, qc, 0)"
         ),
         "DecisionRawSignedRequest": (
-            "[preimage |-> DecisionRawRequestPreimage(node, qc), "
-            "signature |-> DecisionRawRequestSignature(node, qc)]"
+            "AsyncCertifiedSignedRequest(node, qc, 0)"
         ),
         "DecisionRawRequestHash": (
-            "[exactSignedRequest |-> DecisionRawSignedRequest(node, qc)]"
+            "AsyncCertifiedRequestHashOf(node, qc, 0)"
         ),
         "DecisionRequestOccurrences": "CertifiedRequestOutbox(node, qc)",
         "DecisionRegisteredOccurrences": (
@@ -13973,13 +14093,15 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ DecisionRegisteredOccurrences(node, qc) # {}"
         ),
         "CertifiedRequestLogicalIdentity": (
-            "[round |-> [height |-> request.envelope.height, "
+            "[round |-> [context |-> request.envelope.certificate.context, "
+            "height |-> request.envelope.height, "
             "view |-> request.envelope.view], "
             "subject |-> request.envelope.subject, "
             "requester |-> request.source]"
         ),
         "DecisionLogicalRequestIdentity": (
-            "[round |-> [height |-> qc.context.height, view |-> qc.view], "
+            "[round |-> [context |-> qc.context, "
+            "height |-> qc.context.height, view |-> qc.view], "
             "subject |-> qc.subject, requester |-> node]"
         ),
         "DecisionFetchCandidateAt": (
@@ -14556,10 +14678,37 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ request.qc.view = command.view "
                 "/\\ request.qc.subject = command.subject}"
             ),
-            "PersistDecisionFetchSuccessor": (
-                "LET request == CHOOSE entry \\in PersistDecisionRequests(command): TRUE "
+            "PersistDecisionRequest": (
+                "CHOOSE request \\in PersistDecisionRequests(command): TRUE"
+            ),
+            "PersistDecisionBody": (
+                "LET request == PersistDecisionRequest(command) "
+                "qc == request.qc IN BodyRecord("
+                "request.node, qc.context, qc.view, qc.subject)"
+            ),
+            "PersistDecisionValidationHeld": (
+                "LET request == PersistDecisionRequest(command) "
+                "qc == request.qc IN \\E validation \\in validatedBodies: "
+                "/\\ validation.node = request.node "
+                "/\\ validation.context = qc.context "
+                "/\\ validation.view = qc.view "
+                "/\\ validation.subject = qc.subject"
+            ),
+            "PersistDecisionRecoveryKind": (
+                "LET request == PersistDecisionRequest(command) "
+                "qc == request.qc IN "
+                "IF BodyHeldBy(durableBodies, request.node, qc.context, "
+                "qc.view, qc.subject) "
+                'THEN IF PersistDecisionValidationHeld(command) THEN "Apply" '
+                'ELSE "ValidateBody" '
+                "ELSE IF PersistDecisionBody(command) \\in availableBodies "
+                'THEN "StoreBody" ELSE "FetchBody"'
+            ),
+            "PersistDecisionRecoverySuccessor": (
+                "LET request == PersistDecisionRequest(command) "
                 "qc == request.qc IN AsyncCandidateAtConsumer( "
-                '"Completion", "FetchBody", request.node, qc.context.height, '
+                '"Completion", PersistDecisionRecoveryKind(command), '
+                "request.node, qc.context.height, "
                 "qc.view, qc.subject, NoAsyncItem, command.consumerView, "
                 "command.consumerGeneration, qc, qc.subject, qc.subject, qc.subject)"
             ),
@@ -14586,27 +14735,48 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
 
     persist_decision_theorem = _top_level_theorem_body(
         async_source,
-        "PersistDecisionRecoveryUsesCompletionFetchBody",
+        "PersistDecisionRecoveryUsesBodyStateCompletion",
         preserve_string_contents=True,
     )
     exact_persist_decision_statement = (
         "\\A command: "
         '/\\ command.kind = "PersistDecision" '
         "/\\ PersistDecisionRequests(command) # {} "
-        "=> LET successor == PersistDecisionFetchSuccessor(command) IN "
+        "=> LET request == PersistDecisionRequest(command) "
+        "qc == request.qc "
+        "successor == PersistDecisionRecoverySuccessor(command) IN "
         "/\\ CommandSuccessors(command) = <<successor>> "
         "/\\ Len(CommandSuccessors(command)) = 1 "
-        '/\\ CommandSuccessors(command)[1].kind = "FetchBody" '
-        '/\\ CommandSuccessors(command)[1].class = "Completion" '
-        "/\\ CommandSuccessors(command)[1].item = NoAsyncItem "
-        "/\\ CommandSuccessors(command)[1].evidence = "
-        "(CHOOSE request \\in PersistDecisionRequests(command): TRUE).qc "
+        "/\\ successor.kind = PersistDecisionRecoveryKind(command) "
+        '/\\ successor.class = "Completion" '
+        "/\\ successor.item = NoAsyncItem "
+        "/\\ successor.evidence = qc "
+        "/\\ (/\\ BodyHeldBy(durableBodies, request.node, qc.context, "
+        "qc.view, qc.subject) "
+        "/\\ PersistDecisionValidationHeld(command) "
+        '=> successor.kind = "Apply") '
+        "/\\ (/\\ BodyHeldBy(durableBodies, request.node, qc.context, "
+        "qc.view, qc.subject) "
+        "/\\ ~PersistDecisionValidationHeld(command) "
+        '=> successor.kind = "ValidateBody") '
+        "/\\ (/\\ ~BodyHeldBy(durableBodies, request.node, qc.context, "
+        "qc.view, qc.subject) "
+        "/\\ PersistDecisionBody(command) \\in availableBodies "
+        '=> successor.kind = "StoreBody") '
+        "/\\ (/\\ ~BodyHeldBy(durableBodies, request.node, qc.context, "
+        "qc.view, qc.subject) "
+        "/\\ PersistDecisionBody(command) \\notin availableBodies "
+        '=> successor.kind = "FetchBody") '
         "/\\ (CandidateConsumerCurrent(command) "
-        "=> CandidateConsumerCurrent( CommandSuccessors(command)[1]))"
+        "=> CandidateConsumerCurrent(successor))"
     )
     exact_persist_decision_proof_tokens = (
         "CommandSuccessors",
-        "PersistDecisionFetchSuccessor",
+        "PersistDecisionRecoverySuccessor",
+        "PersistDecisionRecoveryKind",
+        "PersistDecisionBody",
+        "PersistDecisionValidationHeld",
+        "PersistDecisionRequest",
         "AsyncCandidateAtConsumer",
         "AsyncCandidateWithIdentity",
         "CandidateConsumerCurrent",
@@ -14642,18 +14812,18 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "progress-witness-production-refinement"
     ]
     production_refinement_operator = _top_level_operator_body(
-        async_source,
+        temporal_closure_source,
         progress_witness_contract.ledger_symbol,
         preserve_string_contents=True,
     )
     production_refinement_theorem = _top_level_theorem_body(
-        async_source,
+        temporal_closure_source,
         progress_witness_contract.ledger_symbol,
         preserve_string_contents=True,
     )
     if production_refinement_operator is None or production_refinement_theorem is not None:
         errors.append(
-            f"{async_path}: production progress-witness refinement sentinel "
+            f"{temporal_closure_path}: production progress-witness refinement sentinel "
             f"{progress_witness_contract.ledger_symbol} must remain a top-level "
             "operator and may not be substituted by a proofless theorem"
         )
@@ -14665,18 +14835,18 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
         if observed != expected:
             errors.append(
-                f"{async_path}:{line}: progress-witness ledger operator must "
+                f"{temporal_closure_path}:{line}: progress-witness ledger operator must "
                 f"state exactly {expected!r}; found {observed!r}"
             )
 
     progress_witness_bridge = _top_level_theorem_body(
-        async_source,
+        temporal_closure_source,
         progress_witness_contract.tla_theorem,
         preserve_string_contents=True,
     )
     if progress_witness_bridge is None:
         errors.append(
-            f"{async_path}: missing progress-witness cross-tool theorem "
+            f"{temporal_closure_path}: missing progress-witness cross-tool theorem "
             f"{progress_witness_contract.tla_theorem}"
         )
     else:
@@ -14688,7 +14858,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         expected_statement = progress_witness_contract.tla_statement
         if observed_statement != expected_statement:
             errors.append(
-                f"{async_path}:{line}: progress-witness cross-tool theorem must "
+                f"{temporal_closure_path}:{line}: progress-witness cross-tool theorem must "
                 f"state exactly {expected_statement!r}; found "
                 f"{observed_statement!r}"
             )
@@ -14698,7 +14868,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
         if observed_proof != expected_proof:
             errors.append(
-                f"{async_path}:{line}: progress-witness cross-tool theorem must "
+                f"{temporal_closure_path}:{line}: progress-witness cross-tool theorem must "
                 "retain its exact model-obligation bridge proof"
             )
 
@@ -14859,7 +15029,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
     progress_obligation = _top_level_theorem_body(
-        async_source, "ProgressWitnessObligation"
+        temporal_closure_source, "ProgressWitnessObligation"
     )
     exact_progress_obligation = (
         "\\A initialContext: "
@@ -14867,7 +15037,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncSpecAt(initialContext))"
     )
     if progress_obligation is None:
-        errors.append(f"{async_path}: missing ProgressWitnessObligation")
+        errors.append(f"{temporal_closure_path}: missing ProgressWitnessObligation")
     else:
         body, line = progress_obligation
         statement = re.split(
@@ -14876,7 +15046,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         normalized = " ".join(statement.split())
         if normalized != exact_progress_obligation:
             errors.append(
-                f"{async_path}:{line}: ProgressWitnessObligation must use the "
+                f"{temporal_closure_path}:{line}: ProgressWitnessObligation must use the "
                 "crash-aware async plus historical locked-body recovery property "
                 "and state only "
                 f"{exact_progress_obligation!r}; found {normalized!r}"
@@ -14887,18 +15057,18 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "HistoricalLockedBodyRecoveryProductionRefinementObligation",
     ):
         if _top_level_theorem_body(
-            async_source,
+            temporal_closure_source,
             retired_historical_sentinel,
             preserve_string_contents=True,
         ) is not None:
             errors.append(
-                f"{async_path}: retired unledgered historical recovery theorem "
+                f"{temporal_closure_path}: retired unledgered historical recovery theorem "
                 f"{retired_historical_sentinel} must remain folded into the "
                 "reviewed progress-witness obligations"
             )
 
     historical_production_bridge = _top_level_theorem_body(
-        async_source,
+        temporal_closure_source,
         "HistoricalLockedBodyRecoveryProductionRefinementFromReviewedSeams",
         preserve_string_contents=True,
     )
@@ -14916,7 +15086,7 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     )
     if historical_production_bridge is None:
         errors.append(
-            f"{async_path}: missing historical locked-body production bridge from "
+            f"{temporal_closure_path}: missing historical locked-body production bridge from "
             "the two reviewed cross-tool seams"
         )
     else:
@@ -14928,13 +15098,13 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         observed_proof = " ".join(parts[1].split()) if len(parts) == 2 else ""
         if observed_statement != exact_historical_bridge_statement:
             errors.append(
-                f"{async_path}:{line}: historical locked-body production bridge "
+                f"{temporal_closure_path}:{line}: historical locked-body production bridge "
                 f"must state exactly {exact_historical_bridge_statement!r}; "
                 f"found {observed_statement!r}"
             )
         if observed_proof != exact_historical_bridge_proof:
             errors.append(
-                f"{async_path}:{line}: historical locked-body production bridge "
+                f"{temporal_closure_path}:{line}: historical locked-body production bridge "
                 "must derive the refinement from the exact effective-lock and "
                 "progress-witness definitions"
             )
@@ -15921,7 +16091,9 @@ def _reply_route_ownership_source_fidelity_errors(
         ownership,
         "ReplyAttemptSurvivalStep",
         (
-            "\\A retainedBefore \\in rrAttempts: \\E retainedAfter \\in rrAttempts'",
+            "\\A retainedBefore \\in rrAttempts:",
+            "ReplyAttemptCoveredByCloseStep(retainedBefore)",
+            "\\E retainedAfter \\in rrAttempts':",
             "SameReplyAttemptIdentity(retainedBefore, retainedAfter)",
         ),
     )
@@ -18175,7 +18347,9 @@ FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
 
     daemon_path = paths["daemon"]
     daemon_source = sources["daemon"]
-    daemon_start = _require_rust_item(daemon_path, daemon_source, "start", errors)
+    daemon_start = _require_rust_item(
+        daemon_path, daemon_source, "start_with_runtime_deps", errors
+    )
     _require_rust_item_context(
         daemon_path,
         daemon_start,
@@ -21531,8 +21705,8 @@ if source_retained.is_some_and(|retained| retained.items >= 1) {
         p2p_network_path,
         network_reliable_items.get("submit_progress_message_to_source"),
         """
-ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),
-ProgressLeaseAttempt::CancelledMembership => return Ok(None),
+ProgressLeaseAttempt::SameRequestAlreadyOwned
+| ProgressLeaseAttempt::CancelledMembership => return Ok(None),
 ProgressLeaseAttempt::InvalidTicket => {
     return Err(NetworkActorAdmissionError::Rejected {
         message,
@@ -22860,14 +23034,15 @@ merge_sidecars: match retained_merge_sidecars {
         limits.reply_source_capacity.get(),
         limits.merge_sidecar_limits,
     ),
-    None => MergeSidecarTransport::with_limits(
+    None => MergeSidecarTransport::open_durable(
+        &kura.store_root(),
         limits.reply_source_capacity.get(),
         limits.merge_sidecar_limits,
     ),
 }
 """,
         "adapter rehydrates retained sidecar ownership only under the exact fingerprinted "
-        "geometry and installs the same limits for a fresh live transport",
+        "geometry and opens the crash-safe lifecycle journal for a fresh live transport",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -23340,7 +23515,7 @@ def _post_decision_timeout_mutation_source_fidelity_errors(
 def _certified_response_registration_runner_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
-    """Pin the five certified-response registration mutation outcomes."""
+    """Pin the seven certified-response registration mutation outcomes."""
 
     path = repo_root / CERTIFIED_RESPONSE_REGISTRATION_RUNNER
     if not path.is_file() or path.is_symlink():
@@ -23395,6 +23570,16 @@ def _certified_response_registration_runner_errors(
             ),
         ),
         (
+            "commit-certificate-fanout-fixed",
+            "certified_response_registration_commit_fanout_fixed.cfg",
+            0,
+            (
+                "Model checking completed. No error has been found.",
+                "5 states generated, 5 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 5",
+            ),
+        ),
+        (
             "restart-fixed",
             "certified_response_registration_restart_fixed.cfg",
             0,
@@ -23422,6 +23607,16 @@ def _certified_response_registration_runner_errors(
                 "Invariant AcceptedOnlyWhileOutstanding is violated.",
                 "5 states generated, 5 distinct states found, 0 states left on queue.",
                 "depth of the complete state graph search is 5",
+            ),
+        ),
+        (
+            "commit-certificate-route-only-retirement",
+            "certified_response_registration_commit_fanout_route_only_bug.cfg",
+            12,
+            (
+                "Invariant CommitFanoutFirstAcceptedResponseRetiresAllRouteAliases is violated.",
+                "4 states generated, 4 distinct states found, 0 states left on queue.",
+                "depth of the complete state graph search is 4",
             ),
         ),
         (
@@ -23465,9 +23660,9 @@ def _certified_response_registration_runner_errors(
 
     expected_order = tuple(case[0] for case in expected_cases)
     observed_order = tuple(case[0] for case in cases)
-    if len(cases) != 5 or observed_order != expected_order:
+    if len(cases) != 7 or observed_order != expected_order:
         errors.append(
-            f"{path}: runner must execute exactly five sealed cases in order "
+            f"{path}: runner must execute exactly seven sealed cases in order "
             f"{expected_order!r}; found {observed_order!r}"
         )
 
@@ -23486,9 +23681,9 @@ def _certified_response_registration_runner_errors(
 
     repaired_count = sum(case[2] == 0 for case in cases)
     mutant_count = sum(case[2] == 12 for case in cases)
-    if repaired_count != 3 or mutant_count != 2:
+    if repaired_count != 4 or mutant_count != 3:
         errors.append(
-            f"{path}: runner must contain exactly three repaired cases and two "
+            f"{path}: runner must contain exactly four repaired cases and three "
             f"status-12 mutants; found repaired={repaired_count}, "
             f"mutants={mutant_count}"
         )
@@ -23533,15 +23728,15 @@ def _certified_response_registration_runner_errors(
             parsed_depth_cases += 1
             depth_total += int(depth_matches[0].group("depth"))
     if (
-        parsed_state_cases != 5
-        or parsed_depth_cases != 5
-        or generated_total != 36
-        or distinct_total != 36
-        or depth_total != 36
+        parsed_state_cases != 7
+        or parsed_depth_cases != 7
+        or generated_total != 45
+        or distinct_total != 45
+        or depth_total != 45
     ):
         errors.append(
-            f"{path}: runner must report exactly 36 generated states, 36 "
-            "distinct states, and aggregate depth 36 across five cases; found "
+            f"{path}: runner must report exactly 45 generated states, 45 "
+            "distinct states, and aggregate depth 45 across seven cases; found "
             f"generated={generated_total}, distinct={distinct_total}, "
             f"depth={depth_total}, state_cases={parsed_state_cases}, "
             f"depth_cases={parsed_depth_cases}"
@@ -23849,20 +24044,16 @@ def _certified_response_registration_production_source_fidelity_errors(
         "MatchingCertifiedRequests": (
             "{request \\in asyncActiveRequests: "
             '/\\ request.kind = "CertifiedRequest" '
-            "/\\ request.source = response.envelope.recipient "
-            "/\\ request.envelope.height = response.envelope.height "
-            "/\\ request.envelope.view = response.envelope.view "
-            "/\\ request.envelope.subject = response.envelope.subject}"
+            "/\\ AsyncCertifiedRequestHash(request) = "
+            "response.envelope.requestHash}"
         ),
         "CertifiedResponseAuthorized": (
             '/\\ item.kind = "CertifiedResponse" '
+            "/\\ CertifiedResponseAuthenticatedOccurrence(item) "
+            "/\\ item.envelope.archiveServer \\in AsyncArchiveServerIds "
             "/\\ MatchingCertifiedRequests(item) # {} "
-            "/\\ \\E qc \\in DecisionQcValues \\cup prepareQCs: "
-            "/\\ CertifiedBodyRecoveryAuthority(item.envelope.recipient, qc) "
-            "/\\ item.envelope.height = qc.context.height "
-            "/\\ item.envelope.view = qc.view "
-            "/\\ item.envelope.subject = qc.subject "
-            "/\\ item.source \\in qc.signers"
+            "/\\ \\E request \\in MatchingCertifiedRequests(item): "
+            "FrozenCertifiedResponseBinding(item, request)"
         ),
     }
     for symbol, expected in expected_bodies.items():
@@ -23878,10 +24069,10 @@ def _certified_response_registration_production_source_fidelity_errors(
         normalized = " ".join(body.split())
         if normalized != expected:
             description = (
-                "must require one exact live matching certified request before "
-                "certificate-backed recovery/signer authorization"
+                "must require an authenticated sent occurrence, one exact "
+                "live request hash, and its frozen certificate binding"
                 if symbol == "CertifiedResponseAuthorized"
-                else "must retain exact outstanding-request identity"
+                else "must retain exact outstanding signed-request-hash identity"
             )
             errors.append(
                 f"{path}:{line}: {symbol} {description}; expected "
@@ -23903,20 +24094,20 @@ def _certified_response_registration_mutation_source_fidelity_errors(
     model_count = sum(name.endswith(".tla") for name in expected_formal)
     config_count = sum(name.endswith(".cfg") for name in expected_formal)
     if (
-        len(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) != 6
+        len(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) != 8
         or model_count != 1
-        or config_count != 5
+        or config_count != 7
     ):
         errors.append(
             "certified-response registration source seal must name exactly one "
-            "model and five configurations; found "
+            "model and seven configurations; found "
             f"models={model_count}, configurations={config_count}, "
             f"total={len(CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS)}"
         )
     if digest_names != expected_all:
         errors.append(
             "certified-response registration digest inventory must equal the "
-            f"exact seven-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact nine-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -25924,9 +26115,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "installed == {item \\in remembered: "
             "item.source # node \\/ ControlClass(item) "
             "\\in AsyncInstallRetainedControlKinds} "
-            "currentTimeout == IF StrictSameRoundTcUpgrade(node, tc) "
-            "THEN CurrentTimeoutControlFor(remembered, node) ELSE {} "
-            "IN installed \\cup currentTimeout"
+            "withCurrentTimeout == installed \\cup "
+            "(IF StrictSameRoundTcUpgrade(node, tc) "
+            "THEN CurrentTimeoutControlFor(remembered, node) ELSE {}) "
+            "IN ReseedExactHighestPrepareControl("
+            "withCurrentTimeout, node, tc)"
         ),
         "PersistInstalledControlAfterInstall": (
             "/\\ asyncRetainedControl' = InstalledControlAfterTC("
@@ -25938,7 +26131,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "ELSE asyncTransport "
             "/\\ asyncActiveRequests' = "
             "{item \\in asyncActiveRequests: "
-            "CertifiedRequestSurvivesInstall(item, node, tc)}"
+            "CertifiedRequestSurvivesInstall(item, node, tc)} "
+            "/\\ asyncCertifiedResponseClaim' = "
+            "CertifiedResponseClaimForRequests(asyncActiveRequests')"
         ),
         "AsyncNonCrashOuterFrame": (
             "/\\ UNCHANGED up /\\ UNCHANGED AsyncRecoveryControlVars "
@@ -25969,20 +26164,21 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "PostGstOpenHistoricalRecovery(node)) "
             "\\/ (\\E node \\in Responsive: "
             "PostGstRunHistoricalRecoveryNode(node)) "
-            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "\\/ (\\E node \\in Responsive: "
             "PostGstRunHistoricalServer(node)) "
             "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
             "PostGstCommitCertificateDiscovery(node)) "
             "\\/ (\\E node \\in Responsive: "
             "PostGstHistoricalCommitCertificateDiscovery(node)) "
-            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "\\/ (\\E node \\in Responsive: "
             "PostGstServiceIoWorker(node)) "
             "\\/ (\\E node \\in Responsive: "
             "PostGstServiceHistoricalRecoveryIoWorker(node)) "
-            "\\/ (\\E recipient \\in AsyncVotersAt(initialContext), "
-            "source \\in AsyncVotersAt(initialContext): "
+            "\\/ (\\E recipient \\in Responsive, "
+            "source \\in AsyncIngressSources: "
             "PostGstAdmitHiddenPacket(recipient, source)) "
-            "\\/ (\\E recipient \\in ValidatorIds, source \\in ValidatorIds: "
+            "\\/ (\\E recipient \\in ValidatorIds, "
+            "source \\in AsyncIngressSources: "
             "PostGstAdmitHistoricalRecoveryPacket(recipient, source))"
         ),
         "AsyncSetGST": (
@@ -25990,14 +26186,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             '/\\ asyncRecoveryPhase \\notin '
             '{"RestartRequired", "ReplayRequired", "Replaying"} '
             "/\\ Responsive \\subseteq up /\\ SetGST "
-            "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryControlVars>> "
-            "/\\ asyncHistoricalLockRestartAuthorities' = "
-            "RetainedHistoricalLockRestartAuthorities"
-        ),
-        "RetainedHistoricalLockRestartAuthorities": (
-            "{authority \\in asyncHistoricalLockRestartAuthorities: "
-            "/\\ HistoricalLockRestartAuthoritySource(authority) "
-            "/\\ ~HistoricalLockRestartExactCurrentFetchOwner(authority)}"
+            "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>> "
+            "/\\ AsyncNonRunnerOuterFrame"
         ),
         "AsyncRecoveryControlVars": (
             "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration, "
@@ -26070,8 +26260,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "IF NodeHasApplication(node) THEN <<>> "
             "ELSE IF RestartDecisions(node) # {} "
             "THEN RestartDecisionReplay(node) "
-            "ELSE LET signatures == RestartSignatureReplay(node) "
-            "IN IF Len(signatures) > 0 THEN <<Head(signatures)>> "
+            "ELSE LET locked == RestartLockedBodyReplay(node) "
+            "signatures == RestartSignatureReplay(node) "
+            "IN IF Len(signatures) > 0 "
+            "THEN locked \\o <<Head(signatures)>> "
+            "ELSE IF Len(locked) > 0 THEN locked "
             "ELSE RestartRunnerAssembly(node)"
         ),
         "AsyncRestartAuthorityInvariant": (
@@ -26087,8 +26280,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncStepRefinesCore": "AsyncNext => [Next]_vars",
         "CertifiedServeCanRespond": (
             '/\\ request.kind = "CertifiedRequest" '
-            "/\\ BodyHeldBy(durableBodies, request.envelope.recipient, "
-            "context, request.envelope.view, request.envelope.subject)"
+            "/\\ request.envelope.recipient = server "
+            "/\\ BodyHeldBy(durableBodies, server, "
+            "request.envelope.certificate.context, "
+            "request.envelope.view, request.envelope.subject)"
         ),
         "NextCommandClass": (
             'CASE commandClass = "Completion" -> "Progress" '
@@ -26276,9 +26471,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ node \\in Responsive \\cap up "
             "/\\ ~NodeHasDecision(node) "
             "/\\ ~NodeHasApplication(node) "
-            "/\\ \\E server \\in "
-            "(AsyncCurrentResponsiveVoters \\cap up) \\ {node}: "
-            "NodeHasApplication(server)"
+            "/\\ (AsyncResponsiveAppliedArchiveServers \\ {node}) # {}"
         ),
         "OpenHistoricalRecovery": (
             "/\\ gst /\\ HistoricalRecoverySourceReady(node) "
@@ -26299,7 +26492,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CommitCertificateResponseAuthorized": (
             '/\\ item.kind = "CommitCertificateResponse" '
-            "/\\ item.source \\in CurrentVoters "
+            "/\\ item.source \\in AsyncIngressSources "
+            "/\\ item.envelope.request \\in asyncActiveRequests "
+            "/\\ CommitCertificateRequestAuthorized("
+            "item.envelope.request) "
             "/\\ item.envelope.qc \\in commitQCs "
             "/\\ item.envelope.qc.context = context "
             '/\\ item.envelope.qc.phase = "Commit" '
@@ -26314,7 +26510,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ CommitCertificateDiscoveryStepWork(node)"
         ),
         "ServiceIoWorker": (
-            "/\\ node \\in AsyncCurrentResponsiveVoters "
+            "/\\ node \\in AsyncArchiveIoServiceNodes "
             "/\\ ServiceIoWorkerWork(node)"
         ),
         "ServiceHistoricalRecoveryIoWorker": (
@@ -26355,9 +26551,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "HistoricalRecoveryPacketCorridor": (
             "\\/ /\\ HistoricalRecoveryTarget(recipient) "
-            "/\\ source \\in AsyncCurrentResponsiveVoters "
+            "/\\ source \\in AsyncIngressSources "
             "\\/ /\\ HistoricalRecoveryTarget(source) "
-            "/\\ recipient \\in AsyncCurrentResponsiveVoters"
+            "/\\ recipient \\in AsyncArchiveIoServiceNodes"
         ),
         "PostGstAdmitHistoricalRecoveryPacket": (
             "/\\ gst "
@@ -26389,7 +26585,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 '"CommitCertificateResponse"}'
             ),
             "IngressAdmissionClass": (
-                "IF item.kind \\in IngressTransportCompletionKinds "
+                'IF item.kind = "CertifiedResponse" '
+                'THEN "CertifiedResponse" ELSE IF item.kind \\in '
+                "IngressTransportCompletionKinds "
                 'THEN "TransportCompletion" ELSE IF item.kind \\in '
                 'IngressProgressKinds THEN "Progress" ELSE "Auxiliary"'
             ),
@@ -26400,7 +26598,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "IngressLaneHasTransportCompletionIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
-                'IngressAdmissionClass(queued) = "TransportCompletion"'
+                "IngressUsesPhysicalCompletionOwner(queued)"
             ),
             "IngressProtectedSourcesFor": (
                 "{source \\in AsyncIngressSources: "
@@ -26482,16 +26680,17 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncTimeoutVoteByteReserve": "64 * 1024",
             "AsyncTimeoutVoteByteGateAllows": (
                 '\\/ item.kind # "TimeoutVote" '
-                "\\/ item.source \\notin ValidatorIds "
+                "\\/ IngressResourceSource(item) \\notin ValidatorIds "
                 "\\/ /\\ AsyncValidTimeoutVoteWireByteBound <= "
                 "AsyncTimeoutVoteByteReserve "
                 "/\\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes, "
-                "item.envelope.recipient, item.source)"
+                "item.envelope.recipient, IngressResourceSource(item))"
             ),
             "AsyncTransportCompletionOwnerGateAllows": (
-                '\\/ IngressAdmissionClass(item) # "TransportCompletion" '
+                "\\/ ~IngressUsesPhysicalCompletionOwner(item) "
                 "\\/ ~IngressLaneHasTransportCompletionIn("
-                " asyncIngressLanes, item.envelope.recipient, item.source)"
+                " asyncIngressLanes, item.envelope.recipient, "
+                "IngressResourceSource(item))"
             ),
             "IngressLaneHasTimeoutVoteIn": (
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
@@ -26501,7 +26700,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ IngressDepth(item.envelope.recipient) < "
                 "IngressUsableCapacityAfterAdmission(item) "
                 "/\\ AsyncTimeoutVoteByteGateAllows(item) "
-                "/\\ AsyncTransportCompletionOwnerGateAllows(item)"
+                "/\\ AsyncTransportCompletionOwnerGateAllows(item) "
+                "/\\ CertifiedResponseFreshClaimGateAllows(item) "
+                "/\\ AsyncUntrustedGenericCompletionGateAllows(item)"
             ),
             "ProtectedProgressCommand": (
                 'CASE command.kind = "DeliverVote" -> '
@@ -26630,10 +26831,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         reviewed_response_branches = {
             "CertifiedResponse": (
                 'ELSE IF item.kind = "CertifiedResponse" '
-                "THEN \\/ ~CertifiedResponseAuthorized(item) "
+                "THEN \\/ ~CertifiedResponseClaimAuthorized(item) "
                 "\\/ CandidateScheduled( CertifiedResponseCandidate(item)) "
-                "\\/ /\\ ~CompletionCausalAdmissionDebt(node) "
-                "/\\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity "
+                "\\/ /\\ CanEnqueueCertifiedResponse(node) "
                 "/\\ ~CandidateScheduled( CertifiedResponseCandidate(item)) "
                 'ELSE IF item.kind = "CommitCertificateResponse"'
             ),
@@ -26670,9 +26870,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "CertifiedResponse": (
                 "IF CandidateScheduled(completion) THEN UNCHANGED "
                 "<<AsyncIoVars, asyncCommandQueues, asyncNextCommandClass>> "
-                "ELSE /\\ asyncLocalReadyCompletions' = "
-                "[asyncLocalReadyCompletions EXCEPT "
-                "![node] = Append(@, completion)]"
+                "ELSE /\\ EnqueueCandidate(completion) "
+                "/\\ UNCHANGED AsyncIoVars"
             ),
             "CommitCertificateResponse": (
                 "IF CandidateScheduled( discoveredCandidate) THEN UNCHANGED "
@@ -26847,8 +27046,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             '/\\ IF /\\ item.kind = "CommitCertificateResponse" '
             "/\\ item \\in asyncSentItems "
             "/\\ CommitCertificateResponseAuthorized(item) "
-            "/\\ item.envelope \\notin qcNetwork "
-            "THEN ImportAuthenticatedCommitCertificate(item.envelope) "
+            "/\\ DiscoveredCommitQcItem(item).envelope \\notin qcNetwork "
+            "THEN ImportAuthenticatedCommitCertificate( "
+            "DiscoveredCommitQcItem(item).envelope) "
             "ELSE UNCHANGED vars"
         )
         if exact_import not in drain_normalized:
@@ -26967,7 +27167,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         )
         expected_persist_decision_branch = (
             "IF PersistDecisionRequests(command) = {} THEN <<>> "
-            "ELSE <<PersistDecisionFetchSuccessor(command)>>"
+            "ELSE <<PersistDecisionRecoverySuccessor(command)>>"
         )
         if persist_decision_branch is None:
             errors.append(
@@ -26981,7 +27181,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             if persist_decision_normalized != expected_persist_decision_branch:
                 errors.append(
                     f"{path}:{successor_line}: PersistDecision must schedule "
-                    "exactly one FetchBody frontier; found "
+                    "exactly one body-state recovery frontier; found "
                     f"{persist_decision_normalized!r}"
                 )
 
@@ -27049,7 +27249,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ AsyncQueueTyped(RestartReplay(node)) "
                 "/\\ AsyncCausalQueueOwnership(node, RestartReplay(node)) "
                 "/\\ SequenceHasUniqueValues(RestartReplay(node)) "
-                "/\\ Len(RestartReplay(node)) <= 1"
+                "/\\ Len(RestartReplay(node)) <= 2"
             ),
         }
         for symbol, expected_statement in restart_theorems.items():
@@ -27255,12 +27455,12 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "CommitCertificateServeCanRespond",
             "CommitCertificateResponseItems",
         ),
-        "CertifiedRequestOutbox": ("qc.signers \\ {node}",),
+        "CertifiedRequestOutbox": ("CertifiedArchiveRoutes(node, qc)",),
         "SendNodeRetransmissions": ("RetryableItems(node)",),
         "AsyncTickEnabled": (
             "~gst",
             "OverdueResponsivePackets",
-            "LocalRunnerServiceOwners",
+            "AsyncTimedServiceNodes",
         ),
         "AsyncRunnerStep": (
             "\\E node \\in AsyncCurrentResponsiveVoters: RunNode(node)",
@@ -27339,16 +27539,18 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncItemTyped": (
             'item.kind = "TimeoutCertificate"',
             "AsyncTcEnvelopeTyped(item.envelope)",
-            'item.kind \\notin {"Noise", "Chunk", "CertifiedResponse"}',
+            'item.kind \\notin {"Noise", "Chunk", "CertifiedResponse", "CommitCertificateResponse"}',
             "item.source \\in ValidatorIds",
         ),
         "AsyncNetworkItems": (
-            'kind \\in {"Chunk", "CertifiedResponse"}, '
-            "source \\in AsyncIngressSources",
+            'AsyncNetworkItem("Chunk", source, envelope)',
+            '"CertifiedResponse", source,',
+            "AsyncCertifiedResponseEnvelope(",
+            "archiveServer \\in AsyncArchiveServerIds",
         ),
         "InjectUntrustedTransportCompletion": (
             "kind \\in IngressTransportCompletionKinds",
-            "AsyncUntrustedSource",
+            "AsyncUntrustedTransportCompletionItem(kind, recipient, nonce)",
             "nonce = 0",
             "~ItemScheduled(item)",
             "asyncTransport' = asyncTransport \\cup {packet}",
@@ -27503,8 +27705,8 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "SelectedIngressItemAt(node, index)",
             "PopSelectedIngress(node, index, laneIndex)",
             "CommitCertificateResponseAuthorized(item)",
-            "item.envelope \\notin qcNetwork",
-            "ImportAuthenticatedCommitCertificate(item.envelope)",
+            "DiscoveredCommitQcItem(item).envelope \\notin qcNetwork",
+            "ImportAuthenticatedCommitCertificate( DiscoveredCommitQcItem(item).envelope)",
             "ELSE UNCHANGED vars",
             "CommitCertificateResponseCandidate(item)",
             "EnqueueCandidate( discoveredCandidate)",
@@ -27538,7 +27740,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "PostGstServiceIoWorker(node)",
             "\\A node \\in Responsive: WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))",
             "PostGstAdmitHiddenPacket(recipient, source)",
-            "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: WF_AsyncAllVars( PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
+            "\\A recipient \\in ValidatorIds, source \\in AsyncIngressSources: WF_AsyncAllVars( PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
         ),
         "VoteOutbox": (
             "recipient \\in CurrentVoters \\ {request.node}",
@@ -27555,7 +27757,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             'CausalCandidate("Completion", "ValidateBody", command)',
             'CausalCandidate("Completion", "StoreBody", command)',
             "PersistDecisionRequests(command)",
-            "PersistDecisionFetchSuccessor(command)",
+            "PersistDecisionRecoverySuccessor(command)",
         ),
         "AsyncProgressOwnershipInvariant": (
             "AsyncLogicalCandidateOwnershipInvariant",
@@ -27575,7 +27777,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "ExecuteDecisionFetch": (
             "CertifiedRecoveryFetchFrontier(command)",
             "BodyHeldBy(durableBodies, command.node, context, command.view, command.subject)",
-            "THEN /\\ UNCHANGED vars /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport>>",
+            "THEN /\\ UNCHANGED vars /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncCertifiedResponseClaim, asyncTransport>>",
             "qc \\in DecisionQcValues \\cup prepareQCs",
             "CommandMatches(command, command.node, qc.view, qc.subject)",
             "command.evidence = qc",
@@ -27743,11 +27945,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "ResponsiveReplayScheduledCandidates(asyncRecoveryNode)",
         ),
         "RestartHighestPrepareQCs": (
-            "highestRank[node] # NoRank",
-            "qc.context = context",
-            'qc.phase = "Prepare"',
-            "qc.view = highestRank[node]",
-            "qc.subject = highestSubject[node]",
+            "highestPrepareQc[node] = NoPrepareQC",
+            "THEN {}",
+            "ELSE {highestPrepareQc[node]}",
         ),
         "RestartDecisionQCs": (
             "decision.qc",
@@ -27761,9 +27961,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "ELSE {lastInstalledTc[node]}",
         ),
         "RestartHighestPrepareControl": (
-            "certificates == RestartHighestPrepareQCs(node)",
-            "IF certificates = {} THEN {}",
-            "QcOutbox(node, CHOOSE qc \\in certificates: TRUE)",
+            "highestPrepareQc[node] = NoPrepareQC",
+            "THEN {}",
+            "ELSE QcOutbox(node, highestPrepareQc[node])",
         ),
         "RestartDecisionControl": (
             "certificates == RestartDecisionQCs(node)",
@@ -27896,21 +28096,22 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))",
             "\\A node \\in Responsive: "
             "WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))",
-            "\\A node \\in AsyncVotersAt(initialContext): "
+            "\\A node \\in Responsive: "
             "WF_AsyncAllVars(PostGstRunHistoricalServer(node))",
             "\\A node \\in AsyncVotersAt(initialContext): "
             "WF_AsyncAllVars(PostGstCommitCertificateDiscovery(node))",
             "\\A node \\in Responsive: "
             "WF_AsyncAllVars("
             "PostGstHistoricalCommitCertificateDiscovery(node))",
-            "\\A node \\in AsyncVotersAt(initialContext): "
+            "\\A node \\in Responsive: "
             "WF_AsyncAllVars(PostGstServiceIoWorker(node))",
             "\\A node \\in Responsive: "
             "WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))",
-            "\\A recipient \\in AsyncVotersAt(initialContext), "
-            "source \\in AsyncVotersAt(initialContext): "
+            "\\A recipient \\in Responsive, "
+            "source \\in AsyncIngressSources: "
             "WF_AsyncAllVars(PostGstAdmitHiddenPacket(recipient, source))",
-            "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: "
+            "\\A recipient \\in ValidatorIds, "
+            "source \\in AsyncIngressSources: "
             "WF_AsyncAllVars("
             "PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
         )
@@ -28463,6 +28664,9 @@ if self.retained_effect_batch.is_some() {
             "commitQCs",
             "formedTCs",
             "installedTCs",
+            "lastInstalledTc",
+            "lockPrepareQc",
+            "highestPrepareQc",
             "lockRank",
             "lockSubject",
             "highestRank",
@@ -28542,7 +28746,7 @@ if self.retained_effect_batch.is_some() {
                 errors.append(
                     f"{core_path}:{import_line}: "
                     "ImportAuthenticatedCommitCertificate must frame exactly the "
-                    "45 non-qcNetwork Core variables; "
+                    "48 non-qcNetwork Core variables; "
                     f"missing={sorted(set(imported_commit_certificate_frame) - set(actual_import_frame))}, "
                     f"unexpected={sorted(set(actual_import_frame) - set(imported_commit_certificate_frame))}, "
                     f"count={len(actual_import_frame)}"
@@ -29990,7 +30194,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         )
     }
     for item_name in (
-        "with_reply_source_capacity",
+        "with_limits",
         "release_unsent_request",
         "park_authorized_server_request_attempts",
         "park_inactive_outbound_attempts",
@@ -30009,7 +30213,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         "admit_server_request",
         "cancel_unmaterialized_server_request",
         "enqueue_response",
-        "drain_outbound_chunks",
+        "drain_outbound_chunks_durable",
         "acknowledge_outbound_chunk",
         "tick_bounded",
     ):
@@ -30023,6 +30227,58 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 f"sidecar source-isolated ACK {item_name} production item",
             )
         )
+
+    merge_lifecycle_items: dict[str, RustItem | None] = {}
+    for impl_name, item_names in (
+        (
+            "RequestStreamState",
+            ("allocate", "close", "emit_close", "acknowledge_close"),
+        ),
+        (
+            "ServerRequestSource",
+            ("budget_source", "shares_budget_with"),
+        ),
+        (
+            "MergeSidecarLifecycleJournal",
+            ("open", "remove_stale_temp", "load", "persist"),
+        ),
+        (
+            "MergeSidecarTransport",
+            (
+                "lifecycle_geometry",
+                "lifecycle_max_snapshot_bytes",
+                "lifecycle_snapshot",
+                "restore_lifecycle_snapshot",
+                "open_durable",
+                "persist_lifecycle_state",
+                "rehydrate_with_exact_geometry",
+                "allocate_request_sequence",
+                "close_request_sequence",
+                "begin_close",
+                "begin_request",
+                "acknowledge_close",
+                "preflight_server_request_stream",
+                "advance_server_close_floor",
+                "admit_server_close",
+                "server_gate_attempt_count_after_close",
+                "source_gate_count_after_close",
+                "drain_outbound_chunks_inner",
+                "finish_completed",
+                "discard_invalid",
+                "retain_pending_blocks",
+            ),
+        ),
+    ):
+        for item_name in item_names:
+            qualified_name = f"{impl_name}::{item_name}"
+            merge_lifecycle_items[qualified_name] = _require_qualified_rust_item(
+                merge_path,
+                merge_source,
+                impl_name,
+                item_name,
+                errors,
+                f"crash-safe sidecar lifecycle {qualified_name} production item",
+            )
 
     worker_ack_items: dict[str, RustItem | None] = {}
     for impl_name, item_names in (
@@ -30158,6 +30414,12 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
             merge_ack_items,
             _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256,
             "merge-sidecar source-isolated production seam",
+        ),
+        (
+            merge_path,
+            merge_lifecycle_items,
+            _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256,
+            "merge-sidecar crash-safe lifecycle production seam",
         ),
         (
             worker_path,
@@ -30350,20 +30612,20 @@ Ok(Self {
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::with_reply_source_capacity"),
+        merge_ack_items.get("MergeSidecarTransport::with_limits"),
         """
 let outbound_session_capacity = reply_source_capacity
-    .checked_mul(MAX_OUTBOUND_SESSIONS_PER_SOURCE)
+    .checked_mul(limits.outbound_sessions_per_source)
     .ok_or(MergeSidecarError::Capacity(
         "outbound response session geometry",
     ))?;
 let outbound_byte_capacity = reply_source_capacity
-    .checked_mul(MAX_OUTBOUND_BYTES_PER_SOURCE)
+    .checked_mul(limits.outbound_bytes_per_source)
     .ok_or(MergeSidecarError::Capacity(
         "outbound response byte geometry",
     ))?;
 let server_request_gate_capacity = reply_source_capacity
-    .checked_mul(MAX_SERVER_REQUEST_GATES_PER_SOURCE)
+    .checked_mul(limits.server_request_gates_per_source)
     .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
 """,
         "sidecar global capacity must be checked from the configured authenticated-source geometry",
@@ -30371,10 +30633,11 @@ let server_request_gate_capacity = reply_source_capacity
     )
     _require_exact_rust_tokens(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::with_reply_source_capacity"),
+        merge_ack_items.get("MergeSidecarTransport::with_limits"),
         """
-pub(crate) fn with_reply_source_capacity(
+pub(crate) fn with_limits(
     reply_source_capacity: usize,
+    limits: MergeSidecarLimits,
 ) -> Result<Self, MergeSidecarError> {
     if reply_source_capacity == 0 {
         return Err(MergeSidecarError::Capacity(
@@ -30382,25 +30645,20 @@ pub(crate) fn with_reply_source_capacity(
         ));
     }
     let outbound_session_capacity = reply_source_capacity
-        .checked_mul(MAX_OUTBOUND_SESSIONS_PER_SOURCE)
+        .checked_mul(limits.outbound_sessions_per_source)
         .ok_or(MergeSidecarError::Capacity(
             "outbound response session geometry",
         ))?;
     let outbound_byte_capacity = reply_source_capacity
-        .checked_mul(MAX_OUTBOUND_BYTES_PER_SOURCE)
+        .checked_mul(limits.outbound_bytes_per_source)
         .ok_or(MergeSidecarError::Capacity(
             "outbound response byte geometry",
         ))?;
     let server_request_gate_capacity = reply_source_capacity
-        .checked_mul(MAX_SERVER_REQUEST_GATES_PER_SOURCE)
+        .checked_mul(limits.server_request_gates_per_source)
         .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
-    let unix_nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .to_le_bytes();
-    let process_id = std::process::id().to_le_bytes();
     Ok(Self {
+        limits,
         reply_source_capacity,
         outbound_session_capacity,
         outbound_byte_capacity,
@@ -30410,13 +30668,13 @@ pub(crate) fn with_reply_source_capacity(
         outbound: BTreeMap::new(),
         outbound_order: VecDeque::new(),
         tick_response_next: true,
+        tick_close_next: true,
         server_request_gates: BTreeMap::new(),
-        next_request_nonce: 0,
-        boot_nonce: Hash::new_from_chunks(&[
-            REQUEST_ID_DOMAIN,
-            unix_nanos.as_slice(),
-            process_id.as_slice(),
-        ]),
+        request_streams: BTreeMap::new(),
+        server_closed_through: BTreeMap::new(),
+        server_highest_sequence: BTreeMap::new(),
+        pending_server_closures: BTreeMap::new(),
+        lifecycle_journal: None,
     })
 }
 """,
@@ -30448,7 +30706,7 @@ fn prune_server_gates(&mut self, now: Instant) {
 if !assembly.current.as_ref().is_some_and(|attempt| {
     attempt.id == request.request_id && attempt.holder == request.responder
 }) {
-    return;
+    return Ok(());
 }
 let attempt = assembly
     .current
@@ -30459,23 +30717,28 @@ assembly.attempts = attempt.previous_attempts;
 assembly.chunks.clear();
 assembly.received_bytes = 0;
 assembly.complete_pending_validation = false;
+self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+self.persist_lifecycle_state()
 """,
-        "an unsent sidecar request must restore the exact holder cursor and retry rank",
+        "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
         errors,
     )
     _require_exact_rust_tokens(
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::release_unsent_request"),
         """
-pub(crate) fn release_unsent_request(&mut self, request: &CertifiedMergeSidecarRequestV1) {
+pub(crate) fn release_unsent_request(
+    &mut self,
+    request: &CertifiedMergeSidecarRequestV1,
+) -> Result<(), MergeSidecarError> {
     let key = (request.entry_hash, request.reference_digest);
     let Some(assembly) = self.inbound.get_mut(&key) else {
-        return;
+        return Ok(());
     };
     if !assembly.current.as_ref().is_some_and(|attempt| {
         attempt.id == request.request_id && attempt.holder == request.responder
     }) {
-        return;
+        return Ok(());
     }
     let attempt = assembly
         .current
@@ -30486,9 +30749,11 @@ pub(crate) fn release_unsent_request(&mut self, request: &CertifiedMergeSidecarR
     assembly.chunks.clear();
     assembly.received_bytes = 0;
     assembly.complete_pending_validation = false;
+    self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+    self.persist_lifecycle_state()
 }
 """,
-        "an unsent sidecar request must restore the exact holder cursor and retry rank",
+        "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
         errors,
     )
     for qualified_name, expected_source, description in (
@@ -30497,10 +30762,14 @@ pub(crate) fn release_unsent_request(&mut self, request: &CertifiedMergeSidecarR
             """
 self.server_request_gates
     .values()
-    .filter(|gate| gate.attempts.contains_key(source))
+    .filter(|gate| {
+        gate.attempts
+            .keys()
+            .any(|retained| retained.shares_budget_with(source))
+    })
     .count()
 """,
-            "per-source sidecar gate accounting must count authenticated source ownership",
+            "per-source sidecar gate accounting must share one stable authenticated-peer budget across restart capabilities",
         ),
         (
             "MergeSidecarTransport::server_gate_attempt_count",
@@ -30527,10 +30796,15 @@ self.outbound
             """
 self.outbound
     .values()
-    .filter(|transfer| transfer.attempts.contains_key(source))
+    .filter(|transfer| {
+        transfer
+            .attempts
+            .keys()
+            .any(|retained| retained.shares_budget_with(source))
+    })
     .count()
 """,
-            "per-source sidecar session accounting must isolate authenticated sources",
+            "per-source sidecar session accounting must isolate stable authenticated-peer budgets",
         ),
         (
             "MergeSidecarTransport::global_outbound_bytes",
@@ -30547,11 +30821,16 @@ self.outbound
             """
 self.outbound
     .values()
-    .filter(|transfer| transfer.attempts.contains_key(source))
+    .filter(|transfer| {
+        transfer
+            .attempts
+            .keys()
+            .any(|retained| retained.shares_budget_with(source))
+    })
     .map(|transfer| transfer.response_len)
     .sum()
 """,
-            "per-source sidecar byte accounting must charge shared bytes to each owning source",
+            "per-source sidecar byte accounting must charge shared bytes to each stable authenticated-peer budget",
         ),
     ):
         _require_rust_token_sequence(
@@ -30577,15 +30856,18 @@ self.outbound
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::alternate_source_is_authorized"),
         """
-Some(candidate) => gate.attempts.values().all(|attempt| {
-    attempt.reply_route.as_ref().is_some_and(|prior| {
-        candidate.same_request_authority(prior)
-            && !candidate.equal_ordinal_different_tenure(prior)
-            && !candidate.equal_connection_ordinal_different_tenure(prior)
-    })
+Some(candidate) => gate.attempts.iter().all(|(source, attempt)| {
+    attempt.reply_route.as_ref().map_or_else(
+        || matches!(source, ServerRequestSource::RecoveredAuthenticated(_)),
+        |prior| {
+            candidate.same_request_authority(prior)
+                && !candidate.equal_ordinal_different_tenure(prior)
+                && !candidate.equal_connection_ordinal_different_tenure(prior)
+        },
+    )
 }),
 """,
-        "alternate sidecar sources must share canonical request authority and reject delivery- or connection-ordinal tenure collisions",
+        "alternate sidecar sources must share canonical request authority while a recovered source contributes only stable peer ownership",
         errors,
     )
     _require_exact_rust_tokens(
@@ -30597,21 +30879,23 @@ fn alternate_source_is_authorized(
     candidate: Option<&NetworkReplyRoute>,
 ) -> bool {
     match candidate {
-        Some(candidate) => gate.attempts.values().all(|attempt| {
-            attempt.reply_route.as_ref().is_some_and(|prior| {
-                candidate.same_request_authority(prior)
-                    && !candidate.equal_ordinal_different_tenure(prior)
-                    && !candidate.equal_connection_ordinal_different_tenure(prior)
-            })
+        Some(candidate) => gate.attempts.iter().all(|(source, attempt)| {
+            attempt.reply_route.as_ref().map_or_else(
+                || matches!(source, ServerRequestSource::RecoveredAuthenticated(_)),
+                |prior| {
+                    candidate.same_request_authority(prior)
+                        && !candidate.equal_ordinal_different_tenure(prior)
+                        && !candidate.equal_connection_ordinal_different_tenure(prior)
+                },
+            )
         }),
-        None => gate
-            .attempts
-            .values()
-            .all(|attempt| attempt.reply_route.is_none()),
+        None => gate.attempts.iter().all(|(source, attempt)| {
+            matches!(source, ServerRequestSource::Synthetic(_)) && attempt.reply_route.is_none()
+        }),
     }
 }
 """,
-        "alternate sidecar sources must share canonical request authority and reject delivery- or connection-ordinal tenure collisions",
+        "alternate sidecar sources must retain live route authority without treating recovered peer ownership as a process-local capability",
         errors,
     )
     _require_rust_token_sequence(
@@ -30630,9 +30914,9 @@ NetworkReplyRoutes::try_from_route(route.clone())
         merge_ack_items.get("MergeSidecarTransport::can_add_outbound_attempt"),
         """
 self.outbound_attempt_count() < self.outbound_session_capacity
-    && self.source_outbound_count(source) < MAX_OUTBOUND_SESSIONS_PER_SOURCE
+    && self.source_outbound_count(source) < self.limits.outbound_sessions_per_source
     && self.source_outbound_bytes(source).saturating_add(bytes)
-        <= MAX_OUTBOUND_BYTES_PER_SOURCE
+        <= self.limits.outbound_bytes_per_source
 """,
         "alternate sidecar session attachment must retain global and per-source session and byte bounds",
         errors,
@@ -30797,7 +31081,7 @@ if let Some(retry_chunk) = reconnect_retry_chunk {
         """
 if source_capacity.is_some_and(|capacity| existing.attempts.len() >= capacity)
     || self.server_gate_attempt_count() >= self.server_request_gate_capacity
-    || self.source_gate_count(&source) >= MAX_SERVER_REQUEST_GATES_PER_SOURCE
+    || self.source_gate_count(&source) >= self.limits.server_request_gates_per_source
 {
     return Err(MergeSidecarError::Capacity("server request rate gate"));
 }
@@ -30839,11 +31123,11 @@ self.global_outbound_bytes().saturating_add(response_len)
     > self.outbound_byte_capacity
 """,
         """
-self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE
+self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source
     || self
         .source_outbound_bytes(source)
         .saturating_add(response_len)
-        > MAX_OUTBOUND_BYTES_PER_SOURCE
+        > self.limits.outbound_bytes_per_source
 """,
     ):
         _require_rust_token_sequence(
@@ -30858,11 +31142,11 @@ self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE
         merge_ack_items.get("MergeSidecarTransport::enqueue_response"),
         """
 if remaining_global_sessions == 0
-    || self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE
+    || self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source
     || self
         .source_outbound_bytes(source)
         .saturating_add(response_len)
-        > MAX_OUTBOUND_BYTES_PER_SOURCE
+        > self.limits.outbound_bytes_per_source
 {
     capacity_rejected_attempts.push(source.clone());
     continue;
@@ -31005,7 +31289,9 @@ OutboundTransfer {
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::drain_outbound_chunks"),
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_inner"
+        ),
         """
 let index = attempt.in_flight_chunk.unwrap_or(attempt.next_chunk);
 if index >= count {
@@ -31015,7 +31301,9 @@ if index >= count {
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::drain_outbound_chunks"),
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_inner"
+        ),
         """
 let message = Arc::clone(
     transfer
@@ -31046,7 +31334,9 @@ cursor = ServerResponseCursor::Pending(index);
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::drain_outbound_chunks"),
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_inner"
+        ),
         """
 if index >= count {
     completed = true;
@@ -31058,7 +31348,9 @@ if index >= count {
     )
     _require_rust_token_sequence(
         merge_path,
-        merge_ack_items.get("MergeSidecarTransport::drain_outbound_chunks"),
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_inner"
+        ),
         """
 gate_attempt.cursor = cursor;
 if completed {
@@ -31071,6 +31363,21 @@ if inactive || identity_mismatch || completed {
 }
 """,
         "sidecar drainage must park inactive and mismatched attempts while timestamping terminal completion independently per source",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_durable"
+        ),
+        """
+let (posts, lifecycle_changed) = self.drain_outbound_chunks_inner(limit, now);
+if lifecycle_changed {
+    self.persist_lifecycle_state()?;
+}
+Ok(posts)
+""",
+        "production sidecar drainage must durably publish every changed pending identity before returning any post",
         errors,
     )
     _require_rust_token_sequence(
@@ -31132,10 +31439,15 @@ if count == 0
         "lane application must validate the immutable message and chunk cursors before transport preflight",
         errors,
     )
-    for item_name in ("drain_outbound_chunks", "acknowledge_outbound_chunk"):
+    for item in (
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::drain_outbound_chunks_inner"
+        ),
+        merge_ack_items.get("MergeSidecarTransport::acknowledge_outbound_chunk"),
+    ):
         _require_rust_token_sequence(
             merge_path,
-            merge_ack_items.get(f"MergeSidecarTransport::{item_name}"),
+            item,
             ".to_vec()",
             "per-source sidecar drainage and acknowledgement must never reconstruct cached payload bytes",
             errors,
@@ -32022,12 +32334,20 @@ Self {
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard"),
         """
-merge_sidecars: MergeSidecarTransport::with_reply_source_capacity(
-    limits.reply_source_capacity.get(),
-)
+merge_sidecars: match retained_merge_sidecars {
+    Some(transport) => transport.rehydrate_with_exact_geometry(
+        limits.reply_source_capacity.get(),
+        limits.merge_sidecar_limits,
+    ),
+    None => MergeSidecarTransport::open_durable(
+        &kura.store_root(),
+        limits.reply_source_capacity.get(),
+        limits.merge_sidecar_limits,
+    ),
+}
 .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?,
 """,
-        "lane construction must reserve sidecar capacity from the exact reply-source geometry",
+        "lane construction must restore or open only the exact durable reply-source geometry",
         errors,
     )
     _require_rust_token_sequence(
@@ -32080,13 +32400,18 @@ if let Err(error) = self.merge_sidecars.enqueue_response(
         """
 let posts = self
     .merge_sidecars
-    .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
+    .drain_outbound_chunks_durable(
+        self.sidecar_effect_slots()
+            .min(self.limits.sidecar_service_burst.get()),
+        now,
+    )
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
 let inserted = !posts.is_empty();
 for post in posts {
     self.push_merge_sidecar_post_or_restart(post)?;
 }
 """,
-        "sidecar request service must hand every reserved response into the fail-stop lane queue",
+        "sidecar request service must persist every pending writer identity before handing the reserved response into the fail-stop lane queue",
         errors,
         count=2,
     )
@@ -32257,7 +32582,9 @@ if retired_response_route.is_some_and(|route| !route.is_active()) {
     return Ok(());
 }
 if let Some(request) = unsent_request {
-    self.merge_sidecars.release_unsent_request(&request);
+    self.merge_sidecars
+        .release_unsent_request(&request)
+        .map_err(|_| V2LaneWorkError::RestartRequired)?;
 }
 Err(V2LaneWorkError::RestartRequired)
 """,
@@ -32278,13 +32605,18 @@ if acknowledged {
     self.remove_acknowledged_sidecar_retry_effect(admission);
     let posts = self
         .merge_sidecars
-        .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
+        .drain_outbound_chunks_durable(
+            self.sidecar_effect_slots()
+                .min(self.limits.sidecar_service_burst.get()),
+            now,
+        )
+        .map_err(|_| V2LaneWorkError::RestartRequired)?;
     for post in posts {
         self.push_merge_sidecar_post_or_restart(post)?;
     }
 }
 """,
-        "lane work may schedule the next chunk only after the exact receipt advances",
+        "lane work may schedule the next chunk only after the exact receipt and next pending writer identity are durable",
         errors,
     )
     _require_rust_token_sequence(
@@ -39130,6 +39462,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncSentItems",
         "asyncRetainedControl",
         "asyncActiveRequests",
+        "asyncCertifiedResponseClaim",
         "asyncTransport",
         "asyncIngressLanes",
         "asyncIngressReady",
@@ -41128,8 +41461,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 309:
-        errors.append("internal release-regression seal must contain exactly 309 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 319:
+        errors.append("internal release-regression seal must contain exactly 319 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -41757,21 +42090,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventory to 572 tests across 39 modules. Together with the "
+            "inventory to 582 tests across 39 modules. Together with the "
             "source-sealed\ncommand and tooling legs, the pre-network corridor "
             f"contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "572-test, 39-module inventory. The complete source-sealed "
+            "582-test, 39-module inventory. The complete source-sealed "
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "inventory to 572 exact tests across 39 modules and "
+            "inventory to 582 exact tests across 39 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network "
             "legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -42374,7 +42707,7 @@ _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
         "74ed46cc0c891ee2b54b708bf025f1422e913a28108d6135ed1fb40286de6573"
     ),
     "SumeragiV2Proofs.tla": (
-        "c1962e7e4c7e8571349385152ad1aa756d4a5f29139f187e56188423621e66af"
+        "98d4af84143ef116ea96872bca81c6b79b606f5936718f69d6f28b7fda7b2ab2"
     ),
 }
 

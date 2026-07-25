@@ -91,3 +91,5 @@ mod p2p_caps;
 mod p2p_consensus_caps;
 mod p2p_puzzle;
 mod p2p_trust_gossip;
+#[cfg(feature = "p2p_ws")]
+mod ws_io;

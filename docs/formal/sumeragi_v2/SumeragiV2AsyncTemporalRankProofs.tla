@@ -2104,10 +2104,8 @@ BY ONLY ResponsiveProtectedServeJobHasRankPosition, SMT
 THEOREM ProtectedServeRankProgressImpliesStarvation ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
-    /\ ProtectedServeRankProgressProperty(
-         AsyncSpecAt(initialContext))
-    => ProtectedServeStarvationProperty(
-         AsyncSpecAt(initialContext))
+    /\ ProtectedServeRankProgressProperty(AsyncSpecAt(initialContext))
+    => ProtectedServeStarvationProperty(AsyncSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
@@ -2161,8 +2159,7 @@ PROOF
 THEOREM ProtectedServiceRankProgressImpliesStarvation ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
-    /\ ProtectedServiceRanksProgressProperty(
-         AsyncSpecAt(initialContext))
+    /\ ProtectedServiceRanksProgressProperty(AsyncSpecAt(initialContext))
     => StarvationFreedomProperty(AsyncSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,

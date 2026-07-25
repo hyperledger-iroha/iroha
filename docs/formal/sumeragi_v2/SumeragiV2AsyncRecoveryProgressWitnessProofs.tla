@@ -1598,6 +1598,19 @@ BY SMTT(120), IsaT(120)
        NoDecisionForNode, RequestNodeSet,
        CompleteTimeoutSignature
 
+THEOREM DeliverTimeoutPreservesDecisionTimeoutFrontier ==
+  \A envelope:
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DeliverTimeout(envelope)
+    => DecisionTimeoutFrontierInvariant'
+BY SMTT(120), IsaT(120)
+   DEF DecisionTimeoutFrontierInvariant,
+       PendingTimeoutExcludesDecision,
+       PendingInstallExcludesDecision,
+       TimeoutSigningExcludesDecision,
+       PendingDecisionExcludesTimeoutWork,
+       NoDecisionForNode, RequestNodeSet, DeliverTimeout
+
 THEOREM FormTcPreservesDecisionTimeoutFrontier ==
   \A node, roundView:
     /\ DecisionTimeoutFrontierInvariant
@@ -1695,22 +1708,24 @@ PROOF
                     CompleteTimeoutSignature(request)
       BY <1>1, <2>7,
          CompleteTimeoutSignaturePreservesDecisionTimeoutFrontier
-    <2>8. CASE \E node \in ValidatorIds, roundView \in Views:
+    <2>8. CASE \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
+      BY <1>1, <2>8, DeliverTimeoutPreservesDecisionTimeoutFrontier
+    <2>9. CASE \E node \in ValidatorIds, roundView \in Views:
                     FormTC(node, roundView)
-      BY <1>1, <2>8, FormTcPreservesDecisionTimeoutFrontier
-    <2>9. CASE \E node \in ValidatorIds, tc \in ReceivedTcValues:
+      BY <1>1, <2>9, FormTcPreservesDecisionTimeoutFrontier
+    <2>10. CASE \E node \in ValidatorIds, tc \in ReceivedTcValues:
                     BeginInstallTC(node, tc)
-      BY <1>1, <2>9, BeginInstallTcPreservesDecisionTimeoutFrontier
-    <2>10. CASE \E request \in pendingInstallTC:
+      BY <1>1, <2>10, BeginInstallTcPreservesDecisionTimeoutFrontier
+    <2>11. CASE \E request \in pendingInstallTC:
                      PersistInstallTC(request)
-      BY <1>1, <2>10, PersistInstallTcPreservesDecisionTimeoutFrontier
-    <2>11. CASE \E node \in ValidatorIds: Crash(node)
-      BY <1>1, <2>11, CrashPreservesDecisionTimeoutFrontier
-    <2>12. CASE \E node \in ValidatorIds, vote \in timeoutIntents:
+      BY <1>1, <2>11, PersistInstallTcPreservesDecisionTimeoutFrontier
+    <2>12. CASE \E node \in ValidatorIds: Crash(node)
+      BY <1>1, <2>12, CrashPreservesDecisionTimeoutFrontier
+    <2>13. CASE \E node \in ValidatorIds, vote \in timeoutIntents:
                      ResumeTimeout(node, vote)
-      BY <1>1, <2>12, ResumeTimeoutPreservesDecisionTimeoutFrontier
+      BY <1>1, <2>13, ResumeTimeoutPreservesDecisionTimeoutFrontier
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
-                <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
+                <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13
          DEF Next, DecisionTimeoutFrontierStutteringStep
   <1> QED BY <1>1
 

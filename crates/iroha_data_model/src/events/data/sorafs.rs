@@ -59,8 +59,8 @@ mod model {
         Provider,
         /// Admission registry enforcement.
         Admission,
-        /// Governance/compliance denylist decisions.
-        Denylist,
+        /// Governed gateway-compliance decisions.
+        GatewayCompliance,
         /// Gateway rate limiting.
         RateLimit,
         /// CDN and runtime enforcement derived from GAR policy.
@@ -81,20 +81,8 @@ mod model {
         AdmissionUnavailable,
         /// Provider failed admission checks.
         ProviderNotAdmitted,
-        /// Request matched a denylisted provider.
-        DenylistedProvider,
-        /// Request matched a denylisted manifest digest.
-        DenylistedManifestDigest,
-        /// Request matched a denylisted content identifier.
-        DenylistedCid,
-        /// Request matched a denylisted URL.
-        DenylistedUrl,
-        /// Request matched a denylisted account identifier.
-        DenylistedAccountId,
-        /// Request matched a denylisted account alias.
-        DenylistedAccountAlias,
-        /// Request matched a denylisted perceptual family.
-        DenylistedPerceptualFamily,
+        /// The governed gateway-compliance catalog denied the request.
+        GatewayComplianceDenied,
         /// Request exceeded the configured rate limit window.
         RateLimitExceeded,
         /// Request was temporarily banned due to repeated rate limit violations.
@@ -132,36 +120,6 @@ mod model {
         pub client_fingerprint_hex: String,
         /// Remote socket address of the client, when available.
         pub remote_addr: Option<String>,
-        /// Jurisdiction associated with the denylist entry, if any.
-        pub jurisdiction: Option<String>,
-        /// Human-readable reason recorded for the denylist entry, if any.
-        pub reason: Option<String>,
-        /// Optional alias tied to the denylist entry metadata.
-        pub entry_alias: Option<String>,
-        /// Issuance timestamp of the denylist entry (seconds since UNIX epoch), when available.
-        pub issued_at_unix: Option<u64>,
-        /// Expiry timestamp of the denylist entry (seconds since UNIX epoch), when available.
-        pub expires_at_unix: Option<u64>,
-        /// Base64-encoded content identifier matched by the denylist, when provided.
-        pub denylisted_cid_b64: Option<String>,
-        /// URL matched by the denylist rule, when provided.
-        pub denylisted_url: Option<String>,
-        /// Account identifier matched by the denylist rule, when provided.
-        pub denylisted_account_id: Option<String>,
-        /// Account alias matched by the denylist rule, when provided.
-        pub denylisted_account_alias: Option<String>,
-        /// Perceptual family identifier matched by the denylist rule.
-        pub denylisted_perceptual_family_hex: Option<String>,
-        /// Perceptual variant identifier matched by the denylist rule.
-        pub denylisted_perceptual_variant_hex: Option<String>,
-        /// Canonical perceptual hash recorded for the denylist match.
-        pub denylisted_perceptual_hash_hex: Option<String>,
-        /// Embedding digest recorded for the denylist match.
-        pub denylisted_perceptual_embedding_hex: Option<String>,
-        /// Hamming distance observed for the perceptual hash match.
-        pub perceptual_hamming_distance: Option<u8>,
-        /// Configured Hamming radius for the denylist entry.
-        pub perceptual_hamming_radius: Option<u8>,
         /// Suggested retry window for rate limiting (seconds), when provided.
         pub retry_after_seconds: Option<u64>,
         /// Observed region used during CDN policy enforcement.
@@ -774,9 +732,9 @@ pub mod prelude {
         SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation, SorafsGatewayEvent,
         SorafsGatewayEventSet, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
         SorafsOrderbookLedgerEvent, SorafsOrderbookLedgerEventKind, SorafsProofHealthAlert,
+        SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind,
         SorafsReputationJournalEntryCommittedV1, SorafsReputationJournalEvent,
-        SorafsReputationJournalPolicyActivatedV1,
-        SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind, SorafsReserveLedgerEvent,
+        SorafsReputationJournalPolicyActivatedV1, SorafsReserveLedgerEvent,
         SorafsReserveLedgerEventKind,
     };
 }

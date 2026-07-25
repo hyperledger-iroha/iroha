@@ -230,15 +230,29 @@
     {
       "id": "progress-witness-preservation",
       "requirement": "Every active durable locked Commit intent retains a concrete signing, retransmission, receipt, certificate, decision, or exact node-and-generation crash/replay authority until WAL reconstruction; every durable decision retains an exact body-recovery, validation, application, completion, or exact node-and-generation Decision-recovery witness; every exact historical locked Prepare source retains either its post-validation Commit witness, exact active certified request, or a current-consumer FetchBody, RequestCertifiedBody, FetchCertifiedBody, StoreBody, or ValidateBody candidate; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness, except that an exact durable local TimeoutIntent for the current finality view owns the retry frontier when validation finishes after that view closes and the next certified transition restarts recovery without authorizing a closed-view Commit; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition. Commit crash authority discharges only the durable Commit carrier, and Decision recovery authority retires only into an exact current-consumer FetchBody owner",
-      "module": "SumeragiV2AsyncLivenessProofs",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "ProgressWitnessObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "progress-witness-production-refinement",
       "requirement": "The production reducer, durable WAL sources, effect executor, scheduler queues, body-recovery workers, application completion, successor activation, unified V2/lane-local ingress, and reliable outbound transport refine the exact abstract progress-owner identities and transitions: every durable Commit intent and Decision carrier maps to one current production owner or terminal state; reset and admission lifetimes agree; lane-local and V2 classes share the modeled count/byte owner without conflating semantic origin with the authenticated resource-owning hop; every reliable occurrence retains its exact source, target or remaining broadcast cursor, bytes, and attempt identity through actor, encode, frame, batch, write, and flush stages until the matching flush acknowledgement; scheduler service ranks preserve production FIFO/capacity semantics; and application completion reconstructs the next-height activation witness. Together with the separately reviewed effective-lock production refinement, this exact trace relation derives the historical locked-body production refinement. Source-fidelity checks and adversarial mutation matrices constrain this mapping but do not prove it",
-      "module": "SumeragiV2AsyncLivenessProofs",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
       "symbol": "ProgressWitnessProductionRefinementObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "adequate-leader-exact-closure-residual",
+      "requirement": "The exact adequate-leader closure composes scheduler-origin readiness, target-aware physical transport and runner convergence, certified-response physical completion, timeout-quorum view rotation, immutable phase identity, and a well-founded semantic phase rank into the rotating-leader service kernel without importing the legacy proofless timeout, locked-body, or rotating-leader declarations.",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "AdequateLeaderExactClosureResidualObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "exact-decision-off-scheduler-residual-convergence",
+      "requirement": "Every exact durable Decision request and response owner outside the protected scheduler converges through the request clock/runtime prefix, ingress head and gate ownership, exact request admission or coalescing, and non-physical non-claim certified-response head and gate prefix into the proved Decision service pipeline.",
+      "module": "SumeragiV2AsyncTemporalClosureProofs",
+      "symbol": "ExactDecisionOffSchedulerResidualConvergenceObligation",
       "status": "specified_unproved"
     },
     {

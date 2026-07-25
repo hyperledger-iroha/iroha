@@ -5282,6 +5282,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete control-message vector keeps every canonical domain-separated signature preimage binding visible in one test"
+    )]
     fn signed_control_messages_have_canonical_domain_separated_preimages() {
         let context = context(&[1, 1, 1, 1]);
         let proposal_round = round(&context, 0);
@@ -5502,6 +5506,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete certified-body mutation matrix keeps request, manifest, chunk, and body-hash bindings together as one protocol vector"
+    )]
     fn certified_body_response_binds_request_manifest_and_body_hash() {
         let context = context(&[1, 1, 1, 1]);
         let body = b"certified body".to_vec();
@@ -5743,6 +5751,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete status rejection matrix documents the ordered scalar, frontier, and phase invariants in one canonical protocol vector"
+    )]
     fn status_validation_rejects_impossible_scalar_and_phase_states() {
         use SumeragiV2StatusValidationError as Error;
 
@@ -5870,6 +5882,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete liveness status matrix keeps round, quorum, timeout, and queue-ownership invariants together as one canonical protocol vector"
+    )]
     fn status_validation_checks_liveness_rounds_quorums_and_queue_ownership() {
         use SumeragiV2StatusValidationError as Error;
 

@@ -1681,7 +1681,11 @@ mod tests {
         let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
         let decoded =
             norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar close");
-        assert_eq!(decoded, close_message);
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if message.as_ref() == &CertifiedMergeSidecarMessage::Close(close.clone())
+        ));
 
         let close_ack = CertifiedMergeSidecarCloseAckV1 {
             version: close.version,
@@ -1691,13 +1695,17 @@ mod tests {
             responder: responder.clone(),
         };
         let close_ack_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
-            CertifiedMergeSidecarMessage::CloseAck(close_ack),
+            CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
         ));
         assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
         let encoded = norito::to_bytes(&close_ack_message).expect("encode sidecar close ACK");
         let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
             .expect("decode sidecar close ACK");
-        assert_eq!(decoded, close_ack_message);
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if message.as_ref() == &CertifiedMergeSidecarMessage::CloseAck(close_ack)
+        ));
 
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,

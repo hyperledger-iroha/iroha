@@ -25,17 +25,17 @@ use iroha_data_model::{
         is_canonical_moderation_identifier_v1,
     },
     transaction::{
-        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder,
-        TransactionEntrypoint, TransactionPayload,
+        Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        TransactionPayload,
     },
 };
 use sorafs_node::moderation_orchestrator::{
+    MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1, MODERATION_TRANSACTION_TTL_MS_V1,
     ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1, ModerationSignedTransactionV1,
     ModerationSnapshotReadErrorV1, ModerationSubmissionFailureV1, ModerationSubmissionLookupV1,
     ModerationTerminalHandoffKindV1, ModerationTerminalHandoffSinkV1, ModerationTerminalHandoffV1,
     ModerationTransactionReceiptV1, ModerationTransactionRequestV1,
-    ModerationTransactionSubmitterV1, MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
-    MODERATION_TRANSACTION_TTL_MS_V1,
+    ModerationTransactionSubmitterV1,
 };
 
 const MODERATION_HANDOFF_MAX_BYTES_V1: usize = 64 * 1024;
@@ -216,20 +216,20 @@ impl ModerationTransactionSubmitterV1 for ModerationTransactionSubmitterAdapterV
             .into_payload()
             .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
         validate_unsigned_moderation_payload(&self.chain_id, request, &payload)?;
-        payload.fee_payment = self.fee_quoter.quote(&payload).map_err(|error| match error {
-            ModerationFeeQuoteFailureV1::Unavailable => {
-                ModerationSubmissionFailureV1::RuntimeUnavailable
-            }
-            ModerationFeeQuoteFailureV1::Rejected => {
-                ModerationSubmissionFailureV1::PermanentRejection
-            }
-        })?;
+        payload.fee_payment = self
+            .fee_quoter
+            .quote(&payload)
+            .map_err(|error| match error {
+                ModerationFeeQuoteFailureV1::Unavailable => {
+                    ModerationSubmissionFailureV1::RuntimeUnavailable
+                }
+                ModerationFeeQuoteFailureV1::Rejected => {
+                    ModerationSubmissionFailureV1::PermanentRejection
+                }
+            })?;
         validate_unsigned_moderation_payload(&self.chain_id, request, &payload)?;
         let expected_payload = payload.clone();
-        let transaction = self
-            .signer
-            .sign(payload)
-            .map_err(map_signing_failure)?;
+        let transaction = self.signer.sign(payload).map_err(map_signing_failure)?;
         if transaction.payload() != &expected_payload {
             return Err(ModerationSubmissionFailureV1::PermanentRejection);
         }
@@ -291,8 +291,8 @@ fn validate_unsigned_moderation_payload(
     request: &ModerationTransactionRequestV1,
     payload: &TransactionPayload,
 ) -> Result<(), ModerationSubmissionFailureV1> {
-    let canonical = norito::to_bytes(payload)
-        .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+    let canonical =
+        norito::to_bytes(payload).map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
     let expected_ttl_ms =
         u64::try_from(MODERATION_TRANSACTION_TTL_V1.as_millis()).unwrap_or(u64::MAX);
     if canonical.is_empty()
@@ -520,12 +520,13 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                 replay: false,
             }),
             Err(crate::Error::PushIntoQueue { source, .. }) => match source.as_ref() {
-                iroha_core::queue::Error::InBlockchain
-                | iroha_core::queue::Error::IsInQueue => Ok(ModerationStrictIngressReceiptV1 {
-                    transaction_id,
-                    observed_finalized_height,
-                    replay: true,
-                }),
+                iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue => {
+                    Ok(ModerationStrictIngressReceiptV1 {
+                        transaction_id,
+                        observed_finalized_height,
+                        replay: true,
+                    })
+                }
                 iroha_core::queue::Error::Full
                 | iroha_core::queue::Error::LatencySaturated
                 | iroha_core::queue::Error::MaximumTransactionsPerUser => {
@@ -598,7 +599,8 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
             return ModerationSubmissionLookupV1::Unknown;
         };
-        if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
+        if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash
+        {
             return ModerationSubmissionLookupV1::Unknown;
         }
         let external_entrypoint_count = block.external_entrypoint_count();
@@ -1549,12 +1551,7 @@ mod tests {
             (8, [8; 32], 8_001),
         ] {
             assert_eq!(
-                validate_snapshot_finalized_block_fields(
-                    &snapshot,
-                    height,
-                    hash,
-                    creation_time_ms,
-                ),
+                validate_snapshot_finalized_block_fields(&snapshot, height, hash, creation_time_ms,),
                 Err(ModerationSnapshotReadErrorV1::InvalidSnapshot)
             );
         }

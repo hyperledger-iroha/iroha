@@ -340,7 +340,12 @@ fn scenarios_json_value() -> Value {
             422,
             "refusal",
         ),
-        ("D1", "Load with GAR denylist trigger", 451, "refusal"),
+        (
+            "D1",
+            "Load denied by governed gateway compliance",
+            451,
+            "refusal",
+        ),
     ];
     let entries = scenarios
         .iter()

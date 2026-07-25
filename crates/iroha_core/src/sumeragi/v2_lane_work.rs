@@ -1971,6 +1971,18 @@ impl V2LaneWorkAdapter {
         } else {
             None
         };
+        let merge_sidecars = match retained_merge_sidecars {
+            Some(transport) => transport.rehydrate_with_exact_geometry(
+                limits.reply_source_capacity.get(),
+                limits.merge_sidecar_limits,
+            ),
+            None => MergeSidecarTransport::open_durable(
+                &kura.store_root(),
+                limits.reply_source_capacity.get(),
+                limits.merge_sidecar_limits,
+            ),
+        }
+        .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
         let mut adapter = Self {
             context,
             local_peer,
@@ -2035,17 +2047,7 @@ impl V2LaneWorkAdapter {
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
             merge_signing_guard,
-            merge_sidecars: match retained_merge_sidecars {
-                Some(transport) => transport.rehydrate_with_exact_geometry(
-                    limits.reply_source_capacity.get(),
-                    limits.merge_sidecar_limits,
-                ),
-                None => MergeSidecarTransport::with_limits(
-                    limits.reply_source_capacity.get(),
-                    limits.merge_sidecar_limits,
-                ),
-            }
-            .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?,
+            merge_sidecars,
             authenticated_merge_qcs: BTreeSet::new(),
             authenticated_merge_qc_order: VecDeque::new(),
             #[cfg(test)]
@@ -5162,7 +5164,8 @@ impl V2LaneWorkAdapter {
         self.merge_claims.clear();
         self.purge_queued_merge_broadcasts();
         self.merge_sidecars
-            .retain_pending_blocks(&BTreeSet::new(), self.context.height);
+            .retain_pending_blocks(&BTreeSet::new(), self.context.height)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         self.kura
             .prune_finalized_pending_certified_merge_entries(self.context.height)
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
@@ -7194,6 +7197,9 @@ impl V2LaneWorkAdapter {
             }
             Ok(None) => Ok(MergeSidecarDeferralDisposition::Fetching),
             Err(MergeSidecarError::Capacity(_)) => Ok(MergeSidecarDeferralDisposition::RetryLater),
+            Err(error @ MergeSidecarError::LifecycleJournal(_)) => {
+                Err(V2LaneWorkError::Persistence(error.to_string()))
+            }
             Err(error) => Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string())),
         }
     }
@@ -7263,7 +7269,8 @@ impl V2LaneWorkAdapter {
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
         self.merge_sidecars
-            .retain_pending_blocks(pending_blocks, committed_height);
+            .retain_pending_blocks(pending_blocks, committed_height)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         operation.complete();
         Ok(())
     }
@@ -7577,15 +7584,18 @@ impl V2LaneWorkAdapter {
     /// Returns a restart-required or durable-persistence error before this
     /// process may publish any later consensus output.
     pub(crate) fn schedule_retransmission(&mut self) -> Result<(), V2LaneWorkError> {
+        self.schedule_retransmission_at(Instant::now())
+    }
+
+    fn schedule_retransmission_at(&mut self, now: Instant) -> Result<(), V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2LaneWorkError::RestartRequired)?;
-        let sidecar_posts = self.merge_sidecars.tick_bounded(
-            &self.local_peer,
-            Instant::now(),
-            self.sidecar_effect_slots(),
-        );
+        let sidecar_posts = self
+            .merge_sidecars
+            .tick_bounded(&self.local_peer, now, self.sidecar_effect_slots())
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         for post in sidecar_posts {
             self.push_merge_sidecar_post_or_restart(post)?;
         }
@@ -7959,7 +7969,9 @@ impl V2LaneWorkAdapter {
             return Ok(());
         }
         if let Some(request) = unsent_request {
-            self.merge_sidecars.release_unsent_request(&request);
+            self.merge_sidecars
+                .release_unsent_request(&request)
+                .map_err(|_| V2LaneWorkError::RestartRequired)?;
         }
         Err(V2LaneWorkError::RestartRequired)
     }
@@ -7981,11 +7993,14 @@ impl V2LaneWorkAdapter {
             .map_err(|_| V2LaneWorkError::RestartRequired)?;
         if acknowledged {
             self.remove_acknowledged_sidecar_retry_effect(admission);
-            let posts = self.merge_sidecars.drain_outbound_chunks(
-                self.sidecar_effect_slots()
-                    .min(self.limits.sidecar_service_burst.get()),
-                now,
-            );
+            let posts = self
+                .merge_sidecars
+                .drain_outbound_chunks_durable(
+                    self.sidecar_effect_slots()
+                        .min(self.limits.sidecar_service_burst.get()),
+                    now,
+                )
+                .map_err(|_| V2LaneWorkError::RestartRequired)?;
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
             }
@@ -8161,13 +8176,19 @@ impl V2LaneWorkAdapter {
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
         };
+        self.merge_sidecars
+            .persist_lifecycle_state()
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         self.apply_closed_server_prefixes();
         if !materialize {
-            let posts = self.merge_sidecars.drain_outbound_chunks(
-                self.sidecar_effect_slots()
-                    .min(self.limits.sidecar_service_burst.get()),
-                now,
-            );
+            let posts = self
+                .merge_sidecars
+                .drain_outbound_chunks_durable(
+                    self.sidecar_effect_slots()
+                        .min(self.limits.sidecar_service_burst.get()),
+                    now,
+                )
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             let inserted = !posts.is_empty();
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
@@ -8215,11 +8236,14 @@ impl V2LaneWorkAdapter {
             iroha_logger::debug!(%sender, ?error, "v2 merge-sidecar response budget rejected request");
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let posts = self.merge_sidecars.drain_outbound_chunks(
-            self.sidecar_effect_slots()
-                .min(self.limits.sidecar_service_burst.get()),
-            now,
-        );
+        let posts = self
+            .merge_sidecars
+            .drain_outbound_chunks_durable(
+                self.sidecar_effect_slots()
+                    .min(self.limits.sidecar_service_burst.get()),
+                now,
+            )
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         let inserted = !posts.is_empty();
         for post in posts {
             self.push_merge_sidecar_post_or_restart(post)?;
@@ -8248,6 +8272,9 @@ impl V2LaneWorkAdapter {
             .admit_server_close(&sender, &close, &self.local_peer)
         {
             Ok(ack) => ack,
+            Err(error @ MergeSidecarError::LifecycleJournal(_)) => {
+                return Err(V2LaneWorkError::Persistence(error.to_string()));
+            }
             Err(error) => {
                 iroha_logger::debug!(%sender, ?error, "dropping v2 merge-sidecar close");
                 return Ok(V2LaneIngressOutcome::Rejected);
@@ -8276,6 +8303,9 @@ impl V2LaneWorkAdapter {
         {
             Ok(true) => Ok(V2LaneIngressOutcome::Inserted),
             Ok(false) => Ok(V2LaneIngressOutcome::Duplicate),
+            Err(error @ MergeSidecarError::LifecycleJournal(_)) => {
+                Err(V2LaneWorkError::Persistence(error.to_string()))
+            }
             Err(error) => {
                 iroha_logger::debug!(%sender, ?error, "dropping v2 merge-sidecar close ACK");
                 Ok(V2LaneIngressOutcome::Rejected)
@@ -8310,12 +8340,15 @@ impl V2LaneWorkAdapter {
                     ?error,
                     "reassembled v2 certified merge sidecar is corrupt; rotating holder"
                 );
-                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now);
+                self.retry_completed_merge_sidecar(entry_hash, reference_digest, now)?;
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
         };
         if let Err(error) = authenticate_merge_entry_for_height_context(&self.context, &entry) {
-            let affected = self.merge_sidecars.discard_invalid(entry_hash);
+            let affected = self
+                .merge_sidecars
+                .discard_invalid(entry_hash)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             if !affected.is_empty() {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
@@ -8327,7 +8360,10 @@ impl V2LaneWorkAdapter {
             .state
             .validate_certified_merge_entry_for_global_order(&entry)
         {
-            let affected = self.merge_sidecars.discard_invalid(entry_hash);
+            let affected = self
+                .merge_sidecars
+                .discard_invalid(entry_hash)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             if !affected.is_empty() {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
@@ -8337,13 +8373,10 @@ impl V2LaneWorkAdapter {
         }
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
-                let (affected, _) = self.merge_sidecars.finish_completed(
-                    entry_hash,
-                    reference_digest,
-                    true,
-                    &self.local_peer,
-                    now,
-                );
+                let (affected, _) = self
+                    .merge_sidecars
+                    .finish_completed(entry_hash, reference_digest, true, &self.local_peer, now)
+                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
                 if !affected.is_empty() {
                     self.completed_merge_sidecars.insert(entry_hash);
                 }
@@ -8361,21 +8394,15 @@ impl V2LaneWorkAdapter {
         entry_hash: HashOf<MergeLedgerEntry>,
         reference_digest: Hash,
         now: Instant,
-    ) {
-        let (_, retry) = self.merge_sidecars.finish_completed(
-            entry_hash,
-            reference_digest,
-            false,
-            &self.local_peer,
-            now,
-        );
+    ) -> Result<(), V2LaneWorkError> {
+        let (_, retry) = self
+            .merge_sidecars
+            .finish_completed(entry_hash, reference_digest, false, &self.local_peer, now)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
         if let Some(post) = retry {
-            if !self.push_merge_sidecar_post(post.clone())
-                && let CertifiedMergeSidecarMessage::Request(request) = post.message.as_ref()
-            {
-                self.merge_sidecars.release_unsent_request(request);
-            }
+            self.push_merge_sidecar_post_or_restart(post)?;
         }
+        Ok(())
     }
 
     fn round_is_current(&self, round: wire::ConsensusRound) -> bool {
@@ -13594,6 +13621,255 @@ pub(super) mod tests {
         assert!(output_guard.restart_required());
         assert!(output_guard.acquire().is_none());
         assert_eq!(adapter.merge_claims, claims_before);
+    }
+
+    #[test]
+    fn sidecar_lifecycle_journal_failure_latches_restart_before_request_dispatch() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"journal failure carrier")),
+            payload_hash: Hash::new(b"journal failure payload"),
+        };
+        let reference = missing_sidecar_reference(&adapter, &keys, 1);
+        let output_guard = Arc::clone(&adapter.output_guard);
+        adapter
+            .merge_sidecars
+            .obstruct_lifecycle_journal_temp_for_test();
+
+        assert!(matches!(
+            adapter.defer_missing_merge_sidecar(round, subject, reference),
+            Err(V2LaneWorkError::Persistence(reason))
+                if reason.contains("unsafe lifecycle journal temp artifact")
+        ));
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert!(adapter.sidecar_effects.is_empty());
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "a request whose semantic sequence was not durably committed must never dispatch"
+        );
+    }
+
+    #[test]
+    fn sidecar_close_journal_failure_latches_restart_and_blocks_queued_chunk() {
+        let CertifiedSidecarServerFixture {
+            mut adapter,
+            requester,
+            request,
+            ..
+        } = certified_sidecar_server_fixture();
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let reply_route = routes.mint_via(requester.clone(), hub);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    reply_route.clone(),
+                    request.clone(),
+                )
+                .expect("admit the Kura-backed sidecar request"),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(matches!(
+            adapter.sidecar_effects.front(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. })
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(_))
+        ));
+
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: request.semantic_sequence,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: adapter.local_peer.clone(),
+        };
+        close.close_id = close.canonical_close_id();
+        let output_guard = Arc::clone(&adapter.output_guard);
+        adapter
+            .merge_sidecars
+            .obstruct_lifecycle_journal_temp_for_test();
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: requester,
+                    reply_route: Some(reply_route),
+                    message: CertifiedMergeSidecarMessage::Close(close),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert_eq!(
+            adapter.sidecar_effects.len(),
+            1,
+            "the lane queue may still own the pre-close chunk after a failed durable close"
+        );
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "the fail-stop latch must prevent that stale queued chunk from dispatching"
+        );
+    }
+
+    #[test]
+    fn sidecar_close_ack_journal_failure_latches_restart_before_completion() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"close ACK carrier")),
+            payload_hash: Hash::new(b"close ACK payload"),
+        };
+        let reference = missing_sidecar_reference(&adapter, &keys, 1);
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(round, subject, reference)
+                .expect("begin the exact sidecar request"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        let request = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find_map(|effect| match effect {
+                V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. } => {
+                    match Arc::unwrap_or_clone(message) {
+                        CertifiedMergeSidecarMessage::Request(request) => Some(request),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("the deferral emits its durable request");
+        adapter
+            .retain_deferred_merge_sidecars(&BTreeSet::new())
+            .expect("retire the only deferred carrier");
+        adapter
+            .schedule_retransmission()
+            .expect("schedule the cumulative close");
+        let close = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find_map(|effect| match effect {
+                V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. } => {
+                    match Arc::unwrap_or_clone(message) {
+                        CertifiedMergeSidecarMessage::Close(close) => Some(close),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("retiring the request stream emits a cumulative close");
+        assert_eq!(close.closed_through, request.semantic_sequence);
+        let ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: close.requester,
+            responder: close.responder.clone(),
+        };
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let reply_route = routes.mint_via(close.responder, hub);
+        let output_guard = Arc::clone(&adapter.output_guard);
+        adapter
+            .merge_sidecars
+            .obstruct_lifecycle_journal_temp_for_test();
+
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: ack.responder.clone(),
+                    reply_route: Some(reply_route),
+                    message: CertifiedMergeSidecarMessage::CloseAck(ack),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "an ACK whose completion was not durable must close all later output"
+        );
+    }
+
+    #[test]
+    fn sidecar_timeout_journal_failure_latches_restart_before_retry_dispatch() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"timeout carrier")),
+            payload_hash: Hash::new(b"timeout payload"),
+        };
+        let reference = missing_sidecar_reference(&adapter, &keys, 1);
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(round, subject, reference)
+                .expect("begin the exact sidecar request"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        assert!(matches!(
+            adapter.drain_effects(usize::MAX).as_slice(),
+            [V2LaneWorkEffect::PostCertifiedMergeSidecar { message, .. }]
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Request(_))
+        ));
+        let output_guard = Arc::clone(&adapter.output_guard);
+        adapter
+            .merge_sidecars
+            .obstruct_lifecycle_journal_temp_for_test();
+        let timeout_now = Instant::now()
+            + iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT
+                .saturating_mul(2);
+
+        assert!(matches!(
+            adapter.schedule_retransmission_at(timeout_now),
+            Err(V2LaneWorkError::Persistence(reason))
+                if reason.contains("unsafe lifecycle journal temp artifact")
+        ));
+        assert!(output_guard.restart_required());
+        assert!(output_guard.acquire().is_none());
+        assert!(adapter.sidecar_effects.is_empty());
+        assert!(
+            adapter.drain_effects(usize::MAX).is_empty(),
+            "a timed-out request cannot rotate or emit Close before its lifecycle is durable"
+        );
     }
 
     #[test]

@@ -17697,15 +17697,24 @@ mod kagemusha_bridge_tests {
 
     use super::*;
 
+    #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
 
     /// Live phase channel inherited from the Kagemusha resource supervisor.
     #[derive(Debug)]
     struct KagemushaV4GuardChannel {
+        #[cfg_attr(
+            not(feature = "privacy-production-enabled"),
+            expect(
+                dead_code,
+                reason = "default-build tests validate guard admission; production tests write phases"
+            )
+        )]
         channel: std::fs::File,
     }
 
     impl KagemushaV4GuardChannel {
+        #[cfg(feature = "privacy-production-enabled")]
         fn require(initial_phase: &str) -> Result<Self, String> {
             let descriptor = std::env::var_os(KAGEMUSHA_V4_GUARD_FD_ENV);
             let mut guard = Self::from_descriptor_value(descriptor.as_deref()).map_err(|error| {
@@ -17782,6 +17791,7 @@ mod kagemusha_bridge_tests {
             ))
         }
 
+        #[cfg(feature = "privacy-production-enabled")]
         fn write_phase(&mut self, phase: &str) -> std::io::Result<()> {
             use std::io::Write as _;
 
@@ -17800,6 +17810,7 @@ mod kagemusha_bridge_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn raw_production_acceptance_without_guard_fd_is_rejected() {
         let error = KagemushaV4GuardChannel::from_descriptor_value(None)
@@ -17811,6 +17822,16 @@ mod kagemusha_bridge_tests {
         )))
         .expect_err("malformed supervisor descriptors must be rejected");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn raw_production_acceptance_requires_a_posix_host() {
+        for descriptor in [None, Some(std::ffi::OsStr::new("not-a-descriptor"))] {
+            let error = KagemushaV4GuardChannel::from_descriptor_value(descriptor)
+                .expect_err("resource supervision must reject non-POSIX hosts");
+            assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        }
     }
 
     #[test]
@@ -18736,7 +18757,7 @@ mod kagemusha_bridge_tests {
                     current_policy_hash: policy_hash,
                     admission_height: 1,
                     admission_transaction_hash: Hash::new(b"receiver-offer admission tx"),
-                    public_key: request.receiver_public_key().clone(),
+                    public_key: *request.receiver_public_key(),
                     expires_at_ms: first_time_ms + 10 * 60 * 1_000,
                     account_exists: true,
                     asset_definition_exists: true,
@@ -18968,11 +18989,11 @@ mod kagemusha_bridge_tests {
         let publisher_key_pair = receiver_offer_publisher_key_pair_v1();
         let publisher_public_key = publisher_key_pair.public_key().to_bytes().1;
         assert_eq!(
-            hex::encode(&publisher_public_key),
+            hex::encode(publisher_public_key),
             "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0"
         );
         assert_eq!(
-            b64gp::STANDARD.encode(&publisher_public_key),
+            b64gp::STANDARD.encode(publisher_public_key),
             "DXVQdU4IAKXSN+71gmA1dmubPloVhoqUCrKJlYeI47A="
         );
         assert_eq!(
@@ -20641,7 +20662,11 @@ mod kagemusha_bridge_tests {
     #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn recursive_spend_v4_default_build_is_fail_closed_before_artifact_admission() {
-        assert!(!iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        const {
+            if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
+                panic!("default bridge must compile without the production proof backend");
+            }
+        }
         assert_eq!(
             require_kagemusha_recursive_spend_production_promotion_v4()
                 .expect_err("default bridge must not promote production")

@@ -129,20 +129,6 @@ pub(crate) fn apply_cli_gas_limit_override(
     })
 }
 
-fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
-    match (requested, quoted) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    }
-}
-
 fn fee_quote_rejection_message(status: reqwest::StatusCode, body: &[u8]) -> String {
     let Ok(envelope) = norito::json::from_slice::<ErrorEnvelope>(body) else {
         let fallback = String::from_utf8_lossy(body);
@@ -217,7 +203,7 @@ pub(crate) fn quote_and_sign_transaction(
     }
     let quote: FeeQuoteResponse = norito::json::from_slice(response.body())
         .wrap_err("Failed to decode the exact transaction fee quote")?;
-    if !fee_payment_selection_matches(&requested_fee_payment, &quote.intent) {
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         eyre::bail!(
             "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
         );
@@ -10020,16 +10006,16 @@ mod tests {
             )],
             NonZeroU64::new(42),
         );
-        assert!(fee_payment_selection_matches(&requested, &quoted));
+        assert!(requested.has_same_payer_and_gas_bound(&quoted));
 
         let sponsor = FeeSponsorProgramId::new(
             AccountId::new(fixture_key_pair(7).public_key().clone()),
             "default".parse().expect("program name"),
         );
         let wrong_payer = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), NonZeroU64::new(42));
-        assert!(!fee_payment_selection_matches(&requested, &wrong_payer));
+        assert!(!requested.has_same_payer_and_gas_bound(&wrong_payer));
         let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
-        assert!(!fee_payment_selection_matches(&requested, &wrong_gas));
+        assert!(!requested.has_same_payer_and_gas_bound(&wrong_gas));
     }
 
     #[test]

@@ -8,7 +8,10 @@ import {readdir, readFile} from 'node:fs/promises';
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+import {
+  validateOpenApiGeneratorProvenance,
+  validateReleaseOpenApiDocumentBytes,
+} from './lib/openapi-provenance.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -81,6 +84,9 @@ async function verifyEntry(entry, context) {
     specPath,
     `OpenAPI spec ${specPath} referenced by ${entry.label} is missing. ${staleHint}`,
   );
+  validateReleaseOpenApiDocumentBytes(specBuffer, {
+    label: `OpenAPI spec ${specPath} referenced by ${entry.label}`,
+  });
   const digest = computeSha256Hex(specBuffer);
   const recordedSha = entry.sha256;
   if (!equalsIgnoreCase(recordedSha, digest)) {

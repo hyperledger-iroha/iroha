@@ -249,6 +249,42 @@ fn trust_config(
     }
 }
 
+#[cfg(feature = "p2p_ws")]
+fn websocket_test_config(
+    address: iroha_primitives::addr::SocketAddr,
+    idle_timeout: Duration,
+    prefer_ws_fallback: bool,
+) -> Config {
+    let mut config = trust_config(
+        address,
+        iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+        idle_timeout,
+    );
+    config.prefer_ws_fallback = prefer_ws_fallback;
+    config.happy_eyeballs_stagger = Duration::from_millis(50);
+    config.p2p_queue_cap_high =
+        NonZeroUsize::new(128).expect("WebSocket test high-priority capacity is non-zero");
+    config.p2p_queue_cap_low =
+        NonZeroUsize::new(128).expect("WebSocket test low-priority capacity is non-zero");
+    config.p2p_post_queue_cap =
+        NonZeroUsize::new(64).expect("WebSocket test post capacity is non-zero");
+    config
+}
+
+#[cfg(feature = "p2p_ws")]
+async fn accept_one_websocket_test_connection(
+    listener: tokio::net::TcpListener,
+    network: NetworkHandle<TestMessage>,
+) {
+    let Ok((tcp_stream, remote_address)) = listener.accept().await else {
+        return;
+    };
+    let Ok((reader, writer)) = super::ws_io::accept_bounded(tcp_stream).await else {
+        return;
+    };
+    let _ = network.accept_stream(reader, writer, remote_address).await;
+}
+
 /// This test creates a network and one peer.
 /// This peer connects back to our network, emulating some distant peer.
 /// There is no need to create separate networks to check that messages
@@ -697,461 +733,76 @@ async fn trust_gossip_enabled_flows_through() {
 #[cfg(feature = "p2p_ws")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_fallback_connects_and_handshakes() {
-    use tokio::{
-        io::{AsyncRead, AsyncWrite, ReadBuf},
-        net::TcpListener,
-    };
-    use tokio_tungstenite::accept_async;
-
     setup_logger();
     if super::skip_if_no_tcp_bind() {
         return;
     }
 
-    // Force the dialer to take the WebSocket path for Host addresses.
-
-    // Start the inbound network (peer2).
-    let kp2 = KeyPair::random();
+    let peer2_key_pair = KeyPair::random();
     let chain_id = ChainId::from("test_chain");
-    let idle = Duration::from_millis(5000);
-    let network2_addr = super::next_addr();
-    let (network2, _child2) = NetworkHandle::<TestMessage>::start(
-        kp2.clone(),
-        Config {
-            address: WithOrigin::inline(network2_addr.clone()),
-            public_address: WithOrigin::inline(network2_addr),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout: idle,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: false,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
+    let idle_timeout = Duration::from_secs(5);
+    let peer2_listen_address = super::next_addr();
+    let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
+        peer2_key_pair.clone(),
+        websocket_test_config(peer2_listen_address, idle_timeout, false),
         Some(chain_id.clone()),
         None,
         None,
         ShutdownSignal::new(),
     )
     .await
-    .expect("start network2");
+    .expect("start inbound WebSocket test network");
 
-    // WS server that upgrades and forwards the duplex to network2.accept_stream.
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let ws_addr = listener.local_addr().unwrap();
-    let p2 = network2.clone();
-    tokio::spawn(async move {
-        if let Ok((stream, remote)) = listener.accept().await {
-            if let Ok(ws) = accept_async(stream).await {
-                let (sink, stream) = ws.split();
-                // Adapters
-                #[allow(clippy::items_after_statements)]
-                struct R<S>(S, bytes::Bytes);
-                impl<S> AsyncRead for R<S>
-                where
-                    S: futures::Stream<
-                            Item = Result<
-                                tokio_tungstenite::tungstenite::Message,
-                                tokio_tungstenite::tungstenite::Error,
-                            >,
-                        > + Unpin
-                        + Send,
-                {
-                    fn poll_read(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                        buf: &mut ReadBuf<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        if !self.1.is_empty() {
-                            let n = core::cmp::min(self.1.len(), buf.remaining());
-                            buf.put_slice(&self.1.split_to(n));
-                            return core::task::Poll::Ready(Ok(()));
-                        }
-                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_next(cx)) {
-                            Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(b))) => {
-                                self.1 = b;
-                                let n = core::cmp::min(self.1.len(), buf.remaining());
-                                buf.put_slice(&self.1.split_to(n));
-                                core::task::Poll::Ready(Ok(()))
-                            }
-                            Some(Ok(_)) => {
-                                cx.waker().wake_by_ref();
-                                core::task::Poll::Pending
-                            }
-                            Some(Err(e)) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws read error: {e}"),
-                            ))),
-                            None => core::task::Poll::Ready(Ok(())),
-                        }
-                    }
-                }
-                #[allow(clippy::items_after_statements)]
-                struct W<S>(S, Vec<u8>);
-                impl<S> AsyncWrite for W<S>
-                where
-                    S: futures::Sink<
-                            tokio_tungstenite::tungstenite::Message,
-                            Error = tokio_tungstenite::tungstenite::Error,
-                        > + Unpin
-                        + Send,
-                {
-                    fn poll_write(
-                        mut self: core::pin::Pin<&mut Self>,
-                        _cx: &mut core::task::Context<'_>,
-                        data: &[u8],
-                    ) -> core::task::Poll<std::io::Result<usize>> {
-                        self.1.extend_from_slice(data);
-                        core::task::Poll::Ready(Ok(data.len()))
-                    }
-                    fn poll_flush(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        if self.1.is_empty() {
-                            return core::task::Poll::Ready(Ok(()));
-                        }
-                        let data = core::mem::take(&mut self.1);
-                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_ready(cx)) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                return core::task::Poll::Ready(Err(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("ws ready error: {e}"),
-                                )));
-                            }
-                        }
-                        if let Err(e) = core::pin::Pin::new(&mut self.0).start_send(
-                            tokio_tungstenite::tungstenite::Message::Binary(data.into()),
-                        ) {
-                            return core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws send error: {e}"),
-                            )));
-                        }
-                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_flush(cx)) {
-                            Ok(()) => core::task::Poll::Ready(Ok(())),
-                            Err(e) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws flush error: {e}"),
-                            ))),
-                        }
-                    }
-                    fn poll_shutdown(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_ready(cx)) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                return core::task::Poll::Ready(Err(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("ws ready error: {e}"),
-                                )));
-                            }
-                        }
-                        if let Err(e) = core::pin::Pin::new(&mut self.0)
-                            .start_send(tokio_tungstenite::tungstenite::Message::Close(None))
-                        {
-                            return core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws close error: {e}"),
-                            )));
-                        }
-                        match futures::ready!(core::pin::Pin::new(&mut self.0).poll_flush(cx)) {
-                            Ok(()) => core::task::Poll::Ready(Ok(())),
-                            Err(e) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws close error: {e}"),
-                            ))),
-                        }
-                    }
-                }
-                let read = R(stream, bytes::Bytes::new());
-                let write = W(sink, Vec::new());
-                let _ = p2.accept_stream(read, write, remote).await;
-            }
-        }
-    });
+    // Upgrade one connection and pass its bounded byte-stream adapters to peer 2.
+    let websocket_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind WebSocket fallback listener");
+    let websocket_address = websocket_listener
+        .local_addr()
+        .expect("read WebSocket fallback listener address");
+    // Retain the original handle for the full test while the server task owns a clone.
+    let websocket_peer_network = peer2_network.clone();
+    let _websocket_server = tokio::spawn(accept_one_websocket_test_connection(
+        websocket_listener,
+        websocket_peer_network,
+    ));
 
-    // Start the dialer network (peer1) and point to the WS endpoint via Host address.
-    let kp1 = KeyPair::random();
-    let network1_addr = super::next_addr();
-    let (mut network1, _child1) = NetworkHandle::<TestMessage>::start(
-        kp1.clone(),
-        Config {
-            address: WithOrigin::inline(network1_addr.clone()),
-            public_address: WithOrigin::inline(network1_addr),
-            relay_mode: RelayMode::Disabled,
-            relay_hub_addresses: Vec::new(),
-            relay_ttl: RELAY_TTL,
-            soranet_handshake: default_soranet_handshake(),
-            soranet_privacy: SoranetPrivacy::default(),
-            soranet_vpn: SoranetVpn::default(),
-            lane_profile: LaneProfile::Core,
-            require_sm_handshake_match: true,
-            require_sm_openssl_preview_match: true,
-            idle_timeout: idle,
-            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
-            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
-        deferred_send_ttl: std::time::Duration::from_millis(
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
-        ),
-        deferred_send_max_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
-        deferred_send_max_bytes_per_peer:
-            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
-            peer_gossip_period: PEER_GOSSIP_PERIOD,
-            peer_gossip_max_period: PEER_GOSSIP_PERIOD,
-            trust_decay_half_life:
-                iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
-            trust_penalty_bad_gossip:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
-            trust_penalty_unknown_peer:
-                iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
-            trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            debug_packet_loss_inbound_percent: 0,
-            debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
-            prefer_ws_fallback: true,
-            p2p_proxy: None,
-            p2p_proxy_required: false,
-            p2p_no_proxy: vec![],
-            p2p_proxy_tls_verify: true,
-            p2p_proxy_tls_pinned_cert_der_base64: None,
-            happy_eyeballs_stagger: Duration::from_millis(50),
-            addr_ipv6_first: false,
-            dns_refresh_interval: None,
-            dns_refresh_ttl: None,
-            quic_enabled: false,
-            quic_datagrams_enabled: iroha_config::parameters::defaults::network::QUIC_DATAGRAMS_ENABLED,
-            quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
-            quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
-            quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
-            p2p_queue_cap_low: NonZeroUsize::new(128).unwrap(),
-            p2p_post_queue_cap: NonZeroUsize::new(64).unwrap(),
-            p2p_outbound_frame_queue_max_high_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
-            p2p_outbound_frame_queue_max_low_bytes: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
-            p2p_outbound_frame_queue_max_high_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
-            p2p_outbound_frame_queue_max_low_frames: iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
-            p2p_subscriber_queue_cap:
-                iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
-            consensus_ingress_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
-            consensus_ingress_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BURST,
-            consensus_ingress_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_PER_SEC,
-            consensus_ingress_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_BYTES_BURST,
-            consensus_ingress_critical_rate_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_RATE_PER_SEC,
-            consensus_ingress_critical_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BURST,
-            consensus_ingress_critical_bytes_per_sec:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
-            consensus_ingress_critical_bytes_burst:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_penalty_threshold:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
-            consensus_ingress_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_WINDOW_MS,
-            ),
-            consensus_ingress_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS,
-            ),
-            max_incoming: None,
-            max_total_connections: None,
-            accept_rate_per_ip_per_sec: None,
-            accept_burst_per_ip: None,
-            max_accept_buckets: iroha_config::parameters::defaults::network::MAX_ACCEPT_BUCKETS,
-            accept_bucket_idle: iroha_config::parameters::defaults::network::ACCEPT_BUCKET_IDLE,
-            accept_prefix_v4_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V4_BITS,
-            accept_prefix_v6_bits:
-                iroha_config::parameters::defaults::network::ACCEPT_PREFIX_V6_BITS,
-            accept_rate_per_prefix_per_sec: None,
-            accept_burst_per_prefix: None,
-            low_priority_rate_per_sec: None,
-            low_priority_burst: None,
-            low_priority_bytes_per_sec: None,
-            low_priority_bytes_burst: None,
-            allowlist_only: false,
-            allow_keys: vec![],
-            deny_keys: vec![],
-            allow_cidrs: vec![],
-            deny_cidrs: vec![],
-            disconnect_on_post_overflow: true,
-            max_frame_bytes: 1_048_576,
-            tcp_nodelay: true,
-            tcp_keepalive: None,
-            max_frame_bytes_consensus: 262_144,
-            max_frame_bytes_control: 262_144,
-            max_frame_bytes_block_sync: 1_048_576,
-            max_frame_bytes_tx_gossip: 262_144,
-            max_frame_bytes_peer_gossip: 131_072,
-            max_frame_bytes_health: 65_536,
-            max_frame_bytes_other: 262_144,
-            tls_only_v1_3: true,
-            quic_max_idle_timeout: None,
-        },
-        Some(chain_id.clone()),
+    // Prefer the WebSocket transport for peer 1's connection to the listener.
+    let peer1_key_pair = KeyPair::random();
+    let peer1_listen_address = super::next_addr();
+    let (mut peer1_network, _peer1_child) = NetworkHandle::<TestMessage>::start(
+        peer1_key_pair,
+        websocket_test_config(peer1_listen_address, idle_timeout, true),
+        Some(chain_id),
         None,
         None,
         ShutdownSignal::new(),
     )
     .await
-    .expect("start network1");
+    .expect("start outbound WebSocket test network");
 
-    // Topology and peer address for network1 -> network2 via Host(ws_addr).
-    let peer2 = Peer::new(
-        format!("{}:{}", ws_addr.ip(), ws_addr.port())
-            .parse()
-            .unwrap(),
-        kp2.public_key().clone(),
-    );
-    network1.update_topology(UpdateTopology([peer2.id().clone()].into_iter().collect()));
-    network1.update_peers_addresses(UpdatePeers(vec![(
-        peer2.id().clone(),
-        format!("{}:{}", ws_addr.ip(), ws_addr.port())
-            .parse()
-            .unwrap(),
-    )]));
+    let peer2_address = websocket_address
+        .to_string()
+        .parse()
+        .expect("WebSocket listener address should be a valid peer address");
+    let peer2 = Peer::new(peer2_address.clone(), peer2_key_pair.public_key().clone());
+    peer1_network.update_topology(UpdateTopology(HashSet::from([peer2.id().clone()])));
+    peer1_network.update_peers_addresses(UpdatePeers(vec![(peer2.id().clone(), peer2_address)]));
 
-    // Wait for the networks to connect
     tokio::time::timeout(Duration::from_secs(5), async {
-        let mut n = network1
+        let mut online_count = peer1_network
             .wait_online_peers_update(HashSet::len)
             .await
             .expect("online peers channel closed");
-        while n < 1 {
-            n = network1
+        while online_count < 1 {
+            online_count = peer1_network
                 .wait_online_peers_update(HashSet::len)
                 .await
                 .expect("online peers channel closed");
         }
     })
     .await
-    .expect("peer did not connect over WS");
+    .expect("peer did not connect and complete its handshake over WebSocket");
 }
 
 #[derive(Clone, Debug)]

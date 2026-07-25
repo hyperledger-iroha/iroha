@@ -155,6 +155,7 @@ IN /\ command.kind = "FormPrepareQC"
 /\ \E request \in pendingInstallTC:
      /\ command.node = request.node
      /\ command.view = request.tc.view
+     /\ InstallTcEvidenceMatches(command, request.tc)
      /\ PersistInstallTCReady(request)
 """
     ),

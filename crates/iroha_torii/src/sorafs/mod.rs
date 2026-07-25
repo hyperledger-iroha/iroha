@@ -28,9 +28,9 @@ pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
 #[cfg(feature = "app_api")]
-pub(crate) mod reserve_runtime;
-#[cfg(feature = "app_api")]
 pub(crate) mod reserve_api;
+#[cfg(feature = "app_api")]
+pub(crate) mod reserve_runtime;
 pub(crate) mod reserve_worker;
 pub mod site;
 pub mod token;

@@ -75,8 +75,8 @@ deployment evidence remain open. The existing local
 `/v1/sorafs/reputation/*` snapshot checkpoint is not the production committed
 journal projection.
 
-Within the four ledger-authority domains enumerated by V1-C04, active
-local-authority debt remains only in moderation.
+All four ledger-authority domains enumerated by V1-C04 now use native committed
+state as their local source of truth.
 The process-local reserve runtime, checkpoint, scheduler, mutation API, and
 obsolete routes are deleted; reserve mutations now forward exact caller-signed
 native transactions and reserve reads use authenticated finalized projections.
@@ -85,9 +85,11 @@ accounts with bounded labels and an explicit reconciled-height readiness bit.
 The competing `sorafs_node` orderbook, checkpoint, config, mutation/event API,
 and pre-release snapshot wire are also deleted. The reserve/rent and orderbook
 lanes remain open for full source validation and reviewed distributed recovery
-evidence. Process-local moderation ballot state must still be removed in favor
-of signed native transactions and rebuildable finalized-chain projections.
-Taira and Minamoto mutation remains separately authorized cutover work.
+evidence. Moderation remains open for production transaction submission,
+retry/reconciliation, notification and failover orchestration, protected-viewer
+integration, settlement, downstream publication, and four-peer evidence; its
+ballot lifecycle is already chain-authoritative and rebuildable from finalized
+events. Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
 
@@ -25246,9 +25248,12 @@ the exact runner route bridges and missing-route rejections for
 durable lane certificates and certified sidecar chunks, plus the four-gate,
 two-session, 16-MiB per-source sidecar cap and same-hub overflow isolation
 tests. The added authenticated-source limit and pre-cap alternate-route
-regressions are not covered by that historical 50/50 receipt. Outstanding
-release work for this
-slice is to execute those complete source-sealed suites, add a
+regressions are not covered by that historical 50/50 receipt. The current
+closure journals requester and responder lifecycle state under Kura, preserves
+authenticated-source budgets and cursors across restart/height rollover, and
+fail-stops request, queued-chunk, timeout, Close, and CloseAck output when that
+journal cannot advance. Outstanding release work for this slice is to execute
+those complete source-sealed suites, add a
 four-validator signed-observer slow-reader flood during view change/body
 recovery, discharge the remaining formal obligations, and run the sealed
 network, chaos, and 24-hour soak gates.
@@ -25774,7 +25779,7 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 572-test, 39-module, 82-leg pre-network
+- execute the fresh source-sealed 582-test, 39-module, 82-leg pre-network
   corridor. Its proposal-origin and per-source route-attempt additions cover
   strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
@@ -26009,7 +26014,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  572-test target above supersedes that checkpoint. The 39-module pre-network
+  582-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

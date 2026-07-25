@@ -1051,15 +1051,12 @@ pub struct DaRentLedgerAccounts<'a> {
 /// This mirrors the rent-ledger workflow exposed through `iroha da rent-ledger`,
 /// allowing host automation to derive the same instructions without shelling
 /// out to the CLI.
-///
-/// # Errors
-///
-/// Returns an error if any transfer instruction fails validation (e.g., due to invalid amounts).
+#[must_use]
 pub fn build_da_rent_ledger_plan(
     projection: &DaRentLedgerProjection,
     accounts: &DaRentLedgerAccounts<'_>,
     asset_definition: &AssetDefinitionId,
-) -> Result<DaRentLedgerPlan> {
+) -> DaRentLedgerPlan {
     let mut instructions = Vec::new();
     push_rent_instruction(
         &mut instructions,
@@ -1067,37 +1064,37 @@ pub fn build_da_rent_ledger_plan(
         accounts.treasury,
         projection.rent_due.clone(),
         asset_definition,
-    )?;
+    );
     push_rent_instruction(
         &mut instructions,
         accounts.treasury,
         accounts.protocol_reserve,
         projection.protocol_reserve_due.clone(),
         asset_definition,
-    )?;
+    );
     push_rent_instruction(
         &mut instructions,
         accounts.treasury,
         accounts.provider,
         projection.provider_reward_due.clone(),
         asset_definition,
-    )?;
+    );
     push_rent_instruction(
         &mut instructions,
         accounts.treasury,
         accounts.pdp_bonus,
         projection.pdp_bonus_pool.clone(),
         asset_definition,
-    )?;
+    );
     push_rent_instruction(
         &mut instructions,
         accounts.treasury,
         accounts.potr_bonus,
         projection.potr_bonus_pool.clone(),
         asset_definition,
-    )?;
+    );
 
-    Ok(DaRentLedgerPlan {
+    DaRentLedgerPlan {
         rent_due: projection.rent_due.clone(),
         protocol_reserve_due: projection.protocol_reserve_due.clone(),
         provider_reward_due: projection.provider_reward_due.clone(),
@@ -1105,7 +1102,7 @@ pub fn build_da_rent_ledger_plan(
         potr_bonus_pool: projection.potr_bonus_pool.clone(),
         egress_credit_per_gib: projection.egress_credit_per_gib.clone(),
         instructions,
-    })
+    }
 }
 
 fn push_rent_instruction(
@@ -1114,9 +1111,9 @@ fn push_rent_instruction(
     destination_account: &AccountId,
     amount: XorQuantity,
     asset_definition: &AssetDefinitionId,
-) -> Result<()> {
+) {
     if amount.is_zero() {
-        return Ok(());
+        return;
     }
     let asset_id = AssetId::new(asset_definition.clone(), source_account.clone());
     let transfer = Transfer::asset_quantity(
@@ -1125,7 +1122,6 @@ fn push_rent_instruction(
         destination_account.clone(),
     );
     instructions.push(InstructionBox::from(transfer));
-    Ok(())
 }
 
 fn value_from_usize(value: usize) -> Value {
@@ -1867,8 +1863,7 @@ mod tests {
             pdp_bonus: &pdp_bonus,
             potr_bonus: &potr_bonus,
         };
-        let plan = build_da_rent_ledger_plan(&projection, &accounts, &asset_definition)
-            .expect("ledger plan");
+        let plan = build_da_rent_ledger_plan(&projection, &accounts, &asset_definition);
 
         assert_eq!(plan.rent_due, projection.rent_due);
         assert_eq!(plan.protocol_reserve_due, projection.protocol_reserve_due);

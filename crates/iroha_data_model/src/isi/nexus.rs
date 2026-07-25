@@ -777,6 +777,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one stable-ID registry vector enumerates and decodes every verified Nexus instruction in canonical order"
+    )]
     fn nexus_verified_payload_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<SetLaneRelayEmergencyValidators>(

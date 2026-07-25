@@ -7211,7 +7211,7 @@ mod kagemusha_v4_artifact_contract_tests {
 
     fn profile(
         parity: KagemushaPastaCycleParityV1,
-        params: KagemushaStepCircuitParamsV4,
+        params: &KagemushaStepCircuitParamsV4,
         seed: u8,
     ) -> KagemushaPastaCycleProofProfileV4 {
         let (circuit_id, names) = match parity {
@@ -7289,8 +7289,8 @@ mod kagemusha_v4_artifact_contract_tests {
             withdrawal_height: 100,
             max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
             profiles: vec![
-                profile(KagemushaPastaCycleParityV1::StepEq, params.clone(), 1),
-                profile(KagemushaPastaCycleParityV1::StepEp, params, 11),
+                profile(KagemushaPastaCycleParityV1::StepEq, &params, 1),
+                profile(KagemushaPastaCycleParityV1::StepEp, &params, 11),
             ],
             topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
                 file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
@@ -7872,7 +7872,7 @@ mod kagemusha_v4_artifact_contract_tests {
     fn v4_envelope_uses_verifying_key_role_at_canonical_index() {
         let manifest = manifest();
         manifest.validate().expect("valid V4 manifest");
-        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+        let [vesta_profile, pallas_profile] = manifest.profiles.as_slice() else {
             panic!("test manifest must have Eq/Ep profiles");
         };
         let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
@@ -7881,37 +7881,41 @@ mod kagemusha_v4_artifact_contract_tests {
             version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
             proof_backend: manifest.proof_backend.clone(),
             transcript_profile: manifest.transcript_profile.clone(),
-            step_eq_circuit_id: step_eq.circuit_id.clone(),
-            step_ep_circuit_id: step_ep.circuit_id.clone(),
+            step_eq_circuit_id: vesta_profile.circuit_id.clone(),
+            step_ep_circuit_id: pallas_profile.circuit_id.clone(),
             artifact_generation: manifest.generation.clone(),
             manifest_sha256: digest(&to_bytes(&manifest).expect("canonical manifest")),
-            step_eq_parameter_generation: step_eq.parameter_generation.clone(),
-            step_ep_parameter_generation: step_ep.parameter_generation.clone(),
-            step_eq_circuit_params_sha256: step_eq
+            step_eq_parameter_generation: vesta_profile.parameter_generation.clone(),
+            step_ep_parameter_generation: pallas_profile.parameter_generation.clone(),
+            step_eq_circuit_params_sha256: vesta_profile
                 .circuit_params
                 .sha256()
                 .expect("Eq params identity"),
-            step_ep_circuit_params_sha256: step_ep
+            step_ep_circuit_params_sha256: pallas_profile
                 .circuit_params
                 .sha256()
                 .expect("Ep params identity"),
-            step_eq_verifier_key_sha256: step_eq.artifacts[2].payload_sha256,
-            step_ep_verifier_key_sha256: step_ep.artifacts[2].payload_sha256,
+            step_eq_verifier_key_sha256: vesta_profile.artifacts[2].payload_sha256,
+            step_ep_verifier_key_sha256: pallas_profile.artifacts[2].payload_sha256,
             state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
                 layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
                 state_limbs,
             },
-            proof: ProofBox::new(manifest.proof_backend.clone().into(), vec![0xA5]),
+            proof: ProofBox::new(manifest.proof_backend.clone(), vec![0xA5]),
         };
         envelope
             .validate_against_manifest(&manifest)
             .expect("V4 envelope binds verifying-key role at index two");
 
-        envelope.step_eq_verifier_key_sha256 = step_eq.artifacts[1].payload_sha256;
+        envelope.step_eq_verifier_key_sha256 = vesta_profile.artifacts[1].payload_sha256;
         assert!(envelope.validate_against_manifest(&manifest).is_err());
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the cohesive attestation digest-cycle tamper matrix shares one signed fixture"
+    )]
     fn v4_attestation_subject_breaks_only_the_attestation_digest_cycle() {
         let benchmark = b"signed V4 physical-device benchmark evidence".to_vec();
         let roles = [
@@ -8076,6 +8080,10 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the cohesive canonicalization and signature tamper matrix shares one candidate"
+    )]
     fn v4_cryptographic_review_is_canonical_signed_and_candidate_bound() {
         let candidate = unsigned_candidate(&manifest());
         let reviewer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
@@ -8473,19 +8481,23 @@ mod device_authority_p256_tests {
         assertion_key: &SigningKey,
         ios_authenticator_data: Option<Vec<u8>>,
     ) -> KagemushaRequestAuthorizationV2 {
-        let hardware_assertion = match ios_authenticator_data {
-            None => KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
-                KagemushaAndroidKeyMintHardwareAssertionV1 {
-                    signature: placeholder_signature(),
-                },
-            ),
-            Some(authenticator_data) => KagemushaOnlineHardwareAssertionV1::IosAppAttest(
-                KagemushaIosAppAttestHardwareAssertionV1 {
-                    authenticator_data,
-                    signature: placeholder_signature(),
-                },
-            ),
-        };
+        let hardware_assertion = ios_authenticator_data.map_or_else(
+            || {
+                KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                    KagemushaAndroidKeyMintHardwareAssertionV1 {
+                        signature: placeholder_signature(),
+                    },
+                )
+            },
+            |authenticator_data| {
+                KagemushaOnlineHardwareAssertionV1::IosAppAttest(
+                    KagemushaIosAppAttestHardwareAssertionV1 {
+                        authenticator_data,
+                        signature: placeholder_signature(),
+                    },
+                )
+            },
+        );
         let mut authorization = KagemushaRequestAuthorizationV2 {
             authority: account(21),
             device_id: "hardware-device-21".to_owned(),

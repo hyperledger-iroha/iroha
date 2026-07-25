@@ -22,14 +22,13 @@ cargo xtask openapi
 Yuqoridagi buyruqni ishga tushirish `docs/portal/static/openapi/torii.json` va yozadi
 `docusaurus-plugin-openapi-docs` integratsiyasini ta'minlaydi, shuning uchun bu bo'lim yangilanadi
 avtomatik ravishda. Generator xotiradagi Torii routerini aylantiradi va
-uning OpenAPI so'nggi nuqtasini so'rang; agar bu bajarilmasa (masalan, marshrutizatorni ishga tushirish
-xatolar) o'rniga deterministik to'ldiruvchi spetsifikatsiya chiqariladi.
+Generator Torii marshrutizatoridan kanonik proyeksiyani yaratadi va to'liq
+OpenAPI hujjatini yaratib bo'lmasa, yopiq tarzda xato bilan to'xtaydi.
 
 ## Joriy holat
 
-- **Maxsus manba:** `cargo xtask openapi` to'g'ridan-to'g'ri Torii routeriga so'rov yuboradi; the
-  zaxira stub faqat marshrutizator OpenAPI ni ochib bera olmasa chiqariladi.
-  hujjat.
+- **Maxsus manba:** `cargo xtask openapi` to'g'ridan-to'g'ri Torii routeriga
+  so'rov yuboradi va to'liq spetsifikatsiya mavjud bo'lmasa xato qiladi.
 - **Determinizm:** JSON chiqishi CIda barqaror farqni taʼminlash uchun kanoniklashtirilgan.
 - **Autentifikatsiya:** “Sinab ko‘ring” sinov maydoni endi so‘rovlarni a orqali yuboradi
   cheklangan staging proksi. Operatorlar Torii so'nggi nuqta va tashuvchini taqdim etishlari kerak
@@ -80,4 +79,3 @@ npm run start
 > ⚠️ Proksi-server sahnalashtirish/demo kirish uchun mo'ljallangan. Ishlab chiqarishni joylashtirish
 > qattiqlashtirilgan kirish ortidan yugurishi va bir xil tezlikni cheklash siyosatini qayta ishlatishi kerak
 > Torii old tomoni.
-

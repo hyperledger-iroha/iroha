@@ -276,18 +276,7 @@ fn main() -> Result<()> {
         Metadata::default(),
     )?;
     let quote = client.quote_fees(&payload)?;
-    let selection_matches = match (&fee_payment, &quote.intent) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    };
-    if !selection_matches {
+    if !fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         bail!(
             "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
         );
@@ -350,26 +339,47 @@ mod tests {
                     DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("rose").expect("asset name"),
                 ),
-                per_transaction: Quantity::try_from(10_u64).unwrap(),
-                per_block: Quantity::try_from(100_u64).unwrap(),
-                per_program_epoch: Quantity::try_from(1_000_u64).unwrap(),
-                per_beneficiary_epoch: Quantity::try_from(100_u64).unwrap(),
-                reserve_floor: Quantity::try_from(10_u64).unwrap(),
+                per_transaction: Quantity::from(10_u64),
+                per_block: Quantity::from(100_u64),
+                per_program_epoch: Quantity::from(1_000_u64),
+                per_beneficiary_epoch: Quantity::from(100_u64),
+                reserve_floor: Quantity::from(10_u64),
                 epoch_length_blocks: NonZeroU64::new(100).unwrap(),
             }],
         }
     }
 
     #[test]
+    fn fee_quote_selection_rejects_payer_gas_and_revision_substitution() {
+        let authority = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10));
+        assert!(authority.has_same_payer_and_gas_bound(&authority));
+        assert!(
+            !authority.has_same_payer_and_gas_bound(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(11)
+            ))
+        );
+
+        let program_id = sample_revision().program_id;
+        let sponsor =
+            FeePaymentIntent::sponsor(program_id.clone(), 1, Vec::new(), NonZeroU64::new(10));
+        assert!(!authority.has_same_payer_and_gas_bound(&sponsor));
+        assert!(
+            !sponsor.has_same_payer_and_gas_bound(&FeePaymentIntent::sponsor(
+                program_id,
+                2,
+                Vec::new(),
+                NonZeroU64::new(10)
+            ))
+        );
+    }
+
+    #[test]
     fn provisioning_order_is_create_stage_enroll_fund_activate() {
         let revision = sample_revision();
         let beneficiary = revision.program_id.sponsor.clone();
-        let instructions = provisioning_instructions(
-            revision,
-            vec![beneficiary],
-            Quantity::try_from(100_u64).unwrap(),
-            42,
-        );
+        let instructions =
+            provisioning_instructions(revision, vec![beneficiary], Quantity::from(100_u64), 42);
         let wire_ids = instructions
             .iter()
             .map(|instruction| {

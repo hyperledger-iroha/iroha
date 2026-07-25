@@ -611,15 +611,16 @@ PROOF
                (PostGstAdmitHiddenPacket(recipient, source)
                   \/ PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source))
-        BY <1>1, <2>1, <2>2, ExpandENABLED, Isa
+        BY <1>1, <2>1, <2>2, AutoUSE, ExpandENABLED, Isa
            DEF ResponsivePacketPairAt,
                PostGstAdmitHiddenPacket,
                PostGstAdmitHistoricalRecoveryPacket,
                HistoricalRecoveryPacketCorridor,
                AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, Item, AsyncAllVars,
+               CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket, Item, AsyncAllVars,
                AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
-               AsyncLocalAdmissionVars, AsyncNonRunnerOuterFrame,
+               AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
+               AsyncNonRunnerOuterFrame,
                AsyncNonCrashOuterFrame, AsyncRecoveryOuterFrame,
                AsyncCoreOuterFrame, vars
       <3> QED BY <3>1
@@ -630,15 +631,16 @@ PROOF
                (PostGstAdmitHiddenPacket(recipient, source)
                   \/ PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source))
-        BY <1>1, <2>1, <2>3, <3>1, ExpandENABLED, Isa
+        BY <1>1, <2>1, <2>3, <3>1, AutoUSE, ExpandENABLED, Isa
            DEF ResponsivePacketPairAt,
                PostGstAdmitHiddenPacket,
                PostGstAdmitHistoricalRecoveryPacket,
                HistoricalRecoveryPacketCorridor,
                AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, Item, AsyncAllVars,
+               CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket, Item, AsyncAllVars,
                AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
-               AsyncLocalAdmissionVars, AsyncNonRunnerOuterFrame,
+               AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
+               AsyncNonRunnerOuterFrame,
                AsyncNonCrashOuterFrame, AsyncRecoveryOuterFrame,
                AsyncCoreOuterFrame, vars
       <3> QED BY <3>2
@@ -652,30 +654,39 @@ THEOREM AppliedResponsiveHistoricalServerEnabledAfterGst ==
     /\ gst
     /\ NodeHasApplication(node)
     => ENABLED PostGstRunHistoricalServer(node)
-BY ExpandENABLED, Isa
-   DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+BY GstExcludesResponsiveReplayQuarantine,
+   AutoUSE, ExpandENABLED, IsaT(600)
+   DEF AsyncStrongTypeInvariant,
        PostGstReplayQuarantineExcluded,
-       ResponsiveReplayQuarantined, PostGstRunHistoricalServer,
-       RunHistoricalServer, DrainHistoricalIngressSelected,
-       HistoricalIdleStep, PopSelectedIngress,
-       AsyncAllVars, AsyncSchedulerVars, AsyncIoVars,
-       AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+       PostGstRunHistoricalServer, RunHistoricalServer,
+       DrainHistoricalIngressSelected, HistoricalIdleStep,
+       AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       LeaveCausalQueues, vars
 
 THEOREM HistoricalRecoveryRunnerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
     /\ gst
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
-BY ExpandENABLED, Isa
+BY AsyncStrongTypeProjectsAsyncType,
+   HistoricalRecoveryTargetsAreValidators,
+   LocalAdmissionStepIsEnabled, IngressDrainStepIsEnabled,
+   SerializedRuntimeStepIsEnabled,
+   GstExcludesResponsiveReplayQuarantine,
+   AutoUSE, ExpandENABLED, IsaT(600)
    DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
        AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
        AsyncHistoricalRecoveryTypeInvariant,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, HistoricalRecoveryTarget,
        RunNodeWork, LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep, RuntimeStep,
-       AsyncAllVars, AsyncSchedulerVars, AsyncIoVars,
-       AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+       AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars, vars
 
 THEOREM HistoricalRecoveryIoWorkerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
@@ -683,20 +694,30 @@ THEOREM HistoricalRecoveryIoWorkerEnabledAfterGst ==
     /\ gst
     /\ AsyncIoQueueDepth(node) > 0
     => ENABLED PostGstServiceHistoricalRecoveryIoWorker(node)
-BY ExpandENABLED, Isa
-   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+BY HistoricalRecoveryTargetsAreValidators,
+   AutoUSE, ExpandENABLED, IsaT(600)
+   DEF AsyncTypeInvariant,
        AsyncHistoricalRecoveryTypeInvariant,
        PostGstServiceHistoricalRecoveryIoWorker,
        ServiceHistoricalRecoveryIoWorker, ServiceIoWorkerWork,
        PublishEphemeralItems, LeaveCausalQueues,
-       AsyncIoQueueDepth, AsyncAllVars, AsyncSchedulerVars,
-       AsyncLocalAdmissionVars, AsyncDeferredVars, vars
+       AsyncIoQueueDepth, AsyncNonRunnerOuterFrame,
+       AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars, vars
 
 THEOREM AsyncTickEnabledHasConcreteSuccessor ==
   AsyncTickEnabled => ENABLED AsyncTick
-BY ExpandENABLED
-   DEF AsyncTick, AsyncNonClockVars, AsyncAllVars,
-       AsyncSchedulerVars, AsyncRecoveryVars, vars
+BY AutoUSE, ExpandENABLED, IsaT(600)
+   DEF AsyncTick, AsyncNonRunnerOuterFrame,
+       AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
+       AsyncNonClockVars, AsyncAllVars, AsyncSchedulerVars,
+       AsyncRecoveryVars, AsyncRecoveryControlVars,
+       AsyncLocalAdmissionVars, AsyncIoVars,
+       AsyncHistoricalLockRestartAuthorityTransition,
+       ResponsiveCrashRecoveryRegistration,
+       HistoricalLockRestartAuthoritySourceAfter,
+       HistoricalLockRestartExactCurrentFetchOwnerAfter, vars
 
 THEOREM AsyncTickStrictlyDecreasesResponsiveServiceDebt ==
   \A node \in AsyncCurrentResponsiveVoters:

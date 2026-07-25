@@ -28,13 +28,6 @@ THEOREM SafePrepareOnLockedSubject ==
     lockSubject[node] = proposal.subject => SafeToPrepare(node, proposal)
 BY DEF SafeToPrepare
 
-THEOREM HigherPrepareReleasesDifferentLock ==
-  \A node \in ValidatorIds, proposal \in ProposalRecordSet:
-    (proposal.justifyRank > lockRank[node]
-      /\ proposal.justifySubject = proposal.subject)
-      => SafeToPrepare(node, proposal)
-BY DEF SafeToPrepare
-
 THEOREM PersistedPrepareIsRequiredBeforePrepareSigning ==
   PrepareSigningRequiresIntent
     <=> \A request \in signVotes:
@@ -158,27 +151,15 @@ THEOREM WellTypedTimeoutSelectorRankIsInteger ==
 PROOF
   <1>1. ASSUME NEW tc, ModelConfiguration, TcWellTyped(tc)
          PROVE TcHighRank(tc) \in Int
-    <2>1. Ranks \subseteq Int
+    <2>1. tc.highestPrepareQc \in PrepareQcOptionSet
+      BY <1>1 DEF TcWellTyped
+    <2>2. TcHighRank(tc) \in Ranks
+      BY <2>1, Isa
+         DEF TcHighRank, PrepareQcRank, PrepareQcOptionSet,
+             QcRecordSet, Ranks
+    <2>3. Ranks \subseteq Int
       BY <1>1, ModelRanksAreIntegers
-    <2>2. CASE MaximalTimeoutVotes(tc.votes) = {}
-      <3>1. TcHighRank(tc) = NoRank
-        BY <2>2 DEF TcHighRank, HighestTimeoutVote, EmptyTimeoutHigh
-      <3> QED BY <3>1, SMT DEF NoRank
-    <2>3. CASE MaximalTimeoutVotes(tc.votes) # {}
-      <3>1. HighestTimeoutVote(tc.votes)
-               \in MaximalTimeoutVotes(tc.votes)
-        BY <2>3, Zenon DEF HighestTimeoutVote
-      <3>2. HighestTimeoutVote(tc.votes) \in tc.votes
-        BY <3>1 DEF MaximalTimeoutVotes
-      <3>3. HighestTimeoutVote(tc.votes) \in TimeoutVoteRecordSet
-        BY <1>1, <3>2, Isa DEF TcWellTyped
-      <3>4. HighestTimeoutVote(tc.votes).highRank \in Ranks
-        BY <3>3, Isa DEF TimeoutVoteRecordSet
-      <3> QED BY <2>1, <3>4 DEF TcHighRank
-    <2>4. MaximalTimeoutVotes(tc.votes) = {}
-             \/ MaximalTimeoutVotes(tc.votes) # {}
-      BY Isa
-    <2> QED BY <2>2, <2>3, <2>4
+    <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
 THEOREM PersistLockCommitIsLockMonotone ==
@@ -389,10 +370,11 @@ LockStableNext ==
   \/ \E request \in pendingProposal: PersistProposal(request)
   \/ \E request \in signProposals: CompleteProposalSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       subject \in Subjects, justifyRank \in Ranks,
-       justifySubject \in SubjectOrNone:
+       subject \in Subjects,
+       timeoutCertificate \in TimeoutCertificateOptionSet,
+       highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastProposal(signer, roundView, subject,
-                                  justifyRank, justifySubject)
+                                  timeoutCertificate, highestPrepare)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)
@@ -414,6 +396,8 @@ LockStableNext ==
   \/ \E envelope \in voteNetwork: DeliverVote(envelope)
   \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
        FormPrepareQC(node, roundView, subject)
+  \/ \E envelope \in QcEnvelopeSet:
+       ImportAuthenticatedCommitCertificate(envelope)
   \/ \E envelope \in qcNetwork: DeliverQC(envelope)
   \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
        BeginObservePrepare(node, qc)
@@ -472,7 +456,8 @@ BY IsaM("blast")
        ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
        BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
-       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       FormPrepareQC, ImportAuthenticatedCommitCertificate, DeliverQC,
+       BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, FormCommitQC,
        BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
@@ -500,7 +485,8 @@ BY IsaM("blast")
        ValidateDecidedBody, ValidateLockedBody, RejectBody,
        BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
-       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       FormPrepareQC, ImportAuthenticatedCommitCertificate, DeliverQC,
+       BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, PersistLockCommit,
        FormCommitQC, BeginDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
@@ -896,10 +882,12 @@ PROOF
       <3>13. /\ protectedView \in Int
              /\ timeoutVote.highRank \in Int
              /\ TcHighRank(tc) \in Int
-        <4>1. /\ timeoutVote.highRank \in Ranks
-              /\ HighestTimeoutVote(tc.votes).highRank \in Ranks
-          BY <1>1, <3>7, <3>12
+        <4>1. /\ ModelConfiguration
+              /\ TcWellTyped(tc)
+              /\ timeoutVote.highRank \in Ranks
+          BY <1>1, <3>7
              DEF StrongInductiveInvariant,
+                 Safety, TypeInvariant,
                  ReducerProvenanceInvariant,
                  FormedTimeoutCertificatesSound
         <4>2. ViewDomain \subseteq Nat
@@ -909,7 +897,9 @@ PROOF
         <4>3. /\ Ranks = {NoRank} \cup ViewDomain
               /\ NoRank = -1
           BY DEF Ranks, NoRank, Views
-        <4> QED BY <2>1, <4>1, <4>2, <4>3, SMT DEF TcHighRank
+        <4>4. TcHighRank(tc) \in Int
+          BY <4>1, WellTypedTimeoutSelectorRankIsInteger
+        <4> QED BY <2>1, <4>1, <4>2, <4>3, <4>4, SMT
       <3> QED BY <2>1, <3>8, <3>9, <3>11, <3>13, SMT
            DEF TCMaximumProtectsReports,
                TimeoutVoteStrictlyProtectsCommit,

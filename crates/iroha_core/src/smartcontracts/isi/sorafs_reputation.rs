@@ -1926,9 +1926,9 @@ mod tests {
         );
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-        let policy = policy(&authority);
-        let policy_digest = policy.canonical_digest().expect("policy digest");
-        SetSorafsReputationJournalAuthorityPolicy::new(policy)
+        let initial_policy = policy(&authority);
+        let policy_digest = initial_policy.canonical_digest().expect("policy digest");
+        SetSorafsReputationJournalAuthorityPolicy::new(initial_policy)
             .execute(&authority, &mut transaction)
             .expect("activate policy");
 

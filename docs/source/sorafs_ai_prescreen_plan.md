@@ -442,8 +442,9 @@ Implemented locally:
   encrypted Norito envelope under the SoraFS data directory, persist a separate
   object index checkpoint, reload it on restart, verify plaintext digests
   against quarantine records, and fail closed on tampered envelopes.
-- `sorafs_cli moderation honey-audit` probes configured gateways with
-  denylisted digests and emits JSON/Markdown evidence for policy enforcement.
+- `sorafs_cli moderation honey-audit` probes configured gateways with digests
+  blocked by the promoted compliance catalog and emits JSON/Markdown evidence
+  for policy enforcement.
 - `docs/examples/ai_moderation_calibration_manifest_202602.json`,
   `docs/examples/ai_moderation_calibration_scorecard_202602.json`, and
   `docs/examples/ai_moderation_perceptual_registry_202602.json` provide the
@@ -458,10 +459,11 @@ Implemented locally:
   lookup metadata response also bounds embedded site-file listings with
   `limit` (default 50, max 500) while preserving full file counts and
   truncation metadata for operator tooling.
-- Torii exposes the configured gateway denylist catalog and pack metadata
-  through `/v1/sorafs/denylist/catalog?limit=N` and
-  `/v1/sorafs/denylist/packs/{pack_id}`; catalog readback preserves full pack
-  counts while bounding returned pack/config-list arrays for operator tooling.
+- Torii exposes authenticated governed-compliance feed and status reads plus
+  account-signed `stage`, `acknowledge`, `promote`, and `rollback` mutations
+  under `/v1/sorafs/gateway/compliance`. Catalogs are bounded,
+  predecessor-bound, and threshold-signed; no local catalog pack or unsigned
+  readback route is part of V1.
 - `dashboards/grafana/ministry_moderation_overview.json` and
   `dashboards/alerts/ministry_moderation_rules.yml` provide the moderation
   ingest, latency, drift, and manifest-health monitoring story.
@@ -1163,7 +1165,7 @@ Completed local foundations:
 - Provide honey-audit gateway probing.
 - Provide calibration fixtures, report, dashboards, and alert rules.
 - Wire GAR moderation directives into gateway policy checks.
-- Expose bounded Torii gateway denylist catalog readback for operator audits.
+- Use governed gateway compliance feed/status readback for operator audits.
 
 Remaining rollout work is captured deployed juror notification transport
 service rollout evidence, captured deployed commit/reveal executor job rollout
@@ -1195,5 +1197,5 @@ local commit/reveal executor canary evidence tooling, local operator workflow
 canary evidence tooling, local AI pre-screening rollout evidence gate and
 collection planner/dry-run evidence-contract export, local AI pre-screening
 payload-free canary artifact builder, documented operator role-provisioning
-runbook, GAR policy plumbing, bounded denylist catalog readback, or
+runbook, GAR policy plumbing, governed compliance feed/status readback, or
 observability fixtures.

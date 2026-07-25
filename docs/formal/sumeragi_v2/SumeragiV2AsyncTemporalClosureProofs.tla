@@ -36,6 +36,33 @@ THEOREM ProgressWitnessObligation ==
     AsyncProgressWitnessAndHistoricalRecoveryProperty(AsyncSpecAt(initialContext))
 BY FinalProgressWitnessObligation
 
+(***************************************************************************
+The production refinement is declared only after the complete model-level
+progress witness has closed.  This placement avoids using the earlier
+model-projection seam as a substitute for the temporal theorem.
+***************************************************************************)
+ProgressWitnessProductionRefinementObligation ==
+  /\ ProductionProgressWitnessTraceRefinement
+  /\ ProgressWitnessObligation
+
+THEOREM ProgressWitnessCrossToolRefinement ==
+  ProductionProgressWitnessTraceRefinement
+    => ProgressWitnessProductionRefinementObligation
+PROOF
+  BY ProgressWitnessObligation
+     DEF ProgressWitnessProductionRefinementObligation
+
+THEOREM HistoricalLockedBodyRecoveryProductionRefinementFromReviewedSeams ==
+  /\ EffectiveLockBodyAcquisitionProductionRefinementObligation
+  /\ ProgressWitnessProductionRefinementObligation
+  => ProductionHistoricalLockedBodyRecoveryRefinement
+PROOF
+  BY DEF EffectiveLockBodyAcquisitionProductionRefinementObligation,
+         ProgressWitnessProductionRefinementObligation,
+         ProductionEffectiveLockBodyAcquisitionRefinement,
+         ProductionProgressWitnessTraceRefinement,
+         ProductionHistoricalLockedBodyRecoveryRefinement
+
 THEOREM HeightResetIngressOwnershipResidualConvergenceObligation ==
   \A initialContext:
     HeightResetIngressOwnershipResidualProperty(

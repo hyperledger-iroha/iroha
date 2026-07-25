@@ -530,24 +530,7 @@ pub enum ProviderDisputeKindV1 {
     Other,
 }
 
-/// Chain-authoritative provider-dispute lifecycle transition.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "detail", rename_all = "snake_case")
-)]
-pub enum ProviderDisputeStatusV1 {
-    /// Dispute became active at `submitted_at_unix_ms`.
-    Opened,
-    /// Governance committed one terminal outcome.
-    Resolved(ProviderDisputeResolutionV1),
-}
-
-/// Canonical terminal material for one provider dispute.
+/// Resolution material for a terminal provider-dispute transition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -563,6 +546,23 @@ pub struct ProviderDisputeResolutionV1 {
     pub decision_digest: [u8; 32],
     /// Optional bounded, canonical governance rationale.
     pub rationale: Option<String>,
+}
+
+/// Chain-authoritative provider-dispute lifecycle transition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "status", content = "detail", rename_all = "snake_case")
+)]
+pub enum ProviderDisputeStatusV1 {
+    /// Dispute became active at `submitted_at_unix_ms`.
+    Opened,
+    /// Governance committed one terminal outcome.
+    Resolved(ProviderDisputeResolutionV1),
 }
 
 /// Payload-free provider-dispute journal projection.
@@ -1325,7 +1325,7 @@ pub enum ReputationJournalValidationError {
     /// Recorder policy version is unsupported.
     #[error("unsupported reputation journal authority-policy version {found}")]
     UnsupportedAuthorityPolicyVersion {
-        /// Unsupported version found in the policy.
+        /// Version found in the rejected policy.
         found: u16,
     },
     /// Recorder policy revision zero is reserved.
@@ -1340,7 +1340,7 @@ pub enum ReputationJournalValidationError {
     /// Entry version is unsupported.
     #[error("unsupported reputation journal entry version {found}")]
     UnsupportedEntryVersion {
-        /// Unsupported version found in the entry.
+        /// Version found in the rejected entry.
         found: u16,
     },
     /// Event id zero is reserved.
@@ -1358,21 +1358,21 @@ pub enum ReputationJournalValidationError {
     /// A required digest is inert.
     #[error("reputation journal digest `{field}` must be non-zero")]
     ZeroDigest {
-        /// Name of the field containing an inert digest.
+        /// Canonical field name containing the zero digest.
         field: &'static str,
     },
     /// A required timestamp is zero or the reserved maximum sentinel.
     #[error("reputation journal timestamp `{field}` must be finite and non-zero")]
     InvalidTimestamp {
-        /// Name of the field containing the invalid timestamp.
+        /// Canonical field name containing the invalid timestamp.
         field: &'static str,
     },
     /// Two timestamps are not in canonical order.
     #[error("reputation journal timestamp `{later}` must follow `{earlier}`")]
     InvalidTimestampOrder {
-        /// Name of the timestamp which must occur first.
+        /// Timestamp field that must occur first.
         earlier: &'static str,
-        /// Name of the timestamp which must occur later.
+        /// Timestamp field that must occur later.
         later: &'static str,
     },
     /// Source decision time must equal the committing block time.
@@ -1417,9 +1417,9 @@ pub enum ReputationJournalValidationError {
     /// Entry exceeds the hard encoded-byte bound.
     #[error("reputation journal entry has {found} bytes; maximum is {maximum}")]
     EntryTooLarge {
-        /// Encoded byte length found.
+        /// Encoded byte count found.
         found: usize,
-        /// Maximum permitted encoded byte length.
+        /// Maximum admitted encoded bytes.
         maximum: usize,
     },
     /// The active policy digest differs from the entry binding.
@@ -1449,17 +1449,17 @@ pub enum ReputationJournalValidationError {
     /// Page item count exceeds the hard bound.
     #[error("reputation journal page has {found} items; maximum is {maximum}")]
     TooManyPageItems {
-        /// Number of items found.
+        /// Item count found.
         found: usize,
-        /// Maximum permitted item count.
+        /// Maximum admitted item count.
         maximum: usize,
     },
     /// Encoded page exceeds the hard byte bound.
     #[error("reputation journal page has {found} bytes; maximum is {maximum}")]
     EncodedPageTooLarge {
-        /// Encoded page byte length found.
+        /// Encoded byte count found.
         found: usize,
-        /// Maximum permitted encoded page byte length.
+        /// Maximum admitted encoded bytes.
         maximum: usize,
     },
     /// A page claims continuation without advancing.
@@ -1762,6 +1762,20 @@ mod tests {
             wrong_authority.validate_against_policy(&policy()),
             Err(ReputationJournalValidationError::RecorderAuthorityMismatch)
         );
+    }
+
+    #[test]
+    fn instruction_payloads_have_total_structural_order() {
+        fn assert_total_order<T: Ord>() {}
+
+        assert_total_order::<ReputationJournalAuthorityPolicyV1>();
+        assert_total_order::<ReputationJournalEntryV1>();
+
+        let first = por_entry(1);
+        let second = por_entry(2);
+        let ordering = first.cmp(&second);
+        assert_ne!(ordering, std::cmp::Ordering::Equal);
+        assert_eq!(ordering, second.cmp(&first).reverse());
     }
 
     #[test]

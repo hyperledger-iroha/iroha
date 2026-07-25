@@ -12,7 +12,10 @@ import {createHash} from 'node:crypto';
 import {cp, copyFile, lstat, mkdtemp, mkdir, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 
-import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+import {
+  validateOpenApiGeneratorProvenance,
+  validateReleaseOpenApiDocumentBytes,
+} from './lib/openapi-provenance.mjs';
 import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
 import {isAllowedSigner, loadAllowedSigners} from './lib/openapi-signers.mjs';
 import {checkOpenApiSignatures} from './check-openapi-signatures.mjs';
@@ -152,6 +155,9 @@ export async function syncOpenApi(options, context = defaultContext) {
     await generateSpec(repoRoot, generatedSpecPath);
     await assertRegularFile(generatedSpecPath, 'generated OpenAPI spec');
     const specBytes = await readFile(generatedSpecPath);
+    validateReleaseOpenApiDocumentBytes(specBytes, {
+      label: `generated OpenAPI spec ${generatedSpecPath}`,
+    });
     await assertRegularTree(outputDir);
     const manifestTemplate = await prepareManifestTemplate(
       join(outputDir, 'manifest.json'),
@@ -479,6 +485,9 @@ async function loadVersionMetadata(
   if (!specBuffer) {
     return null;
   }
+  validateReleaseOpenApiDocumentBytes(specBuffer, {
+    label: `OpenAPI version ${label} at ${specPath}`,
+  });
   const specSha = computeSha256Hex(specBuffer);
   const manifestDetails = await loadManifestDetails(manifestPath, outputDirPath, {
     specPath,

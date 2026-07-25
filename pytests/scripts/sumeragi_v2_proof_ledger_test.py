@@ -5231,7 +5231,7 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 10
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 11
     assert (
         sum(
             name.endswith(".tla")
@@ -5244,9 +5244,9 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
         )
-        == 9
+        == 10
     )
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 11
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 12
     assert module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
     ) == []
@@ -5296,7 +5296,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
     repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
         tmp_path, module
     )
-    missing = formal_dir / "post_decision_form_tc_guard_bug.cfg"
+    missing = formal_dir / "post_decision_complete_timeout_guard_bug.cfg"
     missing.unlink()
     errors = module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
@@ -5336,7 +5336,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
 def copy_certified_response_registration_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
-    """Copy the exact seven-file corpus and its production TLA+ seam."""
+    """Copy the exact nine-file corpus and its production TLA+ seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -5377,7 +5377,7 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 6
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 8
     assert (
         sum(
             name.endswith(".tla")
@@ -5390,9 +5390,9 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS
         )
-        == 5
+        == 7
     )
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 7
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 9
     assert (
         "_certified_response_registration_mutation_source_fidelity_errors"
         in module.validate_ledger.__code__.co_names
@@ -5624,7 +5624,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
         ),
         (
             source.replace("run_case restart-fixed", "run_case duplicate-fixed", 1),
-            "must execute exactly five sealed cases in order",
+            "must execute exactly seven sealed cases in order",
         ),
         (
             source.replace(
@@ -5632,7 +5632,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
                 "12 states generated, 11 distinct states found",
                 1,
             ),
-            "must report exactly 36 generated states",
+            "must report exactly 45 generated states",
         ),
     )
     for mutated_source, expected_error in mutations:
@@ -5712,7 +5712,8 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must require one exact live matching certified request" in error
+        "must require an authenticated sent occurrence, one exact "
+        "live request hash, and its frozen certificate binding" in error
         for error in errors
     ), errors
 
@@ -5744,8 +5745,10 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
     wrong_identity = mutate_tla_operator(
         source,
         "MatchingCertifiedRequests",
-        "request.envelope.subject = response.envelope.subject",
-        "request.envelope.subject # response.envelope.subject",
+        "AsyncCertifiedRequestHash(request) =\n"
+        "          response.envelope.requestHash",
+        "AsyncCertifiedRequestHash(request) #\n"
+        "          response.envelope.requestHash",
     )
     async_path.write_text(wrong_identity, encoding="utf-8")
     errors = (
@@ -5754,7 +5757,7 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must retain exact outstanding-request identity" in error
+        "must retain exact outstanding signed-request-hash identity" in error
         for error in errors
     ), errors
 
@@ -7554,17 +7557,17 @@ def test_exact_output_production_source_mutations_fail_closed(
 
 def test_proofless_release_theorems_require_exact_explicit_debt() -> None:
     module = load_checker()
-    source = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    source = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 THEOREM Complete == TRUE
 BY PTL
 THEOREM Pending == TRUE
 =============================================================================
 """
-    sources = {"SumeragiV2AsyncLivenessProofs": source}
+    sources = {"SumeragiV2AsyncTemporalClosureProofs": source}
     obligations = [
         {
             "id": "pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "Pending",
             "status": "specified_unproved",
         }
@@ -7582,38 +7585,39 @@ THEOREM Pending == TRUE
     errors = module._proofless_release_theorem_errors(falsely_proved, sources)
     assert any("must be ledgered specified_unproved" in error for error in errors)
 
-    indented = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    indented = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
   THEOREM IndentedPending == TRUE
 =============================================================================
 """
     indented_obligation = [
         {
             "id": "indented-pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "IndentedPending",
             "status": "specified_unproved",
         }
     ]
     assert (
         module._proofless_release_theorem_errors(
-            indented_obligation, {"SumeragiV2AsyncLivenessProofs": indented}
+            indented_obligation,
+            {"SumeragiV2AsyncTemporalClosureProofs": indented},
         )
         == []
     )
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": indented}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": indented}
     )
     assert any(
         "IndentedPending must have exactly one ledger entry" in error
         for error in errors
     )
 
-    local = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    local = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 LOCAL THEOREM LocalPending == TRUE
 =============================================================================
 """
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": local}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": local}
     )
     assert any(
         "LocalPending must have exactly one ledger entry" in error
@@ -13718,6 +13722,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "asyncSentItems",
         "asyncRetainedControl",
         "asyncActiveRequests",
+        "asyncCertifiedResponseClaim",
         "asyncTransport",
         "asyncIngressLanes",
         "asyncIngressReady",
@@ -13826,7 +13831,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "IndexedAsyncStateShape ==\n"
         "  /\\ Len(indexedAsyncState[initialContext]) = 3\n"
         "  /\\ Len(indexedAsyncState[initialContext][1]) = 46\n"
-        "  /\\ Len(indexedAsyncState[initialContext][2]) = 35\n"
+        "  /\\ Len(indexedAsyncState[initialContext][2]) = 36\n"
         "  /\\ Len(indexedAsyncState[initialContext][3]) = 5\n"
         "THEOREM IndexedInstanceVariablesAreExact ==\n"
         "  IndexedAsyncStateShape\n"
@@ -13966,8 +13971,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
             1,
         )
         .replace(
+            "Len(indexedAsyncState[initialContext][2]) = 36",
             "Len(indexedAsyncState[initialContext][2]) = 35",
-            "Len(indexedAsyncState[initialContext][2]) = 34",
             1,
         )
         .replace(
@@ -14169,8 +14174,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
 
     async_path.write_text(
         async_source.replace(
-            "AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
-            "AsyncAllVars == <<vars, AsyncSchedulerVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars>>",
             1,
         ),
         encoding="utf-8",
@@ -17523,7 +17528,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 572 tests",
+            "must contain exactly 582 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17531,9 +17536,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=572",
-            "readonly expected_production_liveness_test_count=571",
-            "production liveness source count must be sealed as 572",
+            "readonly expected_production_liveness_test_count=582",
+            "readonly expected_production_liveness_test_count=581",
+            "production liveness source count must be sealed as 582",
         ),
         (
             "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
@@ -17760,15 +17765,15 @@ def test_production_release_inventory_seals_successor_parent_binding(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "572-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "582-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 82 legs",
-            "572-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "582-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 81 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "inventory to 572 exact tests across 39 modules and 82 pre-network legs.",
-            "inventory to 572 exact tests across 39 modules and 81 pre-network legs.",
+            "inventory to 582 exact tests across 39 modules and 82 pre-network legs.",
+            "inventory to 582 exact tests across 39 modules and 81 pre-network legs.",
         ),
     ),
 )
@@ -17816,14 +17821,20 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 572",
-            "_PRODUCTION_TEST_COUNT = 571",
-            "production test count must equal the exact shell inventory count 572",
+            "_PRODUCTION_TEST_COUNT = 582",
+            "_PRODUCTION_TEST_COUNT = 581",
+            "production test count must equal the exact shell inventory count 582",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-merge-sidecar", "merge_sidecar::tests", 33),',
-            '("production-merge-sidecar", "merge_sidecar::tests", 32),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 39),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 38),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 34),',
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 33),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -19233,10 +19244,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 572
-    assert len(set(production_inventory)) == 572
-    assert "readonly expected_production_liveness_test_count=572" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 572" in receipt_source
+    assert len(production_inventory) == 582
+    assert len(set(production_inventory)) == 582
+    assert "readonly expected_production_liveness_test_count=582" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 582" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -19246,7 +19257,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 572
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 582
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -21550,8 +21561,10 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
         ),
         (
             "submit_progress_message_to_source",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => "
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => return Ok(None),",
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => "
             "return Ok(Some(NetworkActorAdmittedTicketIdentity::forged())),",
             (
                 "same-request and cancelled admission return no new ticket identity, "

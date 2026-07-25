@@ -1232,8 +1232,7 @@ pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
-    sorafs_gateway_acme_client:
-        Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
+    sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
 }
@@ -9003,9 +9002,48 @@ impl Iroha {
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
         let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
         let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
-        let sorafs_gateway_compliance_feed_transport = runtime_deps
+        let sorafs_gateway_compliance_feed_transport: Option<
+            Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+        > = match runtime_deps
             .sorafs_gateway_compliance_feed_transport
-            .clone();
+            .clone()
+        {
+            Some(transport) => Some(transport),
+            None => match config.torii.sorafs_gateway.compliance.as_ref() {
+                Some(compliance) => {
+                    let mut pins_by_hostname = BTreeMap::<String, BTreeSet<[u8; 32]>>::new();
+                    for feed in &compliance.feeds {
+                        for host in &feed.hosts {
+                            let host_pins = host
+                                .accepted_spki_sha256
+                                .iter()
+                                .copied()
+                                .collect::<BTreeSet<_>>();
+                            if let Some(existing) = pins_by_hostname.get(&host.hostname) {
+                                if existing != &host_pins {
+                                    return Err(Report::new(StartError::StartTorii).attach(
+                                        "one SoraFS compliance feed hostname has conflicting SPKI trust inventories",
+                                    ));
+                                }
+                            } else {
+                                pins_by_hostname.insert(host.hostname.clone(), host_pins);
+                            }
+                        }
+                    }
+                    let transport =
+                        iroha_torii::sorafs::gateway::ProductionGatewayComplianceFeedTransport::try_new(
+                            pins_by_hostname,
+                        )
+                        .map_err(|_| {
+                            Report::new(StartError::StartTorii).attach(
+                                "failed to initialise the bounded SoraFS gateway compliance feed transport",
+                            )
+                        })?;
+                    Some(Arc::new(transport))
+                }
+                None => None,
+            },
+        };
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
@@ -9161,12 +9199,11 @@ impl Iroha {
         } else {
             runtime_deps
         };
-        let runtime_deps =
-            if let Some(transport) = sorafs_gateway_compliance_feed_transport {
-                runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
-            } else {
-                runtime_deps
-            };
+        let runtime_deps = if let Some(transport) = sorafs_gateway_compliance_feed_transport {
+            runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
+        } else {
+            runtime_deps
+        };
         let queue_backpressure = queue.backpressure_handle();
         // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
         // during node startup instead of the first hot-path transaction burst.
@@ -13628,13 +13665,11 @@ mod tests {
                 .reattach_reply_route(route.clone())
                 .expect("fixture route must match the exact relay occurrence");
             let upstream = Arc::new(Semaphore::new(1));
-            relay
-                .retain_authenticated_source_credit(
-                    upstream
-                        .try_acquire_owned()
-                        .expect("upstream fixture source credit remains"),
-                )
-                .expect("upstream fixture source credit attaches");
+            relay.retain_authenticated_source_credit(
+                upstream
+                    .try_acquire_owned()
+                    .expect("upstream fixture source credit remains"),
+            );
             let (peer, authenticated_via, payload, _, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let iroha_core::NetworkMessage::SumeragiBlock(message) = payload else {
@@ -13888,26 +13923,22 @@ mod tests {
                     "127.0.0.1:1".parse().expect("semantic origin address"),
                     key.public_key().clone(),
                 );
-                message
-                    .retain_authenticated_source_credit(
-                        Arc::clone(&upstream)
-                            .try_acquire_owned()
-                            .expect("upstream source credit remains"),
-                    )
-                    .expect("first upstream credit attaches");
+                message.retain_authenticated_source_credit(
+                    Arc::clone(&upstream)
+                        .try_acquire_owned()
+                        .expect("upstream source credit remains"),
+                );
                 high_tx
                     .try_send(message)
                     .expect("the same high-priority lane retains A1 through A8");
             }
 
             let mut ninth = RelayWorkItem::new(via, v2_vote_msg(), 9);
-            ninth
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("the ninth upstream source credit remains"),
-                )
-                .expect("ninth upstream credit attaches");
+            ninth.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("the ninth upstream source credit remains"),
+            );
             high_tx
                 .try_send(ninth)
                 .expect("A9 remains behind A1..A8 on the same high-priority lane");
@@ -13916,13 +13947,11 @@ mod tests {
             let responsive_id = responsive.id().clone();
             let responsive_upstream = Arc::new(Semaphore::new(1));
             let mut responsive_message = RelayWorkItem::new(responsive, v2_vote_msg(), 10);
-            responsive_message
-                .retain_authenticated_source_credit(
-                    Arc::clone(&responsive_upstream)
-                        .try_acquire_owned()
-                        .expect("responsive upstream credit remains"),
-                )
-                .expect("responsive upstream credit attaches");
+            responsive_message.retain_authenticated_source_credit(
+                Arc::clone(&responsive_upstream)
+                    .try_acquire_owned()
+                    .expect("responsive upstream credit remains"),
+            );
             high_tx
                 .try_send(responsive_message)
                 .expect("B sits behind blocked A9 on the exact same priority lane");
@@ -14007,21 +14036,17 @@ mod tests {
             let safety_upstream = Arc::new(Semaphore::new(1));
             let shared_high_upstream = Arc::new(Semaphore::new(1));
             let mut safety = RelayWorkItem::new(peer.clone(), v2_vote_msg(), 1);
-            safety
-                .retain_authenticated_source_credit(
-                    Arc::clone(&safety_upstream)
-                        .try_acquire_owned()
-                        .expect("safety source credit remains"),
-                )
-                .expect("safety source credit attaches once");
+            safety.retain_authenticated_source_credit(
+                Arc::clone(&safety_upstream)
+                    .try_acquire_owned()
+                    .expect("safety source credit remains"),
+            );
             let mut shared_high = RelayWorkItem::new(peer, v2_vote_msg(), 2);
-            shared_high
-                .retain_authenticated_source_credit(
-                    Arc::clone(&shared_high_upstream)
-                        .try_acquire_owned()
-                        .expect("shared-high source credit remains"),
-                )
-                .expect("shared-high source credit attaches once");
+            shared_high.retain_authenticated_source_credit(
+                Arc::clone(&shared_high_upstream)
+                    .try_acquire_owned()
+                    .expect("shared-high source credit remains"),
+            );
 
             let (high_tx, high_rx) = mpsc::channel(2);
             high_tx
@@ -14106,8 +14131,7 @@ mod tests {
                         upstream
                             .try_acquire_owned()
                             .expect("independent upstream source credit remains"),
-                    )
-                    .expect("independent upstream source credit attaches once");
+                    );
                     high_tx
                         .try_send(work)
                         .expect("all eight exact owners fit the same high lane");
@@ -14167,6 +14191,262 @@ mod tests {
 
         #[cfg(feature = "test-network-message-control")]
         #[tokio::test]
+        async fn hold_release_same_source_reconnect_retires_old_delivery_without_rebinding_new_route()
+         {
+            let (_control_dir, controller) = crate::consensus_message_control::Controller::<
+                NetworkReplyRoute,
+                HeldSumeragiRelayOwnership,
+            >::for_tests();
+            let source_credits = SumeragiRelaySourceCredits::new(relay_geometry(1, 1, 1));
+
+            controller.drain_subsequent_messages_for_tests();
+            let peer = sample_peer();
+            let mut fixture =
+                NetworkReplyRouteTestFixture::with_source_capacity(peer.id().clone(), 4);
+            let upstream = Arc::new(Semaphore::new(2));
+
+            let old_route = fixture.mint(peer.id().clone());
+            let mut old_relay = RelayWorkItem::new(peer.clone(), v2_vote_msg(), 101);
+            old_relay
+                .reattach_reply_route(old_route.clone())
+                .expect("old fixture route reattaches to its exact occurrence");
+            old_relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("old upstream source credit remains"),
+            );
+            let (
+                old_peer,
+                old_authenticated_via,
+                old_message,
+                old_size_bytes,
+                old_reply_route,
+                old_p2p_guard,
+            ) = old_relay.into_parts_with_reply_route();
+            let source = SumeragiRelaySource {
+                class: SumeragiRelayClass::V2,
+                via: old_authenticated_via.clone(),
+            };
+            let old_daemon_credit = source_credits
+                .try_acquire(&source)
+                .expect("old daemon source credit remains");
+            let (old_completion, old_outcome) = oneshot::channel();
+            assert!(matches!(
+                prepare_sumeragi_relay_work_boundary(
+                    Some(&controller),
+                    false,
+                    SumeragiRelayPreparationParts {
+                        peer: old_peer,
+                        authenticated_via: old_authenticated_via,
+                        message: old_message,
+                        size_bytes: old_size_bytes,
+                        reply_route: old_reply_route,
+                        ownership: HeldSumeragiRelayOwnership {
+                            retention_guard: SumeragiRelayRetention {
+                                source: source.clone(),
+                                geometry: source_credits.geometry(),
+                                _p2p: old_p2p_guard,
+                                _daemon_source_credit: old_daemon_credit,
+                            },
+                            completion: Some(old_completion),
+                        },
+                    },
+                ),
+                SumeragiRelayPreparationBoundary::Held
+            ));
+
+            let reconnect_route = fixture.mint(peer.id().clone());
+            assert!(old_route.same_source(&reconnect_route));
+            assert!(!old_route.same_tenure(&reconnect_route));
+            assert_eq!(
+                reconnect_route.source_update_from(&old_route),
+                Ok(iroha_p2p::network::NetworkReplyRouteSourceUpdate::Reconnected)
+            );
+            let mut reconnect_relay = RelayWorkItem::new(peer, v2_vote_msg(), 102);
+            reconnect_relay
+                .reattach_reply_route(reconnect_route.clone())
+                .expect("reconnect fixture route reattaches to its exact occurrence");
+            reconnect_relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("reconnect upstream source credit remains"),
+            );
+            let (
+                reconnect_peer,
+                reconnect_authenticated_via,
+                reconnect_message,
+                reconnect_size_bytes,
+                reconnect_reply_route,
+                reconnect_p2p_guard,
+            ) = reconnect_relay.into_parts_with_reply_route();
+            let reconnect_source = SumeragiRelaySource {
+                class: SumeragiRelayClass::V2,
+                via: reconnect_authenticated_via.clone(),
+            };
+            assert_eq!(reconnect_source, source);
+            let reconnect_daemon_credit = source_credits
+                .try_acquire(&reconnect_source)
+                .expect("reconnect daemon source credit remains");
+            let (reconnect_completion, reconnect_outcome) = oneshot::channel();
+            assert!(matches!(
+                prepare_sumeragi_relay_work_boundary(
+                    Some(&controller),
+                    false,
+                    SumeragiRelayPreparationParts {
+                        peer: reconnect_peer,
+                        authenticated_via: reconnect_authenticated_via,
+                        message: reconnect_message,
+                        size_bytes: reconnect_size_bytes,
+                        reply_route: reconnect_reply_route,
+                        ownership: HeldSumeragiRelayOwnership {
+                            retention_guard: SumeragiRelayRetention {
+                                source: reconnect_source.clone(),
+                                geometry: source_credits.geometry(),
+                                _p2p: reconnect_p2p_guard,
+                                _daemon_source_credit: reconnect_daemon_credit,
+                            },
+                            completion: Some(reconnect_completion),
+                        },
+                    },
+                ),
+                SumeragiRelayPreparationBoundary::Held
+            ));
+            assert_eq!(upstream.available_permits(), 0);
+            assert_eq!(source_credits.available_permits(&source), 0);
+
+            assert!(fixture.retire(&old_route));
+            assert!(!old_route.is_active());
+            assert!(reconnect_route.is_active());
+
+            let held_old = controller
+                .next_release()
+                .expect("take old held release")
+                .expect("old held occurrence is releasable");
+            assert!(
+                held_old
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&old_route))
+            );
+            assert!(
+                !held_old
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_tenure(&reconnect_route))
+            );
+            let mut old_reattach_called = false;
+            let (old_sequence, old_ownership) = match rehydrate_held_sumeragi_relay_work(
+                held_old,
+                |peer, message, size_bytes, route| {
+                    old_reattach_called = true;
+                    let mut released = RelayWorkItem::new(peer, message, size_bytes);
+                    released.reattach_reply_route(route)?;
+                    Ok(released)
+                },
+            ) {
+                HeldSumeragiReentry::RetireStale {
+                    sequence,
+                    ownership,
+                } => (sequence, ownership),
+                HeldSumeragiReentry::Ready { .. } | HeldSumeragiReentry::Reject { .. } => {
+                    panic!("the held old tenure must retire instead of using the reconnect route")
+                }
+            };
+            assert!(
+                !old_reattach_called,
+                "stale held work must retire before any route reattachment"
+            );
+            controller
+                .complete_release(
+                    old_sequence,
+                    consensus_message_control::ReleaseOutcome::Retired,
+                )
+                .expect("record old-tenure retirement before releasing its exact token");
+            finish_sumeragi_relay_terminal(
+                SumeragiRelayTerminalOutcome::Retired,
+                old_ownership.retention_guard,
+                old_ownership.completion,
+            );
+            assert_eq!(
+                old_outcome.await.expect("old completion remains live"),
+                SumeragiRelayTerminalOutcome::Retired
+            );
+            assert_eq!(upstream.available_permits(), 1);
+            assert_eq!(source_credits.available_permits(&source), 1);
+
+            let held_reconnect = controller
+                .next_release()
+                .expect("take reconnect held release")
+                .expect("reconnect held occurrence is releasable");
+            assert!(
+                held_reconnect
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&reconnect_route))
+            );
+            assert!(
+                !held_reconnect
+                    .reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_tenure(&old_route))
+            );
+            let (reconnect_sequence, released, reconnect_ownership) =
+                match rehydrate_held_sumeragi_relay_work(
+                    held_reconnect,
+                    |peer, message, size_bytes, route| {
+                        let mut released = RelayWorkItem::new(peer, message, size_bytes);
+                        released.reattach_reply_route(route)?;
+                        Ok(released)
+                    },
+                ) {
+                    HeldSumeragiReentry::Ready {
+                        sequence,
+                        class: SumeragiRelayClass::V2,
+                        work,
+                        ownership,
+                    } => (sequence, work, ownership),
+                    HeldSumeragiReentry::Ready { .. }
+                    | HeldSumeragiReentry::RetireStale { .. }
+                    | HeldSumeragiReentry::Reject { .. } => {
+                        panic!("the live reconnect must rehydrate with its own exact route")
+                    }
+                };
+            assert!(
+                released
+                    .reply_route()
+                    .is_some_and(|route| route.same_delivery(&reconnect_route))
+            );
+            assert_eq!(released.authenticated_via(), &source.via);
+            drop(released);
+            controller
+                .complete_release(
+                    reconnect_sequence,
+                    consensus_message_control::ReleaseOutcome::Delivered,
+                )
+                .expect("record reconnect delivery before releasing its exact token");
+            finish_sumeragi_relay_terminal(
+                SumeragiRelayTerminalOutcome::Delivered,
+                reconnect_ownership.retention_guard,
+                reconnect_ownership.completion,
+            );
+            assert_eq!(
+                reconnect_outcome
+                    .await
+                    .expect("reconnect completion remains live"),
+                SumeragiRelayTerminalOutcome::Delivered
+            );
+            assert_eq!(upstream.available_permits(), 2);
+            assert_eq!(source_credits.available_permits(&source), 2);
+            assert!(
+                controller
+                    .next_release()
+                    .expect("completed drain remains healthy")
+                    .is_none()
+            );
+        }
+
+        #[cfg(feature = "test-network-message-control")]
+        #[tokio::test]
         async fn hold_release_preserves_exact_layered_ownership_until_recorded_terminal() {
             let (_control_dir, controller) = crate::consensus_message_control::Controller::<
                 NetworkReplyRoute,
@@ -14184,13 +14464,11 @@ mod tests {
             relay
                 .reattach_reply_route(route)
                 .expect("fixture route reattaches to its exact occurrence");
-            relay
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("one upstream credit remains"),
-                )
-                .expect("upstream credit attaches once");
+            relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("one upstream credit remains"),
+            );
             let (peer, authenticated_via, message, size_bytes, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let source = SumeragiRelaySource {
@@ -14316,13 +14594,11 @@ mod tests {
             relay
                 .reattach_reply_route(route)
                 .expect("second fixture route reattaches");
-            relay
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("second upstream credit remains"),
-                )
-                .expect("second upstream credit attaches");
+            relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("second upstream credit remains"),
+            );
             let (peer, authenticated_via, message, size_bytes, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let source = SumeragiRelaySource {

@@ -882,7 +882,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 572 named tests
+Before network startup, the executable wrapper inventories 582 named tests
 across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -942,14 +942,14 @@ authenticated origin.
 The final successor/recovery closure adds six exact regressions without adding
 a module. The per-source route-attempt, exact PrepareQC recovery, locked-body
 reproposal, runner/worker, sidecar, and daemon closure brings the current
-inventory to 572 tests across 39 modules. Together with the source-sealed
+inventory to 582 tests across 39 modules. Together with the source-sealed
 command and tooling legs, the pre-network corridor contains 82 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The sidecar stream regressions keep sequence and cumulative-close metadata out
 of canonical semantic identity, remove wall-clock terminal expiry, and permit
 only an authenticated contiguous close floor to retire covered output.
 The canonical module/test TSV inventory SHA-256 is
-`b0c56e1793b9bd1f830f31294a3b2371c5595468b114bf47e8969f78d1f3dc57`.
+`8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1070,7 +1070,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
-572-test inventory, the pinned harness lock and resolved toolchain, the formal
+582-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

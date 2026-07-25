@@ -1182,6 +1182,12 @@ required_production_liveness_tests=(
   merge_sidecar::tests::authenticated_source_limits_are_fixed_at_four_gates_two_sessions_and_sixteen_mibibytes
   merge_sidecar::tests::cached_sidecar_payload_objects_scale_with_chunks_not_sources
   merge_sidecar::tests::sidecar_admission_matches_the_cached_arc_without_changing_ownership
+  merge_sidecar::tests::height_rollover_retries_only_each_sources_current_in_flight_chunk
+  merge_sidecar::tests::durable_requester_restart_advances_sequence_and_carries_close_floor
+  merge_sidecar::tests::durable_requester_crash_before_send_closes_unobserved_sequence
+  merge_sidecar::tests::durable_responder_restart_preserves_same_hub_gate_budget
+  merge_sidecar::tests::durable_responder_restart_allows_new_source_while_recovered_source_is_offline
+  merge_sidecar::tests::durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_generation_after_tc
   sumeragi::v2::tests::prelock_current_commit_is_readmitted_after_exact_lock_persistence
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_generation
@@ -1325,6 +1331,10 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::retired_sidecar_route_between_drain_and_lane_queue_preserves_live_sibling
   sumeragi::v2_lane_work::tests::late_old_sidecar_flush_removes_only_reconnected_source_retry
   sumeragi::v2_lane_work::tests::durable_lane_certificate_coalescing_preserves_alternate_ingress_owners
+  sumeragi::v2_lane_work::tests::sidecar_lifecycle_journal_failure_latches_restart_before_request_dispatch
+  sumeragi::v2_lane_work::tests::sidecar_close_journal_failure_latches_restart_and_blocks_queued_chunk
+  sumeragi::v2_lane_work::tests::sidecar_close_ack_journal_failure_latches_restart_before_completion
+  sumeragi::v2_lane_work::tests::sidecar_timeout_journal_failure_latches_restart_before_retry_dispatch
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot
   sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot
@@ -1604,7 +1614,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=572
+readonly expected_production_liveness_test_count=582
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1704,7 +1714,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 572-test liveness inventory above. The later
+# not belong to the canonical 582-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

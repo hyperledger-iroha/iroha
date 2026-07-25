@@ -2993,27 +2993,6 @@ PROOF
   <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6
        DEF ProgressWitnessAbstractOwnerProjection
 
-ProgressWitnessProductionRefinementObligation ==
-  /\ ProductionProgressWitnessTraceRefinement
-  /\ ProgressWitnessAbstractOwnerProjection
-
-THEOREM ProgressWitnessCrossToolRefinement ==
-  ProductionProgressWitnessTraceRefinement
-    => ProgressWitnessProductionRefinementObligation
-PROOF
-  BY ProgressWitnessAbstractOwnerProjectionObligation
-     DEF ProgressWitnessProductionRefinementObligation
-
-(***************************************************************************
-Historical locked-body recovery remains two deliberately separate debts without
-creating extra ledger entries.  The model-level certified request, response,
-Store, Validate, and post-validation Commit pipeline is a conjunct of
-`ProgressWitnessObligation` in `SumeragiV2AsyncTemporalClosureProofs`.  The
-production relation follows only from both reviewed cross-tool seams:
-effective-lock ownership and the complete progress-witness trace.  The bridge
-below makes that dependency deductive; it does not promote either source seam.
-***************************************************************************)
-
 (***************************************************************************
 Composition debt beyond the production-checked EnterView selection relation.
 
@@ -3039,17 +3018,6 @@ THEOREM EffectiveLockBodyAcquisitionCrossToolRefinement ==
 PROOF
   BY EffectiveLockAcquisitionModelObligation
      DEF EffectiveLockBodyAcquisitionProductionRefinementObligation
-
-THEOREM HistoricalLockedBodyRecoveryProductionRefinementFromReviewedSeams ==
-  /\ EffectiveLockBodyAcquisitionProductionRefinementObligation
-  /\ ProgressWitnessProductionRefinementObligation
-  => ProductionHistoricalLockedBodyRecoveryRefinement
-PROOF
-  BY DEF EffectiveLockBodyAcquisitionProductionRefinementObligation,
-         ProgressWitnessProductionRefinementObligation,
-         ProductionEffectiveLockBodyAcquisitionRefinement,
-         ProductionProgressWitnessTraceRefinement,
-         ProductionHistoricalLockedBodyRecoveryRefinement
 
 THEOREM ProtectedStage4RankProgressFromFairScheduler ==
   \A initialContext:

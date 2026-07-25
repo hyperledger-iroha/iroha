@@ -900,6 +900,17 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
+THEOREM ReplyNestedFunctionalUpdateIdentity ==
+  \A outerDomain, innerDomain, codomain, mapping,
+     outerKey, innerKey:
+    /\ mapping \in [outerDomain -> [innerDomain -> codomain]]
+    /\ outerKey \in outerDomain
+    /\ innerKey \in innerDomain
+    => [mapping EXCEPT
+          ![outerKey][innerKey] = mapping[outerKey][innerKey]]
+         = mapping
+BY Isa
+
 THEOREM ReplyDeliveryOrdinalBumpPreservesMetadata ==
   \A bumpOwner \in ReplyOwners, attempt \in rrAttempts:
     /\ ReplyRouteSafetyInvariant
@@ -6604,6 +6615,28 @@ PROOF
              ReplyRouteLifecycleInductiveInvariant,
              ReplyRouteFullSafetyInvariant,
              ReplyRouteLifecycleInvariant
+    <2>10. /\ rrAttempts' =
+                   ReplyAttemptsAfterClose(
+                     witness.requester, witness.closedThrough)
+             /\ rrSemanticSequence' = rrSemanticSequence
+             /\ rrSemanticHash' = rrSemanticHash
+             /\ rrRequesterNextSequence' =
+                  rrRequesterNextSequence
+             /\ rrRequesterClosedThrough' =
+                  [rrRequesterClosedThrough EXCEPT
+                     ![witness.requester] =
+                       witness.closedThrough]
+             /\ rrClosePendingThrough' =
+                  [rrClosePendingThrough EXCEPT
+                     ![witness.requester][witness.responder] =
+                       witness.closedThrough]
+             /\ rrCloseSentThrough' =
+                  [rrCloseSentThrough EXCEPT
+                     ![witness.requester][witness.responder] =
+                       witness.closedThrough]
+             /\ rrCloseAcknowledgedThrough' =
+                  rrCloseAcknowledgedThrough
+      BY <1>1 DEF CloseSemanticRequest
     <2>3. ReplyLifecycleTypeInvariant'
       BY <1>1, <2>2,
          ReplyFunctionalUpdatePreservesType,
@@ -6632,24 +6665,204 @@ PROOF
                   /\ rrSemanticSequence'[owner][left] =
                        rrSemanticSequence'[owner][right]
                   => left = right
-      BY <1>1, <2>2,
-         ReplyFunctionalUpdateAtKey,
-         ReplyFunctionalUpdateAwayFromKey,
-         SMTT(90)
-         DEF CloseSemanticRequest,
-             ReplyLifecycleTypeInvariant,
-             ReplyLifecycleOwnershipInvariant,
-             ReplySemanticActive, ReplySemanticBound
+      <3>1. ASSUME NEW owner \in ReplyOwners
+             PROVE /\ rrRequesterClosedThrough'[owner]
+                        < rrRequesterNextSequence'[owner]
+                   /\ \A semantic \in ReplySemantics:
+                        /\ (rrSemanticSequence'[
+                              owner][semantic] = 0)
+                             <=>
+                             (rrSemanticHash'[
+                                owner][semantic] = {})
+                        /\ rrSemanticSequence'[
+                             owner][semantic] # 0 =>
+                             /\ rrSemanticHash'[
+                                  owner][semantic] =
+                                  ReplyCanonicalSemanticHash(
+                                    semantic)
+                             /\ rrSemanticSequence'[
+                                  owner][semantic] <
+                                  rrRequesterNextSequence'[owner]
+                        /\ ReplySemanticActive(
+                             owner, semantic)' =>
+                             rrSemanticSequence'[
+                               owner][semantic] <=
+                               rrRequesterClosedThrough'[owner]
+                                 + ReplyActiveWindowCapacity
+                   /\ \A left, right \in ReplySemantics:
+                        /\ rrSemanticSequence'[owner][left] # 0
+                        /\ rrSemanticSequence'[owner][left] =
+                             rrSemanticSequence'[owner][right]
+                        => left = right
+        <4>1. CASE owner = witness.requester
+          <5>1. /\ rrRequesterClosedThrough'[owner] =
+                       witness.closedThrough
+                 /\ rrSemanticSequence' = rrSemanticSequence
+                 /\ rrSemanticHash' = rrSemanticHash
+                 /\ rrRequesterNextSequence' =
+                      rrRequesterNextSequence
+            BY <2>2, <2>10, <3>1, <4>1,
+               ReplyFunctionalUpdateAtKey
+               DEF ReplyLifecycleTypeInvariant
+          <5>2. rrRequesterClosedThrough'[owner] <
+                   rrRequesterNextSequence'[owner]
+            BY <1>1, <4>1, <5>1
+               DEF CloseSemanticRequest
+          <5>3. \A semantic \in ReplySemantics:
+                   /\ (rrSemanticSequence'[
+                         owner][semantic] = 0)
+                        <=>
+                        (rrSemanticHash'[
+                           owner][semantic] = {})
+                   /\ rrSemanticSequence'[
+                        owner][semantic] # 0 =>
+                        /\ rrSemanticHash'[
+                             owner][semantic] =
+                             ReplyCanonicalSemanticHash(semantic)
+                        /\ rrSemanticSequence'[
+                             owner][semantic] <
+                             rrRequesterNextSequence'[owner]
+            BY <1>1, <4>1, <5>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleOwnershipInvariant
+          <5>4. \A semantic \in ReplySemantics:
+                   ReplySemanticActive(owner, semantic)' =>
+                     rrSemanticSequence'[owner][semantic] <=
+                       rrRequesterClosedThrough'[owner]
+                         + ReplyActiveWindowCapacity
+            <6>1. ASSUME NEW semantic \in ReplySemantics,
+                          ReplySemanticActive(owner, semantic)'
+                   PROVE rrSemanticSequence'[owner][semantic] <=
+                           rrRequesterClosedThrough'[owner]
+                             + ReplyActiveWindowCapacity
+              <7>1. /\ ReplySemanticBound(owner, semantic)
+                     /\ rrSemanticSequence[owner][semantic] >
+                          witness.closedThrough
+                BY <5>1, <6>1
+                   DEF ReplySemanticActive, ReplySemanticBound
+              <7>2. rrRequesterClosedThrough[owner] <
+                       witness.closedThrough
+                BY <1>1, <4>1 DEF CloseSemanticRequest
+              <7>3. /\ rrSemanticSequence[owner][semantic] \in Nat
+                     /\ rrRequesterClosedThrough[owner] \in Nat
+                     /\ witness.closedThrough \in Nat
+                BY <1>1, <2>2, <7>1
+                   DEF ReplyRouteLifecycleInductiveInvariant,
+                       ReplyRouteFullSafetyInvariant,
+                       ReplyRouteLifecycleInvariant,
+                       ReplyLifecycleTypeInvariant,
+                       ReplySemanticBound, ReplySemanticSequences
+              <7>4. rrSemanticSequence[owner][semantic] >
+                       rrRequesterClosedThrough[owner]
+                BY <7>1, <7>2, <7>3,
+                   ReplyNaturalStrictTransitive
+              <7>5. ReplySemanticActive(owner, semantic)
+                BY <7>1, <7>4
+                   DEF ReplySemanticActive, ReplySemanticBound
+              <7>6. rrSemanticSequence[owner][semantic] <=
+                       rrRequesterClosedThrough[owner] +
+                         ReplyActiveWindowCapacity
+                BY <1>1, <6>1, <7>5
+                   DEF ReplyRouteLifecycleInductiveInvariant,
+                       ReplyRouteFullSafetyInvariant,
+                       ReplyRouteLifecycleInvariant,
+                       ReplyLifecycleOwnershipInvariant
+              <7>7. /\ rrRequesterClosedThrough[owner] \in Nat
+                     /\ witness.closedThrough \in Nat
+                     /\ ReplyActiveWindowCapacity \in Nat
+                BY <1>1, <2>2
+                   DEF ReplyRouteLifecycleInductiveInvariant,
+                       ReplyRouteFullSafetyInvariant,
+                       ReplyRouteLifecycleInvariant,
+                       ReplyLifecycleTypeInvariant,
+                       ReplyRouteConfiguration,
+                       ReplyActiveWindowCapacity
+              <7>8. rrRequesterClosedThrough[owner] +
+                       ReplyActiveWindowCapacity <=
+                     witness.closedThrough +
+                       ReplyActiveWindowCapacity
+                BY <7>2, <7>7, SMT
+              <7>9. rrSemanticSequence[owner][semantic] <=
+                     witness.closedThrough +
+                       ReplyActiveWindowCapacity
+                BY <7>3, <7>6, <7>7, <7>8, SMT
+              <7> QED BY <5>1, <7>9
+            <6> QED BY <6>1
+          <5>5. \A left, right \in ReplySemantics:
+                   /\ rrSemanticSequence'[owner][left] # 0
+                   /\ rrSemanticSequence'[owner][left] =
+                        rrSemanticSequence'[owner][right]
+                   => left = right
+            BY <1>1, <4>1, <5>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleOwnershipInvariant
+          <5> QED BY <5>2, <5>3, <5>4, <5>5
+        <4>2. CASE owner # witness.requester
+          BY <1>1, <2>2, <2>10, <3>1, <4>2,
+             ReplyFunctionalUpdateAwayFromKey,
+             SMTT(20)
+             DEF ReplyLifecycleTypeInvariant,
+                 ReplyLifecycleOwnershipInvariant,
+                 ReplySemanticActive, ReplySemanticBound
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
     <2>5. \A attempt \in rrAttempts':
              ReplySemanticActive(
                attempt.owner, attempt.semantic)'
-      BY <1>1, <2>2,
-         ReplyFunctionalUpdateAtKey,
-         ReplyFunctionalUpdateAwayFromKey,
-         SMTT(60)
-         DEF CloseSemanticRequest, ReplyAttemptsAfterClose,
-             ReplyLifecycleOwnershipInvariant,
-             ReplySemanticActive, ReplySemanticBound
+      <3>1. ASSUME NEW attempt \in rrAttempts'
+             PROVE ReplySemanticActive(
+                     attempt.owner, attempt.semantic)'
+        <4>1. /\ attempt \in rrAttempts
+               /\ (\/ attempt.owner # witness.requester
+                    \/ rrSemanticSequence[
+                         witness.requester][attempt.semantic] >
+                         witness.closedThrough)
+          BY <2>10, <3>1 DEF ReplyAttemptsAfterClose
+        <4>2. /\ attempt.owner \in ReplyOwners
+               /\ attempt.semantic \in ReplySemantics
+               /\ ReplySemanticActive(
+                    attempt.owner, attempt.semantic)
+          BY <1>1, <4>1
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant,
+                 ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleOwnershipInvariant,
+                 ReplyAttemptSet
+        <4>3. CASE attempt.owner = witness.requester
+          <5>1. rrSemanticSequence' = rrSemanticSequence
+            BY <2>10
+          <5>2. rrSemanticHash' = rrSemanticHash
+            BY <2>10
+          <5>3. rrRequesterClosedThrough'[attempt.owner] =
+                   witness.closedThrough
+            BY <2>2, <2>10, <4>2, <4>3,
+               ReplyFunctionalUpdateAtKey
+               DEF ReplyLifecycleTypeInvariant
+          <5>4. rrSemanticSequence[
+                   attempt.owner][attempt.semantic] >
+                   witness.closedThrough
+            BY <4>1, <4>3
+          <5> QED BY <4>2, <5>1, <5>2, <5>3, <5>4
+               DEF ReplySemanticActive, ReplySemanticBound
+        <4>4. CASE attempt.owner # witness.requester
+          <5>1. rrSemanticSequence' = rrSemanticSequence
+            BY <2>10
+          <5>2. rrSemanticHash' = rrSemanticHash
+            BY <2>10
+          <5>3. rrRequesterClosedThrough'[attempt.owner] =
+                   rrRequesterClosedThrough[attempt.owner]
+            BY <2>2, <2>10, <4>2, <4>4,
+               ReplyFunctionalUpdateAwayFromKey
+               DEF ReplyLifecycleTypeInvariant
+          <5> QED BY <4>2, <5>1, <5>2, <5>3
+               DEF ReplySemanticActive, ReplySemanticBound
+        <4> QED BY <4>3, <4>4
+      <3> QED BY <3>1
     <2>6. rrPayloads' =
              ReplyPayloadsForAttempts(rrAttempts')
       BY <1>1 DEF CloseSemanticRequest
@@ -6660,15 +6873,46 @@ PROOF
                   <= rrClosePendingThrough'[owner][responder]
              /\ rrClosePendingThrough'[owner][responder]
                   <= rrRequesterClosedThrough'[owner]
-      BY <1>1, <2>2,
-         ReplyFunctionalUpdateAtKey,
-         ReplyFunctionalUpdateAwayFromKey,
-         ReplyNestedFunctionalUpdateAtKey,
-         ReplyNestedFunctionalUpdateAwayFromKey,
-         SMTT(90)
-         DEF CloseSemanticRequest, ReplyCloseWorkPending,
-             ReplyLifecycleTypeInvariant,
-             ReplyLifecycleOwnershipInvariant
+      <3>1. ASSUME NEW owner \in ReplyOwners,
+                    NEW responder \in ReplySources
+             PROVE /\ rrCloseSentThrough'[
+                          owner][responder] =
+                          rrClosePendingThrough'[
+                            owner][responder]
+                   /\ rrCloseAcknowledgedThrough'[
+                          owner][responder] <=
+                          rrClosePendingThrough'[
+                            owner][responder]
+                   /\ rrClosePendingThrough'[
+                          owner][responder] <=
+                          rrRequesterClosedThrough'[owner]
+        <4>1. CASE /\ owner = witness.requester
+                    /\ responder = witness.responder
+          BY <1>1, <2>2, <2>10, <3>1, <4>1,
+             ReplyFunctionalUpdateAtKey,
+             ReplyNestedFunctionalUpdateAtKey,
+             SMTT(20)
+             DEF CloseSemanticRequest, ReplyCloseWorkPending,
+                 ReplyLifecycleTypeInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4>2. CASE /\ owner = witness.requester
+                    /\ responder # witness.responder
+          BY <1>1, <2>2, <2>10, <3>1, <4>2,
+             ReplyFunctionalUpdateAtKey,
+             ReplyNestedFunctionalUpdateAwayFromKey,
+             SMTT(20)
+             DEF CloseSemanticRequest,
+                 ReplyLifecycleTypeInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4>3. CASE owner # witness.requester
+          BY <1>1, <2>2, <2>10, <3>1, <4>3,
+             ReplyFunctionalUpdateAwayFromKey,
+             ReplyNestedFunctionalUpdateAwayFromKey,
+             SMTT(20)
+             DEF ReplyLifecycleTypeInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4> QED BY <4>1, <4>2, <4>3
+      <3> QED BY <3>1
     <2>8. ReplyLifecycleOwnershipInvariant'
       BY <2>4, <2>5, <2>6, <2>7
          DEF ReplyLifecycleOwnershipInvariant
@@ -6693,35 +6937,248 @@ THEOREM RetryCloseSemanticRequestPreservesLifecycleInvariant ==
     /\ ReplyRouteLifecycleInductiveInvariant
     /\ RetryCloseSemanticRequest(witness)
     => ReplyRouteLifecycleInductiveInvariant'
-BY ReplyRouteStateIdentityPreservesInductiveInvariant,
-   ReplyNextCloseRetryGenerationTyped,
-   ReplyNestedFunctionalUpdatePreservesType,
-   ReplySemanticCarrierPreservationPreservesLifecycle,
-   SMTT(90)
-   DEF ReplyRouteLifecycleInductiveInvariant,
-       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
-       ReplyRouteInductiveInvariant, ReplyLifecycleTypeInvariant,
-       ReplyLifecycleOwnershipInvariant, RetryCloseSemanticRequest,
-       ReplyCloseWitnessValid, ReplyCloseWorkPending,
-       ReplyRouteVars
+PROOF
+  <1>1. ASSUME NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteLifecycleInductiveInvariant,
+                RetryCloseSemanticRequest(witness)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, ReplyRouteStateIdentityPreservesInductiveInvariant,
+         SMTT(20)
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant,
+             RetryCloseSemanticRequest, ReplyRouteVars
+    <2>2. CASE ReplyCloseWorkPending(
+                 witness.requester, witness.responder)
+      <3>1. /\ witness.requester \in ReplyOwners
+             /\ witness.responder \in ReplySources
+             /\ ReplyRouteConfiguration
+             /\ ReplyRouteLifecycleInvariant
+             /\ rrCloseRetryGeneration[
+                  witness.requester][witness.responder]
+                  \in 0..ReplyDeliveryOrdinalLimit
+        BY <1>1
+           DEF ReplyCloseWitnessSet,
+               ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant
+      <3>2. /\ rrCloseRetryGeneration' =
+                  [rrCloseRetryGeneration EXCEPT
+                     ![witness.requester][witness.responder] =
+                       NextReplyCloseRetryGeneration(
+                         rrCloseRetryGeneration[
+                           witness.requester][witness.responder])]
+             /\ UNCHANGED <<rrAttempts, rrPayloads,
+                            rrSemanticSequence, rrSemanticHash,
+                            rrRequesterNextSequence,
+                            rrRequesterClosedThrough,
+                            rrClosePendingThrough, rrCloseSentThrough,
+                            rrCloseAcknowledgedThrough>>
+        BY <1>1, <2>2
+           DEF RetryCloseSemanticRequest
+      <3>3. NextReplyCloseRetryGeneration(
+               rrCloseRetryGeneration[
+                 witness.requester][witness.responder])
+               \in 0..ReplyDeliveryOrdinalLimit
+        BY <3>1, ReplyNextCloseRetryGenerationTyped
+      <3>4. rrCloseRetryGeneration'
+               \in [ReplyOwners ->
+                     [ReplySources ->
+                       0..ReplyDeliveryOrdinalLimit]]
+        BY <3>1, <3>2, <3>3,
+           ReplyNestedFunctionalUpdatePreservesType
+           DEF ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant
+      <3>5. ReplyLifecycleTypeInvariant'
+        BY <3>1, <3>2, <3>4
+           DEF ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant
+      <3>6. ReplyLifecycleOwnershipInvariant'
+        BY <3>1, <3>2
+           DEF ReplyRouteLifecycleInvariant,
+               ReplyLifecycleOwnershipInvariant,
+               ReplySemanticActive, ReplySemanticBound
+      <3>7. ReplyRouteLifecycleInvariant'
+        BY <3>5, <3>6 DEF ReplyRouteLifecycleInvariant
+      <3> QED BY <2>1, <3>7
+           DEF ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteInductiveInvariant
+    <2>3. CASE ~ReplyCloseWorkPending(
+                 witness.requester, witness.responder)
+      <3>1. UNCHANGED ReplyRouteVars
+        BY <1>1, <2>3
+           DEF RetryCloseSemanticRequest
+      <3>2. ReplyRouteLifecycleInvariant'
+        <4>1. ReplyRouteLifecycleInvariant
+          BY <1>1
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant
+        <4>2. /\ rrAttempts' = rrAttempts
+               /\ rrPayloads' = rrPayloads
+               /\ rrSemanticSequence' = rrSemanticSequence
+               /\ rrSemanticHash' = rrSemanticHash
+               /\ rrRequesterNextSequence' =
+                    rrRequesterNextSequence
+               /\ rrRequesterClosedThrough' =
+                    rrRequesterClosedThrough
+               /\ rrClosePendingThrough' =
+                    rrClosePendingThrough
+               /\ rrCloseSentThrough' = rrCloseSentThrough
+               /\ rrCloseAcknowledgedThrough' =
+                    rrCloseAcknowledgedThrough
+               /\ rrCloseRetryGeneration' =
+                    rrCloseRetryGeneration
+          BY <3>1 DEF ReplyRouteVars
+        <4>3. ReplyLifecycleTypeInvariant'
+          BY <4>1, <4>2
+             DEF ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleTypeInvariant
+        <4>4. ReplyLifecycleOwnershipInvariant'
+          BY <4>1, <4>2
+             DEF ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleOwnershipInvariant,
+                 ReplySemanticActive, ReplySemanticBound
+        <4> QED BY <4>3, <4>4
+             DEF ReplyRouteLifecycleInvariant
+      <3> QED BY <2>1, <3>2
+           DEF ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteInductiveInvariant
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
 
 THEOREM AcknowledgeCloseSemanticRequestPreservesLifecycleInvariant ==
   \A acknowledgement \in ReplyCloseAcknowledgementSet:
     /\ ReplyRouteLifecycleInductiveInvariant
     /\ AcknowledgeCloseSemanticRequest(acknowledgement)
     => ReplyRouteLifecycleInductiveInvariant'
-BY ReplyRouteStateIdentityPreservesInductiveInvariant,
-   ReplyNestedFunctionalUpdatePreservesType,
-   ReplyNestedFunctionalUpdateAtKey,
-   ReplyNestedFunctionalUpdateAwayFromKey,
-   ReplySemanticCarrierPreservationPreservesLifecycle,
-   SMTT(90)
-   DEF ReplyRouteLifecycleInductiveInvariant,
-       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
-       ReplyRouteInductiveInvariant, ReplyLifecycleTypeInvariant,
-       ReplyLifecycleOwnershipInvariant,
-       AcknowledgeCloseSemanticRequest,
-       ReplyCloseAcknowledgementValid
+PROOF
+  <1>1. ASSUME NEW acknowledgement
+                  \in ReplyCloseAcknowledgementSet,
+                ReplyRouteLifecycleInductiveInvariant,
+                AcknowledgeCloseSemanticRequest(acknowledgement)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, ReplyRouteStateIdentityPreservesInductiveInvariant,
+         SMTT(20)
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant,
+             AcknowledgeCloseSemanticRequest
+    <2>2. /\ acknowledgement.requester \in ReplyOwners
+           /\ acknowledgement.responder \in ReplySources
+           /\ acknowledgement.closedThrough
+                \in 0..ReplyDeliveryOrdinalLimit
+           /\ ReplyRouteLifecycleInvariant
+      BY <1>1
+         DEF ReplyCloseAcknowledgementSet,
+             ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant
+    <2>3. /\ rrCloseAcknowledgedThrough' =
+                [rrCloseAcknowledgedThrough EXCEPT
+                   ![acknowledgement.requester][
+                     acknowledgement.responder] =
+                       acknowledgement.closedThrough]
+           /\ UNCHANGED <<rrAttempts, rrPayloads,
+                          rrSemanticSequence, rrSemanticHash,
+                          rrRequesterNextSequence,
+                          rrRequesterClosedThrough,
+                          rrClosePendingThrough, rrCloseSentThrough,
+                          rrCloseRetryGeneration>>
+      BY <1>1 DEF AcknowledgeCloseSemanticRequest
+    <2>4. rrCloseAcknowledgedThrough'
+             \in [ReplyOwners ->
+                   [ReplySources ->
+                     0..ReplyDeliveryOrdinalLimit]]
+      BY <2>2, <2>3,
+         ReplyNestedFunctionalUpdatePreservesType
+         DEF ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>5. ReplyLifecycleTypeInvariant'
+      BY <2>2, <2>3, <2>4
+         DEF ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>6. \A owner \in ReplyOwners,
+               responder \in ReplySources:
+             /\ rrCloseSentThrough'[owner][responder] =
+                  rrClosePendingThrough'[owner][responder]
+             /\ rrCloseAcknowledgedThrough'[owner][responder] <=
+                  rrClosePendingThrough'[owner][responder]
+             /\ rrClosePendingThrough'[owner][responder] <=
+                  rrRequesterClosedThrough'[owner]
+      <3>1. ASSUME NEW owner \in ReplyOwners,
+                    NEW responder \in ReplySources
+             PROVE /\ rrCloseSentThrough'[owner][responder] =
+                          rrClosePendingThrough'[owner][responder]
+                   /\ rrCloseAcknowledgedThrough'[owner][responder] <=
+                          rrClosePendingThrough'[owner][responder]
+                   /\ rrClosePendingThrough'[owner][responder] <=
+                          rrRequesterClosedThrough'[owner]
+        <4>1. CASE /\ owner = acknowledgement.requester
+                    /\ responder = acknowledgement.responder
+          <5>1. rrCloseSentThrough'[owner][responder] =
+                   rrCloseSentThrough[owner][responder]
+            BY <2>3
+          <5>2. rrClosePendingThrough'[owner][responder] =
+                   rrClosePendingThrough[owner][responder]
+            BY <2>3
+          <5>3. rrRequesterClosedThrough'[owner] =
+                   rrRequesterClosedThrough[owner]
+            BY <2>3
+          <5>4. rrCloseAcknowledgedThrough'[
+                   owner][responder] =
+                   acknowledgement.closedThrough
+            BY <2>2, <2>3, <3>1, <4>1,
+               ReplyNestedFunctionalUpdateAtKey
+               DEF ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleTypeInvariant
+          <5>5. rrCloseSentThrough'[owner][responder] =
+                   rrClosePendingThrough'[owner][responder]
+            BY <1>1, <4>1, <5>1, <5>2
+               DEF AcknowledgeCloseSemanticRequest
+          <5>6. rrCloseAcknowledgedThrough'[
+                   owner][responder] <=
+                   rrClosePendingThrough'[owner][responder]
+            <6>1. /\ acknowledgement.closedThrough =
+                     rrClosePendingThrough[owner][responder]
+                   /\ rrClosePendingThrough[owner][responder] \in Nat
+              BY <1>1, <4>1
+                 DEF AcknowledgeCloseSemanticRequest,
+                     ReplyRouteLifecycleInductiveInvariant,
+                     ReplyRouteFullSafetyInvariant,
+                     ReplyRouteLifecycleInvariant,
+                     ReplyLifecycleTypeInvariant
+            <6> QED BY <5>2, <5>4, <6>1, SMT
+          <5>7. rrClosePendingThrough'[owner][responder] <=
+                   rrRequesterClosedThrough'[owner]
+            BY <1>1, <4>1, <5>2, <5>3
+               DEF AcknowledgeCloseSemanticRequest
+          <5> QED BY <5>5, <5>6, <5>7
+        <4>2. CASE \/ owner # acknowledgement.requester
+                    \/ responder # acknowledgement.responder
+          BY <1>1, <2>2, <2>3, <3>1, <4>2,
+             ReplyNestedFunctionalUpdateAwayFromKey,
+             SMTT(10)
+             DEF ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleTypeInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>7. ReplyLifecycleOwnershipInvariant'
+      BY <2>2, <2>3, <2>6
+         DEF ReplyRouteLifecycleInvariant,
+             ReplyLifecycleOwnershipInvariant,
+             ReplySemanticActive, ReplySemanticBound
+    <2>8. ReplyRouteLifecycleInvariant'
+      BY <2>5, <2>7 DEF ReplyRouteLifecycleInvariant
+    <2> QED BY <2>1, <2>8
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+  <1> QED BY <1>1
 
 THEOREM RecoverReplyRouteStatePreservesLifecycleInvariant ==
   \A owner \in ReplyOwners, source \in ReplySources:
@@ -6813,6 +7270,259 @@ PROOF
     BY <1>1, <1>2, PTL DEF ReplyRouteSpec
   <1> QED BY <1>3, PTL
        DEF ReplyRouteLifecycleInductiveInvariant
+
+(***************************************************************************
+The durable sequence/hash journal is append-only, and the requester close
+floor is monotone.  Only first observation may bind an empty slot; the close
+transition never changes an existing binding.
+***************************************************************************)
+THEOREM ReplyLifecycleVarsStutterProvidesJournalStep ==
+  /\ ReplyRouteLifecycleInductiveInvariant
+  /\ UNCHANGED ReplyLifecycleVars
+  => ReplyLifecycleJournalStep
+PROOF
+  <1>1. ASSUME ReplyRouteLifecycleInductiveInvariant,
+                UNCHANGED ReplyLifecycleVars
+         PROVE ReplyLifecycleJournalStep
+    <2>1. /\ rrSemanticSequence' = rrSemanticSequence
+           /\ rrSemanticHash' = rrSemanticHash
+           /\ rrRequesterClosedThrough' = rrRequesterClosedThrough
+      BY <1>1 DEF ReplyLifecycleVars
+    <2>2. \A owner \in ReplyOwners:
+             rrRequesterClosedThrough'[owner] >=
+               rrRequesterClosedThrough[owner]
+      BY <1>1, <2>1, SMT
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2> QED BY <2>1, <2>2 DEF ReplyLifecycleJournalStep
+  <1> QED BY <1>1
+
+THEOREM ObserveNewReplySourceProvidesLifecycleJournalStep ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ ObserveNewReplySource(owner, semantic, source)
+    => ReplyLifecycleJournalStep
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                ReplyRouteLifecycleInductiveInvariant,
+                ObserveNewReplySource(owner, semantic, source)
+         PROVE ReplyLifecycleJournalStep
+    <2>1. \A journalOwner \in ReplyOwners:
+             rrRequesterClosedThrough'[journalOwner] >=
+               rrRequesterClosedThrough[journalOwner]
+      BY <1>1, SMT
+         DEF ObserveNewReplySource,
+             ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>2. \A journalOwner \in ReplyOwners,
+               journalSemantic \in ReplySemantics:
+             ReplySemanticBound(journalOwner, journalSemantic) =>
+               /\ rrSemanticSequence'[
+                    journalOwner][journalSemantic] =
+                    rrSemanticSequence[
+                      journalOwner][journalSemantic]
+               /\ rrSemanticHash'[
+                    journalOwner][journalSemantic] =
+                    rrSemanticHash[
+                      journalOwner][journalSemantic]
+      <3>1. ASSUME NEW journalOwner \in ReplyOwners,
+                    NEW journalSemantic \in ReplySemantics,
+                    ReplySemanticBound(
+                      journalOwner, journalSemantic)
+             PROVE /\ rrSemanticSequence'[
+                          journalOwner][journalSemantic] =
+                          rrSemanticSequence[
+                            journalOwner][journalSemantic]
+                   /\ rrSemanticHash'[
+                          journalOwner][journalSemantic] =
+                          rrSemanticHash[
+                            journalOwner][journalSemantic]
+        <4>1. CASE /\ journalOwner = owner
+                    /\ journalSemantic = semantic
+          BY <1>1, <3>1, <4>1
+             DEF ObserveNewReplySource
+        <4>2. CASE \/ journalOwner # owner
+                    \/ journalSemantic # semantic
+          BY <1>1, <3>1, <4>2,
+             ReplyNestedFunctionalUpdateAwayFromKey,
+             SMTT(15)
+             DEF ObserveNewReplySource,
+                 ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleTypeInvariant
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>2
+         DEF ReplyLifecycleJournalStep
+  <1> QED BY <1>1
+
+THEOREM CloseSemanticRequestProvidesLifecycleJournalStep ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ CloseSemanticRequest(witness)
+    => ReplyLifecycleJournalStep
+PROOF
+  <1>1. ASSUME NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteLifecycleInductiveInvariant,
+                CloseSemanticRequest(witness)
+         PROVE ReplyLifecycleJournalStep
+    <2>1. /\ witness.requester \in ReplyOwners
+           /\ rrRequesterClosedThrough
+                \in [ReplyOwners ->
+                      0..ReplyDeliveryOrdinalLimit]
+      BY <1>1
+         DEF ReplyCloseWitnessSet,
+             ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>2. \A owner \in ReplyOwners:
+             rrRequesterClosedThrough'[owner] >=
+               rrRequesterClosedThrough[owner]
+      <3>1. ASSUME NEW owner \in ReplyOwners
+             PROVE rrRequesterClosedThrough'[owner] >=
+                     rrRequesterClosedThrough[owner]
+        <4>1. CASE owner = witness.requester
+          BY <1>1, <2>1, <3>1, <4>1,
+             ReplyFunctionalUpdateAtKey, SMT
+             DEF CloseSemanticRequest
+        <4>2. CASE owner # witness.requester
+          BY <1>1, <2>1, <3>1, <4>2,
+             ReplyFunctionalUpdateAwayFromKey
+             DEF CloseSemanticRequest
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>3. \A owner \in ReplyOwners,
+               semantic \in ReplySemantics:
+             ReplySemanticBound(owner, semantic) =>
+               /\ rrSemanticSequence'[owner][semantic] =
+                    rrSemanticSequence[owner][semantic]
+               /\ rrSemanticHash'[owner][semantic] =
+                    rrSemanticHash[owner][semantic]
+      BY <1>1 DEF CloseSemanticRequest
+    <2> QED BY <2>2, <2>3
+         DEF ReplyLifecycleJournalStep
+  <1> QED BY <1>1
+
+THEOREM ReplyRouteNextProvidesLifecycleJournalStep ==
+  /\ ReplyRouteLifecycleInductiveInvariant
+  /\ ReplyRouteNext
+  => ReplyLifecycleJournalStep
+PROOF
+  <1>1. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ObserveNewReplySource(owner, semantic, source)
+    BY <1>1, ObserveNewReplySourceProvidesLifecycleJournalStep
+  <1>2. CASE \E witness \in ReplyCloseWitnessSet:
+               CloseSemanticRequest(witness)
+    BY <1>2, CloseSemanticRequestProvidesLifecycleJournalStep
+  <1>3. CASE \E witness \in ReplyCloseWitnessSet:
+               PiggybackCloseSemanticRequest(witness)
+    BY <1>3, CloseSemanticRequestProvidesLifecycleJournalStep
+       DEF PiggybackCloseSemanticRequest
+  <1>4. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ObserveLaterReplyDelivery(owner, semantic, source)
+    BY <1>4, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF ObserveLaterReplyDelivery, ReplyLifecycleVars
+  <1>5. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               RetryExactReplySource(owner, semantic, source)
+    BY <1>5, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF RetryExactReplySource, ReplyRouteVars,
+           ReplyLifecycleVars
+  <1>6. CASE \E owner \in ReplyOwners, source \in ReplySources:
+               RetireReplySource(owner, source)
+    BY <1>6, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF RetireReplySource, ReplyLifecycleVars
+  <1>7. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ReconnectReplySource(owner, semantic, source)
+    BY <1>7, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF ReconnectReplySource, ReplyLifecycleVars
+  <1>8. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               AcquireReplyTicket(owner, semantic, source)
+    BY <1>8, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF AcquireReplyTicket, ReplyLifecycleVars
+  <1>9. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics:
+               ServiceReplyRoute(owner, semantic)
+    BY <1>9, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF ServiceReplyRoute, ReplyLifecycleVars
+  <1>10. CASE \E witness \in ReplyCloseWitnessSet:
+                RetryCloseSemanticRequest(witness)
+    BY <1>10, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF RetryCloseSemanticRequest, ReplyRouteVars,
+           ReplyLifecycleVars
+  <1>11. CASE \E acknowledgement \in ReplyCloseAcknowledgementSet:
+                AcknowledgeCloseSemanticRequest(acknowledgement)
+    BY <1>11, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF AcknowledgeCloseSemanticRequest, ReplyLifecycleVars
+  <1>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                RecoverReplyRouteState(owner, source)
+    BY <1>12, ReplyLifecycleVarsStutterProvidesJournalStep
+       DEF RecoverReplyRouteState, RetireReplySource,
+           ReplyLifecycleVars
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6, <1>7,
+       <1>8, <1>9, <1>10, <1>11, <1>12
+       DEF ReplyRouteNext
+
+THEOREM ReplyRouteSpecProvidesLifecycleJournal ==
+  ReplyRouteSpec => ReplyLifecycleJournal
+PROOF
+  <1>1. ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteSpecAlwaysFullSafetyInvariant, PTL
+       DEF ReplyRouteLifecycleInductiveInvariant
+  <1>2. /\ ReplyRouteLifecycleInductiveInvariant
+           /\ [ReplyRouteNext]_ReplyRouteVars
+          => [ReplyLifecycleJournalStep]_ReplyRouteVars
+    BY ReplyRouteNextProvidesLifecycleJournalStep
+  <1> QED BY <1>1, <1>2, PTL
+       DEF ReplyRouteSpec, ReplyLifecycleJournal
+
+(***************************************************************************
+Rehydration is source-scoped ticket invalidation.  Every retained attempt
+keeps the same semantic/source identity and exact message/chunk cursor.
+***************************************************************************)
+THEOREM RecoverReplyRouteStatePreservesCursors ==
+  \A owner \in ReplyOwners, source \in ReplySources:
+    /\ ReplyRouteInductiveInvariant
+    /\ RecoverReplyRouteState(owner, source)
+    => ReplyRecoveryCursorPreservationStep
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW source \in ReplySources,
+                ReplyRouteInductiveInvariant,
+                RecoverReplyRouteState(owner, source)
+         PROVE ReplyRecoveryCursorPreservationStep
+    <2>1. /\ rrAttempts' =
+                 {ReplyAttemptAfterRetire(owner, source, attempt):
+                    attempt \in rrAttempts}
+           /\ \A attempt \in rrAttempts:
+                /\ attempt \in ReplyAttemptSet
+                /\ SameReplyAttemptIdentity(
+                     attempt,
+                     ReplyAttemptAfterRetire(owner, source, attempt))
+                /\ ReplyAttemptCursor(
+                     ReplyAttemptAfterRetire(
+                       owner, source, attempt)) =
+                     ReplyAttemptCursor(attempt)
+      BY <1>1, ReplyRetireTransformTypedAndIdentity
+         DEF RecoverReplyRouteState, RetireReplySource,
+             ReplyAttemptAfterRetire,
+             ReplyRouteInductiveInvariant,
+             ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+    <2> QED BY <2>1
+         DEF ReplyRecoveryCursorPreservationStep
+  <1> QED BY <1>1
 
 THEOREM ReplyAttemptExtensionProvidesReplayAndIsolation ==
   \A newAttempt:
@@ -12472,16 +13182,805 @@ PROOF
     <2> QED BY <2>1
   <1> QED BY <1>1
 
+(***************************************************************************
+Authenticated cumulative close acknowledgement.
+
+The pending floor is fixed until the exact responder acknowledgement changes
+the acknowledged floor.  Weak fairness for that exact acknowledgement then
+terminates the requester-side retry work.  Retry generation remains separate
+bookkeeping and never appears in a reply capability.
+***************************************************************************)
+ReplyCloseWorkAtFloor(requester, responder, closedThrough) ==
+  /\ ReplyCloseWorkPending(requester, responder)
+  /\ rrClosePendingThrough[requester][responder] = closedThrough
+  /\ rrCloseSentThrough[requester][responder] = closedThrough
+
+ReplyCloseAcknowledgementFieldDomain ==
+  {"requester", "responder", "authenticatedResponder", "closedThrough",
+   "bindingRequester", "bindingResponder", "bindingClosedThrough"}
+
+ReplyRouteCapabilityAuthorityFields ==
+  {"owner", "source", "target", "semantic", "deliveryOrdinal",
+   "connectionTenure", "sourceCapacity", "ticketTenure",
+   "ticketSemantic", "ticketTarget", "ticketMessageCursor",
+   "ticketChunkCursor"}
+
+THEOREM ReplyCloseAcknowledgementSetHasCanonicalDomain ==
+  \A acknowledgement \in ReplyCloseAcknowledgementSet:
+    DOMAIN acknowledgement = ReplyCloseAcknowledgementFieldDomain
+BY Zenon
+   DEF ReplyCloseAcknowledgementSet,
+       ReplyCloseAcknowledgementFieldDomain
+
+THEOREM ReplyCloseAcknowledgementCarriesNoRouteCapability ==
+  \A acknowledgement \in ReplyCloseAcknowledgementSet:
+    /\ DOMAIN acknowledgement = ReplyCloseAcknowledgementFieldDomain
+    /\ DOMAIN acknowledgement \cap ReplyRouteCapabilityAuthorityFields = {}
+PROOF
+  <1>1. ASSUME NEW acknowledgement \in ReplyCloseAcknowledgementSet
+         PROVE /\ DOMAIN acknowledgement =
+                    ReplyCloseAcknowledgementFieldDomain
+               /\ DOMAIN acknowledgement \cap
+                    ReplyRouteCapabilityAuthorityFields = {}
+    <2>1. DOMAIN acknowledgement =
+             ReplyCloseAcknowledgementFieldDomain
+      BY <1>1, ReplyCloseAcknowledgementSetHasCanonicalDomain
+    <2>2. ReplyCloseAcknowledgementFieldDomain \cap
+             ReplyRouteCapabilityAuthorityFields = {}
+      BY SMT
+         DEF ReplyCloseAcknowledgementFieldDomain,
+             ReplyRouteCapabilityAuthorityFields
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ReplyAcknowledgedCloseRetryIsIdempotent ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ RetryCloseSemanticRequest(witness)
+    /\ ~ReplyCloseWorkPending(witness.requester, witness.responder)
+    => UNCHANGED ReplyRouteVars
+BY DEF RetryCloseSemanticRequest
+
+THEOREM ReplyEqualCloseAcknowledgementIsIdempotent ==
+  \A acknowledgement \in ReplyCloseAcknowledgementSet:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ AcknowledgeCloseSemanticRequest(acknowledgement)
+    /\ rrCloseAcknowledgedThrough[
+         acknowledgement.requester][acknowledgement.responder] =
+         acknowledgement.closedThrough
+    => UNCHANGED ReplyRouteVars
+PROOF
+  <1>1. ASSUME NEW acknowledgement
+                  \in ReplyCloseAcknowledgementSet,
+                ReplyRouteFullSafetyInvariant,
+                AcknowledgeCloseSemanticRequest(acknowledgement),
+                rrCloseAcknowledgedThrough[
+                  acknowledgement.requester][
+                    acknowledgement.responder] =
+                  acknowledgement.closedThrough
+         PROVE UNCHANGED ReplyRouteVars
+    <2>1. /\ acknowledgement.requester \in ReplyOwners
+           /\ acknowledgement.responder \in ReplySources
+           /\ rrCloseAcknowledgedThrough
+                \in [ReplyOwners ->
+                      [ReplySources ->
+                        0..ReplyDeliveryOrdinalLimit]]
+      BY <1>1
+         DEF ReplyCloseAcknowledgementSet,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>2. rrCloseAcknowledgedThrough' =
+             rrCloseAcknowledgedThrough
+      BY <1>1, <2>1, ReplyNestedFunctionalUpdateIdentity
+         DEF AcknowledgeCloseSemanticRequest
+    <2> QED BY <1>1, <2>2
+         DEF AcknowledgeCloseSemanticRequest, ReplyRouteVars
+  <1> QED BY <1>1
+
+THEOREM ReplyCanonicalCloseAcknowledgementIsValid ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    /\ ReplyCanonicalCloseAcknowledgement(
+         requester, responder, closedThrough)
+         \in ReplyCloseAcknowledgementSet
+    /\ ReplyCloseAcknowledgementValid(
+         ReplyCanonicalCloseAcknowledgement(
+           requester, responder, closedThrough))
+BY SMTT(10)
+   DEF ReplyCanonicalCloseAcknowledgement,
+       ReplyCloseAcknowledgement,
+       ReplyCloseAcknowledgementSet,
+       ReplyCloseAcknowledgementValid
+
+THEOREM ReplyCanonicalCloseAcknowledgementFields ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    LET acknowledgement ==
+          ReplyCanonicalCloseAcknowledgement(
+            requester, responder, closedThrough)
+    IN /\ acknowledgement.requester = requester
+       /\ acknowledgement.responder = responder
+       /\ acknowledgement.authenticatedResponder = responder
+       /\ acknowledgement.closedThrough = closedThrough
+       /\ acknowledgement.bindingRequester = requester
+       /\ acknowledgement.bindingResponder = responder
+       /\ acknowledgement.bindingClosedThrough = closedThrough
+BY DEF ReplyCanonicalCloseAcknowledgement,
+       ReplyCloseAcknowledgement
+
+THEOREM ReplyCloseWorkAtFloorEnablesExactAcknowledgement ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    => ENABLED
+         <<AcknowledgeCloseSemanticRequest(
+             ReplyCanonicalCloseAcknowledgement(
+               requester, responder, closedThrough))>>_ReplyRouteVars
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough)
+         PROVE ENABLED
+                 <<AcknowledgeCloseSemanticRequest(
+                     ReplyCanonicalCloseAcknowledgement(
+                       requester, responder,
+                       closedThrough))>>_ReplyRouteVars
+    <2>1. LET acknowledgement ==
+                   ReplyCanonicalCloseAcknowledgement(
+                     requester, responder, closedThrough)
+           IN /\ ReplyCloseAcknowledgementValid(acknowledgement)
+              /\ closedThrough # 0
+              /\ closedThrough =
+                   rrClosePendingThrough[requester][responder]
+              /\ closedThrough =
+                   rrCloseSentThrough[requester][responder]
+              /\ closedThrough <=
+                   rrRequesterClosedThrough[requester]
+              /\ rrCloseAcknowledgedThrough[
+                   requester][responder] < closedThrough
+      BY <1>1, ReplyCanonicalCloseAcknowledgementIsValid,
+         SMTT(15)
+         DEF ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant,
+             ReplyLifecycleOwnershipInvariant,
+             ReplyCloseWorkAtFloor, ReplyCloseWorkPending
+    <2>2. [rrCloseAcknowledgedThrough EXCEPT
+             ![requester][responder] = closedThrough] #
+             rrCloseAcknowledgedThrough
+      <3>1. [rrCloseAcknowledgedThrough EXCEPT
+               ![requester][responder] = closedThrough][
+                 requester][responder] = closedThrough
+        BY <1>1, ReplyNestedFunctionalUpdateAtKey
+           DEF ReplyRouteFullSafetyInvariant,
+               ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant
+      <3> QED BY <2>1, <3>1
+    <2>3. LET acknowledgement ==
+                   ReplyCanonicalCloseAcknowledgement(
+                     requester, responder, closedThrough)
+           IN /\ acknowledgement.requester = requester
+              /\ acknowledgement.responder = responder
+              /\ acknowledgement.closedThrough = closedThrough
+      BY <1>1, ReplyCanonicalCloseAcknowledgementFields
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, ExpandENABLED, Isa
+         DEF AcknowledgeCloseSemanticRequest, ReplyRouteVars
+  <1> QED BY <1>1
+
+THEOREM ReplyUnchangedCloseChannelPreservesFloorWork ==
+  \A requester, responder, closedThrough:
+    /\ ReplyCloseWorkAtFloor(requester, responder, closedThrough)
+    /\ UNCHANGED <<rrClosePendingThrough, rrCloseSentThrough,
+                   rrCloseAcknowledgedThrough>>
+    => ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)'
+BY DEF ReplyCloseWorkAtFloor, ReplyCloseWorkPending
+
+THEOREM ReplyCloseStepPreservesOtherPendingFloor ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit,
+     witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    /\ CloseSemanticRequest(witness)
+    => ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)'
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough),
+                CloseSemanticRequest(witness)
+         PROVE ReplyCloseWorkAtFloor(
+                 requester, responder, closedThrough)'
+    <2>1. ~(/\ requester = witness.requester
+             /\ responder = witness.responder)
+      BY <1>1
+         DEF CloseSemanticRequest,
+             ReplyCloseWorkAtFloor, ReplyCloseWorkPending
+    <2>2. /\ rrClosePendingThrough'
+                  [requester][responder] =
+                    rrClosePendingThrough[requester][responder]
+           /\ rrCloseSentThrough'
+                  [requester][responder] =
+                    rrCloseSentThrough[requester][responder]
+           /\ rrCloseAcknowledgedThrough'
+                  [requester][responder] =
+                    rrCloseAcknowledgedThrough[requester][responder]
+      BY <1>1, <2>1,
+         ReplyNestedFunctionalUpdateAwayFromKey,
+         SMTT(15)
+         DEF CloseSemanticRequest,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2> QED BY <1>1, <2>2
+         DEF ReplyCloseWorkAtFloor, ReplyCloseWorkPending
+  <1> QED BY <1>1
+
+THEOREM ReplyAcknowledgementPersistsOrTerminatesFloorWork ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit,
+     acknowledgement \in ReplyCloseAcknowledgementSet:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    /\ AcknowledgeCloseSemanticRequest(acknowledgement)
+    => \/ ReplyCloseWorkAtFloor(
+            requester, responder, closedThrough)'
+       \/ ~ReplyCloseWorkPending(requester, responder)'
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                NEW acknowledgement
+                  \in ReplyCloseAcknowledgementSet,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough),
+                AcknowledgeCloseSemanticRequest(acknowledgement)
+         PROVE \/ ReplyCloseWorkAtFloor(
+                     requester, responder, closedThrough)'
+               \/ ~ReplyCloseWorkPending(requester, responder)'
+    <2>1. CASE /\ requester = acknowledgement.requester
+                /\ responder = acknowledgement.responder
+      BY <1>1, <2>1,
+         ReplyNestedFunctionalUpdateAtKey,
+         SMTT(15)
+         DEF AcknowledgeCloseSemanticRequest,
+             ReplyCloseWorkAtFloor, ReplyCloseWorkPending,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>2. CASE \/ requester # acknowledgement.requester
+                \/ responder # acknowledgement.responder
+      BY <1>1, <2>2,
+         ReplyNestedFunctionalUpdateAwayFromKey,
+         SMTT(15)
+         DEF AcknowledgeCloseSemanticRequest,
+             ReplyCloseWorkAtFloor, ReplyCloseWorkPending,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ReplyRouteNextPersistsOrTerminatesFloorWork ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    /\ ReplyRouteNext
+    => \/ ReplyCloseWorkAtFloor(
+            requester, responder, closedThrough)'
+       \/ ~ReplyCloseWorkPending(requester, responder)'
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough),
+                ReplyRouteNext
+         PROVE \/ ReplyCloseWorkAtFloor(
+                     requester, responder, closedThrough)'
+               \/ ~ReplyCloseWorkPending(requester, responder)'
+    <2>1. CASE \E witness \in ReplyCloseWitnessSet:
+                 CloseSemanticRequest(witness)
+      BY <1>1, <2>1, ReplyCloseStepPreservesOtherPendingFloor
+    <2>2. CASE \E witness \in ReplyCloseWitnessSet:
+                 PiggybackCloseSemanticRequest(witness)
+      BY <1>1, <2>2, ReplyCloseStepPreservesOtherPendingFloor
+         DEF PiggybackCloseSemanticRequest
+    <2>3. CASE \E acknowledgement
+                   \in ReplyCloseAcknowledgementSet:
+                 AcknowledgeCloseSemanticRequest(acknowledgement)
+      BY <1>1, <2>3,
+         ReplyAcknowledgementPersistsOrTerminatesFloorWork
+    <2>4. CASE \E owner \in ReplyOwners,
+                       semantic \in ReplySemantics,
+                       source \in ReplySources:
+                 ObserveNewReplySource(owner, semantic, source)
+      BY <1>1, <2>4, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF ObserveNewReplySource
+    <2>5. CASE \E owner \in ReplyOwners,
+                       semantic \in ReplySemantics,
+                       source \in ReplySources:
+                 ObserveLaterReplyDelivery(owner, semantic, source)
+      BY <1>1, <2>5, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF ObserveLaterReplyDelivery
+    <2>6. CASE \E owner \in ReplyOwners,
+                       semantic \in ReplySemantics,
+                       source \in ReplySources:
+                 RetryExactReplySource(owner, semantic, source)
+      BY <1>1, <2>6, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF RetryExactReplySource, ReplyRouteVars
+    <2>7. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                 RetireReplySource(owner, source)
+      BY <1>1, <2>7, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF RetireReplySource
+    <2>8. CASE \E owner \in ReplyOwners,
+                       semantic \in ReplySemantics,
+                       source \in ReplySources:
+                 ReconnectReplySource(owner, semantic, source)
+      BY <1>1, <2>8, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF ReconnectReplySource
+    <2>9. CASE \E owner \in ReplyOwners,
+                       semantic \in ReplySemantics,
+                       source \in ReplySources:
+                 AcquireReplyTicket(owner, semantic, source)
+      BY <1>1, <2>9, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF AcquireReplyTicket
+    <2>10. CASE \E owner \in ReplyOwners,
+                        semantic \in ReplySemantics:
+                  ServiceReplyRoute(owner, semantic)
+      BY <1>1, <2>10, ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF ServiceReplyRoute
+    <2>11. CASE \E witness \in ReplyCloseWitnessSet:
+                  RetryCloseSemanticRequest(witness)
+      BY <1>1, <2>11,
+         ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF RetryCloseSemanticRequest, ReplyRouteVars
+    <2>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                  RecoverReplyRouteState(owner, source)
+      BY <1>1, <2>12,
+         ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF RecoverReplyRouteState, RetireReplySource
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7,
+         <2>8, <2>9, <2>10, <2>11, <2>12
+         DEF ReplyRouteNext
+  <1> QED BY <1>1
+
+THEOREM ReplyRouteBracketPersistsOrTerminatesFloorWork ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    /\ [ReplyRouteNext]_ReplyRouteVars
+    => \/ ReplyCloseWorkAtFloor(
+            requester, responder, closedThrough)'
+       \/ ~ReplyCloseWorkPending(requester, responder)'
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough),
+                [ReplyRouteNext]_ReplyRouteVars
+         PROVE \/ ReplyCloseWorkAtFloor(
+                     requester, responder, closedThrough)'
+               \/ ~ReplyCloseWorkPending(requester, responder)'
+    <2>1. CASE ReplyRouteNext
+      BY <1>1, <2>1,
+         ReplyRouteNextPersistsOrTerminatesFloorWork
+    <2>2. CASE UNCHANGED ReplyRouteVars
+      BY <1>1, <2>2,
+         ReplyUnchangedCloseChannelPreservesFloorWork
+         DEF ReplyRouteVars
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ReplyExactAcknowledgementTerminatesFloorWork ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+    /\ <<AcknowledgeCloseSemanticRequest(
+            ReplyCanonicalCloseAcknowledgement(
+              requester, responder,
+              closedThrough))>>_ReplyRouteVars
+    => ~ReplyCloseWorkPending(requester, responder)'
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkAtFloor(
+                  requester, responder, closedThrough),
+                <<AcknowledgeCloseSemanticRequest(
+                    ReplyCanonicalCloseAcknowledgement(
+                      requester, responder,
+                      closedThrough))>>_ReplyRouteVars
+         PROVE ~ReplyCloseWorkPending(requester, responder)'
+    <2>1. AcknowledgeCloseSemanticRequest(
+             ReplyCanonicalCloseAcknowledgement(
+               requester, responder, closedThrough))
+      BY <1>1, PTL
+    <2>2. LET acknowledgement ==
+                   ReplyCanonicalCloseAcknowledgement(
+                     requester, responder, closedThrough)
+           IN /\ acknowledgement.requester = requester
+              /\ acknowledgement.responder = responder
+              /\ acknowledgement.closedThrough = closedThrough
+      BY <1>1, ReplyCanonicalCloseAcknowledgementFields
+    <2>3. /\ rrCloseAcknowledgedThrough
+                  \in [ReplyOwners ->
+                        [ReplySources ->
+                          0..ReplyDeliveryOrdinalLimit]]
+           /\ rrCloseAcknowledgedThrough' =
+                [rrCloseAcknowledgedThrough EXCEPT
+                   ![requester][responder] = closedThrough]
+           /\ rrClosePendingThrough' = rrClosePendingThrough
+      BY <1>1, <2>1, <2>2
+         DEF AcknowledgeCloseSemanticRequest,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant
+    <2>4. rrCloseAcknowledgedThrough'[
+             requester][responder] = closedThrough
+      BY <1>1, <2>3, ReplyNestedFunctionalUpdateAtKey
+    <2>5. rrClosePendingThrough'[requester][responder] =
+             closedThrough
+      BY <1>1, <2>3 DEF ReplyCloseWorkAtFloor
+    <2> QED BY <2>4, <2>5, SMT
+         DEF ReplyCloseWorkPending
+  <1> QED BY <1>1
+
+ReplyCloseFloorPersistenceObligation(
+    requester, responder, closedThrough) ==
+  /\ ReplyRouteFullSafetyInvariant
+  /\ ReplyCloseWorkAtFloor(requester, responder, closedThrough)
+  /\ [ReplyRouteNext]_ReplyRouteVars
+  => \/ ReplyCloseWorkAtFloor(requester, responder, closedThrough)'
+     \/ ~ReplyCloseWorkPending(requester, responder)'
+
+THEOREM ReplyCloseFloorPersistenceObligationsHold ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    ReplyCloseFloorPersistenceObligation(
+      requester, responder, closedThrough)
+BY ReplyRouteBracketPersistsOrTerminatesFloorWork
+   DEF ReplyCloseFloorPersistenceObligation
+
+ReplyCloseFloorEnablementObligation(
+    requester, responder, closedThrough) ==
+  /\ ReplyRouteFullSafetyInvariant
+  /\ ReplyCloseWorkAtFloor(requester, responder, closedThrough)
+  => ENABLED
+       <<AcknowledgeCloseSemanticRequest(
+           ReplyCanonicalCloseAcknowledgement(
+             requester, responder, closedThrough))>>_ReplyRouteVars
+
+THEOREM ReplyCloseFloorEnablementObligationsHold ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    ReplyCloseFloorEnablementObligation(
+      requester, responder, closedThrough)
+BY ReplyCloseWorkAtFloorEnablesExactAcknowledgement
+   DEF ReplyCloseFloorEnablementObligation
+
+ReplyCloseFloorOutcomeObligation(
+    requester, responder, closedThrough) ==
+  /\ ReplyRouteFullSafetyInvariant
+  /\ ReplyCloseWorkAtFloor(requester, responder, closedThrough)
+  /\ <<AcknowledgeCloseSemanticRequest(
+          ReplyCanonicalCloseAcknowledgement(
+            requester, responder, closedThrough))>>_ReplyRouteVars
+  => ~ReplyCloseWorkPending(requester, responder)'
+
+THEOREM ReplyCloseFloorOutcomeObligationsHold ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    ReplyCloseFloorOutcomeObligation(
+      requester, responder, closedThrough)
+BY ReplyExactAcknowledgementTerminatesFloorWork
+   DEF ReplyCloseFloorOutcomeObligation
+
+THEOREM ReplyCloseFloorPersistenceBracketProjects ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    [ReplyCloseFloorPersistenceObligationsHold]_ReplyRouteVars
+      => [ReplyCloseFloorPersistenceObligation(
+            requester, responder, closedThrough)]_ReplyRouteVars
+BY Isa
+
+THEOREM ReplyCloseFloorOutcomeBracketProjects ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    [ReplyCloseFloorOutcomeObligationsHold]_ReplyRouteVars
+      => [ReplyCloseFloorOutcomeObligation(
+            requester, responder, closedThrough)]_ReplyRouteVars
+BY Isa
+
+THEOREM ReplyRouteSpecTerminatesCloseWorkAtFloor ==
+  \A requester \in ReplyOwners, responder \in ReplySources,
+     closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+    ReplyRouteSpec =>
+      (ReplyCloseWorkAtFloor(
+         requester, responder, closedThrough)
+        ~> ~ReplyCloseWorkPending(requester, responder))
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                NEW closedThrough
+                  \in 0..ReplyDeliveryOrdinalLimit,
+                ReplyRouteSpec
+         PROVE ReplyCloseWorkAtFloor(
+                 requester, responder, closedThrough)
+                 ~> ~ReplyCloseWorkPending(requester, responder)
+    <2>1. ReplyCloseFloorPersistenceObligation(
+             requester, responder, closedThrough)
+      BY <1>1, ReplyRouteBracketPersistsOrTerminatesFloorWork
+         DEF ReplyCloseFloorPersistenceObligation
+    <2>2. ReplyCloseFloorEnablementObligation(
+             requester, responder, closedThrough)
+      BY <1>1, ReplyCloseWorkAtFloorEnablesExactAcknowledgement
+         DEF ReplyCloseFloorEnablementObligation
+    <2>3. ReplyCloseFloorOutcomeObligation(
+             requester, responder, closedThrough)
+      BY <1>1, ReplyExactAcknowledgementTerminatesFloorWork
+         DEF ReplyCloseFloorOutcomeObligation
+    <2>4. []ReplyRouteFullSafetyInvariant
+      BY <1>1, ReplyRouteSpecAlwaysFullSafetyInvariant
+    <2>5. [][ReplyRouteNext]_ReplyRouteVars
+      BY <1>1, PTL DEF ReplyRouteSpec
+    <2>6. WF_ReplyRouteVars(
+             AcknowledgeCloseSemanticRequest(
+               ReplyCanonicalCloseAcknowledgement(
+                 requester, responder, closedThrough)))
+      <3>1. ReplyCanonicalCloseAcknowledgement(
+               requester, responder, closedThrough)
+               \in ReplyCloseAcknowledgementSet
+        BY <1>1, ReplyCanonicalCloseAcknowledgementIsValid
+      <3> QED BY <1>1, <3>1, IsaM("blast")
+           DEF ReplyRouteSpec, ReplyRouteFairness
+    <2>7. [][ReplyCloseWorkAtFloor(
+                    requester, responder, closedThrough)
+                  /\ [ReplyRouteNext]_ReplyRouteVars
+                 => \/ ReplyCloseWorkAtFloor(
+                         requester, responder, closedThrough)'
+                    \/ ~ReplyCloseWorkPending(
+                         requester, responder)']_ReplyRouteVars
+      BY <1>1, <2>4, <2>5,
+         ReplyRouteBracketPersistsOrTerminatesFloorWork, PTL
+    <2>8. [](ReplyCloseWorkAtFloor(
+                   requester, responder, closedThrough)
+                 => ENABLED
+                      <<AcknowledgeCloseSemanticRequest(
+                          ReplyCanonicalCloseAcknowledgement(
+                            requester, responder,
+                            closedThrough))>>_ReplyRouteVars)
+      BY <1>1, <2>4,
+         ReplyCloseWorkAtFloorEnablesExactAcknowledgement, PTL
+    <2>9. [][/\ ReplyCloseWorkAtFloor(
+                        requester, responder, closedThrough)
+                   /\ <<AcknowledgeCloseSemanticRequest(
+                           ReplyCanonicalCloseAcknowledgement(
+                             requester, responder,
+                             closedThrough))>>_ReplyRouteVars
+                  => ~ReplyCloseWorkPending(
+                        requester, responder)']_ReplyRouteVars
+      BY <1>1, <2>4,
+         ReplyExactAcknowledgementTerminatesFloorWork, PTL
+    <2> QED BY <2>5, <2>6, <2>7, <2>8, <2>9, PTL
+  <1> QED BY <1>1
+
+THEOREM ReplyPendingCloseHasTrackedFloor ==
+  \A requester \in ReplyOwners, responder \in ReplySources:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkPending(requester, responder)
+    => \E closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+         ReplyCloseWorkAtFloor(
+           requester, responder, closedThrough)
+PROOF
+  <1>1. ASSUME NEW requester \in ReplyOwners,
+                NEW responder \in ReplySources,
+                ReplyRouteFullSafetyInvariant,
+                ReplyCloseWorkPending(requester, responder)
+         PROVE \E closedThrough
+                   \in 0..ReplyDeliveryOrdinalLimit:
+                 ReplyCloseWorkAtFloor(
+                   requester, responder, closedThrough)
+    <2>1. /\ rrClosePendingThrough[requester][responder]
+                  \in 0..ReplyDeliveryOrdinalLimit
+           /\ rrCloseSentThrough[requester][responder] =
+                rrClosePendingThrough[requester][responder]
+      BY <1>1
+         DEF ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyLifecycleTypeInvariant,
+             ReplyLifecycleOwnershipInvariant
+    <2>2. ReplyCloseWorkAtFloor(
+             requester, responder,
+             rrClosePendingThrough[requester][responder])
+      BY <1>1, <2>1 DEF ReplyCloseWorkAtFloor
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ReplyPendingCloseTrackedFloorObligationsHold ==
+  \A requester \in ReplyOwners, responder \in ReplySources:
+    /\ ReplyRouteFullSafetyInvariant
+    /\ ReplyCloseWorkPending(requester, responder)
+    => \E closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+         ReplyCloseWorkAtFloor(
+           requester, responder, closedThrough)
+BY ReplyPendingCloseHasTrackedFloor
+
+THEOREM ReplyPendingCloseHasTrackedFloorAt ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources
+  PROVE /\ ReplyRouteFullSafetyInvariant
+          /\ ReplyCloseWorkPending(requester, responder)
+         => \E closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+              ReplyCloseWorkAtFloor(
+                requester, responder, closedThrough)
+BY ReplyPendingCloseHasTrackedFloor
+
+ReplyCloseFloorExistentialEquivalenceObligation(
+    requester, responder, floors) ==
+  (\A closedThrough \in floors:
+     ReplyCloseWorkAtFloor(requester, responder, closedThrough)
+       => <>~ReplyCloseWorkPending(requester, responder))
+    <=> ((\E closedThrough \in floors:
+            ReplyCloseWorkAtFloor(requester, responder, closedThrough))
+          => <>~ReplyCloseWorkPending(requester, responder))
+
+ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold ==
+  \A requester \in ReplyOwners, responder \in ReplySources:
+    ReplyCloseFloorExistentialEquivalenceObligation(
+      requester, responder, 0..ReplyDeliveryOrdinalLimit)
+
+THEOREM ReplyCloseFloorCarrierExistentialEquivalenceObligationsHoldProof ==
+  ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold
+BY IsaM("blast")
+   DEF ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold,
+       ReplyCloseFloorExistentialEquivalenceObligation
+
+THEOREM ReplyCloseFloorExistentialLift ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         \A closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+           ReplyCloseWorkAtFloor(
+             requester, responder, closedThrough)
+             ~> ~ReplyCloseWorkPending(requester, responder)
+  PROVE (\E closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+           ReplyCloseWorkAtFloor(
+             requester, responder, closedThrough))
+          ~> ~ReplyCloseWorkPending(requester, responder)
+PROOF
+  <1>1. (\A closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+            [](ReplyCloseWorkAtFloor(
+                 requester, responder, closedThrough)
+                 => <>~ReplyCloseWorkPending(requester, responder)))
+          <=> [](\A closedThrough
+                        \in 0..ReplyDeliveryOrdinalLimit:
+                   ReplyCloseWorkAtFloor(
+                     requester, responder, closedThrough)
+                     => <>~ReplyCloseWorkPending(
+                          requester, responder))
+    OBVIOUS
+  <1>2. [](\A closedThrough \in 0..ReplyDeliveryOrdinalLimit:
+             ReplyCloseWorkAtFloor(
+               requester, responder, closedThrough)
+               => <>~ReplyCloseWorkPending(requester, responder))
+          <=> []((\E closedThrough
+                       \in 0..ReplyDeliveryOrdinalLimit:
+                    ReplyCloseWorkAtFloor(
+                      requester, responder, closedThrough))
+                 => <>~ReplyCloseWorkPending(requester, responder))
+    <2>1. []ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold
+      BY ReplyCloseFloorCarrierExistentialEquivalenceObligationsHoldProof,
+         PTL
+    <2>2. [](\A allResponder \in ReplySources:
+                  ReplyCloseFloorExistentialEquivalenceObligation(
+                    requester, allResponder,
+                    0..ReplyDeliveryOrdinalLimit))
+      BY <2>1, IsaM("blast")
+    <2>3. []ReplyCloseFloorExistentialEquivalenceObligation(
+               requester, responder, 0..ReplyDeliveryOrdinalLimit)
+      BY <2>2, IsaM("blast")
+    <2> QED BY <2>3, PTL
+         DEF ReplyCloseFloorExistentialEquivalenceObligation
+  <1> QED BY <1>1, <1>2, PTL
+
+THEOREM ReplyRouteSpecTerminatesCloseWork ==
+  ReplyRouteSpec =>
+    \A requester \in ReplyOwners, responder \in ReplySources:
+      ReplyCloseWorkEventuallyTerminates(requester, responder)
+PROOF
+  <1>1. ASSUME ReplyRouteSpec
+         PROVE \A requester \in ReplyOwners,
+                    responder \in ReplySources:
+                   ReplyCloseWorkEventuallyTerminates(
+                     requester, responder)
+    <2>1. ASSUME NEW requester \in ReplyOwners,
+                  NEW responder \in ReplySources
+           PROVE ReplyCloseWorkEventuallyTerminates(
+                   requester, responder)
+      <3>1. []ReplyRouteFullSafetyInvariant
+        BY <1>1, ReplyRouteSpecAlwaysFullSafetyInvariant
+      <3>2. [](/\ ReplyRouteFullSafetyInvariant
+                 /\ ReplyCloseWorkPending(requester, responder)
+                => \E closedThrough
+                     \in 0..ReplyDeliveryOrdinalLimit:
+                     ReplyCloseWorkAtFloor(
+                       requester, responder, closedThrough))
+        BY <2>1, ReplyPendingCloseHasTrackedFloorAt, PTL
+      <3>3. [](ReplyCloseWorkPending(requester, responder) =>
+                 \E closedThrough
+                      \in 0..ReplyDeliveryOrdinalLimit:
+                   ReplyCloseWorkAtFloor(
+                     requester, responder, closedThrough))
+        BY <3>1, <3>2, PTL
+      <3>4. ReplyCloseWorkPending(requester, responder)
+                 ~> (\E closedThrough
+                          \in 0..ReplyDeliveryOrdinalLimit:
+                       ReplyCloseWorkAtFloor(
+                         requester, responder, closedThrough))
+        BY <3>3, PTL
+      <3>5. \A closedThrough
+                    \in 0..ReplyDeliveryOrdinalLimit:
+                 ReplyCloseWorkAtFloor(
+                   requester, responder, closedThrough)
+                   ~> ~ReplyCloseWorkPending(
+                        requester, responder)
+        BY <1>1, <2>1,
+           ReplyRouteSpecTerminatesCloseWorkAtFloor
+      <3>6. (\E closedThrough
+                    \in 0..ReplyDeliveryOrdinalLimit:
+                  ReplyCloseWorkAtFloor(
+                    requester, responder, closedThrough))
+                  ~> ~ReplyCloseWorkPending(requester, responder)
+        BY <2>1, <3>5, ReplyCloseFloorExistentialLift
+      <3> QED BY <3>4, <3>6, PTL
+           DEF ReplyCloseWorkEventuallyTerminates
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
 THEOREM ReplyRouteOwnershipModelObligation ==
   ReplyRouteSpec =>
-    /\ []ReplyRouteSafetyInvariant
+    /\ []ReplyRouteFullSafetyInvariant
     /\ ReplyTenureAwareReplay
     /\ ReplySourceIsolation
+    /\ ReplyLifecycleJournal
+    /\ \A requester \in ReplyOwners, responder \in ReplySources:
+         ReplyCloseWorkEventuallyTerminates(requester, responder)
     /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
           source \in ReplySources:
          ReplySourceEventuallyProgresses(owner, semantic, source)
-BY ReplyRouteSpecAlwaysSafetyInvariant,
+BY ReplyRouteSpecAlwaysFullSafetyInvariant,
    ReplyRouteSpecAlwaysReplayAndIsolation,
+   ReplyRouteSpecProvidesLifecycleJournal,
+   ReplyRouteSpecTerminatesCloseWork,
    ReplyRouteSpecProvidesSourceProgress
 
 =============================================================================

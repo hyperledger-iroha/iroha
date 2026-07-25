@@ -196,13 +196,12 @@ use sorafs_node::{
     EconomicsRuntimeError, ModerationAuthenticatedScreeningAdmissionError,
     ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
     ModerationAuthenticatedScreeningRequestV1, ModerationCorpusRegistryRecord,
-    ModerationEvidenceViewerAccessEventRecord,
-    ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
-    ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
-    ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerAuditScheduleOutcome,
-    ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
-    ModerationEvidenceViewerSessionRecord, ModerationModelRegistryError,
-    ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
+    ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerAccessInput,
+    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
+    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
+    ModerationEvidenceViewerAuditScheduleOutcome, ModerationEvidenceViewerError,
+    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
+    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
     ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
@@ -258,11 +257,9 @@ use crate::{
         },
         encode_token_base64,
         gateway::{
-            ClientFingerprint, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicyTier,
-            GatewayComplianceDecision, GatewayComplianceDecisionSource,
-            GatewayComplianceDisposition, GatewayComplianceSubjectKindV1, PerceptualMatchBasis,
-            PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
-            SORA_TLS_STATE_HEADER,
+            ClientFingerprint, GatewayComplianceDecision, GatewayComplianceDecisionSource,
+            GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceSubjectKindV1,
+            PolicyViolation, RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
@@ -306,8 +303,6 @@ const HEADER_SORA_REQUEST_ID: &str = "x-sorafs-request-id";
 const HEADER_SORA_POTR_REQUEST: &str = "sora-potr-request";
 const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
-const HEADER_SORA_PERCEPTUAL_HASH: &str = "x-sorafs-perceptual-hash";
-const HEADER_SORA_PERCEPTUAL_EMBEDDING: &str = "x-sorafs-perceptual-embedding";
 const MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
 const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
@@ -2752,11 +2747,6 @@ struct StoragePeersReadbackQuery {
 }
 
 #[derive(Debug, Default)]
-struct DenylistCatalogReadbackQuery {
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Default)]
 struct SiteFileListReadbackQuery {
     limit: Option<u32>,
 }
@@ -2998,17 +2988,6 @@ impl ProviderListQuery {
 }
 
 impl StoragePeersReadbackQuery {
-    fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
-    }
-}
-
-impl DenylistCatalogReadbackQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
@@ -9056,8 +9035,7 @@ fn orderbook_api_response(
     response: Response,
 ) -> Response {
     let is_error = response.status().is_client_error() || response.status().is_server_error();
-    telemetry
-        .with_metrics(|metrics| metrics.record_sorafs_orderbook_api_request(route, is_error));
+    telemetry.with_metrics(|metrics| metrics.record_sorafs_orderbook_api_request(route, is_error));
     response
 }
 
@@ -9394,13 +9372,9 @@ fn moderation_route_instruction_mismatch_response(route: ModerationCommandRouteV
 const fn moderation_route_instruction_label(route: ModerationCommandRouteV1) -> &'static str {
     match route {
         ModerationCommandRouteV1::SubmitAppeal => "SubmitSorafsModerationAppeal",
-        ModerationCommandRouteV1::RegisterEligibility => {
-            "RegisterSorafsModerationJurorEligibility"
-        }
+        ModerationCommandRouteV1::RegisterEligibility => "RegisterSorafsModerationJurorEligibility",
         ModerationCommandRouteV1::FinalizeSortition => "FinalizeSorafsModerationSortition",
-        ModerationCommandRouteV1::AcceptAssignment => {
-            "AcceptSorafsModerationJurorAssignment"
-        }
+        ModerationCommandRouteV1::AcceptAssignment => "AcceptSorafsModerationJurorAssignment",
         ModerationCommandRouteV1::ActivateCase => "ActivateSorafsModerationCase",
         ModerationCommandRouteV1::SubmitCommit => "SubmitSorafsModerationCommit",
         ModerationCommandRouteV1::RaiseChallenge => "RaiseSorafsModerationChallenge",
@@ -11537,7 +11511,6 @@ fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Respon
         "authoritative finalized SoraFS orderbook state is unavailable",
     )
 }
-
 
 fn require_moderation_request_auth(
     state: &SharedAppState,
@@ -15039,7 +15012,6 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
         }
     });
 }
-
 
 pub(crate) fn spawn_sorafs_moderation_evidence_viewer_audit_scheduler(
     state: SharedAppState,
@@ -21375,7 +21347,7 @@ fn resolve_site_host_from_authoritative_app(
         .sorafs_node
         .manifest_metadata_by_digest(&manifest_digest)
         .map_err(node_storage_error_response)?;
-    enforce_site_denylist(state, &stored)?;
+    enforce_governed_site_compliance(state, &stored)?;
 
     Ok(Some(ResolvedSiteHost {
         hostname: binding.hostname,
@@ -21433,7 +21405,7 @@ async fn resolve_site_host(
         Err(err) => return Err(node_storage_error_response(err)),
     };
 
-    enforce_site_denylist(state, &stored)?;
+    enforce_governed_site_compliance(state, &stored)?;
 
     let hostname = binding.hostname.clone();
     let index_document = binding.index_document().to_owned();
@@ -21469,7 +21441,7 @@ struct RemoteSiteBundle {
 
 enum RemoteFetchError {
     Source(String),
-    Denylisted(DenylistHit),
+    Compliance(Response),
 }
 
 fn find_local_site_manifest_by_cid(
@@ -21825,51 +21797,20 @@ async fn resolve_remote_cid_sources(
             .collect::<Vec<_>>()
     };
 
-    let now = SystemTime::now();
-    if let Some(denylist) = &state.sorafs_gateway_denylist {
-        if let Some(hit) = denylist.check_cid(cid_bytes, now) {
-            return Err(gateway_policy_violation_response(
-                PolicyViolation::Denylisted(Box::new(hit)),
-                None,
-            ));
-        }
-    }
-
     let mut unresolved = Vec::with_capacity(candidates.len());
     for (manifest_digest_hex, manifest_digest, provider_id_hex, provider_id, host_pattern) in
         candidates
     {
-        if state
-            .sorafs_gateway_denylist
-            .as_ref()
-            .is_some_and(|denylist| {
-                denylist.check_provider(&provider_id, now).is_some()
-                    || denylist
-                        .check_manifest_digest(&manifest_digest, now)
-                        .is_some()
-            })
-        {
-            continue;
-        }
         let torii_base_url = match normalize_provider_torii_base_url(&host_pattern) {
             Ok(url) => url,
-            Err(err) => {
+            Err(_) => {
                 warn!(
-                    provider_id_hex = %provider_id_hex,
-                    manifest_digest_hex = %manifest_digest_hex,
-                    %err,
+                    reason = "invalid_endpoint",
                     "ignoring invalid Torii endpoint advertised for CID gateway fetch"
                 );
                 continue;
             }
         };
-        if state
-            .sorafs_gateway_denylist
-            .as_ref()
-            .is_some_and(|denylist| denylist.check_url(torii_base_url.as_str(), now).is_some())
-        {
-            continue;
-        }
         match enforce_governed_gateway_compliance_for_subjects(
             state,
             &manifest_digest,
@@ -21902,11 +21843,9 @@ async fn resolve_remote_cid_sources(
     for (_, source, addresses) in resolved {
         let pinned_addrs = match addresses {
             Ok(addrs) => addrs,
-            Err(err) => {
+            Err(_) => {
                 warn!(
-                    provider_id_hex = %source.provider_id_hex,
-                    manifest_digest_hex = %source.manifest_digest_hex,
-                    %err,
+                    reason = "endpoint_resolution_failed",
                     "ignoring unsafe or unresolvable Torii endpoint advertised for CID gateway fetch"
                 );
                 continue;
@@ -21966,23 +21905,6 @@ fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<Chunk
         ));
     }
     Ok(descriptor.profile)
-}
-
-fn remote_manifest_denylist_hit(
-    state: &SharedAppState,
-    manifest: &ManifestV1,
-) -> Result<Option<DenylistHit>, String> {
-    let Some(denylist) = &state.sorafs_gateway_denylist else {
-        return Ok(None);
-    };
-    let manifest_digest: [u8; 32] = manifest
-        .digest()
-        .map_err(|err| format!("failed to digest remote manifest: {err}"))?
-        .into();
-    let now = SystemTime::now();
-    Ok(denylist
-        .check_manifest_digest(&manifest_digest, now)
-        .or_else(|| denylist.check_cid(&manifest.root_cid, now)))
 }
 
 fn build_pinned_remote_client(source: &RemoteCidSource) -> Result<reqwest::Client, String> {
@@ -22247,11 +22169,17 @@ async fn fetch_remote_site_bundle_from_source_with_client(
             manifest.content_length, manifest_response.content_length
         )));
     }
-    if let Some(hit) =
-        remote_manifest_denylist_hit(state, &manifest).map_err(RemoteFetchError::Source)?
-    {
-        return Err(RemoteFetchError::Denylisted(hit));
-    }
+    let source_provider_id =
+        decode_hex_32(&source.provider_id_hex).map_err(RemoteFetchError::Source)?;
+    let manifest_digest_bytes: [u8; 32] = manifest_digest.into();
+    enforce_governed_gateway_compliance_for_subjects(
+        state,
+        &manifest_digest_bytes,
+        &manifest.root_cid,
+        source_provider_id,
+        Some(source.torii_base_url.as_str()),
+    )
+    .map_err(RemoteFetchError::Compliance)?;
 
     let storage = state.sorafs_node.storage().ok_or_else(|| {
         RemoteFetchError::Source("local SoraFS storage backend is unavailable".to_string())
@@ -22399,8 +22327,7 @@ async fn fetch_remote_site_bundle_from_source_with_client(
         manifest,
         payload,
         plan,
-        source_provider_id: decode_hex_32(&source.provider_id_hex)
-            .map_err(RemoteFetchError::Source)?,
+        source_provider_id,
     })
 }
 
@@ -22414,17 +22341,10 @@ async fn fetch_remote_site_bundle(
     for source in &sources {
         match fetch_remote_site_bundle_from_source(state, source, cid_bytes).await {
             Ok(bundle) => return Ok(Some(bundle)),
-            Err(RemoteFetchError::Denylisted(hit)) => {
-                return Err(gateway_policy_violation_response(
-                    PolicyViolation::Denylisted(Box::new(hit)),
-                    None,
-                ));
-            }
-            Err(RemoteFetchError::Source(err)) => {
+            Err(RemoteFetchError::Compliance(response)) => return Err(response),
+            Err(RemoteFetchError::Source(_)) => {
                 warn!(
-                    provider_id_hex = %source.provider_id_hex,
-                    manifest_digest_hex = %source.manifest_digest_hex,
-                    %err,
+                    reason = "remote_fetch_failed",
                     "failed to hydrate CID gateway cache from remote provider"
                 );
             }
@@ -22441,14 +22361,6 @@ fn cache_remote_site_bundle(
     state: &SharedAppState,
     bundle: RemoteSiteBundle,
 ) -> Result<StoredManifest, Response> {
-    if let Some(hit) = remote_manifest_denylist_hit(state, &bundle.manifest)
-        .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?
-    {
-        return Err(gateway_policy_violation_response(
-            PolicyViolation::Denylisted(Box::new(hit)),
-            None,
-        ));
-    }
     let manifest_digest: [u8; 32] = bundle
         .manifest
         .digest()
@@ -22564,7 +22476,7 @@ async fn resolve_site_manifest_by_cid(
     cid: &str,
 ) -> Result<StoredManifest, Response> {
     let stored = resolve_site_manifest_by_cid_unchecked(state, cid).await?;
-    enforce_site_denylist(state, &stored)?;
+    enforce_governed_site_compliance(state, &stored)?;
     Ok(stored)
 }
 
@@ -22955,7 +22867,10 @@ mod remote_hydration_security_tests {
     }
 }
 
-fn enforce_site_denylist(state: &SharedAppState, stored: &StoredManifest) -> Result<(), Response> {
+fn enforce_governed_site_compliance(
+    state: &SharedAppState,
+    stored: &StoredManifest,
+) -> Result<(), Response> {
     let provider_id = authoritative_sorafs_provider_id(state)?;
     enforce_governed_gateway_compliance_for_subjects(
         state,
@@ -22963,24 +22878,7 @@ fn enforce_site_denylist(state: &SharedAppState, stored: &StoredManifest) -> Res
         stored.manifest_cid(),
         provider_id,
         None,
-    )?;
-
-    let Some(denylist) = &state.sorafs_gateway_denylist else {
-        return Ok(());
-    };
-    let now = SystemTime::now();
-    let hit = denylist
-        .check_manifest_digest(stored.manifest_digest(), now)
-        .or_else(|| denylist.check_cid(stored.manifest_cid(), now));
-
-    if let Some(hit) = hit {
-        return Err(gateway_policy_violation_response(
-            PolicyViolation::Denylisted(Box::new(hit)),
-            None,
-        ));
-    }
-
-    Ok(())
+    )
 }
 
 fn file_listing_entry_json(file: &StoredFileRecord) -> Value {
@@ -23005,113 +22903,6 @@ fn bounded_file_listing_json(stored: &StoredManifest, limit: usize) -> (Vec<Valu
         .map(file_listing_entry_json)
         .collect();
     (files, file_count, file_count > limit)
-}
-
-fn optional_str_json(value: Option<&str>) -> Value {
-    value.map_or(Value::Null, Value::from)
-}
-
-fn optional_time_json(value: Option<SystemTime>) -> Value {
-    value
-        .and_then(format_system_time)
-        .map_or(Value::Null, Value::from)
-}
-
-fn denylist_policy_tier_label(tier: DenylistPolicyTier) -> &'static str {
-    match tier {
-        DenylistPolicyTier::Standard => "standard",
-        DenylistPolicyTier::Emergency => "emergency",
-        DenylistPolicyTier::Permanent => "permanent",
-    }
-}
-
-fn cid_lookup_moderation_match_json(match_kind: &'static str, hit: &DenylistHit) -> Value {
-    let entry = hit.entry();
-    let scope = if entry.is_governance_backed() {
-        "global"
-    } else {
-        "local"
-    };
-
-    json_object(vec![
-        json_entry("scope", Value::from(scope)),
-        json_entry("match_kind", Value::from(match_kind)),
-        json_entry("pack_id", optional_str_json(entry.source_pack_id())),
-        json_entry(
-            "policy_tier",
-            Value::from(denylist_policy_tier_label(entry.policy_tier())),
-        ),
-        json_entry("reason", optional_str_json(entry.reason())),
-        json_entry("jurisdiction", optional_str_json(entry.jurisdiction())),
-        json_entry("issued_at", optional_time_json(entry.issued_at())),
-        json_entry("expires_at", optional_time_json(entry.expires_at())),
-        json_entry("review_due_at", optional_time_json(entry.review_deadline())),
-        json_entry(
-            "issued_by_proposal_id",
-            optional_str_json(entry.issued_by_proposal_id()),
-        ),
-        json_entry(
-            "review_reference",
-            optional_str_json(entry.review_reference()),
-        ),
-        json_entry(
-            "governance_reference",
-            optional_str_json(entry.governance_reference()),
-        ),
-        json_entry(
-            "pack_manifest_cid",
-            optional_str_json(entry.source_pack_manifest_cid()),
-        ),
-        json_entry(
-            "merkle_root",
-            optional_str_json(entry.source_pack_merkle_root()),
-        ),
-    ])
-}
-
-fn cid_lookup_moderation_json(state: &SharedAppState, stored: &StoredManifest) -> Value {
-    let Some(denylist) = &state.sorafs_gateway_denylist else {
-        return Value::Null;
-    };
-
-    let now = SystemTime::now();
-    let mut has_local = false;
-    let mut has_global = false;
-    let mut matches = Vec::new();
-
-    if let Some(hit) = denylist.check_manifest_digest(stored.manifest_digest(), now) {
-        if hit.entry().is_governance_backed() {
-            has_global = true;
-        } else {
-            has_local = true;
-        }
-        matches.push(cid_lookup_moderation_match_json("manifest_digest", &hit));
-    }
-
-    if let Some(hit) = denylist.check_cid(stored.manifest_cid(), now) {
-        if hit.entry().is_governance_backed() {
-            has_global = true;
-        } else {
-            has_local = true;
-        }
-        matches.push(cid_lookup_moderation_match_json("cid", &hit));
-    }
-
-    let status = if matches.is_empty() {
-        "clear"
-    } else if has_local && has_global {
-        "mixed_blocked"
-    } else if has_global {
-        "global_blocked"
-    } else {
-        "local_blocked"
-    };
-
-    json_object(vec![
-        json_entry("status", Value::from(status)),
-        json_entry("public_links_enabled", Value::from(matches.is_empty())),
-        json_entry("matches", Value::Array(matches)),
-    ])
 }
 
 fn attach_cid_gateway_headers(response: &mut Response, stored: &StoredManifest) {
@@ -23631,7 +23422,6 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
         json_entry("limit", Value::from(limit as u64)),
         json_entry("truncated_files", Value::from(truncated_files)),
         json_entry("files", Value::Array(files)),
-        json_entry("moderation", cid_lookup_moderation_json(&state, &stored)),
     ]);
     JsonBody(value).into_response()
 }
@@ -23693,244 +23483,6 @@ pub(crate) async fn handle_get_sorafs_cid_path(
         attach_cid_gateway_headers(&mut response, &stored);
     }
     response
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_get_sorafs_denylist_catalog(
-    State(state): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> Response {
-    let query = match DenylistCatalogReadbackQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let Some(catalog) = &state.sorafs_gateway_denylist_catalog else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-
-    let opt_out_pack_count = catalog.opt_out_packs.len();
-    let opt_out_packs = catalog
-        .opt_out_packs
-        .iter()
-        .take(limit)
-        .cloned()
-        .map(Value::String)
-        .collect::<Vec<_>>();
-    let extra_pack_count = catalog.extra_packs.len();
-    let extra_packs = catalog
-        .extra_packs
-        .iter()
-        .take(limit)
-        .cloned()
-        .map(Value::String)
-        .collect::<Vec<_>>();
-    let pack_count = catalog.packs.len();
-    let packs = catalog
-        .packs
-        .iter()
-        .take(limit)
-        .map(|pack| {
-            json_object(vec![
-                json_entry("pack_id", Value::from(pack.pack_id.clone())),
-                json_entry(
-                    "version",
-                    pack.version
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry("default_enabled", Value::from(pack.default_enabled)),
-                json_entry("active", Value::from(pack.active)),
-                json_entry(
-                    "policy_tier",
-                    pack.policy_tier
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "manifest_cid",
-                    pack.manifest_cid
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "merkle_root",
-                    pack.merkle_root
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "issued_by_proposal_id",
-                    pack.issued_by_proposal_id
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "review_reference",
-                    pack.review_reference
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "jurisdiction",
-                    pack.jurisdiction
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "issued_at",
-                    pack.issued_at
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry(
-                    "expires_at",
-                    pack.expires_at
-                        .clone()
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                ),
-                json_entry("entry_count", Value::from(pack.entry_count as u64)),
-            ])
-        })
-        .collect::<Vec<_>>();
-
-    let value = json_object(vec![
-        json_entry("version", Value::from(catalog.version as u64)),
-        json_entry(
-            "jurisdiction",
-            catalog
-                .jurisdiction
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("opt_out_pack_count", Value::from(opt_out_pack_count as u64)),
-        json_entry(
-            "returned_opt_out_pack_count",
-            Value::from(opt_out_packs.len() as u64),
-        ),
-        json_entry(
-            "truncated_opt_out_packs",
-            Value::from(opt_out_pack_count > limit),
-        ),
-        json_entry("opt_out_packs", Value::Array(opt_out_packs)),
-        json_entry("extra_pack_count", Value::from(extra_pack_count as u64)),
-        json_entry(
-            "returned_extra_pack_count",
-            Value::from(extra_packs.len() as u64),
-        ),
-        json_entry(
-            "truncated_extra_packs",
-            Value::from(extra_pack_count > limit),
-        ),
-        json_entry("extra_packs", Value::Array(extra_packs)),
-        json_entry("pack_count", Value::from(pack_count as u64)),
-        json_entry("returned_pack_count", Value::from(packs.len() as u64)),
-        json_entry("truncated_packs", Value::from(pack_count > limit)),
-        json_entry("packs", Value::Array(packs)),
-    ]);
-
-    JsonBody(value).into_response()
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_get_sorafs_denylist_pack(
-    State(state): State<SharedAppState>,
-    Path(pack_id): Path<String>,
-) -> Response {
-    let Some(catalog) = &state.sorafs_gateway_denylist_catalog else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let Some(pack) = catalog
-        .packs
-        .iter()
-        .find(|entry| entry.pack_id.eq_ignore_ascii_case(pack_id.trim()))
-    else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-
-    let value = json_object(vec![
-        json_entry("pack_id", Value::from(pack.pack_id.clone())),
-        json_entry(
-            "version",
-            pack.version
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry("default_enabled", Value::from(pack.default_enabled)),
-        json_entry("active", Value::from(pack.active)),
-        json_entry(
-            "policy_tier",
-            pack.policy_tier
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "manifest_cid",
-            pack.manifest_cid
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "merkle_root",
-            pack.merkle_root
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "issued_by_proposal_id",
-            pack.issued_by_proposal_id
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "review_reference",
-            pack.review_reference
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "jurisdiction",
-            pack.jurisdiction
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "issued_at",
-            pack.issued_at
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "expires_at",
-            pack.expires_at
-                .clone()
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry("entry_count", Value::from(pack.entry_count as u64)),
-        json_entry("source_path", Value::from(pack.path.display().to_string())),
-    ]);
-
-    JsonBody(value).into_response()
 }
 
 #[cfg(feature = "app_api")]
@@ -24022,21 +23574,6 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         None,
     ) {
         return response;
-    }
-
-    if let Some(denylist) = &state.sorafs_gateway_denylist {
-        let now = SystemTime::now();
-        if let Some(hit) = manifest
-            .digest()
-            .ok()
-            .and_then(|digest| denylist.check_manifest_digest(digest.as_bytes(), now))
-            .or_else(|| denylist.check_cid(&manifest.root_cid, now))
-        {
-            return gateway_policy_violation_response(
-                PolicyViolation::Denylisted(Box::new(hit)),
-                Some(&provider_id),
-            );
-        }
     }
 
     let profile = match chunk_profile_for_manifest(&manifest) {
@@ -25098,42 +24635,6 @@ fn parse_gateway_region(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-fn parse_perceptual_fingerprint_header(
-    headers: &HeaderMap,
-    name: &str,
-    label: &str,
-) -> Result<Option<[u8; 32]>, Response> {
-    let Some(value) = headers.get(name) else {
-        return Ok(None);
-    };
-    let raw = value.to_str().map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{label} header must be valid ASCII"),
-        )
-    })?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{label} header must not be empty"),
-        ));
-    }
-    let decoded = hex::decode(trimmed).map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{label} header must be 32-byte hex"),
-        )
-    })?;
-    let bytes: [u8; 32] = decoded.try_into().map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{label} header must be 32-byte hex"),
-        )
-    })?;
-    Ok(Some(bytes))
-}
-
 #[derive(Debug)]
 struct ManifestResolution {
     manifest_id: String,
@@ -25324,7 +24825,10 @@ fn enforce_gateway_policy_for_request(
     provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
 ) -> Result<(), Response> {
-    let provider_id = provider_id.ok_or_else(gateway_compliance_unavailable_response)?;
+    let provider_id = provider_id.ok_or_else(|| {
+        record_gateway_compliance_serving_failure(state, "unavailable");
+        gateway_compliance_unavailable_response()
+    })?;
     let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
     let now = SystemTime::now();
     let monotonic_now = Instant::now();
@@ -25366,22 +24870,6 @@ fn enforce_gateway_policy_for_request(
         context = context.with_moderation_slugs(moderation_slugs);
     }
 
-    let perceptual_hash = parse_perceptual_fingerprint_header(
-        headers,
-        HEADER_SORA_PERCEPTUAL_HASH,
-        "x-sorafs-perceptual-hash",
-    )?;
-    let perceptual_embedding = parse_perceptual_fingerprint_header(
-        headers,
-        HEADER_SORA_PERCEPTUAL_EMBEDDING,
-        "x-sorafs-perceptual-embedding",
-    )?;
-    if perceptual_hash.is_some() || perceptual_embedding.is_some() {
-        let observation =
-            PerceptualObservation::new(perceptual_hash.as_ref(), perceptual_embedding.as_ref());
-        context = context.with_perceptual_observation(observation);
-    }
-
     context = context.with_provider_id(&provider_id);
 
     match state.evaluate_gateway_policy(context) {
@@ -25394,29 +24882,25 @@ fn enforce_gateway_policy_for_request(
         ),
         Err(violation) => {
             let (policy_reason, policy_detail) = violation.telemetry_labels();
-            let provider_hex = hex::encode(provider_id);
             warn!(
-                ?violation,
-                client = ?remote,
                 policy_reason,
-                policy_detail,
-                provider_id_hex = provider_hex,
-                "gateway policy denied request"
+                policy_detail, "gateway policy denied request"
             );
-            Err(gateway_policy_violation_response(
-                violation,
-                Some(&provider_id),
-            ))
+            Err(gateway_policy_violation_response(violation))
         }
     }
 }
 
 fn authoritative_sorafs_provider_id(state: &SharedAppState) -> Result<[u8; 32], Response> {
-    state
-        .sorafs_node
-        .capacity_usage()
-        .provider_id
-        .ok_or_else(gateway_compliance_unavailable_response)
+    if let Some(provider_id) = state.sorafs_node.capacity_usage().provider_id {
+        return Ok(provider_id);
+    }
+    #[cfg(test)]
+    if let Some(provider_id) = state.sorafs_gateway_test_provider_id {
+        return Ok(provider_id);
+    }
+    record_gateway_compliance_serving_failure(state, "unavailable");
+    Err(gateway_compliance_unavailable_response())
 }
 
 fn enforce_governed_gateway_compliance_for_subjects(
@@ -25429,11 +24913,15 @@ fn enforce_governed_gateway_compliance_for_subjects(
     let controller = state
         .sorafs_gateway_compliance_controller
         .as_ref()
-        .ok_or_else(gateway_compliance_unavailable_response)?;
+        .ok_or_else(|| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?;
     let observed_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| {
             warn!("gateway compliance serving clock is before the Unix epoch");
+            record_gateway_compliance_serving_failure(state, "unavailable");
             gateway_compliance_unavailable_response()
         })?
         .as_secs();
@@ -25481,10 +24969,16 @@ fn enforce_governed_gateway_compliance_for_cid(
     let controller = state
         .sorafs_gateway_compliance_controller
         .as_ref()
-        .ok_or_else(gateway_compliance_unavailable_response)?;
+        .ok_or_else(|| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?;
     let observed_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| gateway_compliance_unavailable_response())?
+        .map_err(|_| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?
         .as_secs();
     let cid = canonical_lower_base32_cid(cid_bytes);
     evaluate_governed_gateway_compliance_subject(
@@ -25503,13 +24997,81 @@ fn evaluate_governed_gateway_compliance_subject(
     kind: GatewayComplianceSubjectKindV1,
     subject: &str,
 ) -> Result<(), Response> {
-    controller
-        .evaluate_serving(kind, subject, observed_at_unix)
-        .map_err(|_| {
+    match controller.evaluate_serving(kind, subject, observed_at_unix) {
+        Ok(decision) => {
+            let subject_kind = gateway_compliance_subject_kind_label(kind);
+            let disposition = gateway_compliance_disposition_label(decision.disposition);
+            let source = gateway_compliance_decision_source_label(decision.source);
+            state.telemetry.with_metrics(|metrics| {
+                metrics.record_sorafs_gateway_compliance_serving_decision(
+                    subject_kind,
+                    disposition,
+                    source,
+                );
+                metrics.record_sorafs_gateway_compliance_serving_catalog(
+                    Some(decision.catalog_sequence),
+                    Some(decision.catalog_valid_until_unix),
+                    true,
+                );
+            });
+            gateway_compliance_decision_response(state, decision)
+        }
+        Err(error) => {
+            record_gateway_compliance_serving_failure(
+                state,
+                gateway_compliance_serving_error_class(&error),
+            );
             warn!("governed gateway compliance serving evaluation failed closed");
-            gateway_compliance_unavailable_response()
-        })
-        .and_then(|decision| gateway_compliance_decision_response(state, decision))
+            Err(gateway_compliance_unavailable_response())
+        }
+    }
+}
+
+fn gateway_compliance_subject_kind_label(kind: GatewayComplianceSubjectKindV1) -> &'static str {
+    match kind {
+        GatewayComplianceSubjectKindV1::Provider => "provider",
+        GatewayComplianceSubjectKindV1::ManifestDigest => "manifest_digest",
+        GatewayComplianceSubjectKindV1::Cid => "cid",
+        GatewayComplianceSubjectKindV1::Url => "url",
+    }
+}
+
+fn gateway_compliance_disposition_label(disposition: GatewayComplianceDisposition) -> &'static str {
+    match disposition {
+        GatewayComplianceDisposition::Allow => "allow",
+        GatewayComplianceDisposition::Deny => "deny",
+    }
+}
+
+fn gateway_compliance_decision_source_label(
+    source: GatewayComplianceDecisionSource,
+) -> &'static str {
+    match source {
+        GatewayComplianceDecisionSource::NoMatch => "no_match",
+        GatewayComplianceDecisionSource::Baseline => "baseline",
+        GatewayComplianceDecisionSource::AcceptedAppeal => "accepted_appeal",
+        GatewayComplianceDecisionSource::LegalSafetyHold => "legal_safety_hold",
+    }
+}
+
+fn gateway_compliance_serving_error_class(error: &GatewayComplianceError) -> &'static str {
+    match error {
+        GatewayComplianceError::CatalogNotFresh => "expired_catalog",
+        GatewayComplianceError::NoServingCatalog => "unavailable",
+        GatewayComplianceError::Persistence(_)
+        | GatewayComplianceError::InvalidCheckpoint(_)
+        | GatewayComplianceError::LeaseHeld
+        | GatewayComplianceError::CheckpointConflict
+        | GatewayComplianceError::StatePoisoned => "persistence",
+        _ => "internal",
+    }
+}
+
+fn record_gateway_compliance_serving_failure(state: &SharedAppState, class: &'static str) {
+    state.telemetry.with_metrics(|metrics| {
+        metrics.mark_sorafs_gateway_compliance_unready();
+        metrics.record_sorafs_gateway_compliance_failure("serving", class);
+    });
 }
 
 fn gateway_compliance_decision_response(
@@ -25531,10 +25093,7 @@ fn gateway_compliance_decision_response(
     });
     #[cfg(not(feature = "telemetry"))]
     let _ = state;
-    let catalog_digest_hex = decision
-        .catalog_digest
-        .map(hex::encode)
-        .unwrap_or_default();
+    let catalog_digest_hex = decision.catalog_digest.map(hex::encode).unwrap_or_default();
     let body = json_object(vec![
         json_entry("error", Value::from("gateway_compliance_denied")),
         json_entry("source", Value::from(source)),
@@ -25592,15 +25151,7 @@ fn canonical_lower_base32_cid(bytes: &[u8]) -> String {
     encoded
 }
 
-fn format_system_time(value: SystemTime) -> Option<String> {
-    let datetime = OffsetDateTime::from(value).replace_nanosecond(0).ok()?;
-    datetime.format(&Rfc3339).ok()
-}
-
-fn gateway_policy_violation_response(
-    violation: PolicyViolation,
-    provider_id: Option<&[u8; 32]>,
-) -> Response {
+fn gateway_policy_violation_response(violation: PolicyViolation) -> Response {
     match violation {
         PolicyViolation::ManifestEnvelopeMissing => {
             let body = json_object(vec![
@@ -25642,120 +25193,6 @@ fn gateway_policy_violation_response(
                 ),
             ]);
             (StatusCode::PRECONDITION_FAILED, JsonBody(body)).into_response()
-        }
-        PolicyViolation::Denylisted(hit) => {
-            let hit = hit.as_ref();
-            let kind_label = match hit.kind() {
-                DenylistKind::Provider(_) => "provider",
-                DenylistKind::ManifestDigest(_) => "manifest",
-                DenylistKind::Cid(_) => "cid",
-                DenylistKind::Url(_) => "url",
-                DenylistKind::AccountId(_) => "account_id",
-                DenylistKind::AccountAlias(_) => "account_alias",
-                DenylistKind::PerceptualFamily { .. } => "perceptual_family",
-            };
-
-            let mut entries = vec![
-                json_entry("error", Value::from("denylisted")),
-                json_entry("kind", Value::from(kind_label)),
-            ];
-
-            match hit.kind() {
-                DenylistKind::Provider(id) | DenylistKind::ManifestDigest(id) => {
-                    entries.push(json_entry("value_hex", Value::from(hex::encode(id))));
-                }
-                DenylistKind::Cid(cid) => {
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(cid);
-                    entries.push(json_entry("cid_b64", Value::from(encoded)));
-                }
-                DenylistKind::Url(url) => {
-                    entries.push(json_entry("url", Value::from(url.clone())));
-                }
-                DenylistKind::AccountId(account_id) => {
-                    entries.push(json_entry("account_id", Value::from(account_id.clone())));
-                }
-                DenylistKind::AccountAlias(alias) => {
-                    entries.push(json_entry("account_alias", Value::from(alias.clone())));
-                }
-                DenylistKind::PerceptualFamily {
-                    family_id,
-                    variant_id,
-                } => {
-                    entries.push(json_entry(
-                        "family_id_hex",
-                        Value::from(hex::encode(family_id)),
-                    ));
-                    if let Some(variant) = variant_id {
-                        entries.push(json_entry(
-                            "variant_id_hex",
-                            Value::from(hex::encode(variant)),
-                        ));
-                    }
-                    if let Some(perceptual) = hit.perceptual_match() {
-                        match perceptual.basis() {
-                            PerceptualMatchBasis::Hash {
-                                expected,
-                                hamming_distance,
-                                radius,
-                                ..
-                            } => {
-                                entries.push(json_entry(
-                                    "perceptual_hash_hex",
-                                    Value::from(hex::encode(expected)),
-                                ));
-                                entries.push(json_entry(
-                                    "perceptual_hamming_distance",
-                                    Value::from(*hamming_distance as u64),
-                                ));
-                                entries.push(json_entry(
-                                    "perceptual_hamming_radius",
-                                    Value::from(*radius as u64),
-                                ));
-                            }
-                            PerceptualMatchBasis::Embedding { expected, .. } => {
-                                entries.push(json_entry(
-                                    "perceptual_embedding_hex",
-                                    Value::from(hex::encode(expected)),
-                                ));
-                            }
-                        }
-                        if let Some(attack) = perceptual.attack_vector() {
-                            entries
-                                .push(json_entry("attack_vector", Value::from(attack.to_string())));
-                        }
-                    }
-                }
-            }
-            if let Some(provider) = provider_id {
-                entries.push(json_entry(
-                    "provider_id_hex",
-                    Value::from(hex::encode(provider)),
-                ));
-            }
-
-            if let Some(alias) = hit.entry().alias() {
-                if !matches!(hit.kind(), DenylistKind::AccountAlias(_)) {
-                    entries.push(json_entry("alias", Value::from(alias.to_string())));
-                }
-            }
-
-            if let Some(jurisdiction) = hit.entry().jurisdiction() {
-                entries.push(json_entry(
-                    "jurisdiction",
-                    Value::from(jurisdiction.to_string()),
-                ));
-            }
-            if let Some(reason) = hit.entry().reason() {
-                entries.push(json_entry("reason", Value::from(reason.to_string())));
-            }
-            if let Some(expires_at) = hit.entry().expires_at() {
-                if let Some(formatted) = format_system_time(expires_at) {
-                    entries.push(json_entry("expires_at", Value::from(formatted)));
-                }
-            }
-
-            let body = json_object(entries);
-            (StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS, JsonBody(body)).into_response()
         }
         PolicyViolation::RateLimited(error) => {
             let mut headers = HeaderMap::new();
@@ -25916,9 +25353,6 @@ mod gateway_policy_violation_tests {
     use tokio::runtime::Runtime;
 
     use super::*;
-    use crate::sorafs::gateway::{
-        DenylistEntryBuilder, DenylistHit, DenylistKind, PerceptualMatch,
-    };
 
     fn response_json(response: Response) -> Value {
         let runtime = Runtime::new().expect("tokio runtime");
@@ -25941,9 +25375,48 @@ mod gateway_policy_violation_tests {
     }
 
     #[test]
+    fn governed_compliance_telemetry_uses_closed_payload_free_labels() {
+        assert_eq!(
+            gateway_compliance_subject_kind_label(GatewayComplianceSubjectKindV1::ManifestDigest),
+            "manifest_digest"
+        );
+        assert_eq!(
+            gateway_compliance_disposition_label(GatewayComplianceDisposition::Deny),
+            "deny"
+        );
+        assert_eq!(
+            gateway_compliance_decision_source_label(
+                GatewayComplianceDecisionSource::LegalSafetyHold
+            ),
+            "legal_safety_hold"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::CatalogNotFresh),
+            "expired_catalog"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::NoServingCatalog),
+            "unavailable"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::LeaseHeld),
+            "persistence"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::CheckpointConflict),
+            "persistence"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::InvalidCatalog(
+                "payload data must not become a label".to_owned()
+            )),
+            "internal"
+        );
+    }
+
+    #[test]
     fn policy_status_codes_are_normalized() {
-        let response =
-            gateway_policy_violation_response(PolicyViolation::ManifestEnvelopeMissing, None);
+        let response = gateway_policy_violation_response(PolicyViolation::ManifestEnvelopeMissing);
         let status = response.status();
         let body = response_json(response);
         assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
@@ -25952,7 +25425,7 @@ mod gateway_policy_violation_tests {
             Some("manifest_envelope_required")
         );
 
-        let response = gateway_policy_violation_response(PolicyViolation::MissingProviderId, None);
+        let response = gateway_policy_violation_response(PolicyViolation::MissingProviderId);
         let status = response.status();
         let body = response_json(response);
         assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
@@ -25961,31 +25434,13 @@ mod gateway_policy_violation_tests {
             Some("provider_id_missing")
         );
 
-        let response =
-            gateway_policy_violation_response(PolicyViolation::AdmissionUnavailable, None);
+        let response = gateway_policy_violation_response(PolicyViolation::AdmissionUnavailable);
         let status = response.status();
         let body = response_json(response);
         assert_eq!(status, StatusCode::PRECONDITION_FAILED);
         assert_eq!(
             body.get("error").and_then(Value::as_str),
             Some("admission_unavailable")
-        );
-
-        let denylisted = DenylistHit::new_for_tests(
-            DenylistKind::Provider([0xAA; 32]),
-            DenylistEntryBuilder::default().build(),
-            None,
-        );
-        let response = gateway_policy_violation_response(
-            PolicyViolation::Denylisted(Box::new(denylisted)),
-            Some(&[0xAA; 32]),
-        );
-        let status = response.status();
-        let body = response_json(response);
-        assert_eq!(status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        assert_eq!(
-            body.get("error").and_then(Value::as_str),
-            Some("denylisted")
         );
     }
 
@@ -26031,96 +25486,15 @@ mod gateway_policy_violation_tests {
 
         check_response(
             "B2",
-            gateway_policy_violation_response(PolicyViolation::ManifestEnvelopeMissing, None),
+            gateway_policy_violation_response(PolicyViolation::ManifestEnvelopeMissing),
             &entries,
         );
         check_response(
             "B5",
-            gateway_policy_violation_response(
-                PolicyViolation::ProviderNotAdmitted {
-                    provider_id: [0xBB; 32],
-                },
-                Some(&[0xBB; 32]),
-            ),
+            gateway_policy_violation_response(PolicyViolation::ProviderNotAdmitted {
+                provider_id: [0xBB; 32],
+            }),
             &entries,
-        );
-        let denylisted = DenylistHit::new_for_tests(
-            DenylistKind::Provider([0xAA; 32]),
-            DenylistEntryBuilder::default().build(),
-            None,
-        );
-        check_response(
-            "D1",
-            gateway_policy_violation_response(
-                PolicyViolation::Denylisted(Box::new(denylisted)),
-                Some(&[0xAA; 32]),
-            ),
-            &entries,
-        );
-    }
-
-    #[test]
-    fn denylisted_perceptual_response_exposes_metadata() {
-        let entry = DenylistEntryBuilder::default()
-            .reason("perceptual block")
-            .build();
-        let family_id = [0x11; 16];
-        let variant_id = [0x22; 16];
-        let canonical_hash = [0xAA; 32];
-        let observed_hash = [0xAB; 32];
-        let perceptual_match =
-            PerceptualMatch::hash(observed_hash, canonical_hash, 3, 6, Some("attack".into()));
-        let hit = DenylistHit::new_for_tests(
-            DenylistKind::PerceptualFamily {
-                family_id,
-                variant_id: Some(variant_id),
-            },
-            entry,
-            Some(perceptual_match),
-        );
-        let response = gateway_policy_violation_response(
-            PolicyViolation::Denylisted(Box::new(hit)),
-            Some(&[0xCC; 32]),
-        );
-        let status = response.status();
-        let body = response_json(response);
-        assert_eq!(status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        assert_eq!(
-            body.get("kind").and_then(Value::as_str),
-            Some("perceptual_family")
-        );
-        let family_hex = hex::encode(family_id);
-        assert_eq!(
-            body.get("family_id_hex").and_then(Value::as_str),
-            Some(family_hex.as_str())
-        );
-        let variant_hex = hex::encode(variant_id);
-        assert_eq!(
-            body.get("variant_id_hex").and_then(Value::as_str),
-            Some(variant_hex.as_str())
-        );
-        let hash_hex = hex::encode(canonical_hash);
-        assert_eq!(
-            body.get("perceptual_hash_hex").and_then(Value::as_str),
-            Some(hash_hex.as_str())
-        );
-        assert_eq!(
-            body.get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(3)
-        );
-        assert_eq!(
-            body.get("perceptual_hamming_radius")
-                .and_then(Value::as_u64),
-            Some(6)
-        );
-        assert_eq!(
-            body.get("attack_vector").and_then(Value::as_str),
-            Some("attack")
-        );
-        assert_eq!(
-            body.get("provider_id_hex").and_then(Value::as_str),
-            Some(hex::encode([0xCC; 32]).as_str())
         );
     }
 
@@ -28937,21 +28311,6 @@ mod app_api_tests {
     }
 
     #[test]
-    fn denylist_catalog_readback_query_parses_limits() {
-        let query = DenylistCatalogReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse denylist catalog readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
-
-        let query = DenylistCatalogReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized denylist catalog query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
-
-        let err = DenylistCatalogReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
     fn storage_metadata_readback_query_parses_limits() {
         let query = StorageMetadataReadbackQuery::parse(Some("limit=2&ignored=true"))
             .expect("parse storage metadata readback query");
@@ -30896,10 +30255,10 @@ mod advert_tests {
     use norito::to_bytes;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use sorafs_manifest::{
-        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv, CapabilityType,
-        CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
-        EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
-        EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
+        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
+        CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
+        EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
+        EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
         PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
         ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
         ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -30909,10 +30268,9 @@ mod advert_tests {
         ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
         ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-        SignatureAlgorithm, SoraFsAppealFinanceAccountFlowV1,
-        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1,
-        build_reputation_snapshot,
+        SignatureAlgorithm, SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
@@ -37107,7 +36465,6 @@ mod advert_tests {
         );
     }
 
-
     async fn post_appeal_finance_report(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -38255,8 +37612,8 @@ mod advert_tests {
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
         builder
-        .with_instructions([instruction])
-        .sign(signer.keypair.private_key())
+            .with_instructions([instruction])
+            .sign(signer.keypair.private_key())
     }
 
     #[test]
@@ -38417,9 +37774,7 @@ mod advert_tests {
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
                 SoraFsModerationBallotContextV1,
             },
-            moderation_ledger::{
-                MODERATION_APPEAL_INTAKE_VERSION_V1, ModerationAppealIntakeV1,
-            },
+            moderation_ledger::{MODERATION_APPEAL_INTAKE_VERSION_V1, ModerationAppealIntakeV1},
         };
 
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
@@ -40688,13 +40043,6 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-
-
-
-
-
-
-
     #[test]
     fn orderbook_websocket_frames_wrap_finalized_typed_events() {
         let (authority, _) = gen_account_in("wonderland");
@@ -40735,7 +40083,6 @@ mod advert_tests {
             Some(9)
         );
     }
-
 
     #[tokio::test]
     async fn reputation_latest_returns_not_found_before_publish() {
@@ -43029,7 +42376,6 @@ mod advert_tests {
             None,
         );
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
 
         let issuer = stream_token_issuer_for_tests(&storage_dir);
@@ -43201,7 +42547,6 @@ mod advert_tests {
             None,
         );
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
 
         let client_id = "gateway-beta".to_string();
@@ -44507,7 +43852,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -44926,7 +44270,7 @@ mod advert_tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
+        assert!(cid_lookup_value.get("moderation").is_none());
 
         let capped_cid_lookup = handle_get_sorafs_cid_lookup(
             State(state.clone()),
@@ -45693,156 +45037,7 @@ mod advert_tests {
                 .map(Vec::len),
             Some(2)
         );
-        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
-    }
-
-    #[tokio::test]
-    async fn cid_lookup_reports_moderation_without_unblocking_gateway_fetches() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-
-        let payload = b"blocked site payload".to_vec();
-        let manifest = manifest_for_payload(0xD9, &payload);
-        let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
-        let content_cid = encode_content_cid(&manifest.root_cid);
-        let local_issued_at = SystemTime::now();
-        let plan =
-            CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
-                .expect("plan");
-        let mut reader = payload.as_slice();
-        inner
-            .sorafs_node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
-        if let Some(denylist) = &inner.sorafs_gateway_denylist {
-            denylist.upsert(
-                crate::sorafs::gateway::DenylistKind::Cid(manifest.root_cid.clone()),
-                crate::sorafs::gateway::DenylistEntryBuilder::default()
-                    .reason("local operator quarantine")
-                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Emergency)
-                    .canon(Some("incident-42"))
-                    .issued_at(local_issued_at)
-                    .expires_at(local_issued_at + Duration::from_secs(600))
-                    .review_deadline(Some(local_issued_at + Duration::from_secs(300)))
-                    .build(),
-            );
-            denylist.upsert(
-                crate::sorafs::gateway::DenylistKind::ManifestDigest(manifest_digest),
-                crate::sorafs::gateway::DenylistEntryBuilder::default()
-                    .reason("governance-backed removal review")
-                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Permanent)
-                    .governance_reference(Some("council-resolution-2026-014"))
-                    .source_pack_id(Some("global-core".to_owned()))
-                    .source_pack_manifest_cid(Some("bafy-pack".to_owned()))
-                    .source_pack_merkle_root(Some("merkle-root".to_owned()))
-                    .issued_by_proposal_id(Some("AC-2026-241".to_owned()))
-                    .review_reference(Some("review-42".to_owned()))
-                    .issued_at(SystemTime::UNIX_EPOCH + Duration::from_secs(900))
-                    .build(),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-        let state = Arc::new(inner);
-
-        let cid_lookup = handle_get_sorafs_cid_lookup(
-            State(state.clone()),
-            Path(content_cid.clone()),
-            axum::extract::RawQuery(None),
-        )
-        .await;
-        assert_eq!(cid_lookup.status(), StatusCode::OK);
-        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
-            .await
-            .expect("read cid lookup body");
-        let cid_lookup_value: Value =
-            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
-        let moderation = cid_lookup_value
-            .get("moderation")
-            .and_then(Value::as_object)
-            .expect("moderation payload");
-        assert_eq!(
-            moderation.get("status").and_then(Value::as_str),
-            Some("mixed_blocked")
-        );
-        assert_eq!(
-            moderation
-                .get("public_links_enabled")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let matches = moderation
-            .get("matches")
-            .and_then(Value::as_array)
-            .expect("moderation matches");
-        assert_eq!(matches.len(), 2);
-
-        let local_match = matches
-            .iter()
-            .find(|entry| entry.get("match_kind").and_then(Value::as_str) == Some("cid"))
-            .expect("local cid match");
-        assert_eq!(
-            local_match.get("scope").and_then(Value::as_str),
-            Some("local")
-        );
-        assert_eq!(
-            local_match.get("policy_tier").and_then(Value::as_str),
-            Some("emergency")
-        );
-        assert!(
-            local_match
-                .get("review_due_at")
-                .and_then(Value::as_str)
-                .is_some()
-        );
-
-        let global_match = matches
-            .iter()
-            .find(|entry| {
-                entry.get("match_kind").and_then(Value::as_str) == Some("manifest_digest")
-            })
-            .expect("global manifest match");
-        assert_eq!(
-            global_match.get("scope").and_then(Value::as_str),
-            Some("global")
-        );
-        assert_eq!(
-            global_match.get("pack_id").and_then(Value::as_str),
-            Some("global-core")
-        );
-        assert_eq!(
-            global_match
-                .get("issued_by_proposal_id")
-                .and_then(Value::as_str),
-            Some("AC-2026-241")
-        );
-        assert_eq!(
-            global_match.get("review_reference").and_then(Value::as_str),
-            Some("review-42")
-        );
-
-        let cid_root = handle_get_sorafs_cid_root(
-            State(state),
-            HeaderMap::new(),
-            format!("/sorafs/cid/{content_cid}")
-                .parse::<Uri>()
-                .expect("cid root uri"),
-            Path(content_cid),
-        )
-        .await;
-        assert_eq!(cid_root.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+        assert!(cid_lookup_value.get("moderation").is_none());
     }
 
     #[tokio::test]
@@ -46038,7 +45233,12 @@ mod advert_tests {
         .await
         .unwrap_or_else(|err| match err {
             RemoteFetchError::Source(err) => panic!("verified transport fetch failed: {err}"),
-            RemoteFetchError::Denylisted(_) => panic!("fixture unexpectedly denylisted"),
+            RemoteFetchError::Compliance(response) => {
+                panic!(
+                    "fixture unexpectedly denied by governed compliance: {}",
+                    response.status()
+                )
+            }
         });
         let stored = cache_remote_site_bundle(&state, bundle).expect("cache verified bundle");
         assert_eq!(stored.manifest_digest(), &manifest_digest);
@@ -46214,308 +45414,6 @@ mod advert_tests {
         );
 
         remote_server.abort();
-    }
-
-    #[tokio::test]
-    async fn storage_pin_rejects_denylisted_cid() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
-        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
-        if let Some(denylist) = &inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("blocked test payload")
-                .build();
-            denylist.upsert(
-                crate::sorafs::gateway::DenylistKind::Cid(vec![0xAA; 16]),
-                metadata,
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-        let state = Arc::new(inner);
-
-        let payload = b"denylisted site payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical denylist fixture PoR root"),
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
-            .build()
-            .expect("manifest");
-        let request = StoragePinRequestDto {
-            manifest_b64: BASE64_STANDARD
-                .encode(norito::to_bytes(&manifest).expect("manifest bytes")),
-            payload_b64: BASE64_STANDARD.encode(payload),
-            ..Default::default()
-        };
-        seed_paid_pin_record_for_payload(&state, &manifest, payload);
-
-        let response = handle_post_sorafs_storage_pin(
-            State(state),
-            HeaderMap::new(),
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8111))),
-            JsonOnly(request),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-    }
-
-    #[tokio::test]
-    async fn denylist_catalog_endpoints_report_active_packs() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let tempdir = TempDir::new().expect("tempdir");
-        let core_path = tempdir.path().join("global-core.json");
-        let emergency_path = tempdir.path().join("global-emergency.json");
-        let catalog_path = tempdir.path().join("catalog.json");
-
-        fs::write(
-            &core_path,
-            r#"[
-  {
-    "kind": "cid",
-    "cid_utf8": "bafycore",
-    "reason": "core"
-  }
-]"#,
-        )
-        .expect("write core denylist pack");
-        fs::write(
-            &emergency_path,
-            r#"[
-  {
-    "kind": "cid",
-    "cid_utf8": "bafyemergency",
-    "reason": "emergency"
-  }
-]"#,
-        )
-        .expect("write emergency denylist pack");
-        fs::write(
-            &catalog_path,
-            r#"{
-  "version": 1,
-  "packs": [
-    {
-      "pack_id": "global-core",
-      "path": "global-core.json",
-      "default_enabled": true,
-      "policy_tier": "standard",
-      "manifest_cid": "bafycorepack"
-    },
-    {
-      "pack_id": "global-emergency",
-      "path": "global-emergency.json",
-      "default_enabled": true,
-      "policy_tier": "emergency",
-      "manifest_cid": "bafyemergencypack"
-    }
-  ]
-}"#,
-        )
-        .expect("write denylist catalog");
-
-        inner.sorafs_gateway_config.denylist.catalog_path = Some(catalog_path);
-        inner.sorafs_gateway_config.denylist.opt_out_packs = vec!["global-emergency".to_owned()];
-        inner.sorafs_gateway_config.denylist.extra_packs =
-            vec!["global-override".to_owned(), "regional-override".to_owned()];
-
-        let components = build_sorafs_gateway_security(
-            &inner.sorafs_gateway_config,
-            inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        inner.sorafs_gateway_policy = Some(components.policy.clone());
-        inner.sorafs_gateway_denylist = Some(components.denylist.clone());
-        inner.sorafs_gateway_denylist_catalog = components.denylist_catalog.clone();
-        inner.sorafs_gateway_tls_state = Some(components.tls_state.clone());
-        let state = Arc::new(inner);
-
-        let catalog_response =
-            handle_get_sorafs_denylist_catalog(State(state.clone()), axum::extract::RawQuery(None))
-                .await;
-        assert_eq!(catalog_response.status(), StatusCode::OK);
-        let catalog_body = body::to_bytes(catalog_response.into_body(), usize::MAX)
-            .await
-            .expect("read catalog body");
-        let catalog_value: Value =
-            norito::json::from_slice(&catalog_body).expect("decode catalog response");
-        assert_eq!(
-            catalog_value.get("limit").and_then(Value::as_u64),
-            Some(DEFAULT_LIST_LIMIT as u64)
-        );
-        assert_eq!(
-            catalog_value.get("pack_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            catalog_value
-                .get("returned_pack_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            catalog_value
-                .get("truncated_packs")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let packs = catalog_value
-            .get("packs")
-            .and_then(Value::as_array)
-            .expect("packs array");
-        assert_eq!(packs.len(), 2);
-        assert_eq!(
-            catalog_value
-                .get("opt_out_pack_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            catalog_value
-                .get("returned_opt_out_pack_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            catalog_value
-                .get("opt_out_packs")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            catalog_value
-                .get("extra_pack_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            catalog_value
-                .get("returned_extra_pack_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            catalog_value
-                .get("extra_packs")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-        assert_eq!(
-            packs[0].get("pack_id").and_then(Value::as_str),
-            Some("global-core")
-        );
-        assert_eq!(packs[0].get("active").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            packs[1].get("pack_id").and_then(Value::as_str),
-            Some("global-emergency")
-        );
-        assert_eq!(packs[1].get("active").and_then(Value::as_bool), Some(false));
-
-        let capped_response = handle_get_sorafs_denylist_catalog(
-            State(state.clone()),
-            axum::extract::RawQuery(Some("limit=1".to_owned())),
-        )
-        .await;
-        assert_eq!(capped_response.status(), StatusCode::OK);
-        let capped_body = body::to_bytes(capped_response.into_body(), usize::MAX)
-            .await
-            .expect("read capped catalog body");
-        let capped_value: Value =
-            norito::json::from_slice(&capped_body).expect("decode capped catalog response");
-        assert_eq!(capped_value.get("limit").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            capped_value.get("pack_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        assert_eq!(
-            capped_value
-                .get("returned_pack_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_value.get("truncated_packs").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            capped_value
-                .get("packs")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            capped_value
-                .get("returned_opt_out_pack_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_value
-                .get("truncated_opt_out_packs")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            capped_value
-                .get("returned_extra_pack_count")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            capped_value
-                .get("truncated_extra_packs")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let pack_response =
-            handle_get_sorafs_denylist_pack(State(state), Path("global-core".to_owned())).await;
-        assert_eq!(pack_response.status(), StatusCode::OK);
-        let pack_body = body::to_bytes(pack_response.into_body(), usize::MAX)
-            .await
-            .expect("read pack body");
-        let pack_value: Value = norito::json::from_slice(&pack_body).expect("decode pack response");
-        assert_eq!(
-            pack_value.get("pack_id").and_then(Value::as_str),
-            Some("global-core")
-        );
-        assert_eq!(
-            pack_value.get("active").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            pack_value.get("manifest_cid").and_then(Value::as_str),
-            Some("bafycorepack")
-        );
     }
 
     #[tokio::test]
@@ -46818,7 +45716,6 @@ mod advert_tests {
                 None,
             );
             app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-            app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
             app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
             context.app = Arc::new(app_inner);
         }
@@ -46899,7 +45796,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -46948,7 +45844,6 @@ mod advert_tests {
             None,
         );
         inner_after.sorafs_gateway_policy = Some(Arc::clone(&components_after.policy));
-        inner_after.sorafs_gateway_denylist = Some(Arc::clone(&components_after.denylist));
         inner_after.sorafs_gateway_tls_state = Some(Arc::clone(&components_after.tls_state));
         let state_after = Arc::new(inner_after);
 
@@ -48664,7 +47559,6 @@ mod advert_tests {
             None,
         );
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         context.app = Arc::new(app_inner);
 
@@ -48731,7 +47625,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -48821,11 +47714,12 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_fetch_requires_provider_id_when_gar_enforced() {
+    async fn storage_fetch_fails_closed_without_authoritative_provider_identity() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
+        inner.sorafs_gateway_test_provider_id = None;
         inner.sorafs_gateway_config.require_manifest_envelope = false;
         inner.sorafs_gateway_config.enforce_admission = true;
         inner.sorafs_gateway_config.enforce_capabilities = true;
@@ -48837,7 +47731,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -48900,14 +47793,14 @@ mod advert_tests {
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect response body");
         let value: Value = norito::json::from_slice(&body_bytes).expect("decode provider response");
         assert_eq!(
             value.get("error"),
-            Some(&Value::String("provider_id_missing".into()))
+            Some(&Value::String("gateway_compliance_unavailable".into()))
         );
     }
 
@@ -48948,7 +47841,6 @@ mod advert_tests {
             None,
         );
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         context.app = Arc::new(app_inner);
 
@@ -48985,7 +47877,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -49098,7 +47989,6 @@ mod advert_tests {
         );
         inner.sorafs_gateway_config = gateway_config;
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         context.app = Arc::new(inner);
 
@@ -49149,7 +48039,6 @@ mod advert_tests {
             None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         let state = Arc::new(inner);
 
@@ -49351,91 +48240,6 @@ mod advert_tests {
             .decode(data_b64.as_bytes())
             .expect("decode permitted payload");
         assert_eq!(decoded, payload);
-    }
-
-    #[tokio::test]
-    async fn storage_fetch_perceptual_denylist_preempts_capability_override() {
-        let fixture = make_signed_advert();
-        let payload = b"perceptual capability fetch payload".to_vec();
-        let mut context = capability_token_context(&fixture, payload.clone());
-
-        let app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        if let Some(denylist) = &app_inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("perceptual capability block")
-                .build();
-            let canonical_hash = [0x99; 32];
-            denylist.upsert_perceptual(
-                crate::sorafs::gateway::PerceptualFamilyEntry::new([0xDD; 16], metadata)
-                    .with_perceptual_hash(Some(canonical_hash), 4),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-        app_inner
-            .sorafs_chunk_range_overrides
-            .insert(fixture.provider_id(), false);
-        context.app = Arc::new(app_inner);
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("perceptual-fetch-nonce"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("perceptual-fetch-client"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alias/test"),
-        );
-        let mut observed_hash = [0x99; 32];
-        observed_hash[0] ^= 0x01;
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PERCEPTUAL_HASH),
-            header_value(&hex::encode(observed_hash), "X-SoraFS-Perceptual-Hash"),
-        );
-
-        let request = StorageFetchRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            offset: 0,
-            length: payload.len() as u64,
-        };
-
-        let response = handle_post_sorafs_storage_fetch(
-            State(context.app.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8108))),
-            JsonOnly(request),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect perceptual denylist body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode perceptual denylist response");
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("denylisted".into()))
-        );
-        assert_eq!(
-            value
-                .get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            value.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
     }
 
     #[tokio::test]
@@ -49667,292 +48471,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn chunk_range_perceptual_denylist_reports_match() {
-        let mut context = token_test_context();
-        let app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-
-        if let Some(denylist) = &app_inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("perceptual deny")
-                .build();
-            let canonical_hash = [0xAA; 32];
-            let family_id = [0xEF; 16];
-            denylist.upsert_perceptual(
-                crate::sorafs::gateway::PerceptualFamilyEntry::new(family_id, metadata)
-                    .with_perceptual_hash(Some(canonical_hash), 4),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-
-        context.app = Arc::new(app_inner);
-
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata present");
-        let chunk_digest_hex =
-            hex::encode(manifest.chunk(0).expect("chunk metadata present").digest);
-        let chunker_handle = manifest.chunk_profile_handle().to_string();
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let mut headers = chunk_range_headers(
-            &chunker_handle,
-            &chunk_digest_hex,
-            &token_base64,
-            "perceptual-deny",
-        );
-        let mut observed_hash = [0xAA; 32];
-        observed_hash[0] ^= 0x01;
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PERCEPTUAL_HASH),
-            header_value(&hex::encode(observed_hash), "X-SoraFS-Perceptual-Hash"),
-        );
-
-        let response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8098))),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect perceptual denylist body");
-        let body: Value =
-            norito::json::from_slice(&body_bytes).expect("decode perceptual denylist response");
-        assert_eq!(body.get("error"), Some(&Value::String("denylisted".into())));
-        assert_eq!(
-            body.get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            body.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
-    }
-
-    #[tokio::test]
-    async fn car_range_perceptual_denylist_reports_match() {
-        let mut context = token_test_context();
-        let app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-
-        if let Some(denylist) = &app_inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("perceptual deny car")
-                .build();
-            let canonical_hash = [0xBE; 32];
-            let family_id = [0xDE; 16];
-            denylist.upsert_perceptual(
-                crate::sorafs::gateway::PerceptualFamilyEntry::new(family_id, metadata)
-                    .with_perceptual_hash(Some(canonical_hash), 4),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-
-        context.app = Arc::new(app_inner);
-
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata present");
-        let chunker_handle = manifest.chunk_profile_handle().to_string();
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let mut headers = car_range_headers(
-            &chunker_handle,
-            manifest.content_length(),
-            &token_base64,
-            "perceptual-car",
-        );
-        let mut observed_hash = [0xBE; 32];
-        observed_hash[1] ^= 0x01;
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PERCEPTUAL_HASH),
-            header_value(&hex::encode(observed_hash), "X-SoraFS-Perceptual-Hash"),
-        );
-
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8099))),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect perceptual car denylist body");
-        let body: Value =
-            norito::json::from_slice(&body_bytes).expect("decode perceptual car denylist response");
-        assert_eq!(body.get("error"), Some(&Value::String("denylisted".into())));
-        assert_eq!(
-            body.get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            body.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
-    }
-
-    #[tokio::test]
-    async fn chunk_range_perceptual_denylist_preempts_capability_override() {
-        let fixture = make_signed_advert();
-        let mut context =
-            capability_token_context(&fixture, b"perceptual capability chunk payload".to_vec());
-
-        let app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        if let Some(denylist) = &app_inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("perceptual capability block")
-                .build();
-            let canonical_hash = [0xBA; 32];
-            denylist.upsert_perceptual(
-                crate::sorafs::gateway::PerceptualFamilyEntry::new([0xCC; 16], metadata)
-                    .with_perceptual_hash(Some(canonical_hash), 4),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-        app_inner
-            .sorafs_chunk_range_overrides
-            .insert(fixture.provider_id(), false);
-        context.app = Arc::new(app_inner);
-
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata present");
-        let chunk_record = manifest.chunk(0).expect("chunk record");
-        let chunk_digest_hex = hex::encode(chunk_record.digest);
-        let chunker_handle = manifest.chunk_profile_handle().to_string();
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let mut headers = chunk_range_headers(
-            &chunker_handle,
-            &chunk_digest_hex,
-            &token_base64,
-            "perceptual-capability",
-        );
-        let mut observed_hash = [0xBA; 32];
-        observed_hash[0] ^= 0x01;
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PERCEPTUAL_HASH),
-            header_value(&hex::encode(observed_hash), "X-SoraFS-Perceptual-Hash"),
-        );
-
-        let response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8109))),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect perceptual denylist body");
-        let body: Value =
-            norito::json::from_slice(&body_bytes).expect("decode perceptual denylist response");
-        assert_eq!(body.get("error"), Some(&Value::String("denylisted".into())));
-        assert_eq!(
-            body.get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            body.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
-    }
-
-    #[tokio::test]
-    async fn car_range_perceptual_denylist_preempts_capability_override() {
-        let fixture = make_signed_advert();
-        let mut context =
-            capability_token_context(&fixture, b"perceptual capability car payload".to_vec());
-
-        let app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        if let Some(denylist) = &app_inner.sorafs_gateway_denylist {
-            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
-                .reason("perceptual capability block (car)")
-                .build();
-            let canonical_hash = [0xAB; 32];
-            denylist.upsert_perceptual(
-                crate::sorafs::gateway::PerceptualFamilyEntry::new([0xEE; 16], metadata)
-                    .with_perceptual_hash(Some(canonical_hash), 4),
-            );
-        } else {
-            panic!("gateway denylist must be configured");
-        }
-        app_inner
-            .sorafs_chunk_range_overrides
-            .insert(fixture.provider_id(), false);
-        context.app = Arc::new(app_inner);
-
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest metadata present");
-        let chunker_handle = manifest.chunk_profile_handle().to_string();
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let mut headers = car_range_headers(
-            &chunker_handle,
-            manifest.content_length(),
-            &token_base64,
-            "perceptual-capability-car",
-        );
-        let mut observed_hash = [0xAB; 32];
-        observed_hash[0] ^= 0x01;
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PERCEPTUAL_HASH),
-            header_value(&hex::encode(observed_hash), "X-SoraFS-Perceptual-Hash"),
-        );
-
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8110))),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect perceptual car denylist body");
-        let body: Value =
-            norito::json::from_slice(&body_bytes).expect("decode perceptual car denylist response");
-        assert_eq!(body.get("error"), Some(&Value::String("denylisted".into())));
-        assert_eq!(
-            body.get("perceptual_hamming_distance")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            body.get("provider_id_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
-        );
-    }
-
-    #[tokio::test]
     async fn car_range_rejects_provider_without_admission() {
         let mut context = token_test_context();
         let mut app_inner = Arc::try_unwrap(context.app)
@@ -49968,7 +48486,6 @@ mod advert_tests {
         );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         context.app = Arc::new(app_inner);
 
@@ -50029,85 +48546,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn car_range_blocked_for_denylisted_provider() {
-        let mut context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
-        let end = manifest.content_length().saturating_sub(1);
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let denylist_dir = tempfile::tempdir().expect("create denylist dir");
-        let denylist_path = denylist_dir.path().join("denylist.json");
-        let denylist_json = format!(
-            "[{{\"kind\":\"provider\",\"provider_id_hex\":\"{}\",\"reason\":\"blocked\"}}]",
-            context.provider_id_hex
-        );
-        fs::write(&denylist_path, denylist_json).expect("write denylist file");
-
-        let mut app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        let mut gateway_config = app_inner.sorafs_gateway_config.clone();
-        gateway_config.denylist.path = Some(denylist_path.clone());
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_config = gateway_config;
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
-        context.app = Arc::new(app_inner);
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::RANGE,
-            HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_DAG_SCOPE),
-            HeaderValue::from_static("block"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-download"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
-            HeaderValue::from_static("dummy"),
-        );
-
-        let response = handle_get_sorafs_storage_car_range(
-            State(context.app.clone()),
-            Path(context.manifest_id_hex.clone()),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8086))),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body bytes");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error JSON");
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("denylisted".into()))
-        );
-    }
-
-    #[tokio::test]
     async fn car_range_rate_limits_repeated_clients() {
         let mut context = token_test_context();
         let mut app_inner = Arc::try_unwrap(context.app)
@@ -50125,7 +48563,6 @@ mod advert_tests {
         );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         context.app = Arc::new(app_inner);
 
@@ -50227,7 +48664,6 @@ mod advert_tests {
         );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
         app_inner.trusted_proxy_nets =
             Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
@@ -50334,87 +48770,6 @@ mod advert_tests {
             response.status(),
             StatusCode::PARTIAL_CONTENT,
             "untrusted peers must not inherit the trusted client's forwarded-IP bucket"
-        );
-    }
-
-    #[tokio::test]
-    async fn chunk_range_blocked_for_denylisted_provider() {
-        let mut context = token_test_context();
-        let manifest = context
-            .app
-            .sorafs_node
-            .manifest_metadata(&context.manifest_id_hex)
-            .expect("manifest");
-        let chunk_record = manifest.chunk(0).expect("chunk record");
-        let chunk_digest_hex = hex::encode(chunk_record.digest);
-        let token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
-
-        let denylist_dir = tempfile::tempdir().expect("create denylist dir");
-        let denylist_path = denylist_dir.path().join("denylist.json");
-        let denylist_json = format!(
-            "[{{\"kind\":\"provider\",\"provider_id_hex\":\"{}\",\"reason\":\"blocked\"}}]",
-            context.provider_id_hex
-        );
-        fs::write(&denylist_path, denylist_json).expect("write denylist file");
-
-        let mut app_inner = Arc::try_unwrap(context.app)
-            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        let mut gateway_config = app_inner.sorafs_gateway_config.clone();
-        gateway_config.denylist.path = Some(denylist_path.clone());
-        let components = build_sorafs_gateway_security(
-            &gateway_config,
-            app_inner.sorafs_admission.clone(),
-            None,
-            None,
-        );
-        app_inner.sorafs_gateway_config = gateway_config;
-        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
-        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
-        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
-        context.app = Arc::new(app_inner);
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NONCE),
-            HeaderValue::from_static("nonce-chunk"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&token_base64, "X-SoraFS-Stream-Token"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_CHUNKER),
-            header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_NAME),
-            header_value("alias/test", "Sora-Name"),
-        );
-        headers.insert(
-            header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alias/test"),
-        );
-
-        let response = handle_get_sorafs_storage_chunk(
-            State(context.app.clone()),
-            Path((context.manifest_id_hex.clone(), chunk_digest_hex)),
-            headers,
-            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8090))),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body bytes");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error JSON");
-        assert_eq!(
-            value.get("error"),
-            Some(&Value::String("denylisted".into()))
-        );
-        assert_eq!(value.get("kind"), Some(&Value::String("provider".into())));
-        assert_eq!(
-            value.get("value_hex"),
-            Some(&Value::String(context.provider_id_hex.clone()))
         );
     }
 
