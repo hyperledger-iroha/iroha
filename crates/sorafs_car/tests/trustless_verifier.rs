@@ -5,7 +5,7 @@ use std::{env, fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::decode_from_bytes;
 use norito::json::Value;
-use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig};
+use sorafs_car::{TrustlessVerificationError, TrustlessVerifier, TrustlessVerifierConfig};
 use sorafs_manifest::{ManifestV1, SORAFS_GATEWAY_MANIFEST_DIGEST_HEX};
 use tempfile::{Builder, TempDir};
 
@@ -81,6 +81,36 @@ fn trustless_verifier_reports_gateway_fixture_digests() {
         !outcome.report.chunk_store.chunks().is_empty(),
         "chunk store should carry the rebuilt plan"
     );
+}
+
+#[test]
+fn trustless_verifier_rejects_manifest_chunk_plan_and_por_root_substitution() {
+    let config_path = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
+    let config =
+        TrustlessVerifierConfig::from_file(&config_path).expect("gateway config parses cleanly");
+    let manifest_bytes = fs::read(workspace_path(
+        "fixtures/sorafs_gateway/1.0.0/manifest_v1.to",
+    ))
+    .expect("manifest bytes");
+    let manifest: ManifestV1 =
+        decode_from_bytes(&manifest_bytes).expect("manifest Norito decoding succeeds");
+    let car_bytes = fs::read(workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car"))
+        .expect("gateway CAR bytes");
+    let verifier = TrustlessVerifier::new(config);
+
+    let mut substituted_plan = manifest.clone();
+    substituted_plan.chunk_digest_sha3_256[0] ^= 0x80;
+    assert!(matches!(
+        verifier.verify_full(&substituted_plan, &car_bytes),
+        Err(TrustlessVerificationError::ManifestChunkPlanMismatch { .. })
+    ));
+
+    let mut substituted_root = manifest;
+    substituted_root.por_root[31] ^= 0x01;
+    assert!(matches!(
+        verifier.verify_full(&substituted_root, &car_bytes),
+        Err(TrustlessVerificationError::ManifestPorRootMismatch { .. })
+    ));
 }
 
 #[test]
@@ -165,7 +195,7 @@ fn trustless_verifier_writes_validation_outcome_json_out() {
 }
 
 #[test]
-fn validation_outcome_rejects_pin_record_flag_explicitly() {
+fn retired_local_pin_record_flag_is_rejected() {
     let manifest = workspace_path("fixtures/sorafs_gateway/1.0.0/manifest_v1.to");
     let car = workspace_path("fixtures/sorafs_gateway/1.0.0/gateway.car");
     let config = workspace_path("configs/soranet/gateway_m0/gateway_trustless_verifier.toml");
@@ -178,17 +208,16 @@ fn validation_outcome_rejects_pin_record_flag_explicitly() {
             car.to_str().expect("CAR path is utf-8"),
             "--config",
             config.to_str().expect("config path is utf-8"),
-            "--validation-outcome",
-            "--pin-record",
-            "pin-record.to",
+            "--finalized-pin-record",
+            "finalized-pin-record.to",
         ])
         .output()
         .expect("run trustless verifier");
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--validation-outcome emits manifest/CAR replay outcomes"),
+        stderr.contains("unexpected argument '--finalized-pin-record'"),
         "stderr: {stderr}"
     );
 }

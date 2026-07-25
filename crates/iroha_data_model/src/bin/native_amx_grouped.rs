@@ -595,13 +595,308 @@ fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
     controls(id, "application_evidence", mutations)
 }
 
+fn hash_consistency_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
+    let remote_leg = &commitment.native_amx_receipts[0].legs[1];
+    let leg = "/golden/receipt_group/native_amx_receipts/0/legs/1";
+    let descriptor = format!("{leg}/participant_proposal/descriptor");
+    let proposal = format!("{leg}/participant_proposal");
+    let prepare = format!("{leg}/prepare_qc");
+    let commit = format!("{leg}/commit_qc");
+
+    let forged_validator_set_hash = HashOf::<Vec<PeerId>>::from_untyped_unchecked(Hash::new(
+        b"native-amx-v2-negative-forged-validator-set-hash",
+    ));
+    let mut validator_hash_leg = remote_leg.clone();
+    validator_hash_leg
+        .participant_proposal
+        .descriptor
+        .validator_set_hash = forged_validator_set_hash;
+    validator_hash_leg
+        .participant_proposal
+        .descriptor
+        .descriptor_hash = validator_hash_leg
+        .participant_proposal
+        .descriptor
+        .computed_descriptor_hash();
+    validator_hash_leg.participant_proposal.proposal_hash = validator_hash_leg
+        .participant_proposal
+        .computed_proposal_hash();
+    for qc in [
+        &mut validator_hash_leg.prepare_qc,
+        &mut validator_hash_leg.commit_qc,
+    ] {
+        qc.validator_set_hash = forged_validator_set_hash;
+        qc.body.participant_validator_set_hash = forged_validator_set_hash;
+        qc.body.participant_proposal_hash = validator_hash_leg.participant_proposal.proposal_hash;
+    }
+
+    let mut stale_descriptor_leg = remote_leg.clone();
+    stale_descriptor_leg
+        .participant_proposal
+        .descriptor
+        .subject_hash = Hash::new(b"native-amx-v2-negative-stale-descriptor-subject");
+    stale_descriptor_leg.participant_proposal.proposal_hash = stale_descriptor_leg
+        .participant_proposal
+        .computed_proposal_hash();
+    for qc in [
+        &mut stale_descriptor_leg.prepare_qc,
+        &mut stale_descriptor_leg.commit_qc,
+    ] {
+        qc.body.participant_proposal_hash = stale_descriptor_leg.participant_proposal.proposal_hash;
+    }
+
+    let forged_proposal_hash = Hash::new(b"native-amx-v2-negative-forged-proposal-hash");
+    let forged_settlement_hash = HashOf::<LaneBlockCommitment>::from_untyped_unchecked(Hash::new(
+        b"native-amx-v2-negative-forged-settlement-hash",
+    ));
+    vec![
+        controls(
+            "coherent_forged_validator_set_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{descriptor}/validator_set_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg
+                                .participant_proposal
+                                .descriptor
+                                .validator_set_hash,
+                        )
+                        .expect("validator-set hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{descriptor}/descriptor_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg
+                                .participant_proposal
+                                .descriptor
+                                .descriptor_hash,
+                        )
+                        .expect("descriptor hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{proposal}/proposal_hash"),
+                    Some(
+                        json::to_value(&validator_hash_leg.participant_proposal.proposal_hash)
+                            .expect("proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/validator_set_hash"),
+                    Some(
+                        json::to_value(&validator_hash_leg.prepare_qc.validator_set_hash)
+                            .expect("prepare validator-set hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_validator_set_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg
+                                .prepare_qc
+                                .body
+                                .participant_validator_set_hash,
+                        )
+                        .expect("prepare body validator-set hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg.prepare_qc.body.participant_proposal_hash,
+                        )
+                        .expect("prepare body proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/validator_set_hash"),
+                    Some(
+                        json::to_value(&validator_hash_leg.commit_qc.validator_set_hash)
+                            .expect("commit validator-set hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_validator_set_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg
+                                .commit_qc
+                                .body
+                                .participant_validator_set_hash,
+                        )
+                        .expect("commit body validator-set hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(
+                            &validator_hash_leg.commit_qc.body.participant_proposal_hash,
+                        )
+                        .expect("commit body proposal hash serializes"),
+                    ),
+                ),
+            ],
+        ),
+        controls(
+            "coherent_stale_descriptor_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{descriptor}/subject_hash"),
+                    Some(
+                        json::to_value(
+                            &stale_descriptor_leg
+                                .participant_proposal
+                                .descriptor
+                                .subject_hash,
+                        )
+                        .expect("descriptor subject hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{proposal}/proposal_hash"),
+                    Some(
+                        json::to_value(&stale_descriptor_leg.participant_proposal.proposal_hash)
+                            .expect("stale-descriptor proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(
+                            &stale_descriptor_leg
+                                .prepare_qc
+                                .body
+                                .participant_proposal_hash,
+                        )
+                        .expect("stale-descriptor prepare proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(
+                            &stale_descriptor_leg
+                                .commit_qc
+                                .body
+                                .participant_proposal_hash,
+                        )
+                        .expect("stale-descriptor commit proposal hash serializes"),
+                    ),
+                ),
+            ],
+        ),
+        controls(
+            "coherent_stale_proposal_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{proposal}/proposal_hash"),
+                    Some(
+                        json::to_value(&forged_proposal_hash)
+                            .expect("forged proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(&forged_proposal_hash)
+                            .expect("forged prepare proposal hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_proposal_hash"),
+                    Some(
+                        json::to_value(&forged_proposal_hash)
+                            .expect("forged commit proposal hash serializes"),
+                    ),
+                ),
+            ],
+        ),
+        controls(
+            "coherent_stale_settlement_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{leg}/participant_settlement_hash"),
+                    Some(
+                        json::to_value(&forged_settlement_hash)
+                            .expect("forged settlement hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_settlement_commitment"),
+                    Some(
+                        json::to_value(&Hash::from(forged_settlement_hash))
+                            .expect("forged prepare settlement hash serializes"),
+                    ),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_settlement_commitment"),
+                    Some(
+                        json::to_value(&Hash::from(forged_settlement_hash))
+                            .expect("forged commit settlement hash serializes"),
+                    ),
+                ),
+            ],
+        ),
+        controls(
+            "non_canonical_validator_peer_id",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{descriptor}/validator_set/3"),
+                    Some(norito::json!("not-a-canonical-bls-peer-id")),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/validator_set/3"),
+                    Some(norito::json!("not-a-canonical-bls-peer-id")),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/validator_set/3"),
+                    Some(norito::json!("not-a-canonical-bls-peer-id")),
+                ),
+            ],
+        ),
+    ]
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the compact negative-control corpus is easier to audit as one ordered list"
 )]
-fn negative_controls() -> Vec<Value> {
+fn negative_controls(commitment: &LaneBlockCommitment) -> Vec<Value> {
     let receipt = "/golden/receipt_group/native_amx_receipts";
     let first = format!("{receipt}/0");
+    let second = format!("{receipt}/1");
     let first_leg = format!("{first}/legs/0");
     let prepare = format!("{first_leg}/prepare_qc");
     let commit = format!("{first_leg}/commit_qc");
@@ -621,7 +916,7 @@ fn negative_controls() -> Vec<Value> {
         b"native-amx-v2-grouped-fixture-coordinator-incarnation",
     ))
     .expect("hash serializes to JSON");
-    vec![
+    let mut controls = vec![
         control(
             "flattened_phase",
             mutation(
@@ -666,6 +961,37 @@ fn negative_controls() -> Vec<Value> {
                 Some(norito::json!({"left": 0, "right": 1})),
             ),
         ),
+        controls(
+            "coherent_unordered_validator_set",
+            "receipt_group",
+            vec![
+                mutation(
+                    "swap",
+                    &format!("{prepare}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{prepare}/validator_set_pops"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{commit}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{commit}/validator_set_pops"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{same_route_descriptor}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+            ],
+        ),
         control(
             "under_quorum_bitmap",
             mutation(
@@ -690,12 +1016,64 @@ fn negative_controls() -> Vec<Value> {
                 Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
             ),
         ),
+        controls(
+            "zero_pop",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/validator_set_pops/0/0"),
+                    Some(norito::json!(0)),
+                ),
+                mutation(
+                    "repeat",
+                    &format!("{prepare}/validator_set_pops/0"),
+                    Some(norito::json!({
+                        "source_index": 0,
+                        "count": (BLS_PROOF_BYTES)
+                    })),
+                ),
+            ],
+        ),
+        control(
+            "long_pop",
+            mutation(
+                "repeat",
+                &format!("{prepare}/validator_set_pops/0"),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (BLS_PROOF_BYTES + 1)
+                })),
+            ),
+        ),
         control(
             "short_aggregate_signature",
             mutation(
                 "replace",
                 &format!("{prepare}/bls_aggregate_signature"),
                 Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
+            ),
+        ),
+        control(
+            "zero_aggregate_signature",
+            mutation(
+                "repeat",
+                &format!("{prepare}/bls_aggregate_signature"),
+                Some(norito::json!({
+                    "source_index": 71,
+                    "count": (BLS_PROOF_BYTES)
+                })),
+            ),
+        ),
+        control(
+            "long_aggregate_signature",
+            mutation(
+                "repeat",
+                &format!("{prepare}/bls_aggregate_signature"),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (BLS_PROOF_BYTES + 1)
+                })),
             ),
         ),
         control(
@@ -803,6 +1181,55 @@ fn negative_controls() -> Vec<Value> {
             ),
         ),
         control(
+            "outer_group_source_reorder",
+            mutation(
+                "swap",
+                receipt,
+                Some(norito::json!({"left": 0, "right": 1})),
+            ),
+        ),
+        controls(
+            "outer_group_source_substitution",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{second}/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/0/prepare_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/0/commit_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/1/prepare_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/1/commit_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+            ],
+        ),
+        control(
             "unsupported_receipt_version",
             mutation(
                 "replace",
@@ -819,6 +1246,83 @@ fn negative_controls() -> Vec<Value> {
                     "abababababababababababababababababababababababababababababababab"
                 )),
             ),
+        ),
+        controls(
+            "source_id_substituted_for_entrypoint_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "copy",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!({"from": (format!("{first}/source_id"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!({"from": (format!("{first}/source_id"))})),
+                ),
+            ],
+        ),
+        controls(
+            "entrypoint_hash_substituted_for_source_id",
+            "receipt_group",
+            vec![
+                mutation(
+                    "copy",
+                    &format!("{first}/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{prepare}/body/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{commit}/body/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+            ],
+        ),
+        controls(
+            "wrong_entrypoint_hash_checksum",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+                    )),
+                ),
+            ],
+        ),
+        controls(
+            "wrong_entrypoint_hash_marker",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
+                    )),
+                ),
+            ],
         ),
         controls(
             "stale_same_route_incarnation",
@@ -930,7 +1434,9 @@ fn negative_controls() -> Vec<Value> {
                 Some(forged_hash),
             )],
         ),
-    ]
+    ];
+    controls.extend(hash_consistency_controls(commitment));
+    controls
 }
 
 fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dyn Error>> {
@@ -1012,7 +1518,7 @@ fn document() -> Result<Value, Box<dyn Error>> {
     let diagnostics = diagnostics(commitment.clone(), &remote);
     validate_golden(&diagnostics)?;
     let application_evidence = application_evidence(&context, &remote)?;
-    let controls = negative_controls();
+    let controls = negative_controls(&commitment);
     let mut ids = BTreeSet::new();
     for control in &controls {
         let Some(id) = control

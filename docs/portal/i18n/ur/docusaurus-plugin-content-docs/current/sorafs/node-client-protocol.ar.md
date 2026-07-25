@@ -120,10 +120,12 @@ SoraFS فراہم کنندگان `ProviderAdvertV1` پے لوڈ نشر کرتے 
 
 - `iroha app sorafs pin list|show` ، `alias list` اور `replication list` آرام سے نوڈس کو انکولیٹ کریں
   Norito آڈٹ شواہد کے لئے تصدیق شدہ بلاکس کے ساتھ خام JSON کو ریکارڈ کرتا ہے اور پرنٹ کرتا ہے۔
-- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` ظاہر قبول کریں
-  Norito یا JSON میں عرف اور جانشین کے لئے اختیاری ثبوتوں کے ساتھ۔ لیڈ ثبوت
-  `400` میں مسخ شدہ ، اور پرانے ثبوت `503` کو `Warning: 110` کے ساتھ دکھاتے ہیں ، جبکہ بحالی کرتے ہوئے
-  مکمل طور پر ختم ہونے والے ثبوت `412`۔
+- `torii /v1/sorafs/pin/register` بند JSON V1 request قبول کرتا ہے۔
+  `manifest_payload` canonical Norito `ManifestV1` bytes کا عین canonical padded
+  base64 ہونا چاہیے۔ Torii digest، chunker، content length، pin policy اور fee
+  inputs صرف decoded manifest سے اخذ کرتا ہے اور منسوخ duplicate summary fields
+  کو رد کرتا ہے۔ `alias` اور nonzero `successor_of_hex` predecessor بدستور
+  optional ہیں۔
 - ریسٹ پوائنٹس (`/v1/sorafs/pin` ، `/v1/sorafs/aliases` ، `/v1/sorafs/replication`)
   تصدیق کے ڈھانچے پر مشتمل ہے تاکہ کلائنٹ تازہ ترین کے خلاف ڈیٹا چیک کرسکیں
   پھانسی سے پہلے ہیڈر بلاک کریں۔## حوالہ جات

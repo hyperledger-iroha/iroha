@@ -7,6 +7,7 @@ import pytest
 
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
     SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
@@ -41,8 +42,21 @@ def _fixture(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def _governance_outcome_fixture(name: str) -> dict[str, object]:
-    return json.loads((_GOVERNANCE_FIXTURES / name).read_text(encoding="utf-8"))
+def _assert_exact_outcome(
+    outcome: dict[str, object],
+    fixture_root: Path,
+    fixture_name: str,
+) -> None:
+    expected_text = (fixture_root / fixture_name).read_text(encoding="utf-8")
+    assert outcome == json.loads(expected_text)
+    assert json.dumps(outcome, indent=2, ensure_ascii=True) + "\n" == expected_text
+
+
+def _assert_governance_outcome(
+    outcome: dict[str, object],
+    fixture_name: str,
+) -> None:
+    _assert_exact_outcome(outcome, _GOVERNANCE_FIXTURES, fixture_name)
 
 
 def _pdp_fixtures() -> tuple[bytes, bytes, bytes]:
@@ -59,35 +73,37 @@ def _fixed32(value: int) -> bytes:
 
 def test_validate_orderbook_payload_accepts_canonical_order_request() -> None:
     outcome = validate_orderbook_payload(
-        "order",
+        SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
         _fixture(_ORDERBOOK_FIXTURES / "order_request_v1.to"),
-        label="fixtures/sorafs_manifest/orderbook/order_request_v1.to",
-        generated_at_unix=1_700_000_123,
+        label="order_request_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["category"] == "validation"
-    assert outcome["generated_at"] == 1_700_000_123
-    assert outcome["inputs"][0]["kind"] == "orderbook_order_request"
-    assert outcome["inputs"][0]["path"] == "fixtures/sorafs_manifest/orderbook/order_request_v1.to"
-
-
-def test_validate_orderbook_payload_accepts_runtime_snapshot_alias() -> None:
-    outcome = validate_orderbook_payload(
-        SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
-        memoryview(_fixture(_ORDERBOOK_FIXTURES / "runtime_snapshot_v1.to")),
-        generated_at_unix=1_700_000_456,
+    _assert_exact_outcome(
+        outcome,
+        _ORDERBOOK_FIXTURES,
+        "order_request_validation_outcome_v1.json",
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["inputs"][0]["kind"] == "orderbook_runtime_snapshot"
+
+def test_orderbook_signature_and_noncanonical_outcomes_match_exactly() -> None:
+    for name in ("order_request_bad_signature", "order_request_trailing_bytes"):
+        outcome = validate_orderbook_payload(
+            "order-request",
+            _fixture(_ORDERBOOK_FIXTURES / "negative" / f"{name}_v1.to"),
+            label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _ORDERBOOK_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
 
 
 def test_validate_orderbook_payload_reports_malformed_norito() -> None:
     outcome = validate_orderbook_payload(
-        "settlement_receipt",
+        "settlement-receipt",
         b"\x00" * 8,
         generated_at_unix=1_700_000_789,
     )
@@ -98,10 +114,10 @@ def test_validate_orderbook_payload_reports_malformed_norito() -> None:
     assert outcome["inputs"][0]["kind"] == "settlement_receipt"
 
 
-def test_sign_orderbook_payload_signs_mutable_fixture_payloads() -> None:
+def test_sign_orderbook_payload_deterministically_reproduces_signed_fixtures() -> None:
     private_key = bytes([0xB7]) * 32
     cases = (
-        ("order", "order_request_v1.to", "orderbook_order_request"),
+        ("order-request", "order_request_v1.to", "orderbook_order_request"),
         ("order-cancel", "order_cancel_v1.to", "orderbook_order_cancel"),
         ("settlement-receipt", "settlement_receipt_v1.to", "settlement_receipt"),
     )
@@ -110,7 +126,7 @@ def test_sign_orderbook_payload_signs_mutable_fixture_payloads() -> None:
         unsigned = _fixture(_ORDERBOOK_FIXTURES / filename)
         signed = sign_orderbook_payload(kind, memoryview(unsigned), private_key)
         assert isinstance(signed, bytes)
-        assert signed != unsigned
+        assert signed == unsigned
 
         outcome = validate_orderbook_payload(kind, signed, generated_at_unix=1_700_000_999)
         assert outcome["status"] == "Ok"
@@ -118,11 +134,11 @@ def test_sign_orderbook_payload_signs_mutable_fixture_payloads() -> None:
 
 
 def test_sign_orderbook_payload_rejects_non_signable_and_bad_keys() -> None:
-    snapshot = _fixture(_ORDERBOOK_FIXTURES / "runtime_snapshot_v1.to")
+    trade = _fixture(_ORDERBOOK_FIXTURES / "trade_event_v1.to")
     order = _fixture(_ORDERBOOK_FIXTURES / "order_request_v1.to")
 
     with pytest.raises(ValueError, match="cannot be signed"):
-        sign_orderbook_payload("runtime-snapshot", snapshot, bytes([0xB7]) * 32)
+        sign_orderbook_payload("trade-event", trade, bytes([0xB7]) * 32)
     with pytest.raises(ValueError, match="32 bytes"):
         sign_orderbook_payload("order-request", order, bytes([0xB7]) * 31)
 
@@ -134,13 +150,13 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
         {
             "side": "bid",
             "tier": "hot",
-            "pricePerGib": _MAX_SCALED_XOR,
-            "quantityGib": "12",
-            "ownerAccount": _ORDERBOOK_OWNER_ACCOUNT,
-            "expiryUnix": "1700010000",
+            "price_per_gib": _MAX_SCALED_XOR,
+            "quantity_gib": "12",
+            "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+            "expiry_unix": "1700010000",
             "nonce": "7",
-            "makerFeeBps": "25",
-            "takerFeeBps": "30",
+            "maker_fee_bps": "25",
+            "taker_fee_bps": "30",
         },
         _ORDERBOOK_PRIVATE_KEY,
     )
@@ -149,6 +165,44 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
         order,
         generated_at_unix=1_700_000_999,
     )["status"] == "Ok"
+
+    ask = build_signed_orderbook_order_request(
+        {
+            "side": "ask",
+            "tier": "hot",
+            "price_per_gib": "1.25",
+            "quantity_gib": "4",
+            "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+            "provider_id": _fixed32(0x72),
+            "expiry_unix": "1700010000",
+            "nonce": "8",
+            "maker_fee_bps": "25",
+            "taker_fee_bps": "30",
+        },
+        _ORDERBOOK_PRIVATE_KEY,
+    )
+    assert ask != order
+    assert validate_orderbook_payload(
+        "order-request",
+        ask,
+        generated_at_unix=1_700_000_999,
+    )["status"] == "Ok"
+    ask_other_provider = build_signed_orderbook_order_request(
+        {
+            "side": "ask",
+            "tier": "hot",
+            "price_per_gib": "1.25",
+            "quantity_gib": "4",
+            "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+            "provider_id": _fixed32(0x73),
+            "expiry_unix": "1700010000",
+            "nonce": "8",
+            "maker_fee_bps": "25",
+            "taker_fee_bps": "30",
+        },
+        _ORDERBOOK_PRIVATE_KEY,
+    )
+    assert ask_other_provider != ask
 
     cancel = build_signed_orderbook_order_cancel(
         {
@@ -167,17 +221,17 @@ def test_field_level_orderbook_builders_emit_valid_signed_payloads() -> None:
 
     receipt = build_signed_orderbook_settlement_receipt(
         {
-            "receiptId": _fixed32(0x21),
-            "channelId": _fixed32(0x22),
-            "tradeId": _fixed32(0x23),
-            "rangeStart": "0",
-            "rangeEnd": "4096",
-            "chunkHash": _fixed32(0x24),
-            "bytesDelivered": "4096",
-            "xorDebited": "340282366920938463463374607431768211456.000000001",
-            "providerCredit": "340282366920938463463374607431768211456",
-            "feeAmount": "0.000000001",
-            "issuedAtUnix": "1700000999",
+            "receipt_id": _fixed32(0x21),
+            "channel_id": _fixed32(0x22),
+            "trade_id": _fixed32(0x23),
+            "range_start": "0",
+            "range_end": "4096",
+            "chunk_hash": _fixed32(0x24),
+            "bytes_delivered": "4096",
+            "xor_debited": "340282366920938463463374607431768211456.000000001",
+            "provider_credit": "340282366920938463463374607431768211456",
+            "fee_amount": "0.000000001",
+            "issued_at_unix": "1700000999",
         },
         _ORDERBOOK_PRIVATE_KEY,
     )
@@ -284,21 +338,49 @@ def test_field_level_orderbook_builder_rejects_noncanonical_order_id() -> None:
         )
 
 
+def test_field_level_orderbook_builder_enforces_exact_provider_binding() -> None:
+    common = {
+        "tier": "hot",
+        "price_per_gib": "1",
+        "quantity_gib": "1",
+        "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+        "expiry_unix": "1700010000",
+        "nonce": "17",
+        "maker_fee_bps": 0,
+        "taker_fee_bps": 0,
+    }
+    with pytest.raises(ValueError, match="absent or empty for bid"):
+        build_signed_orderbook_order_request(
+            {**common, "side": "bid", "provider_id": _fixed32(0x72)},
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+    with pytest.raises(ValueError, match="exactly 32 bytes for ask"):
+        build_signed_orderbook_order_request(
+            {**common, "side": "ask"},
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+    with pytest.raises(ValueError, match="must not be all zero"):
+        build_signed_orderbook_order_request(
+            {**common, "side": "ask", "provider_id": bytes(32)},
+            _ORDERBOOK_PRIVATE_KEY,
+        )
+
+
 def test_field_level_settlement_receipt_builder_rejects_imbalanced_amounts() -> None:
     with pytest.raises(ValueError, match="settlement imbalance"):
         build_signed_orderbook_settlement_receipt(
             {
-                "receiptId": _fixed32(0x31),
-                "channelId": _fixed32(0x32),
-                "tradeId": _fixed32(0x33),
-                "rangeStart": "0",
-                "rangeEnd": "4096",
-                "chunkHash": _fixed32(0x34),
-                "bytesDelivered": "4096",
-                "xorDebited": "100",
-                "providerCredit": "91",
-                "feeAmount": "10",
-                "issuedAtUnix": "1700000999",
+                "receipt_id": _fixed32(0x31),
+                "channel_id": _fixed32(0x32),
+                "trade_id": _fixed32(0x33),
+                "range_start": "0",
+                "range_end": "4096",
+                "chunk_hash": _fixed32(0x34),
+                "bytes_delivered": "4096",
+                "xor_debited": "100",
+                "provider_credit": "91",
+                "fee_amount": "10",
+                "issued_at_unix": "1700000999",
             },
             _ORDERBOOK_PRIVATE_KEY,
         )
@@ -398,8 +480,8 @@ def test_max_scaled_xor_quantity_uses_the_155_character_boundary() -> None:
     assert len(_MAX_SCALED_XOR) == 155
 
 
-def test_field_level_orderbook_builders_reject_duplicate_exact_aliases() -> None:
-    with pytest.raises(TypeError, match="exactly once"):
+def test_field_level_orderbook_builders_reject_retired_field_aliases() -> None:
+    with pytest.raises(TypeError, match="retired"):
         build_signed_orderbook_order_request(
             {
                 "side": "bid",
@@ -416,7 +498,7 @@ def test_field_level_orderbook_builders_reject_duplicate_exact_aliases() -> None
             _ORDERBOOK_PRIVATE_KEY,
         )
 
-    with pytest.raises(TypeError, match="exactly once"):
+    with pytest.raises(TypeError, match="retired"):
         build_signed_orderbook_settlement_receipt(
             {
                 "receipt_id": _fixed32(0x41),
@@ -435,6 +517,34 @@ def test_field_level_orderbook_builders_reject_duplicate_exact_aliases() -> None
             _ORDERBOOK_PRIVATE_KEY,
         )
 
+
+def test_field_level_orderbook_builders_reject_noncanonical_selectors() -> None:
+    common = {
+        "tier": "hot",
+        "price_per_gib": "1",
+        "quantity_gib": "12",
+        "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+        "expiry_unix": "1700010000",
+        "nonce": "7",
+        "maker_fee_bps": "25",
+        "taker_fee_bps": "30",
+    }
+    for side in ("Bid", " bid", "BID"):
+        with pytest.raises(ValueError, match="canonical V1 selector"):
+            build_signed_orderbook_order_request(
+                {**common, "side": side},
+                _ORDERBOOK_PRIVATE_KEY,
+            )
+    with pytest.raises(ValueError, match="canonical V1 selector"):
+        build_signed_orderbook_order_cancel(
+            {
+                "order_id": _fixed32(0x45),
+                "owner_account": _ORDERBOOK_OWNER_ACCOUNT,
+                "reason": "owner-requested",
+                "nonce": 10,
+            },
+            _ORDERBOOK_PRIVATE_KEY,
+        )
 
 def test_validate_pdp_payload_accepts_canonical_commitment() -> None:
     commitment, _challenge, _proof = _pdp_fixtures()
@@ -476,10 +586,10 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
         commitment,
         challenge,
         proof,
-        commitment_label="commitment.to",
-        challenge_label="challenge.to",
-        proof_label="proof.to",
-        generated_at_unix=1_700_001_004,
+        commitment_label="commitment_v1.to",
+        challenge_label="challenge_v1.to",
+        proof_label="proof_v1.to",
+        generated_at_unix=123,
     )
 
     assert commitment_challenge["status"] == "Ok"
@@ -494,17 +604,76 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
         "pdp_challenge",
         "pdp_proof",
     ]
-    assert bundle["status"] == "Ok"
-    assert bundle["code"] == "SFS-PDP-DIAG-000"
-    assert {entry["key"]: entry["value"] for entry in bundle["context"]}[
-        "production_acceptance"
-    ] == "false"
-    assert [entry["kind"] for entry in bundle["inputs"]] == [
-        "pdp_commitment",
-        "pdp_challenge",
-        "pdp_proof",
-    ]
-    assert bundle["generated_at"] == 1_700_001_004
+    _assert_exact_outcome(bundle, _PDP_FIXTURES, "bundle_validation_outcome_v1.json")
+
+
+def test_all_pdp_negative_outcomes_match_exactly() -> None:
+    commitment, challenge, _proof = _pdp_fixtures()
+
+    single_cases = (
+        (
+            "duplicate_hot_leaf_challenge",
+            lambda payload: validate_pdp_payload(
+                "challenge",
+                payload,
+                label="duplicate_hot_leaf_challenge_v1.to",
+                generated_at_unix=123,
+            ),
+        ),
+        (
+            "missing_signature_proof",
+            lambda payload: validate_pdp_payload(
+                "proof",
+                payload,
+                label="missing_signature_proof_v1.to",
+                generated_at_unix=123,
+            ),
+        ),
+    )
+    pair_names = ("late_proof", "wrong_manifest_proof", "wrong_provider_proof")
+    bundle_names = (
+        "missing_hot_leaf_path_proof",
+        "missing_segment_path_proof",
+        "wrong_path_proof",
+    )
+
+    for name, validate in single_cases:
+        outcome = validate(_fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"))
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
+
+    for name in pair_names:
+        outcome = validate_pdp_challenge_proof(
+            challenge,
+            _fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"),
+            challenge_label="challenge_v1.to",
+            proof_label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
+
+    for name in bundle_names:
+        outcome = validate_pdp_bundle(
+            commitment,
+            challenge,
+            _fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"),
+            commitment_label="commitment_v1.to",
+            challenge_label="challenge_v1.to",
+            proof_label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
 
 
 def test_validate_pdp_payload_reports_malformed_payloads() -> None:
@@ -530,8 +699,28 @@ def test_validate_pdp_challenge_proof_reports_signature_failure() -> None:
 
 
 def test_reference_validation_rejects_bad_arguments_before_native_validation() -> None:
-    with pytest.raises(ValueError, match="unsupported SoraFS PDP payload kind"):
-        validate_pdp_payload("bad-kind", b"\x00" * 8)
+    for kind in (
+        "bad-kind",
+        "pdp-proof",
+        "pdp_proof",
+        "PROOF",
+        "Proof",
+        " proof ",
+    ):
+        with pytest.raises(ValueError, match="unsupported SoraFS PDP payload kind"):
+            validate_pdp_payload(kind, b"\x00" * 8)
+    for kind in (
+        "bad-kind",
+        "order",
+        "request",
+        "order_request",
+        "orderbook-order-request",
+        "ORDER-REQUEST",
+        " order-request ",
+        "runtime-snapshot",
+    ):
+        with pytest.raises(ValueError, match="unsupported SoraFS orderbook payload kind"):
+            validate_orderbook_payload(kind, b"\x00" * 8)
     with pytest.raises(ValueError, match="generated_at_unix"):
         validate_orderbook_payload("order-request", b"\x00" * 8, generated_at_unix=-1)
     with pytest.raises(TypeError, match="bytes-like"):
@@ -541,66 +730,51 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
 def test_validate_governance_dag_block_accepts_canonical_fixture() -> None:
     outcome = validate_governance_dag_block(
         _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-        label="fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-        generated_at_unix=1_700_002_001,
+        label="dag_block_0_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["generated_at"] == 1_700_002_001
-    assert outcome["inputs"] == [
-        {
-            "kind": "governance_dag_block",
-            "path": "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-        }
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_block_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_block_rejects_expected_cid_mismatch() -> None:
     outcome = validate_governance_dag_block(
         _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-        expected_block_cid=bytes(32),
-        generated_at_unix=1_700_002_002,
+        expected_block_cid=bytes([0x7F]) * 32,
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Error"
-    assert outcome["code"] == "SFS-GOV-004"
-    assert outcome["category"] == "validation"
-    assert outcome["generated_at"] == 1_700_002_002
-    assert outcome["inputs"] == [
-        {
-            "kind": "governance_dag_block",
-            "path": "governance-dag-block.to",
-        }
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_block_cid_mismatch_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_head_chain_accepts_root_to_head_fixture() -> None:
     blocks = [
         SorafsGovernanceDagBlockInput(
             _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-            "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+            "dag_block_0_v1.to",
         ),
         SorafsGovernanceDagBlockInput(
             _fixture(_GOVERNANCE_FIXTURES / "dag_block_1_v1.to"),
-            "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+            "dag_block_1_v1.to",
         ),
     ]
     outcome = validate_governance_dag_head_chain(
         _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
         blocks,
-        head_label="fixtures/sorafs_manifest/governance/dag_head_v1.to",
-        generated_at_unix=1_700_002_003,
+        head_label="dag_head_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["generated_at"] == 1_700_002_003
-    assert [entry["kind"] for entry in outcome["inputs"]] == [
-        "governance_dag_head",
-        "governance_dag_block",
-        "governance_dag_block",
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_head_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
@@ -615,17 +789,13 @@ def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
     outcome = validate_governance_dag_head_chain(
         _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
         blocks,
-        generated_at_unix=1_700_002_004,
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Error"
-    assert outcome["code"] == "SFS-GOV-006"
-    assert outcome["generated_at"] == 1_700_002_004
-    assert [entry["path"] for entry in outcome["inputs"]] == [
-        "governance-dag-head.to",
-        "governance-dag-block-0.to",
-        "governance-dag-block-1.to",
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_head_reordered_validation_outcome_v1.json",
+    )
 
 
 def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
@@ -637,8 +807,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         label="dag_block_bad_signature_v1.to",
         generated_at_unix=123,
     )
-    assert block_signature_outcome == _governance_outcome_fixture(
-        "dag_block_bad_signature_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        block_signature_outcome,
+        "dag_block_bad_signature_validation_outcome_v1.json",
     )
 
     trailing_bytes_outcome = validate_governance_dag_block(
@@ -646,8 +817,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         label="dag_block_trailing_bytes_v1.to",
         generated_at_unix=123,
     )
-    assert trailing_bytes_outcome == _governance_outcome_fixture(
-        "dag_block_trailing_bytes_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        trailing_bytes_outcome,
+        "dag_block_trailing_bytes_validation_outcome_v1.json",
     )
 
     head_signature_outcome = validate_governance_dag_head_chain(
@@ -659,8 +831,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         head_label="dag_head_bad_signature_v1.to",
         generated_at_unix=123,
     )
-    assert head_signature_outcome == _governance_outcome_fixture(
-        "dag_head_bad_signature_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        head_signature_outcome,
+        "dag_head_bad_signature_validation_outcome_v1.json",
     )
 
     predecessor_outcome = validate_governance_dag_head_chain(
@@ -678,8 +851,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         head_label="dag_head_bad_predecessor_v1.to",
         generated_at_unix=123,
     )
-    assert predecessor_outcome == _governance_outcome_fixture(
-        "dag_head_bad_predecessor_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        predecessor_outcome,
+        "dag_head_bad_predecessor_validation_outcome_v1.json",
     )
 
 
@@ -691,6 +865,17 @@ def test_governance_dag_wrappers_enforce_labels_and_block_count() -> None:
             root,
             label="x" * (SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 + 1),
         )
+    with pytest.raises(ValueError, match="control characters"):
+        validate_governance_dag_block(root, label="bad\u0001label")
+    for invalid_length in (0, 31, 33):
+        with pytest.raises(
+            ValueError,
+            match=rf"exactly {SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes",
+        ):
+            validate_governance_dag_block(
+                root,
+                expected_block_cid=bytes(invalid_length),
+            )
     with pytest.raises(ValueError, match=r"1\.\.="):
         validate_governance_dag_head_chain(head, [])
     with pytest.raises(ValueError, match=r"1\.\.="):

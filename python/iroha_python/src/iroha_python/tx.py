@@ -704,9 +704,9 @@ class TransactionDraft:
         try:
             normalized_public_amount = _normalize_quantity(public_amount)
         except TypeError as exc:
-            raise TypeError(f"public_amount must be a canonical quantity: {exc}") from exc
+            raise TypeError(f"public_amount: {exc}") from exc
         except ValueError as exc:
-            raise ValueError(f"public_amount must be a canonical quantity: {exc}") from exc
+            raise ValueError(f"public_amount: {exc}") from exc
         self.add_instruction(
             Instruction.unshield_prepared(
                 _require_non_empty_string(asset_definition_id, "asset_definition_id"),

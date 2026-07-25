@@ -41,49 +41,67 @@ SF-4 нь Pin бүртгэлийн гэрээ болон хадгалдаг ту
 
 | Бүтэц | Тодорхойлолт | Талбарууд |
 |--------|-------------|--------|
-| `PinRecordV1` | Каноник манифест оруулга. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, I18NI000000030X, I18NI000000310, I18NI0000003102 `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` | Газрын зургийн бусад нэр -> манифест CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
 | `ReplicationOrderV1` | Үйлчилгээ үзүүлэгчдийн манифестийг тогтоох заавар. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
 | `ReplicationReceiptV1` | Үйлчилгээ үзүүлэгчийн хүлээн зөвшөөрөлт. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
 | `ManifestPolicyV1` | Засаглалын бодлогын агшин зураг. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Хэрэгжүүлэх лавлагаа: `crates/sorafs_manifest/src/pin_registry.rs`-г үзнэ үү
-Rust Norito схемүүд болон баталгаажуулалтын туслахууд нь эдгээр бүртгэлийг дэмждэг. Баталгаажуулалт
-нь манифест хэрэгслийг (chunker бүртгэлийн хайлт, пин бодлогын гарц) толин тусгал болгодог
-гэрээ, Torii фасадууд, CLI нь ижил инвариантуудыг хуваалцдаг.
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-Даалгаварууд:
-- `crates/sorafs_manifest/src/pin_registry.rs` дээр Norito схемүүдийг эцэслэнэ.
-- Norito макро ашиглан код үүсгэх (Rust + бусад SDK).
-- Схемүүд буусны дараа баримтуудыг шинэчилнэ үү (`sorafs_architecture_rfc.md`).
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## Гэрээний хэрэгжилт
+## Contract Implementation
 
-| Даалгавар | Эзэмшигч(үүд) | Тэмдэглэл |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| Бүртгэлийн хадгалалт (sled/sqlite/off-chain) эсвэл ухаалаг гэрээний модулийг хэрэгжүүлэх. | Үндсэн Infra / Ухаалаг гэрээний баг | Тодорхойлолттой хэш хийх, хөвөх цэгээс зайлсхий. |
-| Оролтын цэгүүд: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Баталгаажуулалтын төлөвлөгөөнөөс `ManifestValidator` хөшүүрэг аваарай. Alias ​​холбох нь одоо `RegisterPinManifest` (Torii DTO гадаргуу) -аар дамждаг бол `bind_alias` дараалсан шинэчлэлтүүдийг хийхээр төлөвлөгдсөн хэвээр байна. |
-| Төлөвийн шилжилтүүд: залгамж чанарыг хэрэгжүүлэх (манифест A -> B), хадгалалтын эрин үе, бусад нэрийн өвөрмөц байдал. | Засаглалын зөвлөл / Үндсэн Инфра | Alias-ын өвөрмөц байдал, хадгалах хязгаарлалт, өмнөх үеийн зөвшөөрөл/тэтгэвэрт гарах шалгалтууд одоо `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`-д байна; олон хоп залгамжлал илрүүлэх, хуулбарлах нягтлан бодох бүртгэл нээлттэй хэвээр байна. |
-| Зохицуулсан параметрүүд: `ManifestPolicyV1`-г тохиргоо/засаглалын төлөвөөс ачаалах; засаглалын үйл явдлуудаар дамжуулан шинэчлэлт хийхийг зөвшөөрөх. | Засаглалын зөвлөл | Бодлогын шинэчлэлтийн CLI-г өгнө үү. |
-| Үйл явдлын ялгаруулалт: телеметрийн Norito үйл явдлыг ялгаруулна (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Ажиглалт | Үйл явдлын схем + бүртгэлийг тодорхойлох. |
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-Туршилт:
-- Оролтын цэг бүрийн нэгжийн тест (эерэг + татгалзал).
-- Өв залгамжлалын гинжин хэлхээний шинж чанарын туршилт (мөчлөг байхгүй, монотон эрин үе).
-- Санамсаргүй манифест үүсгэх замаар тодорхойгүй баталгаажуулалт (хязгаарлагдмал).
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-## Үйлчилгээний фасад (Torii/SDK интеграци)
+## Service Facade (Torii/SDK Integration)
 
-| Бүрэлдэхүүн хэсэг | Даалгавар | Эзэмшигч(үүд) |
-|----------|------|----------|
-| Torii Үйлчилгээ | `/v1/sorafs/pin` (илгээх), `/v1/sorafs/pin/{cid}` (хайлт), `/v1/sorafs/aliases` (жагсаалт/холбох), `/v1/sorafs/replication` (захиалга/баримт) илчлэх. Хуудсууд + шүүлтүүрээр хангана. | Сүлжээний TL / Core Infra |
-| Баталгаажуулалт | Хариултуудад бүртгэлийн өндөр/хэшийг оруулах; SDK-уудын хэрэглэдэг Norito баталгаажуулалтын бүтцийг нэмнэ үү. | Core Infra |
-| CLI | `sorafs_manifest_builder` эсвэл шинэ `sorafs_pin` CLI-г `pin submit`, `alias bind`, `order issue`, `registry export`-ээр сунгана. | Багажны WG |
-| SDK | Norito схемээс үйлчлүүлэгчийн холболт (Rust/Go/TS) үүсгэх; интеграцийн тест нэмэх. | SDK багууд |
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
-Үйл ажиллагаа:
-- GET төгсгөлийн цэгүүдэд кэшийн давхарга/ETag нэмнэ үү.
-- Torii бодлоготой нийцүүлэн ханшийн хязгаарлалт / баталгаажуулалтыг өгнө.
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## Бэхэлгээ & CI
 
@@ -133,9 +151,8 @@ Rust Norito схемүүд болон баталгаажуулалтын тус�
 SF-4-ийн дагуух замын зургийн хяналтын хуудас бүр ахиц дэвшил гарсан үед энэ төлөвлөгөөг иш татна.
 REST фасадыг одоо баталгаажуулсан жагсаалтын төгсгөлийн цэгүүдээр нийлүүлдэг.
 
-- `GET /v1/sorafs/pin` ба `GET /v1/sorafs/pin/{digest}` буцах манифестууд
-  Alias bindings, replication orders, and attestation object from үүсэлтэй
-  хамгийн сүүлийн блок хэш.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` ба `GET /v1/sorafs/replication` идэвхтэй бодисыг илрүүлдэг.
   нэрийн каталог болон хуулбарлах захиалгын дарааллыг тууштай хуудаслах ба
   статус шүүлтүүрүүд.

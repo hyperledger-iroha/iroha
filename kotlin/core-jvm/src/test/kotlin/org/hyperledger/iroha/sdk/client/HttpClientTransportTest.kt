@@ -70,6 +70,69 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun getSumeragiDiagnosticsUsesDedicatedOperationalEndpoint() {
+        val payload = """
+            {
+              "pipeline_execution": {
+                "tx_vertices_total": 0,
+                "tx_edges_total": 0,
+                "overlay_count_total": 0,
+                "overlay_instr_total": 0,
+                "overlay_bytes_total": 0,
+                "rbc_chunks_total": 0,
+                "rbc_bytes_total": 0,
+                "detached_prepared_total": 0,
+                "detached_merged_total": 0,
+                "detached_fallback_total": 0,
+                "detached_fallback_fee_postprocessing_total": 0,
+                "detached_fallback_user_executor_total": 0,
+                "detached_fallback_durable_state_total": 0,
+                "detached_fallback_unsupported_instruction_total": 0,
+                "detached_fallback_rejected_eval_total": 0,
+                "detached_fallback_overlay_error_total": 0,
+                "quarantine_executed_total": 0
+              },
+              "tx_queue_depth": 0,
+              "tx_queue_capacity": 1,
+              "tx_queue_retained_bytes": 0,
+              "tx_queue_max_retained_bytes": 1,
+              "tx_queue_saturated": false,
+              "tx_queue_saturated_by_count": false,
+              "tx_queue_saturated_by_bytes": false,
+              "tx_queue_saturated_by_age": false,
+              "tx_queue_oldest_queued_age_ms": 0,
+              "lane_commitments": [],
+              "dataspace_commitments": [],
+              "lane_settlement_commitments": [],
+              "lane_relay_envelopes": [],
+              "lane_payload_ownerships": [],
+              "committed_lane_blocks": [],
+              "lane_block_sessions": [],
+              "lane_governance_sealed_total": 0,
+              "lane_governance_sealed_aliases": [],
+              "lane_governance": [],
+              "native_amx_participant_applications": [],
+              "autonomous_lane_executions": []
+            }
+        """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+        val executor = StubResponseExecutor(200, payload)
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val diagnostics = transport.getSumeragiDiagnostics().join()
+
+        assertEquals(BigInteger.ONE, diagnostics.txQueueCapacity)
+        assertEquals(
+            "https://torii.example/api/v1/sumeragi/diagnostics",
+            executor.lastRequest.uri.toString(),
+        )
+        assertEquals("GET", executor.lastRequest.method)
+        assertEquals("application/json", executor.lastRequest.headers["Accept"]?.single())
+    }
+
+    @Test
     fun issueIdentifierClaimReceiptForwardsAccountAliasPathLiteral() {
         val executor = CapturingExecutor()
         val transport = HttpClientTransport.withExecutor(

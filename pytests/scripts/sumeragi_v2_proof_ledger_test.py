@@ -78,6 +78,152 @@ def copy_async_source_fidelity_fixture(
     return formal_dir
 
 
+def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
+    """Copy only the config-v6 merge/pending projection and its live consumers."""
+
+    for relative in (
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    kura = tmp_path / "crates/iroha_core/src/kura.rs"
+    kura.write_text(
+        """
+pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits() {
+    let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
+        sumeragi_limits,
+        &config.store_dir.resolve_relative_path(),
+    )?;
+}
+
+fn pending_merge_entry_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+}
+
+fn pending_queue_plan_admission_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+}
+
+fn validate_pending_merge_entries_on_startup() {
+    if !self
+        .pending_control_sidecar_limits
+        .combined_bytes_within_limit(merge_bytes, admission_bytes)
+    {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            self.store_root.clone(),
+            "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+        ));
+    }
+}
+
+pub(crate) fn persist_pending_certified_merge_entry() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+    if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
+        !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(total, admission_bytes)
+    }) {
+        return Err(error);
+    }
+}
+
+pub fn persist_pending_queue_plan_admission_certificate() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+    if admission_bytes
+        .checked_add(canonical_certificate_bytes.len())
+        .is_none_or(|total| {
+            !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(merge_bytes, total)
+        })
+    {
+        return Err(error);
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    daemon = tmp_path / "crates/irohad/src/main.rs"
+    daemon.parent.mkdir(parents=True, exist_ok=True)
+    daemon.write_text(
+        """
+fn production_startup() {
+    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+        &config.kura,
+        &config.nexus.lane_config,
+        &config.nexus.configured_lane_catalog,
+        &config.snapshot.bootstrap,
+        &config.sumeragi.limits,
+    );
+}
+""",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def merge_runtime_config_errors(repo_root: Path) -> list[str]:
+    """Run one mutation check in a fresh process so large Rust tokens are released."""
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("merge_runtime_checker", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+print(json.dumps(module._merge_runtime_config_production_source_fidelity_errors(
+    Path(sys.argv[2])
+)))
+""",
+            str(SCRIPT),
+            str(repo_root),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    errors = json.loads(probe.stdout)
+    assert isinstance(errors, list) and all(isinstance(error, str) for error in errors)
+    return errors
+
+
 def mutate_tla_operator(
     source: str,
     symbol: str,
@@ -17247,7 +17393,9 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
     verus_source = (ROOT_DIR / "scripts" / "verify_sumeragi_v2.sh").read_text()
     unit = verus_source.index("--unit")
     fast_network = verus_source.index("--fast-network")
-    backend = verus_source.index("cargo verus verify")
+    backend = verus_source.index(
+        "run_sumeragi_v2_harness.sh --verus"
+    )
     assert unit < fast_network < backend
 
 
@@ -17284,9 +17432,53 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         ),
         (
             harness,
-            "    cargo fetch --locked\n",
-            "    cargo fetch --locked --offline\n",
-            "exactly one online `cargo fetch --locked`",
+            "    run_cargo fetch --locked\n",
+            "    run_cargo fetch --locked --offline\n",
+            "guarded `run_cargo fetch --locked`",
+        ),
+        (
+            harness,
+            "    ps -axo pid,etime,command\n",
+            "    ps -axo pid,command\n",
+            "exact `ps -axo pid,etime,command` snapshot",
+        ),
+        (
+            harness,
+            'run_cargo() {\n'
+            "  wait_for_external_cargo\n"
+            '  command cargo "$@"\n'
+            "}\n",
+            'run_cargo() {\n'
+            '  command cargo "$@"\n'
+            "}\n",
+            "exact wait_for_external_cargo/run_cargo wrapper",
+        ),
+        (
+            harness,
+            "  --*)\n"
+            '    echo "unknown harness mode: $1" >&2\n',
+            "  --escape)\n"
+            '    "$@"\n'
+            "    ;;\n"
+            "  --*)\n"
+            '    echo "unknown harness mode: $1" >&2\n',
+            "fixed-mode inventory is not exact",
+        ),
+        (
+            harness,
+            '    echo "positional harness commands are unsupported; '
+            'select one fixed mode" >&2\n'
+            "    exit 2\n",
+            '    "$@"\n',
+            "argument vector may be forwarded only",
+        ),
+        (
+            harness,
+            "    run_cargo verus verify --locked --offline -p "
+            "iroha_sumeragi_core --features verus \\\n",
+            "    run_cargo verus verify --locked -p "
+            "iroha_sumeragi_core --features verus \\\n",
+            "exact reviewed Verus and Clippy command branches",
         ),
         (
             harness,
@@ -17304,11 +17496,11 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             harness,
             '    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"\n'
             '    ignored_test_list="$(\n'
-            "      cargo test --locked --offline -p iroha_sumeragi_core \\\n"
+            "      run_cargo test --locked --offline -p iroha_sumeragi_core \\\n"
             "        --test network_simulation -- --list --ignored",
             '    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"\n'
             '    ignored_test_list="$(\n'
-            "      cargo test --locked -p iroha_sumeragi_core \\\n"
+            "      run_cargo test --locked -p iroha_sumeragi_core \\\n"
             "        --test network_simulation -- --list --ignored",
             "inventory and execution must both remain --locked --offline",
         ),
@@ -17378,13 +17570,13 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "canonical module/test inventory SHA-256",
         ),
         (
-            'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --lib -- --list)"',
-            'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --all-features --lib -- --list)"',
+            'production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"',
+            'production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --all-features --lib -- --list)"',
             "reviewed P2P corridor must use exact default-feature test discovery",
         ),
         (
-            'production_config_unit_list="$(cargo test --locked --offline -p iroha_config --lib -- --list)"',
-            'production_config_unit_list="$(cargo test --locked --offline -p iroha_config --all-features --lib -- --list)"',
+            'production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --lib -- --list)"',
+            'production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --all-features --lib -- --list)"',
             "exact-output configuration discovery must use the exact iroha_config library test surface",
         ),
         (
@@ -17413,6 +17605,8 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
     for relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
@@ -17440,6 +17634,8 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
@@ -17487,6 +17683,8 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
@@ -17530,6 +17728,8 @@ def test_production_release_inventory_seals_successor_parent_binding(
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
@@ -17579,14 +17779,14 @@ def test_production_release_inventory_seals_successor_parent_binding(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the current 515-test, 38-module, 65-leg\ninventory",
-            "yielding the current 515-test, 38-module, 64-leg\ninventory",
+            "yielding the current 515-test, 38-module, 78-leg\ninventory",
+            "yielding the current 515-test, 38-module, 77-leg\ninventory",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 65 pre-network corridor legs and\n"
+            "receipt binds the 78 pre-network corridor legs and\n"
             "their exact 515-test inventory",
-            "receipt binds the 64 pre-network corridor legs and\n"
+            "receipt binds the 77 pre-network corridor legs and\n"
             "their exact 515-test inventory",
         ),
     ),
@@ -17651,18 +17851,18 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=65",
-            "  readonly expected_corridor_leg_count=64",
-            "sealed at sixty-five legs",
+            "  readonly expected_corridor_leg_count=78",
+            "  readonly expected_corridor_leg_count=77",
+            "sealed at 78 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            '  source-sealed-workspace-tests command 0 \\\n'
-            '  "cargo test --locked --offline --workspace" \\\n'
-            "  cargo test --locked --offline --workspace",
-            '  source-sealed-workspace-tests command 0 \\\n'
-            '  "cargo test --locked --workspace" \\\n'
-            "  cargo test --locked --workspace",
+            '    source-sealed-workspace-tests command 0 \\\n'
+            '    "cargo test --locked --offline --workspace" \\\n'
+            "    run_cargo test --locked --offline --workspace",
+            '    source-sealed-workspace-tests command 0 \\\n'
+            '    "cargo test --locked --workspace" \\\n'
+            "    run_cargo test --locked --workspace",
             "source-sealed command-success leg source-sealed-workspace-tests",
         ),
     ),
@@ -18038,6 +18238,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         )
         == []
     )
+    assert (
+        module._kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+            fidelity_root
+        )
+        == []
+    )
     lane_geometry_fidelity_path = fidelity_root / lane_geometry_relative
     canonical_lane_geometry = lane_geometry_fidelity_path.read_text(
         encoding="utf-8"
@@ -18083,7 +18289,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             canonical_fixed_pairs.replace(old, new, 1),
         )
 
-    mutate_fixed_progress_pairs("; 8]", "; 7]")
+    mutate_fixed_progress_pairs("; 5]", "; 4]")
     errors = module._kura_retirement_progress_production_source_fidelity_errors(
         fidelity_root
     )
@@ -18107,7 +18313,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
         assert any(
-            "must preserve exact eight-member artifact membership and order"
+            "must preserve exact five-member artifact membership and order"
             in error
             for error in errors
         ), (data_name, errors)
@@ -18115,35 +18321,18 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             canonical_lane_geometry, encoding="utf-8"
         )
 
-    mutate_lane_geometry_item(
-        "ensure_first_release_lane_retirement_admissible_locked",
-        "Self::native_amx_application_manifest_paths_for_entry(",
-        "Self::native_amx_participant_receipt_paths_for_entry(",
-    )
-    errors = module._kura_retirement_progress_production_source_fidelity_errors(
-        fidelity_root
-    )
-    assert any(
-        "retirement native_manifest_data/native_manifest_index path binding"
-        in error
-        for error in errors
-    ), errors
-    lane_geometry_fidelity_path.write_text(
-        canonical_lane_geometry, encoding="utf-8"
-    )
-
     lane_geometry_mutations = (
         (
             "ensure_first_release_lane_retirement_admissible_locked",
             "    &fixed_progress_pairs,\n",
-            "    &fixed_progress_pairs[..6],\n",
+            "    &fixed_progress_pairs[..4],\n",
             "all fixed retirement progress pairs must recover before the "
             "immutable snapshot",
         ),
         (
             "recover_geometry_progress_pairs_before_snapshot",
             "for &(data_path, index_path, kind) in pairs {",
-            "for &(data_path, index_path, kind) in pairs.iter().take(7) {",
+            "for &(data_path, index_path, kind) in pairs.iter().take(4) {",
             "retirement recovery must visit every pair inside the "
             "authenticated directory",
         ),
@@ -18175,6 +18364,93 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         lane_geometry_fidelity_path.write_text(
             canonical_lane_geometry, encoding="utf-8"
         )
+
+    standalone_native_mutations = (
+        (
+            "read_geometry_native_amx_per_height_evidence",
+            "Self::parse_native_amx_evidence_path(&path)?",
+            "None",
+            "standalone Native AMX scanner must classify only canonical "
+            "per-height names",
+        ),
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            """            if !native_amx_retained_windows_are_complete(
+                &native_manifest_heights,
+                &native_receipt_heights,
+            ) {
+""",
+            """            if native_manifest_heights != native_receipt_heights {
+""",
+            "live Native AMX evidence must form a complete retained suffix",
+        ),
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            "match native_receipt_heights.last().copied() {",
+            "match native_receipt_heights.first().copied() {",
+            "live Native AMX latest lookup must select the highest retained "
+            "receipt",
+        ),
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            "manifest.leaf.lane_id != entry.lane_id",
+            "manifest.leaf.lane_id == entry.lane_id",
+            "live Native AMX manifests must join the active route, incarnation, "
+            "and application height",
+        ),
+        (
+            "ensure_archived_lane_work_released",
+            "manifest.leaf.lane_incarnation != binding.incarnation",
+            "manifest.leaf.lane_incarnation == binding.incarnation",
+            "archived Native AMX manifests must join the archived incarnation "
+            "and canonical finality",
+        ),
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            """                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane retirement scan encountered an unknown artifact filename",
+                    ),
+                    path,
+                ));
+""",
+            """                continue;
+""",
+            "live Native AMX retirement must reject every unexpected or legacy "
+            "artifact after the complete allowlist",
+        ),
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            """                if Self::parse_native_amx_evidence_path(&path)?.is_some() {
+                    continue;
+                }
+""",
+            """                if Self::parse_native_amx_evidence_path(&path)?.is_some() {
+                    continue;
+                }
+                if name == "native_amx_application_manifests.norito" {
+                    continue;
+                }
+""",
+            "must reject obsolete dense Native AMX evidence acceptance",
+        ),
+    )
+    for item_name, old, new, diagnostic in standalone_native_mutations:
+        mutate_lane_geometry_item(item_name, old, new)
+        errors = (
+            module._kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+                fidelity_root
+            )
+        )
+        assert any(diagnostic in error for error in errors), (
+            diagnostic,
+            errors,
+        )
+        lane_geometry_fidelity_path.write_text(
+            canonical_lane_geometry, encoding="utf-8"
+        )
+
     new_production_inventory_additions = (
         (
             "kura::lane_geometry::tests::",
@@ -18188,7 +18464,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "kura::lane_geometry::tests::",
-            "first_release_retirement_promotes_then_rejects_complete_autonomous_rewrite",
+            "first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion",
             lane_geometry_source,
         ),
         (
@@ -18982,7 +19258,11 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
     )
-    assert len(receipt_module._corridor_legs()) == 65
+    assert (
+        len(receipt_module._corridor_legs())
+        == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
+        == 78
+    )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
     ) == (
@@ -19002,13 +19282,16 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "cargo test --locked --offline -p iroha_data_model --lib "
         "block::consensus_v2::finality::tests -- --test-threads=1"
     )
-    for _, module, expected_count in receipt_module._PRODUCTION_MODULES:
+    for _, production_module, expected_count in receipt_module._PRODUCTION_MODULES:
         assert (
-            sum(test.startswith(f"{module}::") for test in production_inventory)
+            sum(
+                test.startswith(f"{production_module}::")
+                for test in production_inventory
+            )
             == expected_count
         )
-    for module, test_name, _ in production_inventory_additions:
-        assert f"{module}{test_name}" in production_inventory
+    for production_module, test_name, _ in production_inventory_additions:
+        assert f"{production_module}{test_name}" in production_inventory
     for required_test in (
         "kura::tests::progress_witness_durability::"
         "absent_progress_namespace_requires_every_directory_barrier",
@@ -19167,13 +19450,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in release_source
     )
     assert (
-        'production_config_unit_list="$(cargo test --locked --offline -p iroha_config '
+        'production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config '
         '--lib -- --list)"'
         in release_source
     )
     assert (
         'production_config_ignored_unit_list="$(\n'
-        '  cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
+        '  run_cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
         ')"'
         in release_source
     )
@@ -19216,7 +19499,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "pytests/scripts/seal_workspace_source_test.py" in release_source
     assert "did not run exactly 30 passing tests" in release_source
     assert "seed_launcher_contract_tests=(" in release_source
-    assert "did not run exactly 11 passing tests" in release_source
+    assert "did not run exactly 14 passing tests" in release_source
+    for seed_contract in (
+        "test_mocked_seed_matrix_rejects_bundle_tampering_before_completion",
+        "test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion",
+        "test_mocked_seed_matrix_marker_durability_failure_is_not_terminal",
+    ):
+        assert seed_contract in release_source
+    assert (
+        '"preflight-seed-launcher",\n                "pytest",\n                14,'
+        in receipt_source
+    )
     assert "did not run exactly five passing tests" in release_source
     assert "preflight-chaos-launcher pytest 5" in release_source
     assert "did not run exactly 68 passing tests" in release_source
@@ -19225,8 +19518,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 82" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 221 passing tests" in release_source
-    assert "preflight-release-receipt pytest 221" in release_source
+    assert "did not run exactly 316 passing tests" in release_source
+    assert "preflight-release-receipt pytest 316" in release_source
+    assert "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py" in release_source
+    assert (
+        "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py"
+        in release_source
+    )
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
@@ -19244,7 +19542,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                221,'
+        '"preflight-release-receipt",\n                "pytest",\n                316,'
         in receipt_source
     )
     assert "did not run exactly 1045 passing tests" in release_source
@@ -19289,8 +19587,23 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
-    assert "did not run exactly 39 passing tests" in release_source
-    assert "expected_corridor_leg_count=65" in release_source
+    assert "did not run exactly 42 passing tests" in release_source
+    for soak_contract in (
+        "test_launcher_rejects_bundle_tampering_before_completion",
+        "test_launcher_rejects_symlinked_marker_temp_without_completion",
+        "test_launcher_marker_durability_failure_is_not_terminal",
+        "test_launcher_does_not_promote_provisional_evidence_when_validation_fails",
+    ):
+        assert soak_contract in release_source
+    assert (
+        '"preflight-taira-soak",\n                "pytest",\n                42,'
+        in receipt_source
+    )
+    assert (
+        "expected_corridor_leg_count="
+        f"{module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
+        in release_source
+    )
     for leg_id, command in (
         ("source-sealed-workspace-format", "cargo fmt --all -- --check"),
         (
@@ -19393,7 +19706,19 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source
-    assert "Fail before 160 real-network runs" in release_source
+    assert "  seed_count=32" in seed_source
+    scenario_marker = "readonly scenarios=(\n"
+    assert seed_source.count(scenario_marker) == 1
+    scenario_inventory = seed_source.split(scenario_marker, 1)[1].split("\n)", 1)[0]
+    scenario_count = sum(
+        1 for line in scenario_inventory.splitlines() if line.strip()
+    )
+    assert scenario_count == 5
+    assert 32 * scenario_count == 160
+    assert (
+        'readonly expected_runs="$((seed_count * ${#scenarios[@]}))"'
+        in seed_source
+    )
     assert "workspace sources changed during the PR release corridor" in release_source
     assert "workspace sources changed before the Taira production soak" in release_source
     assert "workspace sources changed during the production release corridor" in release_source
@@ -19458,7 +19783,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert finalizer < fail_closed < successful_skip
 
 
-def test_release_corridor_clears_binary_overrides_and_uses_source_bound_targets() -> None:
+def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> None:
     release_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     ).read_text(encoding="utf-8")
@@ -19472,12 +19797,60 @@ def test_release_corridor_clears_binary_overrides_and_uses_source_bound_targets(
         assert "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA" in source
         assert "TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO" in source
         assert "CARGO_BIN_EXE_iroha" in source
-        assert "IROHA_TEST_SKIP_BUILD=0" in source
-        assert "IROHA_TEST_ALLOW_REENTRANT_BUILD=1" in source
+        assert "export IROHA_TEST_SKIP_BUILD=1" in source
+        assert "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0" in source
         assert "IROHA_TEST_BUILD_TIMEOUT_MS=3600" in source
         assert "sumeragi-v2-release/${" in source
+        assert "ensure_source_bound_localnet_binaries" in source
+        assert "export_source_bound_localnet_binaries" in source
+        assert (
+            'export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"'
+            in source
+        )
+        assert (
+            'export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"'
+            in source
+        )
+        assert (
+            'export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"'
+            in source
+        )
+        assert (
+            'export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"' in source
+        )
     assert 'export CARGO_TARGET_DIR="${source_bound_root}/test-suite"' in soak_source
     assert 'export IROHA_TEST_TARGET_DIR="${source_bound_root}/programs"' in soak_source
+
+
+def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
+    inventory_source = (
+        ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    ).read_text(encoding="utf-8")
+    kura_source = (
+        ROOT_DIR / "crates" / "iroha_core" / "src" / "kura.rs"
+    ).read_text(encoding="utf-8")
+
+    current_names = (
+        "native_amx_manifest_v1_",
+        "native_amx_receipt_v1_",
+        "native_amx_evidence_prune_intent_v1.norito",
+        "native_amx_evidence_prune_intent_v1.norito.tmp",
+        "native_amx_participant_receipts.latest_v1.norito",
+        "native_amx_participant_receipts.latest_v1.norito.tmp",
+    )
+    for name in current_names:
+        assert name in inventory_source
+        assert name in kura_source
+
+    obsolete_dense_names = (
+        "native_amx_participant_receipts.norito",
+        "native_amx_participant_receipts.index",
+        "native_amx_application_manifests.norito",
+        "native_amx_application_manifests.index",
+    )
+    for name in obsolete_dense_names:
+        assert name in inventory_source
+        assert name not in kura_source
 
 
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:
@@ -19672,6 +20045,38 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
     assert "--unit" in source
     assert "--model-replay" in source
     assert "--chaos-100k" in source
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("/attacker/path/cargo", "test", "--locked", "--offline"),
+        ("env", "cargo", "test", "--locked", "--offline"),
+        ("bash", "-c", "cargo test --locked --offline"),
+    ),
+)
+def test_workspace_excluded_harness_rejects_indirect_cargo_dispatch(
+    tmp_path: Path, arguments: tuple[str, ...]
+) -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT_DIR / "scripts/formal/run_sumeragi_v2_harness.sh"),
+            *arguments,
+        ],
+        cwd=ROOT_DIR,
+        env={**os.environ, "CARGO_TARGET_DIR": str(tmp_path / "target")},
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert (
+        "positional harness commands are unsupported; select one fixed mode"
+        in result.stderr
+    )
 
 
 def test_installers_use_fixed_urls_and_literal_checksums() -> None:
@@ -20670,6 +21075,225 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         )
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any("semantic-capacity bypass" in error for error in errors)
+
+
+MERGE_RUNTIME_PROJECTED_FIELDS = (
+    "merge_sidecar_inbound_session_capacity",
+    "merge_sidecar_inbound_sessions_per_peer",
+    "merge_sidecar_inbound_assembly_bytes",
+    "merge_sidecar_inbound_assembly_bytes_per_peer",
+    "merge_sidecar_deferred_block_capacity",
+    "merge_sidecar_future_block_distance",
+    "merge_sidecar_request_timeout_ms",
+    "merge_sidecar_outbound_sessions_per_source",
+    "merge_sidecar_outbound_bytes_per_source",
+    "merge_sidecar_server_request_gates_per_source",
+    "merge_sidecar_server_request_gate_ttl_ms",
+    "pending_certified_merge_entry_capacity",
+    "pending_queue_plan_admission_capacity",
+    "pending_control_sidecar_bytes",
+    "merge_signing_guard_record_capacity",
+    "merge_signing_guard_record_bytes",
+    "merge_signing_guard_total_bytes",
+)
+
+
+def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
+    module = load_checker()
+    checker_source = SCRIPT.read_text(encoding="utf-8")
+
+    assert tuple(
+        projected_field
+        for projected_field, *_rest in module.MERGE_RUNTIME_CONFIG_FIELDS
+    ) == MERGE_RUNTIME_PROJECTED_FIELDS
+    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 17
+    assert (
+        checker_source.count(
+            '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
+        )
+        == 2
+    )
+    assert (
+        '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;"'
+        not in checker_source
+    )
+
+
+def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
+    module = load_checker()
+
+    assert module._merge_runtime_config_production_source_fidelity_errors() == []
+
+
+@pytest.mark.parametrize("field", MERGE_RUNTIME_PROJECTED_FIELDS)
+def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    actual_path = repo_root / "crates/iroha_config/src/parameters/actual.rs"
+    source = actual_path.read_text(encoding="utf-8")
+    projection_start = source.index("limits: SumeragiV2Limits {")
+    projection_end = source.index(
+        "native_amx_signing_guard_record_capacity,", projection_start
+    )
+    needle = f"                {field},"
+    position = source.index(needle, projection_start, projection_end)
+    replacement = f"                {field}: 0,"
+    actual_path.write_text(
+        source[:position] + replacement + source[position + len(needle) :],
+        encoding="utf-8",
+    )
+
+    errors = merge_runtime_config_errors(repo_root)
+
+    assert any(
+        "shared fingerprint projection carries all 17 config-v6 merge fields"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "region", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION:",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 5;",
+            "merge-runtime shared-config format version 6",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY:",
+            "V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "V2_RETIRED_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "config-v6 default V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES:",
+            "V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES",
+            "V2_RETIRED_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES",
+            "merge-signing metadata headroom has one named config source",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "pub struct SumeragiV2RuntimeLimits {",
+            "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER",
+            "user config field merge_sidecar_inbound_session_capacity",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "limits: actual::SumeragiV2RuntimeLimits {",
+            ".merge_sidecar_inbound_session_capacity,",
+            ".merge_sidecar_inbound_sessions_per_peer,",
+            "user parsing maps all 17 config-v6 merge fields without substitution",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "let merge_sidecar_inbound_session_capacity = canonical_bounded_size(",
+            "merge_sidecar_inbound_sessions_per_peer,\n"
+            "            merge_sidecar_inbound_session_capacity,",
+            "merge_sidecar_inbound_sessions_per_peer,\n"
+            "            merge_sidecar_inbound_sessions_per_peer,",
+            "config validation preserves decided and ordinary inbound session corridors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "let merge_sidecar_limits = MergeSidecarLimits::new(",
+            "non_zero(config.limits.merge_sidecar_inbound_sessions_per_peer)?",
+            "non_zero(config.limits.merge_sidecar_inbound_session_capacity)?",
+            "runner constructs live sidecar and signing limits from all projected merge fields",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "merge_sidecars: MergeSidecarTransport::with_limits(",
+            "limits.merge_sidecar_limits,",
+            "MergeSidecarLimits::defaults(),",
+            "adapter installs fingerprinted merge-sidecar limits in live transport",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(",
+            "limits.merge_signing_guard_limits,",
+            "MergeSigningGuardLimits::defaults(),",
+            "adapter opens the durable merge-signing journal with fingerprinted limits",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn defer_block_with_priority(",
+            "self.limits.future_block_distance",
+            "u64::MAX",
+            "live sidecar carrier admission consumes configured future distance",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if bytes.len() > self.limits.max_record_bytes",
+            "total > self.limits.max_total_bytes",
+            "total > usize::MAX",
+            "merge-signing authorization consumes configured aggregate bytes",
+        ),
+        (
+            "crates/irohad/src/main.rs",
+            "Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(",
+            "&config.sumeragi.limits,",
+            "&iroha_config::parameters::actual::SumeragiV2RuntimeLimits::default(),",
+            "daemon passes fingerprinted pending-control limits into production Kura",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(",
+            "sumeragi_limits,",
+            "&SumeragiV2RuntimeLimits::default(),",
+            "Kura validates pending-control limits before opening its store",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "pub(crate) fn persist_pending_certified_merge_entry(",
+            "paths.len() == self.pending_control_sidecar_limits.certified_merge_entries",
+            "paths.len() == usize::MAX",
+            "Kura merge admission consumes the configured pending-entry count",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "pub fn persist_pending_queue_plan_admission_certificate(",
+            "paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions",
+            "paths.len() == usize::MAX",
+            "Kura QueuePlan admission consumes the configured certificate count",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "fn validate_pending_merge_entries_on_startup(",
+            ".combined_bytes_within_limit(merge_bytes, admission_bytes)",
+            ".merge_bytes_within_limit(merge_bytes)",
+            "Kura startup consumes the configured shared pending byte limit",
+        ),
+    ),
+)
+def test_merge_runtime_config_v6_rejects_disconnected_production_seams(
+    tmp_path: Path,
+    relative: str,
+    region: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    path = repo_root / relative
+    source = path.read_text(encoding="utf-8")
+    region_start = source.index(region)
+    mutation = source.index(old, region_start)
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+
+    errors = merge_runtime_config_errors(repo_root)
+
+    assert any(expected_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

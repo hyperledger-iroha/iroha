@@ -80,10 +80,11 @@ def matcher_service(*, lag_ms: int = 100) -> dict:
             "daemonized": True,
             "contract_forwarding_enabled": True,
             "price_time_priority_verified": True,
-            "replay_snapshot_verified": True,
+            "finalized_cursor_replay_verified": True,
+            "committed_state_reconciliation_verified": True,
+            "local_book_authority_absent": True,
             "durable_checkpoint_verified": True,
             "contract_digest_hex": DIGEST,
-            "divergence_detected": False,
             "matcher_lag_ms": lag_ms,
             "accepted_order_count": 12,
             "accepted_orders": order_refs(12),
@@ -94,7 +95,7 @@ def matcher_service(*, lag_ms: int = 100) -> dict:
                 "orderbook-order-invalid-00",
                 "orderbook-order-invalid-01",
             ],
-            "raw_snapshot_included": False,
+            "raw_ledger_included": False,
         }
     )
     return payload
@@ -223,19 +224,30 @@ def observability(*, critical: bool = False) -> dict:
     payload.update(
         {
             "metrics_scrape_success": True,
+            "metrics_scraped_at_unix": GENERATED_AT,
             "contract_digest_hex": DIGEST,
             "dashboard_provisioned": True,
             "alert_rules_installed": True,
             "live_dashboard_wired": True,
             "critical_alerts_firing": critical,
+            "finalized_projection_ready": True,
+            "finalized_projection_height": 42,
+            "finalized_projection_timestamp_seconds": GENERATED_AT,
+            "finalized_projection_failure_delta": 0,
             "metrics": [
-                "torii_sorafs_orderbook_order_flow_total",
-                "torii_sorafs_orderbook_open_depth",
-                "torii_sorafs_orderbook_matcher_lag_ms",
+                "torii_sorafs_orderbook_finalized_events_total",
+                "torii_sorafs_orderbook_open_depth_gib",
+                "torii_sorafs_orderbook_matcher_lag_seconds",
                 "torii_sorafs_orderbook_settlement_backlog",
-                "torii_sorafs_orderbook_api_error_ratio",
+                "torii_sorafs_orderbook_oldest_settlement_age_seconds",
                 "torii_sorafs_orderbook_escrow_runway_seconds",
-                "torii_sorafs_orderbook_contract_mirror_divergence",
+                "torii_sorafs_orderbook_finalized_projection_ready",
+                "torii_sorafs_orderbook_finalized_projection_height",
+                "torii_sorafs_orderbook_finalized_projection_timestamp_seconds",
+                "torii_sorafs_orderbook_finalized_projection_failures_total",
+                "torii_sorafs_orderbook_book_revision",
+                "torii_sorafs_orderbook_matcher_scan_book_revision",
+                "torii_sorafs_orderbook_api_requests_total",
             ],
             "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
@@ -254,15 +266,15 @@ def reconciliation(*, peer_count: int = 4, mismatch_count: int = 0) -> dict:
             "contract_digest_hex": DIGEST,
             "source_count": 5,
             "sources": [
-                {"name": "contract"},
-                {"name": "matcher"},
-                {"name": "torii-mirror"},
-                {"name": "settlement-service"},
+                {"name": "finalized-ledger"},
+                {"name": "matcher-worker"},
+                {"name": "torii-finalized-projection"},
+                {"name": "settlement-worker"},
                 {"name": "governance-dag"},
             ],
-            "contract_mirror_reconciliation_passed": True,
+            "finalized_projection_reconciliation_passed": True,
+            "replica_finalized_state_equal": True,
             "evidence_dag_published": True,
-            "contract_mirror_divergence": False,
             "mismatch_count": mismatch_count,
             "unreconciled_event_count": 0,
             "raw_ledger_included": False,
@@ -343,6 +355,16 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
     )
+    assert observability_artifact["fingerprint"]["metrics_scraped_at_unix"] == GENERATED_AT
+    assert observability_artifact["fingerprint"]["finalized_projection_ready"] is True
+    assert observability_artifact["fingerprint"]["finalized_projection_height"] == 42
+    assert (
+        observability_artifact["fingerprint"][
+            "finalized_projection_timestamp_seconds"
+        ]
+        == GENERATED_AT
+    )
+    assert observability_artifact["fingerprint"]["finalized_projection_failure_delta"] == 0
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -381,13 +403,7 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
             "matcher_service",
             "matcher-service.json",
             matcher_service,
-            "divergence_detected",
-        ),
-        (
-            "matcher_service",
-            "matcher-service.json",
-            matcher_service,
-            "raw_snapshot_included",
+            "raw_ledger_included",
         ),
         (
             "settlement_service",
@@ -424,12 +440,6 @@ def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
             "observability.json",
             observability,
             "response_bodies_included",
-        ),
-        (
-            "reconciliation",
-            "reconciliation.json",
-            reconciliation,
-            "contract_mirror_divergence",
         ),
         (
             "reconciliation",
@@ -1271,6 +1281,61 @@ def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["observability"]["artifacts"][0]
     assert "metrics must not include unknown values" in artifact["errors"]
+
+
+def test_observability_requires_ready_fresh_finalized_projection(tmp_path: Path) -> None:
+    for field, value, expected_error in (
+        (
+            "finalized_projection_ready",
+            False,
+            "finalized_projection_ready must be true",
+        ),
+        (
+            "finalized_projection_failure_delta",
+            1,
+            "finalized_projection_failure_delta must be 0",
+        ),
+        (
+            "metrics_scraped_at_unix",
+            NOW_UNIX - MODULE.DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS - 1,
+            "metrics_scraped_at_unix is older than",
+        ),
+        (
+            "finalized_projection_timestamp_seconds",
+            NOW_UNIX - MODULE.DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS - 1,
+            "finalized_projection_timestamp_seconds is older than",
+        ),
+    ):
+        root = tmp_path / field
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = observability()
+        payload[field] = value
+        write_json(root / "observability.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["observability"]["artifacts"][0]
+        assert any(expected_error in error for error in artifact["errors"])
+
+
+def test_observability_rejects_projection_newer_than_scrape(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["finalized_projection_timestamp_seconds"] = (
+        payload["metrics_scraped_at_unix"] + 1
+    )
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert (
+        "finalized_projection_timestamp_seconds must not be after metrics_scraped_at_unix"
+        in artifact["errors"]
+    )
 
 
 def test_governance_approval_must_match_contract_surface_digest(tmp_path: Path) -> None:

@@ -268,6 +268,7 @@ mod tests {
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, crate::BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(128)
             .car_digest([0xAB; 32])
             .car_size(256)

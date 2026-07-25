@@ -684,27 +684,40 @@ for provider in ingestion.providers:
 # `status_bytes`, `weekly_report`, and the export helper all return Norito payloads.
 # Decode them with the `norito` crate or via `norito.decode(...)` when the matching schema is available.
 
-# Inspect the local SoraFS orderbook mirror exposed by Torii.
-orderbook = client.get_sorafs_orderbook()
-trades = client.list_sorafs_orderbook_trades()
-events = client.list_sorafs_orderbook_events(since=0, limit=25, etag='"cached-etag"')
-print(orderbook["open_order_count"], trades["count"], 0 if events is None else events["count"])
-for event in client.stream_sorafs_orderbook_events(since=0, limit=1, with_metadata=True):
+# Inspect finalized native SoraFS orderbook state at one coherent chain anchor.
+orderbook = client.get_sorafs_orderbook(limit=25)
+anchor = orderbook["orders"]["finalized_cursor"]
+anchor_height = anchor["height"]
+anchor_hash_hex = bytes(anchor["block_hash"]).hex()
+trades = client.list_sorafs_orderbook_trades(
+    expected_finalized_height=anchor_height,
+    expected_finalized_block_hash_hex=anchor_hash_hex,
+    limit=25,
+)
+events = client.list_sorafs_orderbook_events(
+    expected_finalized_height=anchor_height,
+    expected_finalized_block_hash_hex=anchor_hash_hex,
+    limit=25,
+    if_none_match='"cached-etag"',
+)
+print(
+    orderbook["status"]["open_orders"],
+    len(trades["trades"]["trades"]),
+    0 if events is None else len(events["events"]["events"]),
+)
+for event in client.stream_sorafs_orderbook_events(limit=1, with_metadata=True):
     print(event.event, event.data)
     break
 # WebSocket helpers require `websocket-client` (`pip install iroha-python[ws]`).
-for event in client.stream_sorafs_orderbook_events_websocket(since=0, limit=1, with_metadata=True):
+for event in client.stream_sorafs_orderbook_events_websocket(limit=1, with_metadata=True):
     print(event.event, event.data)
     break
-from iroha_python import ToriiCanonicalRequestAuth
 
-def sign_request_envelope(message: bytes) -> bytes:
-    return request_envelope_keypair.sign(message)
-
-auth = ToriiCanonicalRequestAuth(
-    account_id="<canonical_i105_account_id>",
-    signer=sign_request_envelope,
-)
+# Mutation routes accept only a complete caller-signed, versioned native
+# SignedTransaction. Each route validates that the transaction contains exactly
+# one matching native ISI before normal transaction ingress:
+# SubmitSorafsOrderbookOrder, CancelSorafsOrderbookOrder, or
+# RecordSorafsOrderbookSettlementReceipt.
 from iroha_python import build_signed_orderbook_order_request, sign_orderbook_payload
 
 orderbook_private_key = bytes.fromhex("b7" * 32)
@@ -729,15 +742,17 @@ signed_order_request_from_fields = build_signed_orderbook_order_request(
 )
 # XOR-denominated orderbook values are canonical decimal strings with at most
 # nine fractional digits. Integer JSON numbers and retired micro-XOR fields are rejected.
-order_result = client.submit_sorafs_orderbook_order(
-    signed_order_request_from_fields,
-    canonical_auth=auth,
+# Embed `signed_order_request_from_fields` in a SubmitSorafsOrderbookOrder ISI,
+# build and sign the native transaction, then encode its versioned Norito bytes.
+signed_order_transaction = b"...versioned caller-signed SignedTransaction bytes..."
+submission_receipt = client.submit_sorafs_orderbook_order(signed_order_transaction)
+print(submission_receipt["payload"]["signed_transaction_hash"])
+client.submit_sorafs_orderbook_cancel(
+    b"...versioned SignedTransaction with one CancelSorafsOrderbookOrder ISI..."
 )
-print(order_result["status"])
-# Cancel and receipt helpers use the same request-envelope auth. The Norito
-# payload bytes can be signed locally from existing bytes or field values.
-client.submit_sorafs_orderbook_cancel(b"...Norito OrderCancelV1 bytes...", canonical_auth=auth)
-client.submit_sorafs_orderbook_receipt(b"...Norito SettlementReceiptV1 bytes...", canonical_auth=auth)
+client.submit_sorafs_orderbook_receipt(
+    b"...versioned SignedTransaction with one RecordSorafsOrderbookSettlementReceipt ISI..."
+)
 
 # Validate SoraFS reference payloads locally
 from iroha_python import (

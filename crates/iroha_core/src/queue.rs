@@ -14,7 +14,6 @@ use core::time::Duration;
 #[cfg(test)]
 use std::sync::Barrier;
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
     num::{NonZeroU64, NonZeroUsize},
@@ -22,7 +21,7 @@ use std::{
     path::Path,
     str::FromStr,
     sync::{
-        Arc, LazyLock, OnceLock,
+        Arc, LazyLock, OnceLock, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
@@ -50,7 +49,11 @@ use iroha_data_model::nexus::{
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    block::{ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole},
+    block::{
+        BlockHeader, ExternalExecutionContext, ExternalExecutionRouteLeg,
+        ExternalExecutionRouteRole,
+    },
+    consensus::MAX_LANE_CONSENSUS_VALIDATORS,
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
         InstructionBox,
@@ -62,6 +65,7 @@ use iroha_data_model::{
         },
     },
     name::Name,
+    peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, TransactionEntrypoint, error::TransactionRejectionReason,
         signed::TransactionPayload,
@@ -73,19 +77,24 @@ use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
+pub use journal::QUEUE_PLAN_JOURNAL_VERSION;
 #[cfg(test)]
 use journal::QueuePlanJournalTestFault;
 use journal::{
-    QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalLimits, QueuePlanJournalRecordV2,
+    QueuePlanJournal, QueuePlanJournalExactRemoveResult, QueuePlanJournalFlush,
+    QueuePlanJournalLimits, QueuePlanJournalRecordV4,
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
+use reservation_journal::{
+    LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal,
+    LaneQueueReservationJournalLimits,
+};
 #[cfg(test)]
-use reservation_journal::ReservationJournalAppendFault;
-use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
+use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -125,13 +134,35 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
-    state::{State, TransactionsReadOnly, WorldReadOnly, WorldView},
+    state::{
+        QueuePlanAdmissionRegistryMatch, State, StateReadOnly, TransactionsReadOnly, WorldReadOnly,
+        queue_plan_admission_registry_match,
+    },
     sumeragi::status,
     telemetry::StateTelemetry,
     tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
 };
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
+type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
+
+fn compatibility_queue_hash(entrypoint_hash: HashOf<TransactionEntrypoint>) -> SignedTxHash {
+    HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash))
+}
+
+fn exact_signed_transaction_hash(
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<iroha_data_model::transaction::SignedTransaction>> {
+    match entrypoint {
+        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(HashOf::new(reveal.signed_transaction()))
+        }
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::PrivateKaigi(_)
+        | TransactionEntrypoint::Time(_) => None,
+    }
+}
 
 /// Return the latest queued full routing plan recorded for a transaction hash.
 #[must_use]
@@ -172,6 +203,333 @@ pub(crate) fn execution_context_for_routing_plan(
         plan.digest(),
         execution_context_legs_for_routing_plan(plan),
     )
+}
+
+/// Version of the queue-plan lifecycle context embedded in durable admission claims.
+pub const QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2: u16 = 2;
+/// Version of a queue-plan durable admission claim returned after a strict journal sync.
+pub const QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2: u16 = 2;
+/// Version of the global admission identity embedded in a strict queue-plan journal record.
+pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2: u16 = 2;
+
+/// Chain/request identity chosen once by ingress before any authority acquires queue ownership.
+///
+/// This identity is persisted inside the exact journal record. Together with the record's
+/// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
+/// global admission binding that every authority attested.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanGlobalAdmissionIdentityV2 {
+    /// Identity layout version.
+    pub version: u16,
+    /// Domain-separated digest of the chain identifier.
+    pub chain_id_digest: Hash,
+    /// Deterministic QueuePlanSynced proxy request identity.
+    pub request_id: Hash,
+}
+
+/// One routing leg paired with the exact active lane incarnation that admitted it.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanRouteIncarnationV2 {
+    /// Coordinator or participant route in canonical routing-plan order.
+    pub leg: RouteLeg,
+    /// Non-zero lane incarnation active for this route at `proposal_height`.
+    pub lane_incarnation: Hash,
+    /// Version of the canonical ordered validator-set hash.
+    pub validator_set_hash_version: u16,
+    /// Typed digest of the ordered authoritative roster at `proposal_height`.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Exact ordered authoritative roster at `proposal_height`.
+    pub validator_set: Vec<PeerId>,
+    /// Number of distinct identities in the authoritative roster.
+    pub validator_count: u16,
+    /// Minimum distinct durable attestations needed to include at least one honest copy.
+    pub durability_threshold: u16,
+}
+
+/// Generation-stable lifecycle context for one queue-plan admission attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionContextV2 {
+    /// Context layout version.
+    pub version: u16,
+    /// Canonical committed height used to resolve the routing plan.
+    pub authority_height: u64,
+    /// Contiguous next proposal height at which all route incarnations are active.
+    pub proposal_height: u64,
+    /// Exact committed tip that is the predecessor of `proposal_height`.
+    pub predecessor_block_hash: Option<HashOf<BlockHeader>>,
+    /// Digest of the complete coordinator/participant routing plan.
+    pub routing_plan_digest: Hash,
+    /// Coordinator-first route/incarnation pairs for the complete plan.
+    pub route_incarnations: Vec<QueuePlanRouteIncarnationV2>,
+}
+
+impl QueuePlanAdmissionContextV2 {
+    /// Reconstruct the complete canonical routing plan carried by this context.
+    ///
+    /// # Errors
+    /// Returns an error when the leg vector is empty or its roles/order cannot encode one
+    /// canonical single-route or Native AMX plan.
+    pub fn routing_plan(&self) -> Result<RoutingPlan, String> {
+        let Some(coordinator) = self.route_incarnations.first() else {
+            return Err("queue-plan admission context has no coordinator leg".to_owned());
+        };
+        if coordinator.leg.role != RouteLegRole::Coordinator {
+            return Err("queue-plan admission context first leg is not the coordinator".to_owned());
+        }
+        if self.route_incarnations.len() == 1 {
+            return Ok(RoutingPlan::single(coordinator.leg.route));
+        }
+        let participants = self
+            .route_incarnations
+            .iter()
+            .skip(1)
+            .map(|bound| {
+                if bound.leg.role != RouteLegRole::Participant {
+                    return Err(
+                        "queue-plan admission context contains a non-participant trailing leg"
+                            .to_owned(),
+                    );
+                }
+                Ok(bound.leg)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RoutingPlan::native_amx(coordinator.leg.route, participants))
+    }
+
+    /// Validate this context against an exact canonical routing plan.
+    ///
+    /// # Errors
+    /// Returns the first structural, lifecycle, roster, or redundant-field mismatch.
+    pub fn validate_for_routing_plan(&self, routing_plan: &RoutingPlan) -> Result<(), String> {
+        let canonical_plan = match routing_plan {
+            RoutingPlan::Single(leg) => RoutingPlan::single(leg.route),
+            RoutingPlan::NativeAmx(plan) => {
+                if plan.participants.is_empty()
+                    || plan.participants.len() > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS
+                {
+                    return Err(format!(
+                        "queue-plan Native AMX participant count {} is outside 1..={}",
+                        plan.participants.len(),
+                        crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS
+                    ));
+                }
+                RoutingPlan::native_amx(plan.coordinator.route, plan.participants.clone())
+            }
+        };
+        if &canonical_plan != routing_plan {
+            return Err(
+                "queue-plan admission context is paired with a noncanonical routing plan"
+                    .to_owned(),
+            );
+        }
+        if self.version != QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2 {
+            return Err(format!(
+                "unsupported queue-plan admission context version {}; expected {}",
+                self.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2
+            ));
+        }
+        let Some(expected_proposal_height) = self.authority_height.checked_add(1) else {
+            return Err(
+                "queue-plan admission authority height overflows proposal height".to_owned(),
+            );
+        };
+        if self.proposal_height != expected_proposal_height {
+            return Err(
+                "queue-plan admission proposal height is not contiguous with authority height"
+                    .to_owned(),
+            );
+        }
+        if (self.authority_height == 0) != self.predecessor_block_hash.is_none() {
+            return Err(
+                "queue-plan admission predecessor hash presence does not match authority height"
+                    .to_owned(),
+            );
+        }
+        if self
+            .predecessor_block_hash
+            .is_some_and(|hash| hash_is_zero(Hash::from(hash)))
+        {
+            return Err(
+                "queue-plan admission context contains a zero predecessor block hash".to_owned(),
+            );
+        }
+        if self.routing_plan_digest != routing_plan.digest() {
+            return Err(
+                "queue-plan admission context digest does not match the exact routing plan"
+                    .to_owned(),
+            );
+        }
+        let legs = routing_plan.legs();
+        if self.route_incarnations.len() != legs.len() {
+            return Err(
+                "queue-plan admission context does not bind every routing leg exactly once"
+                    .to_owned(),
+            );
+        }
+        for (bound, expected_leg) in self.route_incarnations.iter().zip(legs) {
+            if bound.leg != expected_leg {
+                return Err(
+                    "queue-plan admission context legs are missing, reordered, or role-mismatched"
+                        .to_owned(),
+                );
+            }
+            if hash_is_zero(bound.lane_incarnation) {
+                return Err(
+                    "queue-plan admission context contains a zero lane incarnation".to_owned(),
+                );
+            }
+            if bound.validator_set_hash_version
+                != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
+            {
+                return Err(format!(
+                    "queue-plan admission validator-set hash version {} is unsupported",
+                    bound.validator_set_hash_version
+                ));
+            }
+            if hash_is_zero(Hash::from(bound.validator_set_hash)) {
+                return Err(
+                    "queue-plan admission context contains a zero validator-set hash".to_owned(),
+                );
+            }
+            let validator_count = bound.validator_set.len();
+            if validator_count == 0 || validator_count > MAX_LANE_CONSENSUS_VALIDATORS {
+                return Err(format!(
+                    "queue-plan admission validator count {} is outside 1..={MAX_LANE_CONSENSUS_VALIDATORS}",
+                    validator_count
+                ));
+            }
+            if usize::from(bound.validator_count) != validator_count {
+                return Err(format!(
+                    "queue-plan admission validator count {} does not equal exact roster length {validator_count}",
+                    bound.validator_count
+                ));
+            }
+            if bound.validator_set.iter().collect::<BTreeSet<_>>().len() != validator_count {
+                return Err(
+                    "queue-plan admission validator roster contains duplicate identities"
+                        .to_owned(),
+                );
+            }
+            if bound.validator_set_hash != HashOf::new(&bound.validator_set) {
+                return Err(
+                    "queue-plan admission validator-set hash does not match the exact ordered roster"
+                        .to_owned(),
+                );
+            }
+            let expected_threshold = validator_count.div_ceil(3);
+            if usize::from(bound.durability_threshold) != expected_threshold {
+                return Err(format!(
+                    "queue-plan admission durability threshold {} does not equal ceil({validator_count}/3)",
+                    bound.durability_threshold
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanDurableAdmissionV2 {
+    /// Claim layout version.
+    pub version: u16,
+    /// Lifecycle context held stable across routing validation and journal synchronization.
+    pub context: QueuePlanAdmissionContextV2,
+    /// Global chain/request identity persisted in the record, when this admission is eligible
+    /// for a globally ordered QueuePlan certificate.
+    pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    /// Complete routing plan persisted in the journal record.
+    pub routing_plan: RoutingPlan,
+    /// Typed hash of the exact transaction entrypoint persisted in the journal record.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Real signed-transaction hash when the entrypoint contains one.
+    pub signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// Exact queue timestamp persisted in the journal record.
+    pub enqueue_timestamp_ms: u64,
+    /// Domain-separated digest of the canonical `QueuePlanJournalRecordV4` bytes that crossed the
+    /// sync boundary.
+    pub journal_record_digest: Hash,
+}
+
+/// Recompute the canonical durable journal-record digest attested by a queue admission claim.
+///
+/// # Errors
+/// Returns a Norito encoding error when the exact record cannot be encoded.
+pub fn queue_plan_journal_record_claim_digest(
+    entrypoint: TransactionEntrypoint,
+    routing_plan: RoutingPlan,
+    admission_context: QueuePlanAdmissionContextV2,
+    enqueue_timestamp_ms: u64,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+) -> Result<Hash, norito::Error> {
+    QueuePlanJournalRecordV4::new(
+        entrypoint,
+        routing_plan,
+        admission_context,
+        enqueue_timestamp_ms,
+        global_admission_identity,
+    )
+    .claim_digest()
+}
+
+/// Failure to capture a bounded, authoritative queue-plan admission context.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum QueuePlanAdmissionContextError {
+    /// Routing plan is no longer valid for the contiguous next proposal height.
+    #[error(transparent)]
+    Routing(#[from] RoutingResolveError),
+    /// The requested committed generation has no exact predecessor hash in the coherent view.
+    #[error(
+        "queue-plan admission authority height {authority_height} has no exact committed predecessor hash"
+    )]
+    MissingPredecessor {
+        /// Committed height whose exact block hash is unavailable.
+        authority_height: u64,
+    },
+    /// A route has no authoritative validator binding at the admission height.
+    #[error(
+        "lane {lane_id} dataspace {dataspace_id} has no authoritative validators at proposal height {proposal_height}"
+    )]
+    MissingAuthority {
+        /// Lane without an authoritative roster.
+        lane_id: LaneId,
+        /// Dataspace bound to the lane.
+        dataspace_id: DataSpaceId,
+        /// Height at which authority was resolved.
+        proposal_height: u64,
+    },
+    /// An authority source returned duplicate validator identities.
+    #[error(
+        "lane {lane_id} dataspace {dataspace_id} has duplicate authoritative validators at proposal height {proposal_height}"
+    )]
+    DuplicateAuthority {
+        /// Lane with the malformed roster.
+        lane_id: LaneId,
+        /// Dataspace bound to the lane.
+        dataspace_id: DataSpaceId,
+        /// Height at which authority was resolved.
+        proposal_height: u64,
+    },
+    /// The resolved validator roster exceeds the protocol-wide committee bound.
+    #[error(
+        "lane {lane_id} dataspace {dataspace_id} authority count {validator_count} exceeds the maximum {max_validator_count}"
+    )]
+    AuthorityBoundExceeded {
+        /// Lane with the oversized roster.
+        lane_id: LaneId,
+        /// Dataspace bound to the lane.
+        dataspace_id: DataSpaceId,
+        /// Resolved roster length.
+        validator_count: usize,
+        /// Protocol-wide roster limit.
+        max_validator_count: usize,
+    },
+    /// A captured or supplied context violates the canonical V2 layout.
+    #[error("noncanonical queue-plan admission context: {reason}")]
+    NonCanonical {
+        /// Exact canonicality failure.
+        reason: String,
+    },
 }
 
 /// Exact lane-local proposal slot that may take ownership of queued transactions.
@@ -265,13 +623,15 @@ impl LaneQueueReservationRoutingMode {
 /// Complete exact identity of one durable lane queue reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub struct LaneQueueReservationKeyV1 {
+pub struct LaneQueueReservationKeyV2 {
     /// Exact encoded reservation-key schema version.
     pub version: u16,
     /// Compatibility hash of the signed transaction used by queue indexes.
     pub signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
     /// Canonical hash of the full transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Exact globally committed QueuePlan admission binding authorizing economic ownership.
+    pub queue_plan_admission_binding_hash: Hash,
     /// Digest of the complete single-route or Native AMX routing plan.
     pub routing_plan_digest: Hash,
     /// Exact coordinator leg; participant roles are invalid for queue ownership.
@@ -294,9 +654,9 @@ pub struct LaneQueueReservationKeyV1 {
     pub proposal_identity_hash: Hash,
 }
 
-impl LaneQueueReservationKeyV1 {
+impl LaneQueueReservationKeyV2 {
     /// Current and only accepted reservation-key schema version.
-    pub const VERSION: u16 = 1;
+    pub const VERSION: u16 = 2;
 
     /// Return a digest covering every exact identity field.
     #[must_use]
@@ -320,7 +680,8 @@ impl LaneQueueReservationKeyV1 {
         if self.proposal_height == 0 || self.lane_block_height == 0 {
             return Err("lane reservation heights must be non-zero");
         }
-        if hash_is_zero(self.routing_plan_digest)
+        if hash_is_zero(self.queue_plan_admission_binding_hash)
+            || hash_is_zero(self.routing_plan_digest)
             || hash_is_zero(self.lane_incarnation)
             || hash_is_zero(self.reservation_owner_hash)
             || hash_is_zero(self.proposal_identity_hash)
@@ -338,14 +699,14 @@ impl LaneQueueReservationKeyV1 {
 /// absent from the ordinary FIFO so later admissions cannot overtake it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct LaneQueueFifoOrderV3 {
+struct LaneQueueFifoOrderV5 {
     /// FIFO order layout version.
     version: u16,
     /// Monotonic queue admission ordinal.
     ordinal: u64,
 }
 
-impl LaneQueueFifoOrderV3 {
+impl LaneQueueFifoOrderV5 {
     fn new(ordinal: u64) -> Result<Self, LaneQueueReservationError> {
         if ordinal == 0 {
             return Err(LaneQueueReservationError::InvalidIdentity(
@@ -371,23 +732,24 @@ impl LaneQueueFifoOrderV3 {
 
 /// Durable journal payload for one live queue reservation.
 ///
-/// Version three is intentionally not wire-compatible with earlier
-/// prototypes. Ownership journals are local persistence, but accepting an old
-/// record would discard the original FIFO ordinal required for exact release.
+/// Version five is the first-release layout and intentionally rejects every
+/// earlier prototype. In particular, V5 binds every reservation to an exact
+/// globally committed QueuePlan admission identity and persists atomic ordered
+/// release batches.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationRecordV3 {
+pub(crate) struct LaneQueueReservationRecordV5 {
     /// Record format version.
     version: u16,
     /// Exact reservation identity.
-    key: LaneQueueReservationKeyV1,
+    key: LaneQueueReservationKeyV2,
     /// Original queue admission timestamp retained for release ordering and pressure age.
     enqueue_timestamp_ms: u64,
     /// Original global FIFO position retained while ordinary queue ownership is absent.
-    fifo_order: LaneQueueFifoOrderV3,
+    fifo_order: LaneQueueFifoOrderV5,
 }
 
-impl LaneQueueReservationRecordV3 {
+impl LaneQueueReservationRecordV5 {
     fn validate(&self) -> Result<(), &'static str> {
         if self.version != LANE_QUEUE_RESERVATION_JOURNAL_VERSION {
             return Err("unsupported lane queue reservation journal version");
@@ -404,7 +766,7 @@ impl LaneQueueReservationRecordV3 {
 /// attempt before it can touch a live reservation from a recreated lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationReleaseBarrierV2 {
+pub(crate) struct LaneQueueReservationReleaseBarrierV3 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
     /// Chain context of the retired payload.
@@ -432,11 +794,11 @@ pub(crate) struct LaneQueueReservationReleaseBarrierV2 {
     /// Digest of the exact durable Kura retirement record.
     pub(crate) retirement_hash: Hash,
     /// Original FIFO-ordered reservation identities.
-    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV1>,
+    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV2>,
 }
 
-impl LaneQueueReservationReleaseBarrierV2 {
-    pub(crate) const VERSION: u16 = 2;
+impl LaneQueueReservationReleaseBarrierV3 {
+    pub(crate) const VERSION: u16 = 3;
 
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION {
@@ -490,7 +852,7 @@ impl LaneQueueReservationReleaseBarrierV2 {
     #[must_use]
     pub(crate) fn digest(&self) -> Hash {
         Hash::new_from_chunks(&[
-            b"iroha:queue-lane-reservation-release-barrier:v2\0",
+            b"iroha:queue-lane-reservation-release-barrier:v3\0",
             &norito::to_bytes(self).expect("validated queue release barrier must encode"),
         ])
     }
@@ -503,16 +865,16 @@ impl LaneQueueReservationReleaseBarrierV2 {
 /// reinsertion restartable without changing global queue order.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationReleaseCompletionV3 {
+pub(crate) struct LaneQueueReservationReleaseCompletionV5 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
     /// Exact prepared release barrier.
-    pub(crate) barrier: LaneQueueReservationReleaseBarrierV2,
+    pub(crate) barrier: LaneQueueReservationReleaseBarrierV3,
     /// Live records in the barrier's original order.
-    pub(crate) ordered_records: Vec<LaneQueueReservationRecordV3>,
+    pub(crate) ordered_records: Vec<LaneQueueReservationRecordV5>,
 }
 
-impl LaneQueueReservationReleaseCompletionV3 {
+impl LaneQueueReservationReleaseCompletionV5 {
     fn validate(&self) -> Result<(), &'static str> {
         if self.version != LANE_QUEUE_RESERVATION_JOURNAL_VERSION {
             return Err("unsupported lane queue release completion version");
@@ -541,7 +903,7 @@ impl LaneQueueReservationReleaseCompletionV3 {
 /// A transaction whose full queue ownership was durably transferred to one lane proposal slot.
 #[derive(Clone)]
 pub struct LaneReservedTransaction {
-    key: LaneQueueReservationKeyV1,
+    key: LaneQueueReservationKeyV2,
     tx: Arc<CheckedTransaction<'static>>,
     routing_plan: RoutingPlan,
     encoded_len: usize,
@@ -551,7 +913,7 @@ pub struct LaneReservedTransaction {
 impl LaneReservedTransaction {
     /// Borrow the exact durable reservation identity.
     #[must_use]
-    pub fn key(&self) -> &LaneQueueReservationKeyV1 {
+    pub fn key(&self) -> &LaneQueueReservationKeyV2 {
         &self.key
     }
 
@@ -665,10 +1027,13 @@ pub enum LaneQueueReservationError {
 #[derive(Default)]
 struct LaneQueueReservationStore {
     journal: Option<LaneQueueReservationJournal>,
-    live_by_hash: HashMap<SignedTxHash, LaneQueueReservationRecordV3>,
-    commit_barriers: Vec<LaneQueueReservationKeyV1>,
-    release_barriers: Vec<LaneQueueReservationReleaseBarrierV2>,
-    completed_releases: Vec<LaneQueueReservationReleaseCompletionV3>,
+    live_by_hash: HashMap<SignedTxHash, LaneQueueReservationRecordV5>,
+    commit_barriers: Vec<LaneQueueReservationKeyV2>,
+    release_barriers: Vec<LaneQueueReservationReleaseBarrierV3>,
+    completed_releases: Vec<LaneQueueReservationReleaseCompletionV5>,
+    /// Durable reservation-owner identities whose transaction payload is not
+    /// currently materialized in `Queue::txs`.
+    missing_payload_hashes: HashSet<SignedTxHash>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -679,6 +1044,29 @@ enum PlanJournalDurability {
 }
 
 impl LaneQueueReservationStore {
+    fn durable_owned_hashes(&self) -> impl Iterator<Item = SignedTxHash> + '_ {
+        self.live_by_hash
+            .keys()
+            .copied()
+            .chain(
+                self.commit_barriers
+                    .iter()
+                    .map(|key| key.signed_transaction_hash),
+            )
+            .chain(self.release_barriers.iter().flat_map(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .map(|key| key.signed_transaction_hash)
+            }))
+            .chain(self.completed_releases.iter().flat_map(|completion| {
+                completion
+                    .ordered_records
+                    .iter()
+                    .map(|record| record.key.signed_transaction_hash)
+            }))
+    }
+
     fn live_hashes(&self) -> HashSet<SignedTxHash> {
         self.live_by_hash
             .keys()
@@ -692,7 +1080,7 @@ impl LaneQueueReservationStore {
             .collect()
     }
 
-    fn exact(&self, key: &LaneQueueReservationKeyV1) -> bool {
+    fn exact(&self, key: &LaneQueueReservationKeyV2) -> bool {
         self.live_by_hash
             .get(&key.signed_transaction_hash)
             .is_some_and(|record| record.key == *key)
@@ -700,7 +1088,7 @@ impl LaneQueueReservationStore {
 
     fn ensure_no_conflict(
         &self,
-        key: &LaneQueueReservationKeyV1,
+        key: &LaneQueueReservationKeyV2,
     ) -> Result<(), LaneQueueReservationError> {
         if self
             .live_by_hash
@@ -728,9 +1116,9 @@ impl LaneQueueReservationStore {
 
     fn ensure_release_no_conflict(
         &self,
-        requested: &LaneQueueReservationReleaseBarrierV2,
+        requested: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<(), LaneQueueReservationError> {
-        let same_slot = |existing: &LaneQueueReservationReleaseBarrierV2| {
+        let same_slot = |existing: &LaneQueueReservationReleaseBarrierV3| {
             existing.chain_id_hash == requested.chain_id_hash
                 && existing.epoch == requested.epoch
                 && existing.lane_id == requested.lane_id
@@ -739,7 +1127,7 @@ impl LaneQueueReservationStore {
                 && existing.proposal_height == requested.proposal_height
                 && existing.lane_block_height == requested.lane_block_height
         };
-        let overlaps = |existing: &LaneQueueReservationReleaseBarrierV2| {
+        let overlaps = |existing: &LaneQueueReservationReleaseBarrierV3| {
             existing.ordered_keys.iter().any(|existing_key| {
                 requested.ordered_keys.iter().any(|requested_key| {
                     requested_key.signed_transaction_hash == existing_key.signed_transaction_hash
@@ -777,7 +1165,7 @@ impl LaneQueueReservationStore {
 
     fn ensure_not_release_prepared(
         &self,
-        key: &LaneQueueReservationKeyV1,
+        key: &LaneQueueReservationKeyV2,
     ) -> Result<(), LaneQueueReservationError> {
         if let Some(barrier) = self
             .release_barriers
@@ -936,6 +1324,23 @@ fn state_height_for_routing(state: &State) -> u64 {
     u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
 }
 
+fn queue_plan_authoritative_peers_in_view_at_height(
+    state_view: &impl StateReadOnly,
+    route: RoutingDecision,
+    proposal_height: u64,
+) -> Vec<PeerId> {
+    let validator_set =
+        state_view.authoritative_lane_peer_ids_at_height(route.lane_id, proposal_height);
+    if !validator_set.is_empty() {
+        return validator_set;
+    }
+
+    if route_uses_legacy_default_public_lane(route, state_view.nexus()) {
+        return state_view.commit_topology().to_vec();
+    }
+    Vec::new()
+}
+
 fn state_view_height_for_routing(state_view: &StateView<'_>) -> u64 {
     u64::try_from(state_view.height()).unwrap_or(u64::MAX)
 }
@@ -1076,10 +1481,18 @@ pub struct Queue {
     txs: DashMap<SignedTxHash, Arc<CheckedTransaction<'static>>>,
     /// Cached count of transactions tracked by `txs`.
     active_count: AtomicUsize,
+    /// Durable reservation owners whose transaction payload has not yet been
+    /// restored into `txs`.
+    ///
+    /// Each owner consumes one configured transaction slot and the minimum
+    /// retained-byte charge until exact payload replay materializes it.
+    missing_reservation_payload_count: AtomicUsize,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
     /// Cached full routing plan per transaction hash.
     routing_plans: DashMap<SignedTxHash, RoutingPlan>,
+    /// Bounded claim index rebuilt from live V4 journal records during startup replay.
+    durable_plan_claims: DashMap<SignedTxHash, QueuePlanDurableClaimIndexEntry>,
     /// Cached encoded length per queued transaction hash.
     tx_encoded_len: DashMap<SignedTxHash, usize>,
     /// Cached proposal gas cost per queued transaction hash.
@@ -1089,7 +1502,7 @@ pub struct Queue {
     /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// Stable FIFO ordinal for every tracked transaction, including lane-owned reservations.
-    fifo_order_by_hash: DashMap<SignedTxHash, LaneQueueFifoOrderV3>,
+    fifo_order_by_hash: DashMap<SignedTxHash, LaneQueueFifoOrderV5>,
     /// Next FIFO ordinal allocated to a newly admitted transaction.
     next_fifo_ordinal: parking_lot::Mutex<u64>,
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
@@ -1107,8 +1520,15 @@ pub struct Queue {
     fee_admission_reservations: parking_lot::Mutex<FeeAdmissionReservationStore>,
     /// Sticky process-lifetime fault after an ambiguous pending-plan journal boundary.
     plan_journal_durability_fault: AtomicBool,
-    /// Sticky process-lifetime fault after an ambiguous reservation ownership write.
+    /// Sticky process-lifetime fault after an ambiguous reservation-journal durability boundary.
     lane_reservation_durability_fault: AtomicBool,
+    /// Sticky process-lifetime fault when accepted work cannot be revalidated without changing
+    /// its immutable routing or fee-admission identity.
+    accepted_work_validation_fault: AtomicBool,
+    /// Exact queue hashes fenced by an in-construction global carrier candidate.
+    global_selection_owners: parking_lot::Mutex<BTreeMap<SignedTxHash, u64>>,
+    /// Monotonic, nonzero process-local global selection owner identity.
+    next_global_selection_owner: AtomicU64,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
     /// Amount of transactions per user in the queue
@@ -1119,6 +1539,9 @@ pub struct Queue {
     #[cfg(test)]
     durability_observer_lock_handoff:
         parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
+    /// One-shot append fault consumed by install-time reservation reconciliation tests.
+    #[cfg(test)]
+    install_reconciliation_append_fault: parking_lot::Mutex<Option<ReservationJournalAppendFault>>,
     /// Monotonic counter tagging test guards with their queue order.
     #[cfg(test)]
     guard_sequence: AtomicU64,
@@ -1202,13 +1625,14 @@ const TX_RETAINED_OVERHEAD_BYTES: u64 = 128 * 1024;
 /// Snapshot of queue pressure used by Torii admission and status reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueuePressureSnapshot {
-    /// Number of transactions tracked by the queue (queued + in-flight).
+    /// Number of transactions tracked by the queue (queued, in-flight, or durably owned while
+    /// awaiting exact payload replay).
     pub tracked_tx_count: usize,
     /// Number of transactions still waiting in the queue.
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
-    /// Estimated retained bytes for all transactions tracked by the queue.
+    /// Estimated retained bytes for all transactions and payload-less durable owners.
     pub retained_bytes: u64,
     /// Configured maximum estimated retained bytes for the queue.
     pub max_retained_bytes: NonZeroU64,
@@ -1316,6 +1740,98 @@ pub struct GossipBatchEntry {
     pub payload: Arc<Vec<u8>>,
 }
 
+/// Process-local ownership fence for one bounded global candidate snapshot.
+///
+/// Autonomous reservation skips every fenced hash until candidate construction and local lane
+/// binding finish. Ordinary FIFO ownership never leaves the queue, and dropping an abandoned
+/// candidate releases only this exact lease.
+pub(crate) struct GlobalQueueSelectionLease {
+    queue: Weak<Queue>,
+    owner: u64,
+    hashes: Vec<SignedTxHash>,
+}
+
+impl fmt::Debug for GlobalQueueSelectionLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GlobalQueueSelectionLease")
+            .field("owner", &self.owner)
+            .field("hash_count", &self.hashes.len())
+            .finish()
+    }
+}
+
+impl GlobalQueueSelectionLease {
+    /// Release every snapshot hash not present in the exact assembled candidate.
+    ///
+    /// Candidate construction must fence the whole bounded snapshot while it resolves routing and
+    /// payload limits, but retaining rejected/deferred hashes until consensus decides would
+    /// unnecessarily block autonomous progress. Any ownership drift is a process-lifetime
+    /// selection fault: continuing could let the ordinary and autonomous paths both own a hash.
+    pub(crate) fn retain_only(&mut self, retained: &[SignedTxHash]) -> bool {
+        if self.owner == 0 {
+            return retained.is_empty();
+        }
+        let Some(queue) = self.queue.upgrade() else {
+            return false;
+        };
+        let retained_set = retained.iter().copied().collect::<HashSet<_>>();
+        let leased_set = self.hashes.iter().copied().collect::<HashSet<_>>();
+        let exact_subset = retained_set.len() == retained.len()
+            && leased_set.len() == self.hashes.len()
+            && retained_set.iter().all(|hash| leased_set.contains(hash));
+        let first_hash = self
+            .hashes
+            .first()
+            .copied()
+            .or_else(|| retained.first().copied());
+        let queue_guard = queue.push_remove_lock.lock();
+        let mut owners = queue.global_selection_owners.lock();
+        let ownership_intact = self
+            .hashes
+            .iter()
+            .all(|hash| owners.get(hash) == Some(&self.owner));
+        if !exact_subset || !ownership_intact {
+            drop(owners);
+            drop(queue_guard);
+            if let Some(hash) = first_hash {
+                queue.mark_accepted_work_validation_fault(
+                    hash,
+                    "global_candidate_selection",
+                    "global candidate selection lease changed before exact narrowing",
+                    None,
+                );
+            }
+            return false;
+        }
+        for hash in &self.hashes {
+            if !retained_set.contains(hash) {
+                owners.remove(hash);
+            }
+        }
+        self.hashes.retain(|hash| retained_set.contains(hash));
+        true
+    }
+}
+
+impl Drop for GlobalQueueSelectionLease {
+    fn drop(&mut self) {
+        if self.owner == 0 {
+            return;
+        }
+        let Some(queue) = self.queue.upgrade() else {
+            return;
+        };
+        let _queue_guard = queue.push_remove_lock.lock();
+        let mut owners = queue.global_selection_owners.lock();
+        for hash in &self.hashes {
+            if owners.get(hash) == Some(&self.owner) {
+                owners.remove(hash);
+            }
+        }
+    }
+}
+
 /// Result counters from replaying the local pending queue-plan journal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueuePlanJournalReplaySummary {
@@ -1327,12 +1843,8 @@ pub struct QueuePlanJournalReplaySummary {
     pub tombstoned_committed: usize,
     /// Records tombstoned because the transaction expired before replay.
     pub tombstoned_expired: usize,
-    /// Records tombstoned because the recomputed routing plan no longer matched.
-    pub tombstoned_stale: usize,
-    /// Records tombstoned because the journal hash did not match the entrypoint.
-    pub tombstoned_malformed: usize,
-    /// Records skipped because normal queue admission rejected them.
-    pub rejected: usize,
+    /// Records tombstoned because canonical WSV owns a different authenticated binding.
+    pub tombstoned_conflicting_global_admission: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1352,6 +1864,8 @@ enum PlanJournalAdmissionMode {
     OptionalDurable,
     /// Require both an installed journal and a durable exact Put.
     RequiredDurable,
+    /// Require a durable Put and return its generation-stable admission claim.
+    RequiredDurableClaim,
 }
 
 #[cfg(test)]
@@ -1369,9 +1883,43 @@ struct PreparedQueueAdmission {
     encoded_len: usize,
     proposal_gas_cost: u64,
     enqueued_at_ms: u64,
+    admission_context: Option<QueuePlanAdmissionContextV2>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    expected_journal_record_digest: Option<Hash>,
+    replayed_journal_record_digest: Option<Hash>,
     fee_reservation: Option<FeeAdmissionReservation>,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePlanDurableClaimIndexEntry {
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    routing_plan: RoutingPlan,
+    admission_context: QueuePlanAdmissionContextV2,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    enqueue_timestamp_ms: u64,
+    journal_record_digest: Hash,
+}
+
+impl QueuePlanDurableClaimIndexEntry {
+    fn global_admission_binding(
+        &self,
+    ) -> Result<crate::torii_proxy::QueuePlanAdmissionBindingV2, String> {
+        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+            &QueuePlanDurableAdmissionV2 {
+                version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+                context: self.admission_context.clone(),
+                global_admission_identity: self.global_admission_identity.clone(),
+                routing_plan: self.routing_plan.clone(),
+                entrypoint_hash: self.entrypoint_hash.clone(),
+                signed_transaction_hash: self.signed_transaction_hash.clone(),
+                enqueue_timestamp_ms: self.enqueue_timestamp_ms,
+                journal_record_digest: self.journal_record_digest,
+            },
+        )
+    }
 }
 
 /// Exact balance resource held by one queued fee component.
@@ -1659,11 +2207,30 @@ fn first_batch_duplicate_index(prepared: &[PreparedQueueAdmission]) -> Option<us
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct QueueAdmissionNotification {
     hash: SignedTxHash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    enqueue_timestamp_ms: u64,
+    journal_record_digest: Option<Hash>,
+    routing_plan: RoutingPlan,
+    admission_context: Option<QueuePlanAdmissionContextV2>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePushOutcome {
+    routing_decision: RoutingDecision,
+    routing_plan: RoutingPlan,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    enqueue_timestamp_ms: u64,
+    journal_record_digest: Option<Hash>,
+    admission_context: Option<QueuePlanAdmissionContextV2>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1799,8 +2366,12 @@ pub struct Failure {
     pub err: Error,
 }
 
-/// Will remove transaction from the queue on drop.
-/// See `Queue::remove_transaction` for details.
+/// Settles popped queue ownership on drop.
+///
+/// Legacy, non-globally-bound ownership is removed. A live durable claim with a global
+/// admission identity is instead restored to its exact FIFO position; if its immutable
+/// transaction, claim, or routing identity cannot be revalidated, the queue retains all
+/// available ownership evidence and latches a restart-recovery fault.
 pub struct TransactionGuard {
     tx: Arc<CheckedTransaction<'static>>,
     queue: Arc<Queue>,
@@ -1839,8 +2410,9 @@ pub(crate) struct TransactionGuardReturnReport {
 ///
 /// These failures are detected before any guard is released or any returned hash is appended, so
 /// the caller retains the whole batch as the authoritative owner. The caller must retain those
-/// guards for retry or quarantine; panicking or otherwise dropping them removes their queue
-/// entries through the guard's removal-on-drop behavior.
+/// guards for retry or quarantine. Dropping a legacy guard removes its queue entry; dropping a
+/// globally admitted guard restores exact FIFO ownership or latches restart recovery while
+/// retaining its evidence.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[cfg(test)]
 pub(crate) enum TransactionGuardReturnError {
@@ -1856,6 +2428,16 @@ pub(crate) enum TransactionGuardReturnError {
     /// A transaction can be returned but its original enqueue timestamp is missing.
     #[error("transaction guard return is missing enqueue timestamp(s): {hashes:?}")]
     MissingEnqueueTimestamps { hashes: Vec<SignedTxHash> },
+    /// A globally bound guard could not authenticate its immutable WSV marker.
+    #[error(
+        "transaction guard return cannot validate QueuePlan admission registry for {hash}: {reason}"
+    )]
+    GlobalAdmissionRegistry {
+        /// Transaction whose global admission marker was malformed or unverifiable.
+        hash: SignedTxHash,
+        /// Fail-closed validation detail.
+        reason: String,
+    },
     /// The hash index cannot hold all live returns despite the queue reservations.
     #[error(
         "transaction guard return exceeds hash-index capacity: queued={queued}, returning={returning}, capacity={capacity}"
@@ -1956,10 +2538,41 @@ impl Drop for TransactionGuard {
         #[cfg(not(feature = "telemetry"))]
         let telemetry_ref: Option<&StateTelemetry> = None;
 
-        {
+        let ownership_fault = {
             let _guard = self.queue.push_remove_lock.lock();
-            self.queue
-                .remove_transaction_locked(&self.tx, &self.routing_plan, telemetry_ref);
+            match self.queue.restore_globally_bound_transaction_guard_locked(
+                &self.tx,
+                self.routing,
+                &self.routing_plan,
+            ) {
+                Ok(true) => None,
+                Ok(false) => {
+                    self.queue.remove_transaction_locked(
+                        &self.tx,
+                        &self.routing_plan,
+                        telemetry_ref,
+                    );
+                    None
+                }
+                Err(reason) => {
+                    let newly_latched = !self
+                        .queue
+                        .accepted_work_validation_fault
+                        .swap(true, Ordering::AcqRel);
+                    Some((reason, newly_latched))
+                }
+            }
+        };
+        if let Some((reason, newly_latched)) = ownership_fault {
+            if newly_latched {
+                iroha_logger::error!(
+                    tx = %self.tx.hash(),
+                    stage = "global_transaction_guard_drop",
+                    %reason,
+                    "globally admitted queue ownership could not be restored; retained transaction and durable claim and disabled admission and transaction selection until restart recovery"
+                );
+            }
+            status::set_tx_queue_pressure(self.queue.pressure_snapshot());
         }
         self.queue
             .publish_backpressure_state(self.queue.active_len(), telemetry_ref);
@@ -2085,104 +2698,6 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
     }
 }
 
-struct LazyAdmissionStateAccess<'state> {
-    state: &'state State,
-    nexus: Option<Nexus>,
-    world: Option<WorldView<'state>>,
-}
-
-impl<'state> LazyAdmissionStateAccess<'state> {
-    const fn new(state: &'state State) -> Self {
-        Self {
-            state,
-            nexus: None,
-            world: None,
-        }
-    }
-
-    fn ensure_world_and_nexus(&mut self) {
-        if self.nexus.is_none() {
-            self.nexus = Some(self.state.nexus_snapshot());
-        }
-        if self.world.is_none() {
-            let nexus = self.nexus.as_ref().expect("nexus initialized above");
-            self.world = Some(self.state.world_view_with_nexus(nexus));
-        }
-    }
-}
-
-impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
-    fn recheck_external_nexus_fee_admission(
-        &mut self,
-        queue: &Queue,
-        tx: &AcceptedTransaction<'static>,
-        route_dataspace_id: Option<DataSpaceId>,
-    ) -> Result<Option<FeeAdmissionReservation>, Error> {
-        self.ensure_world_and_nexus();
-        let next_block_height = u64::try_from(self.state.committed_height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        queue.recheck_external_nexus_fee_admission(
-            tx,
-            self.world.as_ref().expect("world initialized above"),
-            self.nexus.as_ref().expect("nexus initialized above"),
-            &self.state.pipeline_snapshot(),
-            next_block_height,
-            route_dataspace_id,
-        )
-    }
-
-    fn extract_lane_identity_metadata(
-        &mut self,
-        authority: &AccountId,
-        dataspace_id: DataSpaceId,
-        lane_alias: &str,
-    ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
-        self.ensure_world_and_nexus();
-        Queue::extract_lane_identity_metadata(
-            self.world.as_ref().expect("world initialized above"),
-            authority,
-            dataspace_id,
-            lane_alias,
-        )
-    }
-
-    fn extract_lane_authority_domains(
-        &mut self,
-        authority: &AccountId,
-        lane_alias: &str,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
-        self.ensure_world_and_nexus();
-        Queue::extract_lane_authority_domains(
-            self.world.as_ref().expect("world initialized above"),
-            authority,
-            lane_alias,
-            self.state.latest_block_header_fast().map_or(0, |header| {
-                u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX)
-            }),
-        )
-    }
-
-    fn validate_confidential_policy_admission(
-        &mut self,
-        executable: &Executable,
-    ) -> Result<(), Error> {
-        self.ensure_world_and_nexus();
-        let next_block_height = u64::try_from(self.state.committed_height())
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        crate::tx::validate_confidential_policy_admission_for_world(
-            executable,
-            self.world.as_ref().expect("world initialized above"),
-            next_block_height,
-        )
-        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
-            detail: transaction_rejection_detail(&reason),
-            reason,
-        })
-    }
-}
-
 impl Queue {
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
         tx.external()
@@ -2277,13 +2792,19 @@ impl Queue {
         tx.entrypoint_bytes()
     }
 
-    /// Install the local pending queue-plan journal and return the number of replayable records.
+    /// Install the local pending queue-plan journal during startup and return the number of
+    /// replayable records.
     ///
-    /// Startup replay admission is performed by the caller so it can use the fully initialized
-    /// state snapshot and discard stale records deterministically.
+    /// Installation is startup-only and requires an empty in-memory queue and durable-claim
+    /// index. Startup replay is performed by the caller with the fully initialized state
+    /// snapshot. Replay preserves every non-terminal record exactly and fails closed when its
+    /// admitted route evidence cannot be revalidated; only committed or expired records are
+    /// tombstoned.
     ///
     /// # Errors
-    /// Returns journal open or frame decode I/O errors.
+    /// Returns an invalid-state error when startup was finalized, the journal is already
+    /// installed, or in-memory ownership is nonempty. Also returns journal open or frame-decode
+    /// I/O errors.
     pub fn install_plan_journal(
         &self,
         path: impl AsRef<Path>,
@@ -2307,6 +2828,10 @@ impl Queue {
             self.capacity.get(),
         );
         let replayable = {
+            // Admission takes this lock before touching the journal. Holding it across the empty
+            // check and journal publication prevents an in-memory owner from appearing between
+            // validation and installation.
+            let _queue_guard = self.push_remove_lock.lock();
             let mut installed = self.plan_journal.lock();
             if self.plan_journal_disabled.load(Ordering::Acquire) {
                 return Err(std::io::Error::new(
@@ -2318,6 +2843,12 @@ impl Queue {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     "queue plan journal is already installed",
+                ));
+            }
+            if !self.txs.is_empty() || !self.durable_plan_claims.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "queue plan journal installation is startup-only and requires an empty active queue and durable-claim index",
                 ));
             }
             let journal = QueuePlanJournal::open_with_limits(path, limits, durable_writes)?;
@@ -2364,7 +2895,44 @@ impl Queue {
         path: impl AsRef<Path>,
         max_bytes_before_compact: u64,
     ) -> Result<LaneQueueReservationReplaySummary, LaneQueueReservationError> {
-        let (journal, replay) = LaneQueueReservationJournal::open(path, max_bytes_before_compact)?;
+        let max_frame_payload_bytes = self.max_retained_bytes.get().min(u64::from(u32::MAX));
+        let max_file_bytes = max_bytes_before_compact
+            .checked_add(self.max_retained_bytes.get())
+            .and_then(|bytes| bytes.checked_add(max_frame_payload_bytes))
+            .ok_or_else(|| {
+                LaneQueueReservationError::Journal(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "lane reservation journal file limit overflow",
+                ))
+            })?;
+        let max_owned_by_retained_bytes = usize::try_from(
+            self.max_retained_bytes
+                .get()
+                .checked_div(TX_RETAINED_OVERHEAD_BYTES)
+                .unwrap_or(0),
+        )
+        .unwrap_or(usize::MAX)
+        .max(1);
+        let limits = LaneQueueReservationJournalLimits::new(
+            max_bytes_before_compact,
+            max_frame_payload_bytes,
+            max_file_bytes,
+            self.capacity.get().min(max_owned_by_retained_bytes),
+        );
+        // Installation is startup-only. Exclude queue selection and take the reservation-store
+        // lock before opening the path: opening may create, repair, or truncate a journal, so a
+        // losing concurrent installer must fail before it can touch active storage.
+        let _queue_guard = self.push_remove_lock.lock();
+        if self.inflight_guards.load(Ordering::Acquire) != 0
+            || self.selection_attempts.load(Ordering::Acquire) != 0
+        {
+            return Err(LaneQueueReservationError::InflightSelection);
+        }
+        let mut store = self.lane_reservations.lock();
+        if store.journal.is_some() {
+            return Err(LaneQueueReservationError::JournalAlreadyInstalled);
+        }
+        let (journal, replay) = LaneQueueReservationJournal::open_with_limits(path, limits)?;
         let mut restored = HashMap::with_capacity(replay.records().len());
         for record in replay.records() {
             record
@@ -2406,18 +2974,48 @@ impl Queue {
             }
         }
 
-        let _queue_guard = self.push_remove_lock.lock();
-        if self.inflight_guards.load(Ordering::Acquire) != 0
-            || self.selection_attempts.load(Ordering::Acquire) != 0
-        {
-            return Err(LaneQueueReservationError::InflightSelection);
-        }
-        let mut store = self.lane_reservations.lock();
-        if store.journal.is_some() {
-            return Err(LaneQueueReservationError::JournalAlreadyInstalled);
-        }
         for record in restored.values() {
             self.validate_live_reservation_against_queue(record)?;
+        }
+        let missing_payload_hashes = restored
+            .keys()
+            .copied()
+            .chain(
+                commit_barriers
+                    .iter()
+                    .map(|key| key.signed_transaction_hash),
+            )
+            .chain(release_barriers.iter().flat_map(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .map(|key| key.signed_transaction_hash)
+            }))
+            .chain(completed_releases.iter().flat_map(|completion| {
+                completion
+                    .ordered_records
+                    .iter()
+                    .map(|record| record.key.signed_transaction_hash)
+            }))
+            .filter(|hash| !self.txs.contains_key(hash))
+            .collect::<HashSet<_>>();
+        let tracked_after_install = self
+            .materialized_active_len()
+            .saturating_add(missing_payload_hashes.len());
+        if tracked_after_install > self.capacity.get() {
+            return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                "replayed queue ownership would track {tracked_after_install} transactions, exceeding configured capacity {}",
+                self.capacity
+            )));
+        }
+        let retained_after_install = self.materialized_retained_bytes().saturating_add(
+            Self::retained_byte_cost_floor_for_transactions(missing_payload_hashes.len()),
+        );
+        if retained_after_install > self.max_retained_bytes.get() {
+            return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                "replayed queue ownership would retain at least {retained_after_install} bytes, exceeding configured limit {}",
+                self.max_retained_bytes
+            )));
         }
         let awaiting_transaction_replay = restored
             .keys()
@@ -2457,10 +3055,21 @@ impl Queue {
                 ));
             }
         }
+        store.missing_payload_hashes = missing_payload_hashes;
+        self.missing_reservation_payload_count
+            .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
         store.journal = Some(journal);
+        #[cfg(test)]
+        if let Some(fault) = self.install_reconciliation_append_fault.lock().take() {
+            store
+                .journal_mut()
+                .expect("reservation journal was just installed")
+                .inject_next_append_fault(fault);
+        }
         let publish_fault = match self.finalize_commit_barriers_locked(&mut store) {
             Ok(publish_fault) => publish_fault,
             Err(error) => {
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
                 let publish_fault = self.lane_reservation_durability_faulted();
                 drop(store);
                 if publish_fault {
@@ -2472,6 +3081,7 @@ impl Queue {
         let publish_fault = match self.finalize_completed_releases_locked(&mut store) {
             Ok(release_publish_fault) => publish_fault || release_publish_fault,
             Err(error) => {
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
                 let publish_fault = publish_fault || self.lane_reservation_durability_faulted();
                 drop(store);
                 if publish_fault {
@@ -2581,20 +3191,23 @@ impl Queue {
         // visible to drain validation or this operation observes the closed
         // incarnation and fails before taking ownership.
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        self.validate_reservation_scope_against_state(state, scope)?;
-        // Routing reconfiguration may reject stale pending entries and therefore acquires the
-        // queue lock internally. Complete it before taking exclusive selection ownership.
+        // Publish the current router/catalog generation before taking exclusive selection
+        // ownership. Already accepted work keeps its immutable admitted plan across policy
+        // changes; the reconfiguration pass only revalidates that ownership.
         let _ = self.sync_nexus_routing_with_state(state);
+        // Capture one complete state generation before queue ownership. Acquiring a state view
+        // after `push_remove_lock` would invert the normal state-view -> queue lock order and can
+        // deadlock behind a pending state writer.
+        let routing_state_view = state.view();
+        self.sync_nexus_routing_with_view(&routing_state_view);
+        Self::validate_reservation_scope_against_view(&routing_state_view, scope)?;
 
         let _queue_guard = self.push_remove_lock.lock();
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        // Revalidate after acquiring queue ownership as a defense against any
-        // non-lifecycle state drift. The lifecycle fence above remains held.
-        self.validate_reservation_scope_against_state(state, scope)?;
-        let routing_nexus = state.nexus_snapshot();
-        let routing_height = scope.proposal_height;
+        let routing_nexus = routing_state_view.nexus().clone();
+        let routing_height = state_view_height_for_routing(&routing_state_view);
 
         // Ordinary proposal guards can return an older hash after a later admission. Durable
         // ordinals remain authoritative across that retry boundary, so normalize before a lane
@@ -2602,8 +3215,14 @@ impl Queue {
         let fifo = self.fifo_with_released_reservations_locked(&[])?;
         self.replace_fifo_locked(&fifo);
         let live_hashes = self.lane_reservations.lock().live_hashes();
+        let global_selection_hashes = self
+            .global_selection_owners
+            .lock()
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
         let mut selected = Vec::<(
-            LaneQueueReservationRecordV3,
+            LaneQueueReservationRecordV5,
             Arc<CheckedTransaction<'static>>,
             RoutingPlan,
             usize,
@@ -2611,6 +3230,7 @@ impl Queue {
         )>::new();
         let mut selected_encoded_bytes = 0_u64;
         let mut selected_gas = 0_u64;
+        let mut rejected_conflicting_admissions = 0_usize;
 
         for hash in fifo.into_iter().take(limits.max_scan.get()) {
             if selected.len() >= limits.max_transactions.get() {
@@ -2619,30 +3239,92 @@ impl Queue {
             if live_hashes.contains(&hash) {
                 continue;
             }
+            if global_selection_hashes.contains(&hash) {
+                continue;
+            }
             let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
                 continue;
             };
             if excluded_entrypoint_hashes.contains(&tx.as_accepted().hash_as_entrypoint()) {
                 continue;
             }
-            if self.is_expired(tx.as_accepted()) || state.has_committed_transaction(hash) {
+            if routing_state_view.transactions.get(&hash).is_some() {
                 continue;
             }
-            let Ok(routing_plan) = self
-                .router
-                .read()
-                .try_route_plan_with_state(tx.as_accepted(), state)
-                .and_then(|plan| {
-                    resolve_routing_plan_against_nexus_at_height(
-                        plan,
-                        &routing_nexus,
-                        routing_height,
-                    )
-                })
+            let routing_plan = match self.immutable_queued_routing_plan_in_view(
+                hash,
+                tx.as_ref(),
+                &routing_state_view,
+                &routing_nexus,
+                routing_height,
+            ) {
+                Ok(routing_plan) => routing_plan,
+                Err(error) => {
+                    self.mark_accepted_work_validation_fault(
+                        hash,
+                        "lane_reservation_routing",
+                        &error,
+                        None,
+                    );
+                    return Err(LaneQueueReservationError::DurabilityFault);
+                }
+            };
+            let Some(durable_claim) = self
+                .durable_plan_claims
+                .get(&hash)
+                .map(|claim| claim.value().clone())
             else {
+                // Autonomous ownership is unavailable until a global admission binding exists.
+                // Ordinary FIFO ownership and order remain untouched.
                 continue;
             };
-            self.record_refreshed_routing_plan(hash, routing_plan.clone());
+            let admission_binding = match durable_claim.global_admission_binding() {
+                Ok(binding) => binding,
+                Err(reason) => {
+                    self.mark_accepted_work_validation_fault(
+                        hash,
+                        "lane_reservation_global_admission",
+                        &reason,
+                        None,
+                    );
+                    return Err(LaneQueueReservationError::DurabilityFault);
+                }
+            };
+            let queue_plan_admission_binding_hash = admission_binding.canonical_hash();
+            match queue_plan_admission_registry_match(
+                &routing_state_view,
+                admission_binding.entrypoint_hash.clone(),
+                queue_plan_admission_binding_hash,
+            ) {
+                Ok(QueuePlanAdmissionRegistryMatch::Absent) => {
+                    // The certificate has not entered the canonical carrier yet. Preserve exact
+                    // FIFO ownership and retry on a later lane tick.
+                    continue;
+                }
+                Ok(QueuePlanAdmissionRegistryMatch::Exact) => {}
+                Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
+                    self.reject_conflicting_global_admission_locked(
+                        hash,
+                        &tx,
+                        &routing_plan,
+                        &admission_binding,
+                    )?;
+                    rejected_conflicting_admissions =
+                        rejected_conflicting_admissions.saturating_add(1);
+                    continue;
+                }
+                Err(reason) => {
+                    // Malformed registry evidence is not an authenticated losing claim. Retain
+                    // the only durable queue owner and stop selection until restart/repair.
+                    self.mark_accepted_work_validation_fault(
+                        hash,
+                        "lane_reservation_global_admission_registry",
+                        &reason,
+                        None,
+                    );
+                    return Err(LaneQueueReservationError::DurabilityFault);
+                }
+            }
             if !routing_mode.allows(&routing_plan) {
                 continue;
             }
@@ -2653,10 +3335,11 @@ impl Queue {
             {
                 continue;
             }
-            let key = LaneQueueReservationKeyV1 {
-                version: LaneQueueReservationKeyV1::VERSION,
+            let key = LaneQueueReservationKeyV2 {
+                version: LaneQueueReservationKeyV2::VERSION,
                 signed_transaction_hash: hash,
                 entrypoint_hash: tx.as_accepted().hash_as_entrypoint(),
+                queue_plan_admission_binding_hash,
                 routing_plan_digest: routing_plan.digest(),
                 coordinator_leg: coordinator,
                 lane_id: scope.lane_id,
@@ -2710,7 +3393,7 @@ impl Queue {
                 .validate()
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
             selected.push((
-                LaneQueueReservationRecordV3 {
+                LaneQueueReservationRecordV5 {
                     version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                     key,
                     enqueue_timestamp_ms,
@@ -2729,6 +3412,9 @@ impl Queue {
             // otherwise a misconfigured scheduler could appear healthy until its first payload.
             if self.lane_reservations.lock().journal.is_none() {
                 return Err(LaneQueueReservationError::JournalNotInstalled);
+            }
+            if rejected_conflicting_admissions > 0 {
+                self.publish_backpressure_state(self.active_len(), None);
             }
             return Ok(Vec::new());
         }
@@ -2767,6 +3453,9 @@ impl Queue {
         if publish_fault {
             self.publish_latched_lane_reservation_durability_fault(backpressure_telemetry);
         }
+        if rejected_conflicting_admissions > 0 {
+            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+        }
 
         Ok(selected
             .into_iter()
@@ -2789,7 +3478,7 @@ impl Queue {
     /// or lane incarnation.
     pub fn retain_lane_reservation(
         &self,
-        key: &LaneQueueReservationKeyV1,
+        key: &LaneQueueReservationKeyV2,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -2818,7 +3507,7 @@ impl Queue {
     /// Returns an exact-identity conflict or durable journal failure.
     pub fn release_lane_reservation(
         &self,
-        key: &LaneQueueReservationKeyV1,
+        key: &LaneQueueReservationKeyV2,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -2865,16 +3554,16 @@ impl Queue {
     /// This is the crash-recovery companion to a durable autonomous-slot retirement record. The
     /// caller supplies the byte-identical reservation vector retained by that record. Queue
     /// selection remains excluded for the whole operation, so an ordinary block cannot consume a
-    /// released prefix before the remaining live suffix is returned. Each release frame is synced
-    /// before its transaction re-enters FIFO; after a crash, retrying the same ordered vector
-    /// resumes idempotently at the first still-live reservation.
+    /// released prefix before the remaining live suffix is returned. One atomic release-batch
+    /// frame is synced before any transaction re-enters FIFO; after a crash, retrying the same
+    /// ordered vector is idempotent whether the complete batch reached stable storage or not.
     ///
     /// # Errors
     /// Returns an error for duplicate or malformed identities, an identity conflict, a missing
     /// journal when work remains live, or a durable journal failure.
     pub fn release_lane_reservations_in_order(
         &self,
-        keys: &[LaneQueueReservationKeyV1],
+        keys: &[LaneQueueReservationKeyV2],
     ) -> Result<usize, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -2928,16 +3617,18 @@ impl Queue {
             .collect::<Vec<_>>();
         let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;
 
-        for (key, _) in &records {
-            if let Err(error) = store.journal_mut()?.release(*key) {
-                let publish_fault =
-                    self.latch_lane_reservation_durability_fault_locked(&store, &error);
-                drop(store);
-                if publish_fault {
-                    self.publish_latched_lane_reservation_durability_fault(None);
-                }
-                return Err(LaneQueueReservationError::Journal(error));
+        if let Err(error) = store
+            .journal_mut()?
+            .release_batch(records.iter().map(|(key, _)| *key).collect())
+        {
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            drop(store);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
             }
+            return Err(LaneQueueReservationError::Journal(error));
+        }
+        for (key, _) in &records {
             store.live_by_hash.remove(&key.signed_transaction_hash);
         }
         self.replace_fifo_locked(&restored_fifo);
@@ -2962,7 +3653,7 @@ impl Queue {
     /// durable journal failure.
     pub(crate) fn prepare_lane_reservation_release_barrier(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV2,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         barrier
             .validate()
@@ -3040,7 +3731,7 @@ impl Queue {
     /// durable journal failure.
     pub(crate) fn finalize_lane_reservation_release_barrier(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV2,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<usize, LaneQueueReservationError> {
         barrier
             .validate()
@@ -3088,7 +3779,7 @@ impl Queue {
                 self.validate_live_reservation_against_queue(&record)?;
                 ordered_records.push(record);
             }
-            let completion = LaneQueueReservationReleaseCompletionV3 {
+            let completion = LaneQueueReservationReleaseCompletionV5 {
                 version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                 barrier: barrier.clone(),
                 ordered_records,
@@ -3137,7 +3828,7 @@ impl Queue {
     #[must_use]
     pub(crate) fn lane_reservation_release_barriers(
         &self,
-    ) -> Vec<LaneQueueReservationReleaseBarrierV2> {
+    ) -> Vec<LaneQueueReservationReleaseBarrierV3> {
         let store = self.lane_reservations.lock();
         let mut barriers = store.release_barriers.clone();
         for completion in &store.completed_releases {
@@ -3145,7 +3836,7 @@ impl Queue {
                 barriers.push(completion.barrier.clone());
             }
         }
-        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV2::digest);
+        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV3::digest);
         barriers
     }
 
@@ -3159,7 +3850,7 @@ impl Queue {
     /// Returns an exact-identity conflict or durable journal failure.
     pub fn commit_lane_reservation(
         &self,
-        key: &LaneQueueReservationKeyV1,
+        key: &LaneQueueReservationKeyV2,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -3200,31 +3891,32 @@ impl Queue {
         }
 
         let hash = key.signed_transaction_hash;
-        self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
-        if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
-            let plan = self.routing_plans.get(&hash).map_or_else(
-                || RoutingPlan::single(key.coordinator_leg.route),
-                |entry| entry.clone(),
-            );
-            self.remove_transaction_locked(&tx, &plan, None);
-        }
-        match self.remove_plan_journal_for_reservation_commit(hash, key.routing_plan_digest) {
-            Ok(PlanJournalDurability::Synced | PlanJournalDurability::Disabled) => {}
+        let queued_owner =
+            if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
+                let plan = self
+                    .routing_plans
+                    .get(&hash)
+                    .map(|entry| entry.clone())
+                    .ok_or(LaneQueueReservationError::Conflict { hash })?;
+                if tx.as_accepted().hash_as_entrypoint() != key.entrypoint_hash
+                    || plan.digest() != key.routing_plan_digest
+                    || plan.coordinator_leg() != key.coordinator_leg
+                {
+                    return Err(LaneQueueReservationError::Conflict { hash });
+                }
+                Some((tx, plan))
+            } else {
+                None
+            };
+        let journal_durability = match self.remove_plan_journal_for_reservation_commit(key) {
+            Ok(durability @ (PlanJournalDurability::Synced | PlanJournalDurability::Disabled)) => {
+                durability
+            }
             Ok(PlanJournalDurability::StartupPending) => {
                 // Keep the durable commit barrier indefinitely when no pending-plan journal is
                 // installed. If one is installed later, installation finalizes these barriers
                 // before any replay can make the old plan eligible.
-                let publish_fault = self.compact_lane_reservations_locked(&mut store);
-                drop(store);
-                if publish_fault {
-                    self.publish_latched_lane_reservation_durability_fault(None);
-                }
-                self.publish_backpressure_state(self.active_len(), None);
-                return Ok(if newly_committed {
-                    LaneQueueReservationOutcome::Finalized
-                } else {
-                    LaneQueueReservationOutcome::AlreadyFinalized
-                });
+                PlanJournalDurability::StartupPending
             }
             Err(error) => {
                 let publish_fault = self.compact_lane_reservations_locked(&mut store);
@@ -3235,6 +3927,23 @@ impl Queue {
                 self.publish_backpressure_state(self.active_len(), None);
                 return Err(LaneQueueReservationError::Journal(error));
             }
+        };
+        self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+        if let Some((tx, plan)) = queued_owner {
+            self.remove_transaction_locked(&tx, &plan, None);
+        }
+        if journal_durability == PlanJournalDurability::StartupPending {
+            let publish_fault = self.compact_lane_reservations_locked(&mut store);
+            drop(store);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
+            }
+            self.publish_backpressure_state(self.active_len(), None);
+            return Ok(if newly_committed {
+                LaneQueueReservationOutcome::Finalized
+            } else {
+                LaneQueueReservationOutcome::AlreadyFinalized
+            });
         }
         if let Err(error) = store.journal_mut()?.forget_commit(*key) {
             let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
@@ -3271,11 +3980,11 @@ impl Queue {
     /// Returns the first exact-identity or durable journal error.
     pub fn reconcile_orphaned_lane_reservations<F>(
         &self,
-        candidates: &[LaneQueueReservationKeyV1],
+        candidates: &[LaneQueueReservationKeyV2],
         mut matching_kura_payload_exists: F,
     ) -> Result<usize, LaneQueueReservationError>
     where
-        F: FnMut(&LaneQueueReservationKeyV1) -> bool,
+        F: FnMut(&LaneQueueReservationKeyV2) -> bool,
     {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -3363,7 +4072,7 @@ impl Queue {
 
     /// Return exact live reservation identities for restart reconciliation and diagnostics.
     #[must_use]
-    pub fn live_lane_reservations(&self) -> Vec<LaneQueueReservationKeyV1> {
+    pub fn live_lane_reservations(&self) -> Vec<LaneQueueReservationKeyV2> {
         let mut keys: Vec<_> = self
             .lane_reservations
             .lock()
@@ -3371,7 +4080,7 @@ impl Queue {
             .values()
             .map(|record| record.key.clone())
             .collect();
-        keys.sort_by_key(LaneQueueReservationKeyV1::digest);
+        keys.sort_by_key(LaneQueueReservationKeyV2::digest);
         keys
     }
 
@@ -3386,7 +4095,7 @@ impl Queue {
     #[must_use]
     pub fn lane_reservation_group_is_finalized_for_diagnostics(
         &self,
-        keys: &[LaneQueueReservationKeyV1],
+        keys: &[LaneQueueReservationKeyV2],
     ) -> bool {
         if keys.is_empty()
             || keys.len() > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS
@@ -3458,7 +4167,7 @@ impl Queue {
             return true;
         }
         let reservations = self.lane_reservations.lock();
-        let exact_reservation = |key: &LaneQueueReservationKeyV1| {
+        let exact_reservation = |key: &LaneQueueReservationKeyV2| {
             key.lane_id == lane_id
                 && key.dataspace_id == dataspace_id
                 && key.lane_incarnation == lane_incarnation
@@ -3526,7 +4235,8 @@ impl Queue {
         self.plan_journal_durability_fault.load(Ordering::Acquire)
     }
 
-    /// Return whether transaction selection is disabled after an ambiguous reservation append.
+    /// Return whether transaction selection is disabled after an ambiguous reservation-journal
+    /// durability boundary.
     ///
     /// This fault is intentionally sticky for the process lifetime. Restart journal recovery is
     /// the only safe way to decide whether the attempted ownership transfer reached durable
@@ -3537,10 +4247,42 @@ impl Queue {
             .load(Ordering::Acquire)
     }
 
-    /// Return whether any queue-ownership journal requires restart recovery.
+    /// Return whether queue ownership requires restart recovery after a journal or semantic
+    /// revalidation fault.
     #[must_use]
     pub fn transaction_selection_durability_faulted(&self) -> bool {
-        self.plan_journal_durability_faulted() || self.lane_reservation_durability_faulted()
+        self.plan_journal_durability_faulted()
+            || self.lane_reservation_durability_faulted()
+            || self.accepted_work_validation_faulted()
+    }
+
+    /// Return whether accepted queue ownership requires restart recovery after a semantic
+    /// revalidation failure.
+    #[must_use]
+    pub fn accepted_work_validation_faulted(&self) -> bool {
+        self.accepted_work_validation_fault.load(Ordering::Acquire)
+    }
+
+    fn mark_accepted_work_validation_fault(
+        &self,
+        hash: SignedTxHash,
+        stage: &'static str,
+        reason: &(impl fmt::Display + ?Sized),
+        telemetry: Option<&StateTelemetry>,
+    ) {
+        if !self
+            .accepted_work_validation_fault
+            .swap(true, Ordering::AcqRel)
+        {
+            iroha_logger::error!(
+                tx = %hash,
+                stage,
+                %reason,
+                "accepted queue ownership failed immutable revalidation; retaining work and disabling admission and transaction selection until restart recovery"
+            );
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
+        status::set_tx_queue_pressure(self.pressure_snapshot());
     }
 
     #[cfg(test)]
@@ -3604,11 +4346,26 @@ impl Queue {
     /// non-ambiguous failure remains a warning rather than changing that operation's result.
     /// Ambiguous failures poison all transaction selection until startup recovery.
     fn compact_lane_reservations_locked(&self, store: &mut LaneQueueReservationStore) -> bool {
+        self.reconcile_missing_reservation_payloads_locked(store);
         let Err(error) = store.compact_if_needed() else {
             return false;
         };
         warn!(%error, "failed to compact lane queue reservation journal");
         self.latch_lane_reservation_durability_fault_locked(store, &error)
+    }
+
+    /// Rebuild the capacity owners whose exact transaction bytes are not in memory.
+    ///
+    /// The caller holds `push_remove_lock` and the reservation-store lock, so the durable
+    /// ownership union and `txs` membership cannot change between the set and counter updates.
+    fn reconcile_missing_reservation_payloads_locked(&self, store: &mut LaneQueueReservationStore) {
+        let missing_payload_hashes = store
+            .durable_owned_hashes()
+            .filter(|hash| !self.txs.contains_key(hash))
+            .collect();
+        store.missing_payload_hashes = missing_payload_hashes;
+        self.missing_reservation_payload_count
+            .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
     }
 
     /// Publish a reservation durability fault after every reservation-store guard is released.
@@ -3622,16 +4379,16 @@ impl Queue {
 
     /// Return exact crash barriers whose queue-plan tombstones are not yet independently durable.
     #[must_use]
-    pub fn lane_reservation_commit_barriers(&self) -> Vec<LaneQueueReservationKeyV1> {
+    pub fn lane_reservation_commit_barriers(&self) -> Vec<LaneQueueReservationKeyV2> {
         let mut keys = self.lane_reservations.lock().commit_barriers.clone();
-        keys.sort_by_key(LaneQueueReservationKeyV1::digest);
+        keys.sort_by_key(LaneQueueReservationKeyV2::digest);
         keys
     }
 
     fn finalize_one_completed_release_locked(
         &self,
         store: &mut LaneQueueReservationStore,
-        barrier: &LaneQueueReservationReleaseBarrierV2,
+        barrier: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<bool, LaneQueueReservationError> {
         let Some(index) = store
             .completed_releases
@@ -3711,21 +4468,29 @@ impl Queue {
                 let Some(plan) = self.routing_plans.get(&hash).map(|entry| entry.clone()) else {
                     return Err(LaneQueueReservationError::Conflict { hash });
                 };
-                if tx.as_accepted().hash_as_entrypoint() == key.entrypoint_hash
-                    && plan.digest() == key.routing_plan_digest
-                    && plan.coordinator_leg() == key.coordinator_leg
+                if tx.as_accepted().hash_as_entrypoint() != key.entrypoint_hash
+                    || plan.digest() != key.routing_plan_digest
+                    || plan.coordinator_leg() != key.coordinator_leg
                 {
-                    self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
-                    self.remove_transaction_locked(&tx, &plan, None);
+                    return Err(LaneQueueReservationError::Conflict { hash });
                 }
             }
-            match self.remove_plan_journal_for_reservation_commit(hash, key.routing_plan_digest)? {
+            match self.remove_plan_journal_for_reservation_commit(&key)? {
                 PlanJournalDurability::Synced | PlanJournalDurability::Disabled => {}
                 PlanJournalDurability::StartupPending => {
                     // Startup has not yet decided whether a queue-plan journal will be installed.
                     // Retain every remaining barrier until that decision is explicit.
                     break;
                 }
+            }
+            if let Some(tx) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
+                let plan = self
+                    .routing_plans
+                    .get(&hash)
+                    .map(|entry| entry.clone())
+                    .ok_or(LaneQueueReservationError::Conflict { hash })?;
+                self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+                self.remove_transaction_locked(&tx, &plan, None);
             }
             if let Err(error) = store.journal_mut()?.forget_commit(key) {
                 let _ = self.latch_lane_reservation_durability_fault_locked(store, &error);
@@ -3755,9 +4520,15 @@ impl Queue {
 
     /// Replay live pending queue-plan journal records against the current state.
     ///
-    /// Records are admitted only when the recomputed full routing plan exactly matches the
-    /// journaled plan. Committed, expired, malformed, stale, and otherwise invalid records are
-    /// tombstoned so they cannot be replayed indefinitely.
+    /// A still-active record is requeued with its exact original routing plan and durable claim.
+    /// Ordinary height, validator-roster, and current routing-policy advancement therefore cannot
+    /// mutate acknowledged ownership. If the recorded route was retired or any recorded lane ID
+    /// now denotes a different incarnation, startup fails with the record retained; delayed work
+    /// from an earlier generation is never rebound into a recreated lane.
+    ///
+    /// Only semantically terminal records (committed or expired) are tombstoned. Any malformed or
+    /// unverifiable routing, context, stateless-validation, admission, or durability result leaves
+    /// the live record intact and aborts startup.
     ///
     /// # Errors
     /// Returns journal replay I/O or frame decode errors.
@@ -3784,59 +4555,211 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
+        let crypto = state.crypto();
+        let chain_id = state.chain_id_ref().clone();
 
         replay.for_each_record(|record| {
-            let hash = record.signed_transaction_hash;
-            let routing_plan = record.routing_plan.clone();
-            let accepted =
-                AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(record.entrypoint));
+            let entrypoint_hash = record.entrypoint_hash;
+            let hash = compatibility_queue_hash(entrypoint_hash);
+            let recorded_routing_plan = record.routing_plan.clone();
+            let recorded_admission_context = record.admission_context.clone();
+            let recorded_global_admission_identity = record.global_admission_identity.clone();
+            let recorded_signed_transaction_hash = record.signed_transaction_hash.clone();
+            let enqueue_timestamp_ms = record.enqueue_timestamp_ms;
+            let recorded_journal_digest = record.claim_digest().map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to rebuild V4 queue-plan journal claim: {error}"),
+                )
+            })?;
+            let accepted = AcceptedTransaction::accept_entrypoint_at_time(
+                record.entrypoint,
+                &chain_id,
+                max_clock_drift,
+                transaction_limits.clone(),
+                crypto.as_ref(),
+                Duration::from_millis(enqueue_timestamp_ms),
+            )
+            .map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "queue-plan journal transaction {hash} failed canonical stateless validation; retaining its durable record: {error}"
+                    ),
+                )
+            })?;
+            if accepted.hash_as_entrypoint() != entrypoint_hash
+                || exact_signed_transaction_hash(accepted.entrypoint())
+                    != recorded_signed_transaction_hash.clone()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "queue-plan journal transaction {hash} changed identity during stateless validation"
+                    ),
+                ));
+            }
 
-            if accepted.hash() != hash {
-                summary.tombstoned_malformed = summary.tombstoned_malformed.saturating_add(1);
-                journal_removals.push((hash, routing_plan.digest()));
-                return Ok(());
-            }
-            if state.has_committed_transaction(hash) {
+            let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+            let state_view = state.view();
+            if state_view.transactions.get(&hash).is_some() {
                 summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
-                journal_removals.push((hash, routing_plan.digest()));
+                journal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
                 return Ok(());
             }
-            if self.is_expired(&accepted) {
+            let global_registry_match = if recorded_global_admission_identity.is_some() {
+                let binding =
+                    crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                        &QueuePlanDurableAdmissionV2 {
+                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+                            context: recorded_admission_context.clone(),
+                            global_admission_identity: recorded_global_admission_identity.clone(),
+                            routing_plan: recorded_routing_plan.clone(),
+                            entrypoint_hash: entrypoint_hash.clone(),
+                            signed_transaction_hash: recorded_signed_transaction_hash,
+                            enqueue_timestamp_ms,
+                            journal_record_digest: recorded_journal_digest,
+                        },
+                    )
+                    .map_err(|reason| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
+                            ),
+                        )
+                    })?;
+                let expected_chain_id_digest =
+                    crate::torii_proxy::queue_plan_admission_chain_id_digest(
+                        state_view.chain_id(),
+                    );
+                if binding.chain_id_digest != expected_chain_id_digest {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "queue-plan journal transaction {hash} belongs to another chain; retaining its durable record"
+                        ),
+                    ));
+                }
+                Some(
+                    queue_plan_admission_registry_match(
+                        &state_view,
+                        binding.entrypoint_hash.clone(),
+                        binding.canonical_hash(),
+                    )
+                    .map_err(|reason| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                            ),
+                        )
+                    })?,
+                )
+            } else {
+                None
+            };
+            if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
+                summary.tombstoned_conflicting_global_admission = summary
+                    .tombstoned_conflicting_global_admission
+                    .saturating_add(1);
+                journal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
+                return Ok(());
+            }
+            if self.is_expired(&accepted) && global_registry_match.is_none() {
                 summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
-                journal_removals.push((hash, routing_plan.digest()));
+                journal_removals.push((
+                    entrypoint_hash,
+                    recorded_routing_plan.digest(),
+                    recorded_journal_digest,
+                ));
                 return Ok(());
             }
-            match self.route_plan_with_state(&accepted, state) {
-                Ok(current_plan) if current_plan == routing_plan => {}
-                Ok(current_plan) => {
-                    warn!(
-                        tx = %hash,
-                        journal_plan_digest = %routing_plan.digest(),
-                        current_plan_digest = %current_plan.digest(),
-                        "discarding queued transaction journal record with stale routing plan"
-                    );
-                    summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
-                    journal_removals.push((hash, routing_plan.digest()));
-                    return Ok(());
+
+            self.sync_nexus_routing_with_view(&state_view);
+            let active_recorded_plan = resolve_routing_plan_for_queue_admission(
+                recorded_routing_plan.clone(),
+                state_view.nexus(),
+                state_view_height_for_routing(&state_view),
+            )
+            .map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "queue-plan journal transaction {hash} no longer has its admitted routing plan active; retaining immutable ownership evidence: {error}"
+                    ),
+                )
+            })?;
+            if active_recorded_plan != recorded_routing_plan
+                || !Self::durable_plan_claim_context_revalidates_in_view(
+                    &state_view,
+                    &recorded_routing_plan,
+                    &recorded_admission_context,
+                )
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "queue-plan journal transaction {hash} no longer authenticates its admitted route generation or active lane incarnations; retaining immutable ownership evidence"
+                    ),
+                ));
+            }
+
+            if let Some(existing) = self.txs.get(&hash) {
+                let existing_matches = existing.value().as_accepted().entrypoint()
+                    == accepted.entrypoint()
+                    && self
+                        .routing_plans
+                        .get(&hash)
+                        .is_some_and(|plan| *plan == recorded_routing_plan);
+                drop(existing);
+                if !existing_matches {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!(
+                            "queue-plan journal transaction {hash} conflicts with existing in-memory queue ownership"
+                        ),
+                    ));
                 }
-                Err(error) => {
-                    warn!(
-                        tx = %hash,
-                        reason = %error,
-                        reason_label = error.as_label(),
-                        "discarding queued transaction journal record with unresolved routing plan"
-                    );
-                    summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
-                    journal_removals.push((hash, routing_plan.digest()));
-                    return Ok(());
-                }
+                let _queue_guard = self.push_remove_lock.lock();
+                self.durable_plan_claims.insert(
+                    hash,
+                    QueuePlanDurableClaimIndexEntry {
+                        entrypoint_hash,
+                        signed_transaction_hash: record.signed_transaction_hash,
+                        routing_plan: recorded_routing_plan,
+                        admission_context: recorded_admission_context,
+                        global_admission_identity: recorded_global_admission_identity,
+                        enqueue_timestamp_ms,
+                        journal_record_digest: recorded_journal_digest,
+                    },
+                );
+                return Ok(());
             }
 
             let checked = CheckedTransaction::new_unchecked(accepted);
-            let mut state_access = LazyAdmissionStateAccess::new(state);
+            let next_block_height = state_view_height_for_routing(&state_view).saturating_add(1);
+            let mut state_access = EagerAdmissionStateAccess::new(
+                state_view.world(),
+                &state_view.nexus,
+                &state_view.pipeline,
+                next_block_height,
+                state_view.latest_block().map_or(0, |block| {
+                    u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+                }),
+            );
             let mut prepared = match self.prepare_checked_for_enqueue(
                 checked,
-                routing_plan.clone(),
+                recorded_routing_plan,
                 &mut state_access,
                 None,
                 #[cfg(feature = "telemetry")]
@@ -3844,17 +4767,20 @@ impl Queue {
             ) {
                 Ok(prepared) => prepared,
                 Err(failure) => {
-                    warn!(
-                        tx = %hash,
-                        error = %failure.err,
-                        "discarding queued transaction journal record rejected by admission"
-                    );
-                    summary.rejected = summary.rejected.saturating_add(1);
-                    journal_removals.push((hash, routing_plan.digest()));
-                    return Ok(());
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "queue-plan journal transaction {hash} failed current admission; retaining its durable record: {}",
+                            failure.err
+                        ),
+                    ));
                 }
             };
-            prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
+            prepared.enqueued_at_ms = enqueue_timestamp_ms;
+            prepared.admission_context = Some(recorded_admission_context);
+            prepared.global_admission_identity = recorded_global_admission_identity;
+            prepared.expected_journal_record_digest = Some(recorded_journal_digest);
+            prepared.replayed_journal_record_digest = Some(recorded_journal_digest);
 
             match self.enqueue_prepared_admissions(
                 vec![prepared],
@@ -3868,13 +4794,13 @@ impl Queue {
                 Err((notifications, failure)) => {
                     summary.replayed = summary.replayed.saturating_add(notifications.len());
                     self.publish_admission_notifications(&notifications);
-                    warn!(
-                        tx = %hash,
-                        error = %failure.err,
-                        "discarding queued transaction journal record rejected by enqueue"
-                    );
-                    summary.rejected = summary.rejected.saturating_add(1);
-                    journal_removals.push((hash, routing_plan.digest()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!(
+                            "queue-plan journal transaction {hash} failed queue publication after durable recovery; retaining its durable record: {}",
+                            failure.err
+                        ),
+                    ));
                 }
             }
             Ok(())
@@ -3890,15 +4816,17 @@ impl Queue {
     fn record_plan_journal_put_durable(
         &self,
         tx: &AcceptedTransaction<'_>,
-        hash: SignedTxHash,
         routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV2,
         enqueue_timestamp_ms: u64,
+        global_admission_identity: Option<&QueuePlanGlobalAdmissionIdentityV2>,
+        expected_record_digest: Option<Hash>,
         required: bool,
-    ) -> Result<(), (std::io::Error, bool)> {
+    ) -> Result<Option<Hash>, (std::io::Error, bool)> {
         let mut guard = self.plan_journal.lock();
         let Some(journal) = guard.as_mut() else {
             if !required {
-                return Ok(());
+                return Ok(None);
             }
             let reason = if self.plan_journal_disabled.load(Ordering::Acquire) {
                 "queue plan journal is disabled"
@@ -3910,13 +4838,32 @@ impl Queue {
                 false,
             ));
         };
-        let record = QueuePlanJournalRecordV2::new(
+        let record = QueuePlanJournalRecordV4::new(
             tx.entrypoint().clone(),
-            hash,
             routing_plan.clone(),
+            admission_context.clone(),
             enqueue_timestamp_ms,
+            global_admission_identity.cloned(),
         );
-        if let Err(error) = journal.put_strict_durable(record) {
+        let record_digest = record.claim_digest().map_err(|error| {
+            (
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to encode queue plan journal admission claim: {error}"),
+                ),
+                false,
+            )
+        })?;
+        if expected_record_digest.is_some_and(|expected| expected != record_digest) {
+            return Err((
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "queue plan journal record differs from the ingress-bound exact claim",
+                ),
+                false,
+            ));
+        }
+        if let Err(error) = journal.replace_strict_durable(record) {
             let indeterminate = error.is_indeterminate();
             let journal_faulted = error.journal_faulted();
             let error = error.into_source();
@@ -3926,7 +4873,7 @@ impl Queue {
             }
             return Err((error, indeterminate));
         }
-        Ok(())
+        Ok(Some(record_digest))
     }
 
     #[cfg(test)]
@@ -3950,9 +4897,122 @@ impl Queue {
             .inject_fault_script(faults);
     }
 
-    fn record_plan_journal_remove(&self, hash: SignedTxHash, routing_plan: &RoutingPlan) {
-        let flush = self.record_plan_journal_removes_deferred(vec![(hash, routing_plan.digest())]);
+    fn record_plan_journal_remove(&self, removal: QueuePlanJournalRemoval) {
+        let flush = self.record_plan_journal_removes_deferred(vec![removal]);
         self.flush_plan_journal_deferred(flush);
+    }
+
+    /// Durably reject one exact losing global-admission claim while the queue lock is held.
+    ///
+    /// The immutable WSV registry is checked before this helper is called. The journal tombstone
+    /// is force-synced before FIFO and in-memory ownership are released, so a crash cannot
+    /// resurrect the losing binding.
+    fn reject_conflicting_global_admission_locked(
+        &self,
+        hash: SignedTxHash,
+        transaction: &Arc<CheckedTransaction<'static>>,
+        routing_plan: &RoutingPlan,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<(), LaneQueueReservationError> {
+        if transaction.as_accepted().hash_as_entrypoint() != binding.entrypoint_hash
+            || routing_plan.digest() != binding.routing_plan_digest
+        {
+            return Err(LaneQueueReservationError::InvalidIdentity(
+                "conflicting QueuePlan admission rejection changed transaction or routing identity"
+                    .to_owned(),
+            ));
+        }
+        let removal = {
+            let mut guard = self.plan_journal.lock();
+            let journal = guard
+                .as_mut()
+                .ok_or(LaneQueueReservationError::JournalNotInstalled)?;
+            match journal.remove_exact_strict_durable(
+                binding.entrypoint_hash.clone(),
+                binding.routing_plan_digest,
+                binding.journal_record_digest,
+            ) {
+                Ok(removal) => removal,
+                Err(error) => {
+                    drop(guard);
+                    self.mark_plan_journal_durability_fault(&error, None);
+                    return Err(LaneQueueReservationError::Journal(error));
+                }
+            }
+        };
+        if removal != QueuePlanJournalExactRemoveResult::Removed {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "losing QueuePlan admission has live queue ownership without an exact journal record",
+            );
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(LaneQueueReservationError::Journal(error));
+        }
+        self.durable_plan_claims.remove(&hash);
+        self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+        self.remove_transaction_locked(transaction, routing_plan, None);
+        self.removed_hashes.insert(hash, ());
+        Ok(())
+    }
+
+    /// Durably release queue ownership for one exact authenticated losing admission binding.
+    ///
+    /// This operation is idempotent and content-bound. It removes the live journal claim,
+    /// FIFO entry, and transaction only when the queue still owns the byte-for-byte binding
+    /// supplied by the caller. An absent claim or a newer/different binding is left untouched.
+    ///
+    /// # Errors
+    /// Returns an identity or durability error when the binding is malformed or the queue's
+    /// live ownership cannot be reconciled with its exact durable journal claim.
+    pub fn reject_exact_queue_plan_admission_claim(
+        &self,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<bool, LaneQueueReservationError> {
+        binding
+            .validate_structure()
+            .map_err(LaneQueueReservationError::InvalidIdentity)?;
+        let hash = compatibility_queue_hash(binding.entrypoint_hash.clone());
+        let _queue_guard = self.push_remove_lock.lock();
+
+        let Some(indexed_claim) = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|claim| claim.value().clone())
+        else {
+            if self.txs.contains_key(&hash) {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "queue transaction has no durable QueuePlan admission claim during exact rejection",
+                );
+                self.mark_plan_journal_durability_fault(&error, None);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
+            return Ok(false);
+        };
+        let indexed_binding = indexed_claim
+            .global_admission_binding()
+            .map_err(LaneQueueReservationError::InvalidIdentity)?;
+        if &indexed_binding != binding {
+            // A delayed losing certificate must not delete a later admission for the same
+            // entrypoint, including an ABA replacement with the same routing-plan digest.
+            return Ok(false);
+        }
+        let transaction = self
+            .txs
+            .get(&hash)
+            .map(|entry| Arc::clone(entry.value()))
+            .ok_or_else(|| {
+                LaneQueueReservationError::InvalidIdentity(
+                    "durable QueuePlan admission claim has no live queue transaction".to_owned(),
+                )
+            })?;
+        self.reject_conflicting_global_admission_locked(
+            hash,
+            &transaction,
+            &indexed_claim.routing_plan,
+            binding,
+        )?;
+        Ok(true)
     }
 
     /// Append and force-sync one exact pending-plan tombstone for reservation commit ordering.
@@ -3962,9 +5022,9 @@ impl Queue {
     /// writes, because otherwise a crash could resurrect a transaction already owned by a lane.
     fn remove_plan_journal_for_reservation_commit(
         &self,
-        hash: SignedTxHash,
-        plan_digest: Hash,
+        key: &LaneQueueReservationKeyV2,
     ) -> std::io::Result<PlanJournalDurability> {
+        let hash = key.signed_transaction_hash;
         let mut guard = self.plan_journal.lock();
         let Some(journal) = guard.as_mut() else {
             return Ok(if self.plan_journal_disabled.load(Ordering::Acquire) {
@@ -3973,24 +5033,69 @@ impl Queue {
                 PlanJournalDurability::StartupPending
             });
         };
-        if let Err(error) = journal.remove_many_deferred_flush([(hash, plan_digest)]) {
+
+        let indexed_claim = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|claim| claim.value().clone());
+        if let Some(claim) = indexed_claim.as_ref()
+            && (claim.entrypoint_hash != key.entrypoint_hash
+                || claim.routing_plan.digest() != key.routing_plan_digest)
+        {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "reservation commit identity conflicts with the indexed durable queue-plan claim",
+            );
             drop(guard);
             self.mark_plan_journal_durability_fault(&error, None);
             return Err(error);
         }
-        // Forgetting the reservation Commit barrier depends on this exact tombstone surviving
-        // power loss, including file-length metadata and the journal directory entry.
-        if let Err(error) = journal.sync_all_with_parent() {
+        if self.txs.contains_key(&hash) && indexed_claim.is_none() {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "reservation commit found an in-memory transaction without its durable queue-plan claim",
+            );
             drop(guard);
             self.mark_plan_journal_durability_fault(&error, None);
             return Err(error);
+        }
+
+        let removal = match journal.remove_exact_strict_durable(
+            key.entrypoint_hash,
+            key.routing_plan_digest,
+            indexed_claim
+                .as_ref()
+                .map_or(Hash::prehashed([0; Hash::LENGTH]), |claim| {
+                    claim.journal_record_digest
+                }),
+        ) {
+            Ok(removal) => removal,
+            Err(error) => {
+                drop(guard);
+                self.mark_plan_journal_durability_fault(&error, None);
+                return Err(error);
+            }
+        };
+        if removal == QueuePlanJournalExactRemoveResult::AlreadyAbsent
+            && (indexed_claim.is_some() || self.txs.contains_key(&hash))
+        {
+            let error = std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "reservation commit journal tombstone is absent while in-memory ownership remains live",
+            );
+            drop(guard);
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(error);
+        }
+        if removal == QueuePlanJournalExactRemoveResult::Removed {
+            self.durable_plan_claims.remove(&hash);
         }
         Ok(PlanJournalDurability::Synced)
     }
 
     fn record_plan_journal_removes_deferred(
         &self,
-        removals: Vec<(SignedTxHash, Hash)>,
+        removals: Vec<QueuePlanJournalRemoval>,
     ) -> DeferredQueuePlanJournalFlush {
         if removals.is_empty() {
             return DeferredQueuePlanJournalFlush::default();
@@ -4013,7 +5118,7 @@ impl Queue {
 
     fn record_plan_journal_removes_durable(
         &self,
-        removals: Vec<(SignedTxHash, Hash)>,
+        removals: Vec<QueuePlanJournalRemoval>,
     ) -> std::io::Result<()> {
         if removals.is_empty() {
             return Ok(());
@@ -4041,39 +5146,23 @@ impl Queue {
         if !flush.is_needed() {
             return;
         }
-        let sync_file = if flush.0.sync_data() {
-            let guard = self.plan_journal.lock();
-            let Some(journal) = guard.as_ref() else {
-                return;
-            };
-            match journal.sync_file_clone() {
-                Ok(file) => Some(file),
-                Err(error) => {
-                    warn!(%error, "failed to clone queue plan journal sync handle");
-                    drop(guard);
-                    self.mark_plan_journal_durability_fault(&error, None);
-                    None
-                }
-            }
-        } else {
-            None
+        let mut guard = self.plan_journal.lock();
+        let Some(journal) = guard.as_mut() else {
+            return;
         };
-        if let Some(file) = sync_file
-            && let Err(error) = file.sync_data()
-        {
-            warn!(%error, "failed to sync queue plan journal");
-            self.mark_plan_journal_durability_fault(&error, None);
-        }
-        if flush.0.compact() {
-            let mut guard = self.plan_journal.lock();
-            let Some(journal) = guard.as_mut() else {
-                return;
-            };
-            if let Err(error) = journal.compact_if_needed() {
-                warn!(%error, "failed to compact queue plan journal");
-                drop(guard);
-                self.mark_plan_journal_durability_fault(&error, None);
+        let result = (|| {
+            if flush.0.sync_data() {
+                journal.sync_data_verified()?;
             }
+            if flush.0.compact() {
+                journal.compact_if_needed()?;
+            }
+            Ok::<(), std::io::Error>(())
+        })();
+        if let Err(error) = result {
+            warn!(%error, "failed to durably flush queue plan journal");
+            drop(guard);
+            self.mark_plan_journal_durability_fault(&error, None);
         }
     }
 
@@ -5046,10 +6135,12 @@ impl Queue {
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
                 active_count: AtomicUsize::new(0),
+                missing_reservation_payload_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
                 routing_plans: DashMap::new(),
+                durable_plan_claims: DashMap::new(),
                 tx_encoded_len: DashMap::new(),
                 tx_gas_cost: DashMap::new(),
                 tx_enqueued_at_ms: DashMap::new(),
@@ -5066,9 +6157,14 @@ impl Queue {
                 ),
                 plan_journal_durability_fault: AtomicBool::new(false),
                 lane_reservation_durability_fault: AtomicBool::new(false),
+                accepted_work_validation_fault: AtomicBool::new(false),
+                global_selection_owners: parking_lot::Mutex::new(BTreeMap::new()),
+                next_global_selection_owner: AtomicU64::new(1),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 #[cfg(test)]
                 durability_observer_lock_handoff: parking_lot::Mutex::new(None),
+                #[cfg(test)]
+                install_reconciliation_append_fault: parking_lot::Mutex::new(None),
                 #[cfg(test)]
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -5135,8 +6231,71 @@ impl Queue {
         }
     }
 
+    fn global_admission_registry_match_for_hash(
+        &self,
+        hash: SignedTxHash,
+        state_view: &impl StateReadOnly,
+    ) -> Result<
+        Option<(
+            crate::torii_proxy::QueuePlanAdmissionBindingV2,
+            QueuePlanAdmissionRegistryMatch,
+        )>,
+        String,
+    > {
+        let Some(claim) = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|claim| claim.value().clone())
+        else {
+            return Ok(None);
+        };
+        if claim.global_admission_identity.is_none() {
+            return Ok(None);
+        }
+        let binding = claim.global_admission_binding()?;
+        let expected_chain_id_digest =
+            crate::torii_proxy::queue_plan_admission_chain_id_digest(state_view.chain_id());
+        if binding.chain_id_digest != expected_chain_id_digest {
+            return Err("durable QueuePlan admission binding belongs to another chain".to_owned());
+        }
+        let registry_match = queue_plan_admission_registry_match(
+            state_view,
+            binding.entrypoint_hash.clone(),
+            binding.canonical_hash(),
+        )?;
+        Ok(Some((binding, registry_match)))
+    }
+
+    fn has_globally_bound_durable_claim(&self, hash: SignedTxHash) -> bool {
+        self.durable_plan_claims
+            .get(&hash)
+            .is_some_and(|claim| claim.global_admission_identity.is_some())
+    }
+
     fn is_pending(&self, tx: &CheckedTransaction<'static>, state_view: &StateView) -> bool {
-        !self.is_expired(tx.as_accepted()) && !tx.is_in_blockchain(state_view)
+        if tx.is_in_blockchain(state_view) {
+            return false;
+        }
+        if !self.is_expired(tx.as_accepted()) {
+            return true;
+        }
+        let hash = tx.hash();
+        match self.global_admission_registry_match_for_hash(hash, state_view) {
+            Ok(Some((
+                _,
+                QueuePlanAdmissionRegistryMatch::Absent | QueuePlanAdmissionRegistryMatch::Exact,
+            ))) => true,
+            Ok(None | Some((_, QueuePlanAdmissionRegistryMatch::Conflict))) => false,
+            Err(reason) => {
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "global_candidate_expiry_registry",
+                    &reason,
+                    None,
+                );
+                false
+            }
+        }
     }
 
     /// Checks if the transaction is waiting longer than its TTL or than the TTL from [`Config`].
@@ -5401,32 +6560,6 @@ impl Queue {
         })
     }
 
-    fn queue_rejection_reason(
-        err: &Error,
-    ) -> Option<iroha_data_model::transaction::error::TransactionRejectionReason> {
-        match err {
-            Error::NexusFeeAdmissionRejected { reason, .. } => Some(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
-                ),
-            ),
-            Error::ConfidentialPolicyAdmissionRejected { reason, .. } => Some(reason.clone()),
-            Error::NexusFeeAdmissionConfigInvalid { reason, .. } => Some(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError(reason.clone()),
-                ),
-            ),
-            Error::UnresolvedRoute { reason } => Some(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError(format!(
-                        "transaction routing could not be resolved: {reason}"
-                    )),
-                ),
-            ),
-            _ => None,
-        }
-    }
-
     /// Returns all pending transactions.
     pub fn all_transactions<'state>(
         &'state self,
@@ -5451,13 +6584,27 @@ impl Queue {
     /// lose transactions through `TransactionGuard` drop semantics. The ring
     /// order is serialized with queue insertion, unlike `DashMap` iteration,
     /// and every inspected slot counts against the explicit scan bound even if
-    /// the slot became stale concurrently.
+    /// the slot became stale concurrently. The returned lease prevents an
+    /// autonomous lane from reserving a cloned transaction until the candidate
+    /// has either been locally bound or abandoned.
     pub(crate) fn bounded_pending_snapshot(
-        &self,
+        self: &Arc<Self>,
         state_view: &StateView<'_>,
         max_scan: NonZeroUsize,
-    ) -> Vec<AcceptedTransaction<'static>> {
+    ) -> Option<(Vec<AcceptedTransaction<'static>>, GlobalQueueSelectionLease)> {
+        if self.transaction_selection_durability_faulted() {
+            return None;
+        }
+        let queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return None;
+        }
+        let live_reservations = self.lane_reservations.lock().live_hashes();
+        let mut global_owners = self.global_selection_owners.lock();
         let mut age_ring = self.queued_age_ring.lock();
+        if self.transaction_selection_durability_faulted() {
+            return None;
+        }
         let mut remaining_scan = max_scan.get();
         while remaining_scan > 0
             && let Some((hash, enqueued_at_ms)) = age_ring.front().copied()
@@ -5474,10 +6621,17 @@ impl Queue {
             remaining_scan = remaining_scan.saturating_sub(1);
         }
         if remaining_scan == 0 {
-            return Vec::new();
+            return Some((
+                Vec::new(),
+                GlobalQueueSelectionLease {
+                    queue: Arc::downgrade(self),
+                    owner: 0,
+                    hashes: Vec::new(),
+                },
+            ));
         }
         let mut seen = HashSet::with_capacity(remaining_scan);
-        age_ring
+        let pending = age_ring
             .iter()
             .take(remaining_scan)
             .filter_map(|(hash, enqueued_at_ms)| {
@@ -5485,7 +6639,12 @@ impl Queue {
                     .queued_tx_enqueued_at_ms
                     .get(hash)
                     .is_some_and(|entry| *entry.value() == *enqueued_at_ms);
-                if !is_current || !seen.insert(*hash) || self.removed_hashes.contains_key(hash) {
+                if !is_current
+                    || !seen.insert(*hash)
+                    || self.removed_hashes.contains_key(hash)
+                    || live_reservations.contains(hash)
+                    || global_owners.contains_key(hash)
+                {
                     return None;
                 }
                 let transaction = self.txs.get(hash)?;
@@ -5493,11 +6652,77 @@ impl Queue {
                 self.is_pending(transaction, state_view)
                     .then(|| transaction.as_accepted().clone())
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Some((
+                pending,
+                GlobalQueueSelectionLease {
+                    queue: Arc::downgrade(self),
+                    owner: 0,
+                    hashes: Vec::new(),
+                },
+            ));
+        }
+        let hashes = pending
+            .iter()
+            .map(AcceptedTransaction::hash)
+            .collect::<Vec<_>>();
+        let owner = match self.next_global_selection_owner.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| current.checked_add(1),
+        ) {
+            Ok(owner) if owner != 0 => owner,
+            Ok(_) | Err(_) => {
+                let hash = hashes[0];
+                drop(age_ring);
+                drop(global_owners);
+                drop(queue_guard);
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "global_candidate_selection",
+                    "global candidate selection owner identity exhausted",
+                    None,
+                );
+                return None;
+            }
+        };
+        for hash in &hashes {
+            if global_owners.insert(*hash, owner).is_some() {
+                let reason = "global candidate selection ownership changed under the queue lock";
+                for installed in &hashes {
+                    if global_owners.get(installed) == Some(&owner) {
+                        global_owners.remove(installed);
+                    }
+                }
+                let hash = *hash;
+                drop(age_ring);
+                drop(global_owners);
+                drop(queue_guard);
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "global_candidate_selection",
+                    reason,
+                    None,
+                );
+                return None;
+            }
+        }
+        Some((
+            pending,
+            GlobalQueueSelectionLease {
+                queue: Arc::downgrade(self),
+                owner,
+                hashes,
+            },
+        ))
     }
 
     /// Returns `n` transactions in a batch for gossiping
     pub fn gossip_batch(&self, n: u32, state_view: &StateView) -> Vec<GossipBatchEntry> {
+        if self.transaction_selection_durability_faulted() {
+            return Vec::new();
+        }
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
@@ -5513,41 +6738,28 @@ impl Queue {
                     GossipEntryState::Pending
                 }
             },
-            |hash, tx_ref| self.refresh_routing_plan_with_view(hash, tx_ref, state_view),
+            |hash, tx_ref| self.immutable_queued_routing_plan_with_view(hash, tx_ref, state_view),
             backpressure_telemetry,
         )
     }
 
-    /// Returns `n` transactions in a batch for gossiping using narrow state accessors.
+    /// Returns `n` transactions in a batch for gossiping from one lifecycle-fenced state view.
     pub fn gossip_batch_with_state(&self, n: u32, state: &State) -> Vec<GossipBatchEntry> {
-        #[cfg(feature = "telemetry")]
-        let telemetry_handle = state.metrics();
-        #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(&telemetry_handle);
-        #[cfg(not(feature = "telemetry"))]
-        let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let committed_transactions = state.transactions.view();
-        self.gossip_batch_inner(
-            n,
-            |hash, tx_ref| {
-                if self.is_expired(tx_ref.as_accepted()) {
-                    GossipEntryState::Other
-                } else if committed_transactions.get(&hash).is_some() {
-                    GossipEntryState::Committed
-                } else {
-                    GossipEntryState::Pending
-                }
-            },
-            |hash, tx_ref| self.refresh_routing_plan_with_state(hash, tx_ref, state),
-            backpressure_telemetry,
-        )
+        if self.transaction_selection_durability_faulted() {
+            return Vec::new();
+        }
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let _ = self.sync_nexus_routing_with_state(state);
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        self.gossip_batch(n, &state_view)
     }
 
     fn gossip_batch_inner<F, R>(
         &self,
         n: u32,
         mut entry_state: F,
-        mut refresh_routing: R,
+        mut resolve_immutable_routing: R,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> Vec<GossipBatchEntry>
     where
@@ -5566,21 +6778,28 @@ impl Queue {
             let tx_ref = tx_arc.as_ref();
             match entry_state(hash, tx_ref) {
                 GossipEntryState::Pending => {
-                    let routing_plan = match refresh_routing(hash, tx_ref) {
+                    let routing_plan = match resolve_immutable_routing(hash, tx_ref) {
                         Ok(routing_plan) => routing_plan,
                         Err(err) => {
-                            warn!(
+                            iroha_logger::error!(
                                 tx = %hash,
                                 reason = %err,
                                 reason_label = err.as_label(),
-                                "dropping queued transaction before gossip due to unresolved route"
+                                "queued transaction failed immutable routing validation before gossip"
                             );
-                            self.reject_queued_transaction_for_unresolved_route(
+                            if let Err(requeue_hash) = self.tx_gossip.push(hash) {
+                                warn!(
+                                    tx = %requeue_hash,
+                                    "failed to restore immutable queued transaction to gossip backlog"
+                                );
+                            }
+                            self.mark_accepted_work_validation_fault(
                                 hash,
-                                err.to_string(),
+                                "gossip_routing",
+                                &err,
                                 backpressure_telemetry,
                             );
-                            continue;
+                            break;
                         }
                     };
                     let routing = routing_plan.coordinator_route();
@@ -5618,20 +6837,22 @@ impl Queue {
         )
     }
 
-    fn resolve_precomputed_routing_plan_with_state(
+    fn resolve_precomputed_routing_plan_with_view(
         &self,
         tx: &AcceptedTransaction<'_>,
-        state: &State,
-        nexus: &Nexus,
+        state_view: &StateView<'_>,
         plan: RoutingPlan,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let block_height = state_height_for_routing(state);
-        let plan = resolve_routing_plan_for_queue_admission(plan, nexus, block_height)?;
+        let block_height = state_view_height_for_routing(state_view);
+        let plan =
+            resolve_routing_plan_for_queue_admission(plan, state_view.nexus(), block_height)?;
         let current_plan = self
             .router
             .read()
-            .try_route_plan_with_state(tx, state)
-            .and_then(|plan| resolve_routing_plan_for_queue_admission(plan, nexus, block_height))?;
+            .try_route_plan_with_view(tx, state_view)
+            .and_then(|plan| {
+                resolve_routing_plan_for_queue_admission(plan, state_view.nexus(), block_height)
+            })?;
         if current_plan == plan {
             Ok(plan)
         } else {
@@ -5658,129 +6879,292 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let nexus = self.sync_nexus_routing_with_state(state);
-        let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
-    }
-
-    fn record_refreshed_routing_plan(&self, hash: SignedTxHash, plan: RoutingPlan) {
-        let routing = plan.coordinator_route();
-        self.routing_decisions.insert(hash, routing);
-        self.routing_plans.insert(hash, plan.clone());
-        self.record_routing_plan_in_ledger(hash, plan);
+        self.route_plan_with_state(tx, state)
     }
 
     fn record_routing_plan_in_ledger(&self, hash: SignedTxHash, plan: RoutingPlan) {
         routing_ledger::record_plan_bounded(hash, plan, self.capacity.get());
     }
 
-    fn refresh_routing_plan_with_view(
+    fn prune_durable_plan_claim_index_locked(&self) {
+        self.durable_plan_claims
+            .retain(|hash, _| self.txs.contains_key(hash));
+        debug_assert!(
+            self.durable_plan_claims.len() <= self.capacity.get(),
+            "durable queue-plan claim index must remain bounded by queue capacity"
+        );
+    }
+
+    fn durable_plan_claim_context_revalidates_in_view(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        admission_context: &QueuePlanAdmissionContextV2,
+    ) -> bool {
+        if admission_context
+            .validate_for_routing_plan(routing_plan)
+            .is_err()
+        {
+            return false;
+        }
+        let current_authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        if admission_context.authority_height > current_authority_height {
+            return false;
+        }
+        let exact_predecessor = if admission_context.authority_height == 0 {
+            None
+        } else {
+            let Ok(predecessor_index) =
+                usize::try_from(admission_context.authority_height.saturating_sub(1))
+            else {
+                return false;
+            };
+            state_view.block_hashes().get(predecessor_index).copied()
+        };
+        if exact_predecessor != admission_context.predecessor_block_hash {
+            return false;
+        }
+        let Some(current_proposal_height) = current_authority_height.checked_add(1) else {
+            return false;
+        };
+        admission_context.route_incarnations.iter().all(|bound| {
+            state_view.lane_incarnation_at_height(bound.leg.route.lane_id, current_proposal_height)
+                == Some(bound.lane_incarnation)
+        })
+    }
+
+    /// Revalidate an indexed strict claim without comparing its historical authority height,
+    /// predecessor, or roster to the current admission generation.
+    ///
+    /// Caller must hold `push_remove_lock`. The exact historical predecessor remains bound and
+    /// is checked at its original height, while every route must still use the same active
+    /// incarnation at the next proposal height. Current routing policy is deliberately irrelevant
+    /// to already-admitted ownership. This permits a lost-response retry after ordinary
+    /// height/roster/policy advancement without accepting a lane-ID ABA.
+    fn revalidated_durable_plan_claim_retry_locked(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        expected_admission_context: &QueuePlanAdmissionContextV2,
+    ) -> Result<Option<QueuePlanDurableClaimIndexEntry>, &'static str> {
+        let tx_hash = tx.hash();
+        let Some(existing) = self.durable_plan_claims.get(&tx_hash) else {
+            return Ok(None);
+        };
+        let exact_match = existing.entrypoint_hash == tx.hash_as_entrypoint()
+            && existing.signed_transaction_hash == exact_signed_transaction_hash(tx.entrypoint())
+            && &existing.routing_plan == routing_plan
+            && &existing.admission_context == expected_admission_context
+            && self.txs.contains_key(&tx_hash)
+            && self
+                .routing_plans
+                .get(&tx_hash)
+                .is_some_and(|queued| queued.value() == routing_plan);
+        if !exact_match {
+            return Err(
+                "existing durable queue-plan claim conflicts with the exact transaction, plan, or queued admission context",
+            );
+        }
+        if !Self::durable_plan_claim_context_revalidates_in_view(
+            state_view,
+            routing_plan,
+            &existing.admission_context,
+        ) {
+            return Err(
+                "existing durable queue-plan claim no longer matches its predecessor or the active lane incarnation",
+            );
+        }
+        Ok(Some(existing.value().clone()))
+    }
+
+    /// Return an existing same-plan claim that may be rebound to the exact current context.
+    ///
+    /// Caller holds the queue lock and has already verified that `current_context` was captured
+    /// under the lifecycle guard for `routing_plan`. The old claim must still authenticate its
+    /// original predecessor and every active lane incarnation; only height and authority-roster
+    /// generation may advance.
+    fn durable_plan_claim_rollover_candidate_locked(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        requested_context: &QueuePlanAdmissionContextV2,
+        current_context: &QueuePlanAdmissionContextV2,
+    ) -> Result<Option<QueuePlanDurableClaimIndexEntry>, &'static str> {
+        let tx_hash = tx.hash();
+        let Some(existing) = self.durable_plan_claims.get(&tx_hash) else {
+            return Ok(None);
+        };
+        if requested_context != current_context {
+            return Err(
+                "requested durable queue-plan claim context is neither the existing claim nor the exact current generation",
+            );
+        }
+        let exact_owner = existing.entrypoint_hash == tx.hash_as_entrypoint()
+            && existing.signed_transaction_hash == exact_signed_transaction_hash(tx.entrypoint())
+            && &existing.routing_plan == routing_plan
+            && self.txs.contains_key(&tx_hash)
+            && self
+                .routing_plans
+                .get(&tx_hash)
+                .is_some_and(|queued| queued.value() == routing_plan);
+        if !exact_owner {
+            return Err(
+                "existing durable queue-plan claim conflicts with the exact transaction or immutable routing plan",
+            );
+        }
+        if !Self::durable_plan_claim_context_revalidates_in_view(
+            state_view,
+            routing_plan,
+            &existing.admission_context,
+        ) {
+            return Err(
+                "existing durable queue-plan claim no longer matches its predecessor or active lane incarnation",
+            );
+        }
+        Ok(Some(existing.value().clone()))
+    }
+
+    fn immutable_queued_routing_plan_in_view(
+        &self,
+        hash: SignedTxHash,
+        tx: &CheckedTransaction<'static>,
+        state_view: &impl StateReadOnly,
+        nexus: &Nexus,
+        committed_height: u64,
+    ) -> Result<RoutingPlan, RoutingResolveError> {
+        if tx.hash() != hash {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+        let Some(tracked_entry) = self.txs.get(&hash) else {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        };
+        let tracked_tx = tracked_entry.value().as_ref().as_accepted();
+        if tracked_tx.entrypoint() != tx.as_accepted().entrypoint()
+            || tracked_tx.hash_as_entrypoint() != tx.as_accepted().hash_as_entrypoint()
+            || exact_signed_transaction_hash(tracked_tx.entrypoint())
+                != exact_signed_transaction_hash(tx.as_accepted().entrypoint())
+        {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+        drop(tracked_entry);
+
+        let Some(plan) = self
+            .routing_plans
+            .get(&hash)
+            .map(|entry| entry.value().clone())
+        else {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        };
+        let resolved =
+            resolve_routing_plan_for_queue_admission(plan.clone(), nexus, committed_height)?;
+        if resolved != plan {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+        if self
+            .routing_decisions
+            .get(&hash)
+            .is_none_or(|entry| *entry.value() != plan.coordinator_route())
+        {
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+
+        if let Some(claim) = self.durable_plan_claims.get(&hash) {
+            let exact_claim = claim.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()
+                && claim.signed_transaction_hash
+                    == exact_signed_transaction_hash(tx.as_accepted().entrypoint())
+                && claim.routing_plan == plan
+                && Self::durable_plan_claim_context_revalidates_in_view(
+                    state_view,
+                    &plan,
+                    &claim.admission_context,
+                );
+            if !exact_claim {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+        } else if self.plan_journal.lock().is_some() {
+            // A production queue with an installed journal must never select ownership that lacks
+            // the exact durable claim rebuilt or inserted alongside its immutable routing plan.
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+
+        Ok(plan)
+    }
+
+    fn immutable_queued_routing_plan_with_view(
         &self,
         hash: SignedTxHash,
         tx: &CheckedTransaction<'static>,
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         self.sync_nexus_routing_with_view(state_view);
-        let plan = self
-            .router
-            .read()
-            .try_route_plan_with_view(tx.as_accepted(), state_view)?;
-        let plan = Self::resolve_view_routing_plan(plan, state_view)?;
-        self.record_refreshed_routing_plan(hash, plan.clone());
-        Ok(plan)
+        self.immutable_queued_routing_plan_in_view(
+            hash,
+            tx,
+            state_view,
+            state_view.nexus(),
+            state_view_height_for_routing(state_view),
+        )
     }
 
-    fn refresh_routing_plan_with_state(
+    fn exact_plan_journal_removal(
         &self,
         hash: SignedTxHash,
-        tx: &CheckedTransaction<'static>,
-        state: &State,
-    ) -> Result<RoutingPlan, RoutingResolveError> {
-        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let nexus = self.sync_nexus_routing_with_state(state);
-        let plan = self
-            .router
-            .read()
-            .try_route_plan_with_state(tx.as_accepted(), state)?;
-        let plan = resolve_routing_plan_for_queue_admission(
-            plan,
-            &nexus,
-            state_height_for_routing(state),
-        )?;
-        self.record_refreshed_routing_plan(hash, plan.clone());
-        Ok(plan)
+        plan_digest: Hash,
+    ) -> Option<QueuePlanJournalRemoval> {
+        self.durable_plan_claims.get(&hash).and_then(|claim| {
+            (claim.routing_plan.digest() == plan_digest).then(|| {
+                (
+                    claim.entrypoint_hash.clone(),
+                    plan_digest,
+                    claim.journal_record_digest,
+                )
+            })
+        })
     }
 
     fn remove_routing_metadata_plan_first(
         &self,
         hash: SignedTxHash,
-    ) -> (RoutingDecision, Option<RoutingPlan>) {
+    ) -> (
+        RoutingDecision,
+        Option<RoutingPlan>,
+        Option<QueuePlanJournalRemoval>,
+    ) {
+        let indexed_removal = self.durable_plan_claims.get(&hash).map(|claim| {
+            (
+                claim.entrypoint_hash.clone(),
+                claim.routing_plan.digest(),
+                claim.journal_record_digest,
+            )
+        });
+        self.durable_plan_claims.remove(&hash);
         if let Some((_, plan)) = self.routing_plans.remove(&hash) {
             self.routing_decisions.remove(&hash);
             let _ = routing_ledger::take_route(&hash);
-            return (plan.coordinator_route(), Some(plan));
+            let journal_removal =
+                indexed_removal.filter(|(_, plan_digest, _)| *plan_digest == plan.digest());
+            return (plan.coordinator_route(), Some(plan), journal_removal);
         }
 
         if let Some(plan) = routing_ledger::take_plan(&hash) {
             self.routing_decisions.remove(&hash);
             let _ = routing_ledger::take(&hash);
-            return (plan.coordinator_route(), Some(plan));
+            let journal_removal =
+                indexed_removal.filter(|(_, plan_digest, _)| *plan_digest == plan.digest());
+            return (plan.coordinator_route(), Some(plan), journal_removal);
         }
 
         if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
             routing_ledger::discard_if_matches(&hash, decision);
-            return (decision, None);
+            return (decision, None, indexed_removal);
         }
 
-        (routing_ledger::take_route(&hash).unwrap_or_default(), None)
-    }
-
-    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    fn reject_queued_transaction_for_unresolved_route(
-        &self,
-        hash: SignedTxHash,
-        reason: String,
-        telemetry: Option<&StateTelemetry>,
-    ) {
-        let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-        if let Some(plan) = removed_plan.as_ref() {
-            self.record_plan_journal_remove(hash, plan);
-        }
-
-        let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
-        self.fee_admission_reservations.lock().release(&hash);
-        if let Some(removed_tx) = removed_tx {
-            self.untrack_active_transaction();
-            self.untrack_expiry_hash(&hash);
-            self.removed_hashes.insert(hash, ());
-            if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
-                self.decrease_per_user_tx_count(authority);
-            }
-            #[cfg(feature = "telemetry")]
-            self.record_teu_dequeue(&hash, telemetry);
-        }
-
-        self.remove_tx_encoded_len(&hash);
-        self.tx_gas_cost.remove(&hash);
-        self.tx_enqueued_at_ms.remove(&hash);
-        self.fifo_order_by_hash.remove(&hash);
-        self.remove_queued_age(&hash);
-
-        let err = Error::UnresolvedRoute { reason };
-        if let Some(reason) = Self::queue_rejection_reason(&err) {
-            let _ = self.events_sender.send(
-                TransactionEvent {
-                    hash,
-                    block_height: None,
-                    lane_id: routing.lane_id,
-                    dataspace_id: routing.dataspace_id,
-                    status: TransactionStatus::Rejected(Box::new(reason)),
-                }
-                .into(),
-            );
-        }
-        self.publish_backpressure_state(self.active_len(), telemetry);
+        (
+            routing_ledger::take_route(&hash).unwrap_or_default(),
+            None,
+            indexed_removal,
+        )
     }
 
     /// Resolve routing for an admitted transaction against the current state.
@@ -5806,9 +7190,371 @@ impl Queue {
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let nexus = self.sync_nexus_routing_with_state(state);
-        let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
+        let _ = self.sync_nexus_routing_with_state(state);
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let hash = tx.hash();
+        if let Some(tracked) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) {
+            let exact_owner = tracked.as_accepted().entrypoint() == tx.entrypoint()
+                && tracked.as_accepted().hash_as_entrypoint() == tx.hash_as_entrypoint()
+                && exact_signed_transaction_hash(tracked.as_accepted().entrypoint())
+                    == exact_signed_transaction_hash(tx.entrypoint());
+            if !exact_owner {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+            let result = self.immutable_queued_routing_plan_in_view(
+                hash,
+                tracked.as_ref(),
+                &state_view,
+                state_view.nexus(),
+                state_view_height_for_routing(&state_view),
+            );
+            if let Err(error) = result.as_ref() {
+                self.mark_accepted_work_validation_fault(hash, "queued_route_lookup", error, None);
+            }
+            if self.transaction_selection_durability_faulted() {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+            return result;
+        }
+        let plan = self
+            .router
+            .read()
+            .try_route_plan_with_view(tx, &state_view)?;
+        resolve_routing_plan_for_queue_admission(
+            plan,
+            state_view.nexus(),
+            state_view_height_for_routing(&state_view),
+        )
+    }
+
+    fn queue_plan_admission_context_in_view_at_height(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+        authority_height: u64,
+    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+        let proposal_height =
+            authority_height
+                .checked_add(1)
+                .ok_or_else(|| RoutingResolveError::InactiveLane {
+                    lane_id: routing_plan.coordinator_route().lane_id,
+                    dataspace_id: routing_plan.coordinator_route().dataspace_id,
+                })?;
+        let predecessor_block_hash = if authority_height == 0 {
+            None
+        } else {
+            let predecessor_index =
+                usize::try_from(authority_height.saturating_sub(1)).map_err(|_| {
+                    QueuePlanAdmissionContextError::MissingPredecessor { authority_height }
+                })?;
+            Some(
+                state_view
+                    .block_hashes()
+                    .get(predecessor_index)
+                    .copied()
+                    .ok_or(QueuePlanAdmissionContextError::MissingPredecessor {
+                        authority_height,
+                    })?,
+            )
+        };
+        ensure_routing_plan_active_at_height(routing_plan, state_view.nexus(), proposal_height)?;
+        let mut route_incarnations = Vec::with_capacity(routing_plan.legs().len());
+        for leg in routing_plan.legs() {
+            let Some(lane_incarnation) =
+                state_view.lane_incarnation_at_height(leg.route.lane_id, proposal_height)
+            else {
+                return Err(RoutingResolveError::InactiveLane {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                }
+                .into());
+            };
+            let exact_route_active = crate::state::nexus_active_lane_dataspace_at_height(
+                leg.route.lane_id,
+                state_view.nexus(),
+                proposal_height,
+            ) == Some(leg.route.dataspace_id);
+            if !exact_route_active
+                && !route_uses_legacy_default_public_lane(leg.route, state_view.nexus())
+            {
+                return Err(RoutingResolveError::InactiveLane {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                }
+                .into());
+            }
+            let validator_set = queue_plan_authoritative_peers_in_view_at_height(
+                state_view,
+                leg.route,
+                proposal_height,
+            );
+            if validator_set.is_empty() {
+                return Err(QueuePlanAdmissionContextError::MissingAuthority {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    proposal_height,
+                });
+            }
+            if validator_set.len() > MAX_LANE_CONSENSUS_VALIDATORS {
+                return Err(QueuePlanAdmissionContextError::AuthorityBoundExceeded {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    validator_count: validator_set.len(),
+                    max_validator_count: MAX_LANE_CONSENSUS_VALIDATORS,
+                });
+            }
+            if validator_set.iter().collect::<BTreeSet<_>>().len() != validator_set.len() {
+                return Err(QueuePlanAdmissionContextError::DuplicateAuthority {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    proposal_height,
+                });
+            }
+            let validator_count = u16::try_from(validator_set.len())
+                .expect("bounded lane validator count must fit u16");
+            let durability_threshold = u16::try_from(validator_set.len().div_ceil(3))
+                .expect("bounded durable attestation threshold must fit u16");
+            let validator_set_hash = HashOf::new(&validator_set);
+            route_incarnations.push(QueuePlanRouteIncarnationV2 {
+                leg,
+                lane_incarnation,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash,
+                validator_set,
+                validator_count,
+                durability_threshold,
+            });
+        }
+        let context = QueuePlanAdmissionContextV2 {
+            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height,
+            proposal_height,
+            predecessor_block_hash,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations,
+        };
+        context
+            .validate_for_routing_plan(routing_plan)
+            .map_err(|reason| QueuePlanAdmissionContextError::NonCanonical { reason })?;
+        Ok(context)
+    }
+
+    fn queue_plan_admission_context_in_view(
+        state_view: &impl StateReadOnly,
+        routing_plan: &RoutingPlan,
+    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+        let authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        Self::queue_plan_admission_context_in_view_at_height(
+            state_view,
+            routing_plan,
+            authority_height,
+        )
+    }
+
+    /// Capture the exact active route incarnations for a precomputed admission plan.
+    ///
+    /// The lifecycle admission guard is held while the plan is revalidated against
+    /// the current catalogs and while every coordinator/participant incarnation is
+    /// read, preventing a mixed-generation context.
+    ///
+    /// # Errors
+    /// Returns a routing error when the plan is malformed, inactive, or no longer
+    /// valid at the contiguous next proposal height.
+    pub fn plan_admission_context_with_state(
+        &self,
+        state: &State,
+        routing_plan: &RoutingPlan,
+    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let routing_plan = resolve_routing_plan_for_queue_admission(
+            routing_plan.clone(),
+            state_view.nexus(),
+            state_view_height_for_routing(&state_view),
+        )?;
+        Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
+    }
+
+    /// Sample the queue time source once for a shared global admission binding.
+    ///
+    /// The returned value must be carried unchanged to every durable authority; authorities must
+    /// not replace it with their own local clock sample.
+    #[must_use]
+    pub fn queue_plan_admission_timestamp_ms(&self) -> u64 {
+        Self::duration_to_millis(self.time_source.get_unix_time())
+    }
+
+    /// Recover the exact still-owned durable admission claim for a public retry.
+    ///
+    /// Callers do not supply a plan or context: accepting those mutable inputs would let a lost
+    /// response be retried under a newer routing generation. The indexed journal claim is
+    /// returned only when the complete transaction identity, queued plan, historical predecessor,
+    /// and every currently active lane incarnation still revalidate.
+    ///
+    /// # Errors
+    /// Returns [`RoutingResolveError::StaleRoutingPlan`] when indexed ownership exists but any
+    /// exact identity or lifecycle binding has drifted.
+    pub fn durable_plan_admission_claim_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<Option<QueuePlanDurableAdmissionV2>, RoutingResolveError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let hash = tx.hash();
+        if state_view.transactions.get(&hash).is_some() {
+            return Ok(None);
+        }
+        let _queue_guard = self.push_remove_lock.lock();
+        let Some(claim) = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|claim| claim.value().clone())
+        else {
+            return Ok(None);
+        };
+        let exact_owner = claim.entrypoint_hash == tx.hash_as_entrypoint()
+            && claim.signed_transaction_hash == exact_signed_transaction_hash(tx.entrypoint())
+            && self.txs.get(&hash).is_some_and(|queued| {
+                let queued = queued.value().as_accepted();
+                queued.entrypoint() == tx.entrypoint()
+                    && queued.hash_as_entrypoint() == tx.hash_as_entrypoint()
+                    && exact_signed_transaction_hash(queued.entrypoint())
+                        == exact_signed_transaction_hash(tx.entrypoint())
+            })
+            && self
+                .routing_plans
+                .get(&hash)
+                .is_some_and(|queued| queued.value() == &claim.routing_plan)
+            && Self::durable_plan_claim_context_revalidates_in_view(
+                &state_view,
+                &claim.routing_plan,
+                &claim.admission_context,
+            );
+        let active_plan = exact_owner
+            .then(|| {
+                resolve_routing_plan_for_queue_admission(
+                    claim.routing_plan.clone(),
+                    state_view.nexus(),
+                    state_view_height_for_routing(&state_view),
+                )
+            })
+            .transpose()?;
+        if active_plan.as_ref() != Some(&claim.routing_plan) {
+            drop(_queue_guard);
+            self.mark_accepted_work_validation_fault(
+                hash,
+                "durable_public_retry_lookup",
+                "indexed durable queue-plan claim failed exact retry revalidation",
+                None,
+            );
+            return Err(RoutingResolveError::StaleRoutingPlan);
+        }
+        Ok(Some(QueuePlanDurableAdmissionV2 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context: claim.admission_context,
+            global_admission_identity: claim.global_admission_identity,
+            routing_plan: claim.routing_plan,
+            entrypoint_hash: claim.entrypoint_hash,
+            signed_transaction_hash: claim.signed_transaction_hash,
+            enqueue_timestamp_ms: claim.enqueue_timestamp_ms,
+            journal_record_digest: claim.journal_record_digest,
+        }))
+    }
+
+    /// Return whether an exact, still-owned durable claim can be retried safely.
+    ///
+    /// This is intended for ingress layers that otherwise compare a historical claim context to
+    /// the current height before calling strict queue admission. Both the exact old context and an
+    /// exact freshly captured context are accepted after ordinary height or authority-roster
+    /// advancement. The latter is durably rebound by strict admission. Both require the
+    /// transaction to remain uncommitted and queued under the same routing plan and active lane
+    /// incarnation for every leg.
+    #[must_use]
+    pub fn has_revalidatable_durable_plan_claim_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+        routing_plan: &RoutingPlan,
+        expected_admission_context: &QueuePlanAdmissionContextV2,
+    ) -> bool {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let tx_hash = tx.hash();
+        if state_view.transactions.get(&tx_hash).is_some() {
+            return false;
+        }
+        let _queue_guard = self.push_remove_lock.lock();
+        let immutable_owner = self.durable_plan_claims.get(&tx_hash).is_some_and(|claim| {
+            claim.entrypoint_hash == tx.hash_as_entrypoint()
+                && claim.signed_transaction_hash == exact_signed_transaction_hash(tx.entrypoint())
+                && &claim.routing_plan == routing_plan
+                && self.txs.contains_key(&tx_hash)
+                && self
+                    .routing_plans
+                    .get(&tx_hash)
+                    .is_some_and(|queued| queued.value() == routing_plan)
+        });
+        let current_plan = if immutable_owner {
+            resolve_routing_plan_for_queue_admission(
+                routing_plan.clone(),
+                state_view.nexus(),
+                state_view_height_for_routing(&state_view),
+            )
+        } else {
+            self.resolve_precomputed_routing_plan_with_view(tx, &state_view, routing_plan.clone())
+        };
+        let Ok(current_plan) = current_plan else {
+            return false;
+        };
+        match self.revalidated_durable_plan_claim_retry_locked(
+            tx,
+            &state_view,
+            &current_plan,
+            expected_admission_context,
+        ) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => {
+                let Ok(current_context) =
+                    Self::queue_plan_admission_context_in_view(&state_view, &current_plan)
+                else {
+                    return false;
+                };
+                matches!(
+                    self.durable_plan_claim_rollover_candidate_locked(
+                        tx,
+                        &state_view,
+                        &current_plan,
+                        expected_admission_context,
+                        &current_context,
+                    ),
+                    Ok(Some(_))
+                )
+            }
+        }
+    }
+
+    /// Resolve the exact authority roster used by durable queue-plan admission.
+    ///
+    /// The legacy single-lane deployment uses the global commit topology;
+    /// multilane deployments use the lane authority source at `proposal_height`.
+    /// The lifecycle admission guard keeps the catalog generation stable while
+    /// the roster is captured.
+    #[must_use]
+    pub fn plan_admission_authorities_with_state(
+        &self,
+        state: &State,
+        route: RoutingDecision,
+        proposal_height: u64,
+    ) -> Vec<PeerId> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let state_view = state.view();
+        queue_plan_authoritative_peers_in_view_at_height(&state_view, route, proposal_height)
     }
 
     /// Resolve the coordinator lane and dataspace for an exact unsigned payload.
@@ -5856,7 +7602,29 @@ impl Queue {
             return false;
         };
         let tx = entry.value().as_ref();
-        !self.is_expired(tx.as_accepted()) && !state.has_committed_transaction(hash)
+        if state.has_committed_transaction(hash) {
+            return false;
+        }
+        if !self.is_expired(tx.as_accepted()) {
+            return true;
+        }
+        let state_view = state.view();
+        match self.global_admission_registry_match_for_hash(hash, &state_view) {
+            Ok(Some((
+                _,
+                QueuePlanAdmissionRegistryMatch::Absent | QueuePlanAdmissionRegistryMatch::Exact,
+            ))) => true,
+            Ok(None | Some((_, QueuePlanAdmissionRegistryMatch::Conflict))) => false,
+            Err(reason) => {
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "contains_pending_global_admission_registry",
+                    &reason,
+                    None,
+                );
+                false
+            }
+        }
     }
 
     /// Return transactions back to the gossip backlog by their hashes.
@@ -5932,6 +7700,20 @@ impl Queue {
                 });
             }
         };
+        let admission_context = if self.plan_journal.lock().is_some() {
+            Some(
+                Self::queue_plan_admission_context_in_view(state_view, &routing_plan).map_err(
+                    |err| Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::UnresolvedRoute {
+                            reason: err.to_string(),
+                        },
+                    },
+                )?,
+            )
+        } else {
+            None
+        };
         if self.is_expired(checked.as_accepted()) {
             return Err(Failure {
                 tx: Box::new(checked.into_accepted()),
@@ -5955,12 +7737,17 @@ impl Queue {
         self.push_checked_with_lane_context(
             checked,
             routing_plan,
+            admission_context,
+            None,
+            None,
+            None,
             &mut state_access,
             gossip_payload,
             PlanJournalAdmissionMode::OptionalDurable,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )
+        .map(|outcome| outcome.routing_decision)
     }
 
     /// Push transaction into queue using narrow state accessors where possible.
@@ -5978,9 +7765,12 @@ impl Queue {
             tx,
             state,
             None,
+            None,
+            None,
             gossip_payload,
             PlanJournalAdmissionMode::OptionalDurable,
         )
+        .map(|outcome| outcome.routing_decision)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5989,24 +7779,51 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: Option<RoutingPlan>,
+        expected_admission_context: Option<&QueuePlanAdmissionContextV2>,
+        expected_admission_binding: Option<&crate::torii_proxy::QueuePlanAdmissionBindingV2>,
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
-    ) -> Result<RoutingDecision, Failure> {
+    ) -> Result<QueuePushOutcome, Failure> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-        let nexus = self.sync_nexus_routing_with_state(state);
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let supplied_routing_plan = routing_plan.clone();
+        let immutable_durable_retry =
+            if plan_journal_mode == PlanJournalAdmissionMode::RequiredDurableClaim {
+                supplied_routing_plan.as_ref().is_some_and(|supplied_plan| {
+                    let tx_hash = tx.hash();
+                    let _queue_guard = self.push_remove_lock.lock();
+                    self.durable_plan_claims.get(&tx_hash).is_some_and(|claim| {
+                        claim.entrypoint_hash == tx.hash_as_entrypoint()
+                            && claim.signed_transaction_hash
+                                == exact_signed_transaction_hash(tx.entrypoint())
+                            && &claim.routing_plan == supplied_plan
+                            && self.txs.contains_key(&tx_hash)
+                            && self
+                                .routing_plans
+                                .get(&tx_hash)
+                                .is_some_and(|queued| queued.value() == supplied_plan)
+                    })
+                })
+            } else {
+                false
+            };
         let routing_plan = match routing_plan {
-            Some(plan) => {
-                self.resolve_precomputed_routing_plan_with_state(&tx, state, &nexus, plan)
-            }
+            Some(plan) if immutable_durable_retry => resolve_routing_plan_for_queue_admission(
+                plan,
+                state_view.nexus(),
+                state_view_height_for_routing(&state_view),
+            ),
+            Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &state_view, plan),
             None => self
                 .router
                 .read()
-                .try_route_plan_with_state(&tx, state)
+                .try_route_plan_with_view(&tx, &state_view)
                 .and_then(|plan| {
                     resolve_routing_plan_for_queue_admission(
                         plan,
-                        &nexus,
-                        state_height_for_routing(state),
+                        state_view.nexus(),
+                        state_view_height_for_routing(&state_view),
                     )
                 }),
         };
@@ -6021,6 +7838,229 @@ impl Queue {
                 });
             }
         };
+        if expected_admission_context.is_some() && expected_admission_binding.is_some() {
+            return Err(Failure {
+                tx: tx.into(),
+                err: Error::UnresolvedRoute {
+                    reason:
+                        "strict durable queue admission cannot carry both a bare context and a global binding"
+                            .to_owned(),
+                },
+            });
+        }
+        if let Some(binding) = expected_admission_binding
+            && let Err(reason) =
+                binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)
+        {
+            return Err(Failure {
+                tx: tx.into(),
+                err: Error::UnresolvedRoute { reason },
+            });
+        }
+        let expected_admission_context = expected_admission_binding
+            .map(|binding| &binding.admission_context)
+            .or(expected_admission_context);
+        let tx_hash = tx.hash();
+        if state_view.transactions.get(&tx_hash).is_some() {
+            return Err(Failure {
+                tx: tx.into(),
+                err: Error::InBlockchain,
+            });
+        }
+        if plan_journal_mode == PlanJournalAdmissionMode::RequiredDurableClaim {
+            let Some(expected_admission_context) = expected_admission_context else {
+                return Err(Failure {
+                    tx: tx.into(),
+                    err: Error::UnresolvedRoute {
+                        reason:
+                            "strict durable queue-plan claims require an exact admission context"
+                                .to_owned(),
+                    },
+                });
+            };
+            let _queue_guard = self.push_remove_lock.lock();
+            match self.revalidated_durable_plan_claim_retry_locked(
+                &tx,
+                &state_view,
+                &routing_plan,
+                expected_admission_context,
+            ) {
+                Ok(Some(existing)) => {
+                    if let Some(binding) = expected_admission_binding {
+                        let exact_global_claim = existing.global_admission_identity
+                            == Some(binding.global_admission_identity())
+                            && existing.enqueue_timestamp_ms == binding.enqueue_timestamp_ms
+                            && existing.journal_record_digest == binding.journal_record_digest;
+                        if !exact_global_claim {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: "existing durable queue-plan claim conflicts with the exact global admission binding".to_owned(),
+                                },
+                            });
+                        }
+                    }
+                    return Ok(QueuePushOutcome {
+                        routing_decision: existing.routing_plan.coordinator_route(),
+                        routing_plan: existing.routing_plan,
+                        entrypoint_hash: existing.entrypoint_hash,
+                        signed_transaction_hash: existing.signed_transaction_hash,
+                        enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                        journal_record_digest: Some(existing.journal_record_digest),
+                        admission_context: Some(existing.admission_context),
+                        global_admission_identity: existing.global_admission_identity,
+                    });
+                }
+                Ok(None) if self.removed_hashes.contains_key(&tx_hash) => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: "a previously removed durable queue-plan claim cannot be retried as live ownership".to_owned(),
+                        },
+                    });
+                }
+                Ok(None) if immutable_durable_retry => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: "immutable durable queue-plan ownership changed during retry"
+                                .to_owned(),
+                        },
+                    });
+                }
+                Ok(None) => {}
+                Err(reason) => {
+                    let current_context =
+                        Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
+                            .map_err(|error| Failure {
+                                tx: tx.clone().into(),
+                                err: Error::UnresolvedRoute {
+                                    reason: error.to_string(),
+                                },
+                            })?;
+                    let rollover = self
+                        .durable_plan_claim_rollover_candidate_locked(
+                            &tx,
+                            &state_view,
+                            &routing_plan,
+                            expected_admission_context,
+                            &current_context,
+                        )
+                        .map_err(|rollover_reason| Failure {
+                            tx: tx.clone().into(),
+                            err: Error::UnresolvedRoute {
+                                reason: rollover_reason.to_owned(),
+                            },
+                        })?;
+                    let Some(existing) = rollover else {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: Error::UnresolvedRoute {
+                                reason: reason.to_owned(),
+                            },
+                        });
+                    };
+                    let journal_record_digest = match self.record_plan_journal_put_durable(
+                        &tx,
+                        &routing_plan,
+                        &current_context,
+                        existing.enqueue_timestamp_ms,
+                        existing.global_admission_identity.as_ref(),
+                        None,
+                        true,
+                    ) {
+                        Ok(Some(digest)) => digest,
+                        Ok(None) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: Error::PlanJournalDurabilityRejected {
+                                    reason: "required durable claim replacement produced no journal digest"
+                                        .to_owned(),
+                                },
+                            });
+                        }
+                        Err((error, indeterminate)) => {
+                            return Err(Failure {
+                                tx: tx.into(),
+                                err: if indeterminate {
+                                    Error::PlanJournalDurabilityIndeterminate {
+                                        transaction_hash: tx_hash,
+                                        reason: error.to_string(),
+                                    }
+                                } else {
+                                    Error::PlanJournalDurabilityRejected {
+                                        reason: error.to_string(),
+                                    }
+                                },
+                            });
+                        }
+                    };
+                    let rebound = QueuePlanDurableClaimIndexEntry {
+                        entrypoint_hash: existing.entrypoint_hash,
+                        signed_transaction_hash: existing.signed_transaction_hash,
+                        routing_plan: existing.routing_plan,
+                        admission_context: current_context,
+                        global_admission_identity: existing.global_admission_identity,
+                        enqueue_timestamp_ms: existing.enqueue_timestamp_ms,
+                        journal_record_digest,
+                    };
+                    self.durable_plan_claims.insert(tx_hash, rebound.clone());
+                    return Ok(QueuePushOutcome {
+                        routing_decision: rebound.routing_plan.coordinator_route(),
+                        routing_plan: rebound.routing_plan,
+                        entrypoint_hash: rebound.entrypoint_hash,
+                        signed_transaction_hash: rebound.signed_transaction_hash,
+                        enqueue_timestamp_ms: rebound.enqueue_timestamp_ms,
+                        journal_record_digest: Some(rebound.journal_record_digest),
+                        admission_context: Some(rebound.admission_context),
+                        global_admission_identity: rebound.global_admission_identity,
+                    });
+                }
+            }
+        }
+        let context_required = match plan_journal_mode {
+            PlanJournalAdmissionMode::Skip => false,
+            PlanJournalAdmissionMode::OptionalDurable => self.plan_journal.lock().is_some(),
+            PlanJournalAdmissionMode::RequiredDurable
+            | PlanJournalAdmissionMode::RequiredDurableClaim => true,
+        };
+        let current_context = context_required
+            .then(|| Self::queue_plan_admission_context_in_view(&state_view, &routing_plan))
+            .transpose()
+            .map_err(|err| Failure {
+                tx: tx.clone().into(),
+                err: Error::UnresolvedRoute {
+                    reason: err.to_string(),
+                },
+            })?;
+        let admission_context = if plan_journal_mode
+            == PlanJournalAdmissionMode::RequiredDurableClaim
+        {
+            match expected_admission_context {
+                Some(expected_context) if current_context.as_ref() == Some(expected_context) => {}
+                Some(_) => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: "queue-plan admission context no longer matches the active lane/authority generation".to_owned(),
+                        },
+                    });
+                }
+                None => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: "strict durable queue-plan claims require an exact admission context".to_owned(),
+                        },
+                    });
+                }
+            }
+            current_context
+        } else {
+            debug_assert!(expected_admission_context.is_none());
+            debug_assert!(expected_admission_binding.is_none());
+            current_context
+        };
         let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
@@ -6032,13 +8072,6 @@ impl Queue {
             "Pushing to the queue"
         );
 
-        let tx_hash = tx.hash();
-        if state.has_committed_transaction(tx_hash) {
-            return Err(Failure {
-                tx: tx.into(),
-                err: Error::InBlockchain,
-            });
-        }
         let checked = CheckedTransaction::new_unchecked(tx);
         if self.is_expired(checked.as_accepted()) {
             return Err(Failure {
@@ -6048,18 +8081,31 @@ impl Queue {
         }
 
         #[cfg(feature = "telemetry")]
-        let telemetry_handle = state.metrics();
-
-        let mut state_access = LazyAdmissionStateAccess::new(state);
-        self.push_checked_with_lane_context(
+        let telemetry_handle = state_view.telemetry;
+        let next_block_height = state_view_height_for_routing(&state_view).saturating_add(1);
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            &state_view.pipeline,
+            next_block_height,
+            state_view.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            }),
+        );
+        let outcome = self.push_checked_with_lane_context(
             checked,
             routing_plan,
+            admission_context.clone(),
+            expected_admission_binding.map(|binding| binding.global_admission_identity()),
+            expected_admission_binding.map(|binding| binding.enqueue_timestamp_ms),
+            expected_admission_binding.map(|binding| binding.journal_record_digest),
             &mut state_access,
             gossip_payload,
             plan_journal_mode,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
-        )
+        )?;
+        Ok(outcome)
     }
 
     /// Shared admission logic once routing + committed-hash checks have been performed.
@@ -6068,13 +8114,17 @@ impl Queue {
         &self,
         checked: CheckedTransaction<'static>,
         routing_plan: RoutingPlan,
+        admission_context: Option<QueuePlanAdmissionContextV2>,
+        global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+        enqueue_timestamp_override_ms: Option<u64>,
+        expected_journal_record_digest: Option<Hash>,
         state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
-    ) -> Result<RoutingDecision, Failure> {
+    ) -> Result<QueuePushOutcome, Failure> {
         let routing_decision = routing_plan.coordinator_route();
-        let prepared = self.prepare_checked_for_enqueue(
+        let mut prepared = self.prepare_checked_for_enqueue(
             checked,
             routing_plan,
             state_access,
@@ -6082,6 +8132,12 @@ impl Queue {
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )?;
+        prepared.admission_context = admission_context;
+        prepared.global_admission_identity = global_admission_identity;
+        prepared.expected_journal_record_digest = expected_journal_record_digest;
+        if let Some(enqueue_timestamp_ms) = enqueue_timestamp_override_ms {
+            prepared.enqueued_at_ms = enqueue_timestamp_ms;
+        }
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
@@ -6093,8 +8149,21 @@ impl Queue {
             plan_journal_mode,
         ) {
             Ok(notifications) => {
+                let notification = notifications
+                    .first()
+                    .cloned()
+                    .expect("single queue admission must publish one notification");
                 self.publish_admission_notifications(&notifications);
-                Ok(routing_decision)
+                Ok(QueuePushOutcome {
+                    routing_decision,
+                    routing_plan: notification.routing_plan,
+                    entrypoint_hash: notification.entrypoint_hash,
+                    signed_transaction_hash: notification.signed_transaction_hash,
+                    enqueue_timestamp_ms: notification.enqueue_timestamp_ms,
+                    journal_record_digest: notification.journal_record_digest,
+                    admission_context: notification.admission_context,
+                    global_admission_identity: notification.global_admission_identity,
+                })
             }
             Err((notifications, failure)) => {
                 self.publish_admission_notifications(&notifications);
@@ -6458,6 +8527,10 @@ impl Queue {
             encoded_len,
             proposal_gas_cost,
             enqueued_at_ms,
+            admission_context: None,
+            global_admission_identity: None,
+            expected_journal_record_digest: None,
+            replayed_journal_record_digest: None,
             fee_reservation,
             #[cfg(feature = "telemetry")]
             pending_teu,
@@ -6480,14 +8553,17 @@ impl Queue {
         let mut dirty_teu_dataspaces = BTreeSet::new();
         {
             let _guard = self.push_remove_lock.lock();
+            self.prune_durable_plan_claim_index_locked();
             if plan_journal_mode != PlanJournalAdmissionMode::Skip
                 && self.transaction_selection_durability_faulted()
                 && let Some(admission) = prepared.first()
             {
                 let reason = if self.plan_journal_durability_faulted() {
                     "queue plan journal is faulted; restart recovery is required"
-                } else {
+                } else if self.lane_reservation_durability_faulted() {
                     "queue reservation journal is faulted; restart recovery is required"
+                } else {
+                    "accepted queue ownership failed semantic revalidation; restart recovery is required"
                 };
                 return Err((
                     notifications,
@@ -6503,7 +8579,10 @@ impl Queue {
             let capacity = self.capacity.get();
             let base_retained_bytes = self.retained_bytes();
             let max_retained_bytes = self.max_retained_bytes.get();
+            let missing_payload_hashes =
+                self.lane_reservations.lock().missing_payload_hashes.clone();
             let mut accepted_count = 0usize;
+            let mut accepted_capacity_slots = 0usize;
             let mut accepted_retained_bytes = 0u64;
             let mut checked_user_increments = HashMap::<&AccountId, usize>::new();
 
@@ -6533,7 +8612,13 @@ impl Queue {
                     break;
                 }
 
-                if base_len.saturating_add(accepted_count) >= capacity {
+                let replaces_missing_payload = missing_payload_hashes.contains(&hash);
+                let capacity_slots = if replaces_missing_payload { 0 } else { 1 };
+                if base_len
+                    .saturating_add(accepted_capacity_slots)
+                    .saturating_add(capacity_slots)
+                    > capacity
+                {
                     debug!(
                         lane_id = %lane_id,
                         dataspace_id = %dataspace_id,
@@ -6547,7 +8632,11 @@ impl Queue {
                     break;
                 }
 
-                let retained_cost = Self::retained_byte_cost(admission.encoded_len);
+                let retained_cost = if replaces_missing_payload {
+                    u64::try_from(admission.encoded_len).unwrap_or(u64::MAX)
+                } else {
+                    Self::retained_byte_cost(admission.encoded_len)
+                };
                 if base_retained_bytes
                     .saturating_add(accepted_retained_bytes)
                     .saturating_add(retained_cost)
@@ -6590,11 +8679,13 @@ impl Queue {
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
+                accepted_capacity_slots = accepted_capacity_slots.saturating_add(capacity_slots);
                 accepted_retained_bytes = accepted_retained_bytes.saturating_add(retained_cost);
             }
             drop(checked_user_increments);
 
             let mut applied_user_increments = HashMap::<AccountId, usize>::new();
+            let mut materialized_missing_payload = false;
             for admission in prepared.into_iter().take(accepted_count) {
                 let PreparedQueueAdmission {
                     checked,
@@ -6604,6 +8695,10 @@ impl Queue {
                     encoded_len,
                     proposal_gas_cost,
                     enqueued_at_ms,
+                    admission_context,
+                    global_admission_identity,
+                    expected_journal_record_digest,
+                    replayed_journal_record_digest,
                     fee_reservation,
                     #[cfg(feature = "telemetry")]
                     pending_teu,
@@ -6693,66 +8788,119 @@ impl Queue {
                 self.insert_tx_encoded_len(hash, encoded_len);
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
                 let journal_result = match plan_journal_mode {
-                    PlanJournalAdmissionMode::Skip => Ok(()),
-                    PlanJournalAdmissionMode::OptionalDurable => self
-                        .record_plan_journal_put_durable(
+                    PlanJournalAdmissionMode::Skip => Ok(replayed_journal_record_digest),
+                    PlanJournalAdmissionMode::OptionalDurable => match admission_context.as_ref() {
+                        Some(context) => self.record_plan_journal_put_durable(
                             tx_arc.as_accepted(),
-                            hash,
                             &routing_plan,
+                            context,
                             enqueued_at_ms,
+                            global_admission_identity.as_ref(),
+                            expected_journal_record_digest,
                             false,
                         ),
-                    PlanJournalAdmissionMode::RequiredDurable => self
-                        .record_plan_journal_put_durable(
+                        None => {
+                            if self.plan_journal.lock().is_none() {
+                                Ok(None)
+                            } else {
+                                Err((
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "replayable queue-plan Put is missing its exact admission context",
+                                    ),
+                                    false,
+                                ))
+                            }
+                        }
+                    },
+                    PlanJournalAdmissionMode::RequiredDurable
+                    | PlanJournalAdmissionMode::RequiredDurableClaim => {
+                        let Some(context) = admission_context.as_ref() else {
+                            unreachable!(
+                                "required durable admission captured its context before enqueue"
+                            );
+                        };
+                        self.record_plan_journal_put_durable(
                             tx_arc.as_accepted(),
-                            hash,
                             &routing_plan,
+                            context,
                             enqueued_at_ms,
+                            global_admission_identity.as_ref(),
+                            expected_journal_record_digest,
                             true,
-                        ),
+                        )
+                    }
                 };
-                if let Err((error, indeterminate)) = journal_result {
-                    warn!(
-                        tx = %hash,
-                        %error,
-                        "queue admission failed before durable acknowledgement"
+                let journal_record_digest = match journal_result {
+                    Ok(record_digest) => record_digest,
+                    Err((error, indeterminate)) => {
+                        warn!(
+                            tx = %hash,
+                            %error,
+                            "queue admission failed before durable acknowledgement"
+                        );
+                        let failed_tx = tx_arc.as_accepted().clone();
+                        let removed = HashSet::from([hash]);
+                        self.remove_hashes_from_fifo_locked(&removed);
+                        if self.txs.remove(&hash).is_some() {
+                            self.untrack_active_transaction();
+                        }
+                        if fee_reserved {
+                            self.fee_admission_reservations.lock().release(&hash);
+                        }
+                        if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                            routing_ledger::discard_plan_if_matches(&hash, &plan);
+                        } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                            routing_ledger::discard_if_matches(&hash, decision);
+                        }
+                        self.routing_decisions.remove(&hash);
+                        self.remove_tx_encoded_len(&hash);
+                        self.tx_gas_cost.remove(&hash);
+                        self.tx_enqueued_at_ms.remove(&hash);
+                        self.fifo_order_by_hash.remove(&hash);
+                        self.remove_queued_age(&hash);
+                        let err = if indeterminate {
+                            Error::PlanJournalDurabilityIndeterminate {
+                                transaction_hash: hash,
+                                reason: error.to_string(),
+                            }
+                        } else {
+                            Error::PlanJournalDurabilityRejected {
+                                reason: error.to_string(),
+                            }
+                        };
+                        failure = Some(Failure {
+                            tx: Box::new(failed_tx),
+                            err,
+                        });
+                        break;
+                    }
+                };
+                let entrypoint_hash = tx_arc.as_accepted().hash_as_entrypoint();
+                let signed_transaction_hash =
+                    exact_signed_transaction_hash(tx_arc.as_accepted().entrypoint());
+                if let (Some(context), Some(journal_record_digest)) =
+                    (admission_context.as_ref(), journal_record_digest)
+                {
+                    debug_assert!(
+                        self.durable_plan_claims.contains_key(&hash)
+                            || self.durable_plan_claims.len() < self.capacity.get(),
+                        "new durable queue-plan claim must fit the queue-capacity bound"
                     );
-                    let failed_tx = tx_arc.as_accepted().clone();
-                    let removed = HashSet::from([hash]);
-                    self.remove_hashes_from_fifo_locked(&removed);
-                    if self.txs.remove(&hash).is_some() {
-                        self.untrack_active_transaction();
-                    }
-                    if fee_reserved {
-                        self.fee_admission_reservations.lock().release(&hash);
-                    }
-                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                    }
-                    self.routing_decisions.remove(&hash);
-                    self.remove_tx_encoded_len(&hash);
-                    self.tx_gas_cost.remove(&hash);
-                    self.tx_enqueued_at_ms.remove(&hash);
-                    self.fifo_order_by_hash.remove(&hash);
-                    self.remove_queued_age(&hash);
-                    let err = if indeterminate {
-                        Error::PlanJournalDurabilityIndeterminate {
-                            transaction_hash: hash,
-                            reason: error.to_string(),
-                        }
-                    } else {
-                        Error::PlanJournalDurabilityRejected {
-                            reason: error.to_string(),
-                        }
-                    };
-                    failure = Some(Failure {
-                        tx: Box::new(failed_tx),
-                        err,
-                    });
-                    break;
+                    self.durable_plan_claims.insert(
+                        hash,
+                        QueuePlanDurableClaimIndexEntry {
+                            entrypoint_hash,
+                            signed_transaction_hash,
+                            routing_plan: routing_plan.clone(),
+                            admission_context: context.clone(),
+                            global_admission_identity: global_admission_identity.clone(),
+                            enqueue_timestamp_ms: enqueued_at_ms,
+                            journal_record_digest,
+                        },
+                    );
                 }
+                materialized_missing_payload |= missing_payload_hashes.contains(&hash);
                 drop(tx_arc);
                 self.track_expiry_hash(hash);
                 if let Some(authority) = authority {
@@ -6776,11 +8924,22 @@ impl Queue {
                 }
                 notifications.push(QueueAdmissionNotification {
                     hash,
+                    entrypoint_hash,
                     lane_id,
                     dataspace_id,
+                    enqueue_timestamp_ms: enqueued_at_ms,
+                    journal_record_digest,
+                    routing_plan,
+                    admission_context,
+                    global_admission_identity,
+                    signed_transaction_hash,
                 });
             }
             self.apply_per_user_tx_count_increments(applied_user_increments);
+            if materialized_missing_payload {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+            }
         }
         if let Err(error) = self.finalize_completed_releases(telemetry) {
             warn!(%error, "failed to finish a replayed lane reservation release");
@@ -6897,6 +9056,8 @@ impl Queue {
             tx,
             state,
             Some(routing_plan),
+            None,
+            None,
             gossip_payload,
             PlanJournalAdmissionMode::OptionalDurable,
         )
@@ -6954,8 +9115,11 @@ impl Queue {
             state,
             Some(routing_plan),
             None,
+            None,
+            None,
             PlanJournalAdmissionMode::OptionalDurable,
         )
+        .map(|outcome| outcome.routing_decision)
     }
 
     /// Push a transaction using a caller-provided routing plan and acknowledge only after its
@@ -6974,8 +9138,97 @@ impl Queue {
             state,
             Some(routing_plan),
             None,
+            None,
+            None,
             PlanJournalAdmissionMode::RequiredDurable,
         )
+        .map(|outcome| outcome.routing_decision)
+    }
+
+    /// Push a transaction and return evidence of the exact queue-plan record and
+    /// lifecycle generation that crossed the strict journal durability boundary.
+    ///
+    /// # Errors
+    /// Fails closed when routing, authority, incarnation, journal availability,
+    /// append, or synchronization cannot be established exactly.
+    pub fn push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_plan: RoutingPlan,
+        expected_admission_context: &QueuePlanAdmissionContextV2,
+    ) -> Result<QueuePlanDurableAdmissionV2, Failure> {
+        let outcome = self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            Some(expected_admission_context),
+            None,
+            None,
+            PlanJournalAdmissionMode::RequiredDurableClaim,
+        )?;
+        let context = outcome
+            .admission_context
+            .expect("strict durable claim admission must capture lifecycle context");
+        let journal_record_digest = outcome
+            .journal_record_digest
+            .expect("strict durable claim admission must persist a journal record");
+        Ok(QueuePlanDurableAdmissionV2 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context,
+            global_admission_identity: outcome.global_admission_identity,
+            routing_plan: outcome.routing_plan,
+            signed_transaction_hash: outcome.signed_transaction_hash,
+            entrypoint_hash: outcome.entrypoint_hash,
+            enqueue_timestamp_ms: outcome.enqueue_timestamp_ms,
+            journal_record_digest,
+        })
+    }
+
+    /// Push a transaction using one ingress-authored global admission binding.
+    ///
+    /// Every authority persists byte-identical chain/request identity, context, timestamp, and
+    /// journal claim. Existing ownership is returned only when it matches the complete binding;
+    /// a same-entrypoint/different-binding retry fails closed.
+    ///
+    /// # Errors
+    /// Fails before acknowledgement when the binding differs from the transaction, routing plan,
+    /// active lifecycle generation, existing queue ownership, or exact durable journal record.
+    pub fn push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_plan: RoutingPlan,
+        expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) -> Result<QueuePlanDurableAdmissionV2, Failure> {
+        let outcome = self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            None,
+            Some(expected_binding),
+            None,
+            PlanJournalAdmissionMode::RequiredDurableClaim,
+        )?;
+        let context = outcome
+            .admission_context
+            .expect("strict global admission must capture lifecycle context");
+        let global_admission_identity = outcome
+            .global_admission_identity
+            .expect("strict global admission must persist chain/request identity");
+        let journal_record_digest = outcome
+            .journal_record_digest
+            .expect("strict global admission must persist a journal record");
+        Ok(QueuePlanDurableAdmissionV2 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context,
+            global_admission_identity: Some(global_admission_identity),
+            routing_plan: outcome.routing_plan,
+            signed_transaction_hash: outcome.signed_transaction_hash,
+            entrypoint_hash: outcome.entrypoint_hash,
+            enqueue_timestamp_ms: outcome.enqueue_timestamp_ms,
+            journal_record_digest,
+        })
     }
 
     /// Push an input-ordered batch of accepted transactions using caller-provided full routing
@@ -7000,16 +9253,26 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
-        let mut state_access = LazyAdmissionStateAccess::new(state);
         let mut prepared = Vec::with_capacity(txs.len());
         let mut precheck_failure = None;
-        let nexus = self.sync_nexus_routing_with_state(state);
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let capture_admission_context = self.plan_journal.lock().is_some();
+        let next_block_height = state_view_height_for_routing(&state_view).saturating_add(1);
+        let mut state_access = EagerAdmissionStateAccess::new(
+            state_view.world(),
+            &state_view.nexus,
+            &state_view.pipeline,
+            next_block_height,
+            state_view.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            }),
+        );
 
         for (tx, routing_plan) in txs {
-            let routing_plan = match self.resolve_precomputed_routing_plan_with_state(
+            let routing_plan = match self.resolve_precomputed_routing_plan_with_view(
                 &tx,
-                state,
-                &nexus,
+                &state_view,
                 routing_plan,
             ) {
                 Ok(plan) => plan,
@@ -7034,7 +9297,7 @@ impl Queue {
             );
 
             let hash = tx.hash();
-            if state.has_committed_transaction(hash) {
+            if state_view.transactions.get(&hash).is_some() {
                 precheck_failure = Some(Failure {
                     tx: tx.into(),
                     err: Error::InBlockchain,
@@ -7049,6 +9312,22 @@ impl Queue {
                 });
                 break;
             }
+            let admission_context = if capture_admission_context {
+                match Self::queue_plan_admission_context_in_view(&state_view, &routing_plan) {
+                    Ok(context) => Some(context),
+                    Err(err) => {
+                        precheck_failure = Some(Failure {
+                            tx: Box::new(checked.into_accepted()),
+                            err: Error::UnresolvedRoute {
+                                reason: err.to_string(),
+                            },
+                        });
+                        break;
+                    }
+                }
+            } else {
+                None
+            };
             match self.prepare_checked_for_enqueue(
                 checked,
                 routing_plan,
@@ -7057,14 +9336,16 @@ impl Queue {
                 #[cfg(feature = "telemetry")]
                 telemetry_handle,
             ) {
-                Ok(admission) => prepared.push(admission),
+                Ok(mut admission) => {
+                    admission.admission_context = admission_context;
+                    prepared.push(admission);
+                }
                 Err(failure) => {
                     precheck_failure = Some(failure);
                     break;
                 }
             }
         }
-
         match self.enqueue_prepared_admissions(
             prepared,
             backpressure_telemetry,
@@ -7141,11 +9422,11 @@ impl Queue {
             });
         }
 
-        let nexus = self.sync_nexus_routing_with_state(state);
-        let routing_plan = match self.resolve_precomputed_routing_plan_with_state(
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        let routing_plan = match self.resolve_precomputed_routing_plan_with_view(
             checked.as_accepted(),
-            state,
-            &nexus,
+            &state_view,
             routing_plan,
         ) {
             Ok(plan) => plan,
@@ -7158,6 +9439,19 @@ impl Queue {
                 });
             }
         };
+        let admission_context =
+            match Self::queue_plan_admission_context_in_view(&state_view, &routing_plan) {
+                Ok(context) => context,
+                Err(err) => {
+                    return Err(Failure {
+                        tx: Box::new(checked.into_accepted()),
+                        err: Error::UnresolvedRoute {
+                            reason: err.to_string(),
+                        },
+                    });
+                }
+            };
+        drop(state_view);
         let routing_decision = routing_plan.coordinator_route();
 
         #[cfg(feature = "telemetry")]
@@ -7195,6 +9489,11 @@ impl Queue {
                         });
                     }
                 };
+            let replaces_missing_payload = self
+                .lane_reservations
+                .lock()
+                .missing_payload_hashes
+                .contains(&hash);
             let txs_len = self.active_len();
             let entry = match self.txs.entry(hash) {
                 Entry::Occupied(_) => {
@@ -7206,7 +9505,9 @@ impl Queue {
                 Entry::Vacant(entry) => entry,
             };
 
-            if txs_len >= self.capacity.get() {
+            if txs_len.saturating_add(if replaces_missing_payload { 0 } else { 1 })
+                > self.capacity.get()
+            {
                 debug!(
                     lane_id = %lane_id,
                     dataspace_id = %dataspace_id,
@@ -7220,7 +9521,11 @@ impl Queue {
                 });
             }
 
-            let retained_cost = Self::retained_byte_cost(encoded_len);
+            let retained_cost = if replaces_missing_payload {
+                u64::try_from(encoded_len).unwrap_or(u64::MAX)
+            } else {
+                Self::retained_byte_cost(encoded_len)
+            };
             let retained_bytes = self.retained_bytes();
             let max_retained_bytes = self.max_retained_bytes.get();
             if retained_bytes.saturating_add(retained_cost) > max_retained_bytes {
@@ -7297,52 +9602,77 @@ impl Queue {
             }
             self.insert_tx_encoded_len(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
-            if let Err((error, indeterminate)) = self.record_plan_journal_put_durable(
+            let journal_record_digest = match self.record_plan_journal_put_durable(
                 tx_arc.as_accepted(),
-                hash,
                 &routing_plan,
+                &admission_context,
                 enqueue_at_ms,
+                None,
+                None,
                 false,
             ) {
-                warn!(
-                    tx = %hash,
-                    %error,
-                    "consensus requeue failed before durable queue ownership"
-                );
-                let failed_tx = tx_arc.as_accepted().clone();
-                self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
-                if self.txs.remove(&hash).is_some() {
-                    self.untrack_active_transaction();
+                Ok(digest) => digest,
+                Err((error, indeterminate)) => {
+                    warn!(
+                        tx = %hash,
+                        %error,
+                        "consensus requeue failed before durable queue ownership"
+                    );
+                    let failed_tx = tx_arc.as_accepted().clone();
+                    self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+                    if self.txs.remove(&hash).is_some() {
+                        self.untrack_active_transaction();
+                    }
+                    self.fee_admission_reservations.lock().release(&hash);
+                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                    }
+                    self.routing_decisions.remove(&hash);
+                    self.remove_tx_encoded_len(&hash);
+                    self.tx_gas_cost.remove(&hash);
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.fifo_order_by_hash.remove(&hash);
+                    self.remove_queued_age(&hash);
+                    if let Some(authority) = failed_tx.authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                    return Err(Failure {
+                        tx: Box::new(failed_tx),
+                        err: if indeterminate {
+                            Error::PlanJournalDurabilityIndeterminate {
+                                transaction_hash: hash,
+                                reason: error.to_string(),
+                            }
+                        } else {
+                            Error::PlanJournalDurabilityRejected {
+                                reason: error.to_string(),
+                            }
+                        },
+                    });
                 }
-                self.fee_admission_reservations.lock().release(&hash);
-                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                    routing_ledger::discard_plan_if_matches(&hash, &plan);
-                } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                    routing_ledger::discard_if_matches(&hash, decision);
-                }
-                self.routing_decisions.remove(&hash);
-                self.remove_tx_encoded_len(&hash);
-                self.tx_gas_cost.remove(&hash);
-                self.tx_enqueued_at_ms.remove(&hash);
-                self.fifo_order_by_hash.remove(&hash);
-                self.remove_queued_age(&hash);
-                if let Some(authority) = failed_tx.authority_opt() {
-                    self.decrease_per_user_tx_count(authority);
-                }
-                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-                return Err(Failure {
-                    tx: Box::new(failed_tx),
-                    err: if indeterminate {
-                        Error::PlanJournalDurabilityIndeterminate {
-                            transaction_hash: hash,
-                            reason: error.to_string(),
-                        }
-                    } else {
-                        Error::PlanJournalDurabilityRejected {
-                            reason: error.to_string(),
-                        }
+            };
+            if let Some(journal_record_digest) = journal_record_digest {
+                self.durable_plan_claims.insert(
+                    hash,
+                    QueuePlanDurableClaimIndexEntry {
+                        entrypoint_hash: tx_arc.as_accepted().hash_as_entrypoint(),
+                        signed_transaction_hash: exact_signed_transaction_hash(
+                            tx_arc.as_accepted().entrypoint(),
+                        ),
+                        routing_plan: routing_plan.clone(),
+                        admission_context: admission_context.clone(),
+                        global_admission_identity: None,
+                        enqueue_timestamp_ms: enqueue_at_ms,
+                        journal_record_digest,
                     },
-                });
+                );
+            }
+            if replaces_missing_payload {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
             }
             drop(tx_arc);
             self.track_expiry_hash(hash);
@@ -7402,7 +9732,17 @@ impl Queue {
         let journal_flush;
         {
             let _guard = self.push_remove_lock.lock();
-            let mut journal_removals = Vec::new();
+            let journal_removals = self
+                .durable_plan_claims
+                .iter()
+                .map(|claim| {
+                    (
+                        claim.entrypoint_hash.clone(),
+                        claim.routing_plan.digest(),
+                        claim.journal_record_digest,
+                    )
+                })
+                .collect::<Vec<_>>();
             let queued_hashes = {
                 let mut age_ring = self.queued_age_ring.lock();
                 let hashes = core::iter::from_fn(|| self.tx_hashes.pop()).collect::<Vec<_>>();
@@ -7415,10 +9755,10 @@ impl Queue {
                 }
                 self.routing_decisions.remove(&hash);
                 if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                    journal_removals.push((hash, plan.digest()));
                     let _ = routing_ledger::take_plan(&hash);
-                } else if let Some(plan) = routing_ledger::take_plan(&hash) {
-                    journal_removals.push((hash, plan.digest()));
+                    let _ = plan;
+                } else {
+                    let _ = routing_ledger::take_plan(&hash);
                 }
                 let _ = routing_ledger::take(&hash);
                 self.removed_hashes.remove(&hash);
@@ -7428,8 +9768,7 @@ impl Queue {
                 .iter()
                 .map(|entry| (*entry.key(), entry.value().clone()))
                 .collect::<Vec<_>>();
-            for (hash, plan) in remaining_plans {
-                journal_removals.push((hash, plan.digest()));
+            for (hash, _plan) in remaining_plans {
                 let _ = routing_ledger::take(&hash);
                 let _ = routing_ledger::take_plan(&hash);
             }
@@ -7459,6 +9798,11 @@ impl Queue {
             *self.next_fifo_ordinal.lock() = 1;
             self.routing_decisions.clear();
             self.routing_plans.clear();
+            self.durable_plan_claims.clear();
+            {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+            }
             #[cfg(feature = "telemetry")]
             {
                 self.tx_teu.clear();
@@ -7531,6 +9875,67 @@ impl Queue {
                 tx_arc.as_ref(),
                 tx_arc.as_ref().is_in_blockchain(state_view),
             ) {
+                if matches!(e, Error::Expired) {
+                    match self.global_admission_registry_match_for_hash(hash, state_view) {
+                        Ok(Some((
+                            _,
+                            QueuePlanAdmissionRegistryMatch::Absent
+                            | QueuePlanAdmissionRegistryMatch::Exact,
+                        ))) => {
+                            if let Err(reason) = self
+                                .restore_popped_globally_bound_hash(hash, backpressure_telemetry)
+                            {
+                                self.mark_accepted_work_validation_fault(
+                                    hash,
+                                    "global_admission_expiry_restore",
+                                    &reason,
+                                    backpressure_telemetry,
+                                );
+                            }
+                            // Once admission is globally bound, wall-clock TTL cannot revoke
+                            // accepted ownership while its carrier is pending or canonical.
+                            return None;
+                        }
+                        Ok(Some((binding, QueuePlanAdmissionRegistryMatch::Conflict))) => {
+                            match self.reject_exact_queue_plan_admission_claim(&binding) {
+                                Ok(true) => continue,
+                                Ok(false) => {
+                                    if let Err(reason) = self.restore_popped_globally_bound_hash(
+                                        hash,
+                                        backpressure_telemetry,
+                                    ) {
+                                        self.mark_accepted_work_validation_fault(
+                                            hash,
+                                            "global_admission_conflict_restore",
+                                            &reason,
+                                            backpressure_telemetry,
+                                        );
+                                    }
+                                    return None;
+                                }
+                                Err(error) => {
+                                    self.retain_popped_hash_after_validation_failure(
+                                        hash,
+                                        "global_admission_conflict_rejection",
+                                        &error,
+                                        backpressure_telemetry,
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(reason) => {
+                            self.retain_popped_hash_after_validation_failure(
+                                hash,
+                                "global_admission_expiry_registry",
+                                &reason,
+                                backpressure_telemetry,
+                            );
+                            return None;
+                        }
+                    }
+                }
                 iroha_logger::warn!(
                     tx = %hash,
                     ?e,
@@ -7546,9 +9951,10 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-                    if let Some(plan) = removed_plan.as_ref() {
-                        self.record_plan_journal_remove(hash, plan);
+                    let (routing, _removed_plan, journal_removal) =
+                        self.remove_routing_metadata_plan_first(hash);
+                    if let Some(removal) = journal_removal {
+                        self.record_plan_journal_remove(removal);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
@@ -7572,26 +9978,38 @@ impl Queue {
                 continue;
             }
 
-            let routing_plan =
-                match self.refresh_routing_plan_with_view(hash, tx_arc.as_ref(), state_view) {
-                    Ok(routing_plan) => routing_plan,
-                    Err(err) => {
-                        warn!(
-                            tx = %hash,
-                            reason = %err,
-                            reason_label = err.as_label(),
-                            "dropping transaction during queue pop (routing refresh)"
-                        );
-                        drop(tx_arc);
-                        self.reject_queued_transaction_for_unresolved_route(
-                            hash,
-                            err.to_string(),
-                            backpressure_telemetry,
-                        );
-                        continue;
-                    }
-                };
+            let routing_plan = match self.immutable_queued_routing_plan_with_view(
+                hash,
+                tx_arc.as_ref(),
+                state_view,
+            ) {
+                Ok(routing_plan) => routing_plan,
+                Err(err) => {
+                    iroha_logger::error!(
+                        tx = %hash,
+                        reason = %err,
+                        reason_label = err.as_label(),
+                        "retaining transaction after immutable routing validation failed during queue pop"
+                    );
+                    self.retain_popped_hash_after_validation_failure(
+                        hash,
+                        "proposal_routing",
+                        &err,
+                        backpressure_telemetry,
+                    );
+                    return None;
+                }
+            };
             let routing = routing_plan.coordinator_route();
+            if self.transaction_selection_durability_faulted() {
+                self.retain_popped_hash_after_validation_failure(
+                    hash,
+                    "proposal_durability_gate",
+                    "queue durability fault latched during routing revalidation",
+                    backpressure_telemetry,
+                );
+                return None;
+            }
 
             let fee_recheck = tx_arc.as_accepted().external().map_or(Ok(()), |_| {
                 self.recheck_external_nexus_fee_admission(
@@ -7609,47 +10027,27 @@ impl Queue {
                 })
             });
             if let Err(e) = fee_recheck {
-                iroha_logger::warn!(
+                iroha_logger::error!(
                     tx = %hash,
                     ?e,
-                    "dropping transaction during queue pop (nexus fee recheck)"
+                    "retaining transaction after fee revalidation failed during queue pop"
                 );
-                drop(tx_arc);
-                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
-                    self.fee_admission_reservations.lock().release(&hash);
-                    self.untrack_active_transaction();
-                    self.untrack_expiry_hash(&hash);
-                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
-                        self.decrease_per_user_tx_count(authority);
-                    }
-                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-                    if let Some(plan) = removed_plan.as_ref() {
-                        self.record_plan_journal_remove(hash, plan);
-                    }
-                    #[cfg(feature = "telemetry")]
-                    self.record_teu_dequeue(&hash, Some(state_view.telemetry));
-                    self.tx_enqueued_at_ms.remove(&hash);
-                    self.fifo_order_by_hash.remove(&hash);
-                    self.remove_queued_age(&hash);
-                    if let Some(reason) = Self::queue_rejection_reason(&e) {
-                        let _ = self.events_sender.send(
-                            TransactionEvent {
-                                hash,
-                                block_height: None,
-                                lane_id: routing.lane_id,
-                                dataspace_id: routing.dataspace_id,
-                                status: TransactionStatus::Rejected(Box::new(reason)),
-                            }
-                            .into(),
-                        );
-                    }
-                }
-                self.remove_tx_encoded_len(&hash);
-                self.tx_gas_cost.remove(&hash);
-                self.tx_enqueued_at_ms.remove(&hash);
-                self.fifo_order_by_hash.remove(&hash);
-                self.remove_queued_age(&hash);
-                continue;
+                self.retain_popped_hash_after_validation_failure(
+                    hash,
+                    "proposal_fee",
+                    &e,
+                    backpressure_telemetry,
+                );
+                return None;
+            }
+            if self.transaction_selection_durability_faulted() {
+                self.retain_popped_hash_after_validation_failure(
+                    hash,
+                    "proposal_durability_gate",
+                    "queue durability fault latched during fee revalidation",
+                    backpressure_telemetry,
+                );
+                return None;
             }
 
             #[cfg(test)]
@@ -7685,203 +10083,6 @@ impl Queue {
         }
     }
 
-    /// Pop single transaction from the queue using narrow [`State`] accessors.
-    ///
-    /// Removes all transactions that are already committed or expired.
-    /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
-    /// and every test-only transaction-guard return for this queue.
-    fn pop_from_queue_with_state(
-        self: &Arc<Self>,
-        state: &State,
-        expired_transactions: &mut Vec<ExpiredQueueTransaction>,
-    ) -> Option<TransactionGuard> {
-        let _selection_attempt = self.begin_selection_attempt();
-        #[cfg(feature = "telemetry")]
-        let telemetry_handle = state.metrics();
-        #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
-        #[cfg(not(feature = "telemetry"))]
-        let backpressure_telemetry: Option<&StateTelemetry> = None;
-        let committed_transactions = state.transactions.view();
-        let mut state_access = LazyAdmissionStateAccess::new(state);
-        loop {
-            let hash = if let Some(hash) = self.pop_queued_hash() {
-                hash
-            } else {
-                if self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry) {
-                    continue;
-                }
-                return None;
-            };
-            if self.removed_hashes.remove(&hash).is_some() {
-                continue;
-            }
-
-            let tx_arc = if let Some(entry) = self.txs.get(&hash) {
-                Arc::clone(entry.value())
-            } else {
-                self.untrack_expiry_hash(&hash);
-                #[cfg(test)]
-                self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
-                warn!("Looks like we're experiencing a high load");
-                continue;
-            };
-
-            if let Err(e) =
-                self.check_tx(tx_arc.as_ref(), committed_transactions.get(&hash).is_some())
-            {
-                iroha_logger::warn!(
-                    tx = %hash,
-                    ?e,
-                    "dropping transaction during queue pop (check_tx)"
-                );
-                iroha_logger::trace!(?hash, ?e, "dropping transaction during queue pop");
-                // Drop the cloned arc before removing to keep expiration recovery effective.
-                drop(tx_arc);
-                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
-                    self.fee_admission_reservations.lock().release(&hash);
-                    self.untrack_active_transaction();
-                    self.untrack_expiry_hash(&hash);
-                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
-                        self.decrease_per_user_tx_count(authority);
-                    }
-                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-                    if let Some(plan) = removed_plan.as_ref() {
-                        self.record_plan_journal_remove(hash, plan);
-                    }
-                    #[cfg(feature = "telemetry")]
-                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
-                    self.tx_enqueued_at_ms.remove(&hash);
-                    self.fifo_order_by_hash.remove(&hash);
-                    self.remove_queued_age(&hash);
-                    if let Error::Expired = e
-                        && let Ok(tx) = Arc::try_unwrap(removed_tx)
-                    {
-                        expired_transactions.push(ExpiredQueueTransaction {
-                            tx: tx.into_accepted(),
-                            routing,
-                        });
-                    }
-                }
-                self.remove_tx_encoded_len(&hash);
-                self.tx_gas_cost.remove(&hash);
-                self.tx_enqueued_at_ms.remove(&hash);
-                self.fifo_order_by_hash.remove(&hash);
-                self.remove_queued_age(&hash);
-                continue;
-            }
-
-            let routing_plan =
-                match self.refresh_routing_plan_with_state(hash, tx_arc.as_ref(), state) {
-                    Ok(routing_plan) => routing_plan,
-                    Err(err) => {
-                        warn!(
-                            tx = %hash,
-                            reason = %err,
-                            reason_label = err.as_label(),
-                            "dropping transaction during queue pop (routing refresh)"
-                        );
-                        drop(tx_arc);
-                        self.reject_queued_transaction_for_unresolved_route(
-                            hash,
-                            err.to_string(),
-                            backpressure_telemetry,
-                        );
-                        continue;
-                    }
-                };
-            let routing = routing_plan.coordinator_route();
-            let route_dataspace_id = Some(routing.dataspace_id);
-            let fee_recheck = tx_arc.as_accepted().external().map_or(Ok(()), |_| {
-                state_access
-                    .recheck_external_nexus_fee_admission(
-                        self,
-                        tx_arc.as_accepted(),
-                        route_dataspace_id,
-                    )
-                    .and_then(|reservation| {
-                        self.fee_admission_reservations
-                            .lock()
-                            .refresh(hash, reservation)
-                    })
-            });
-            if let Err(e) = fee_recheck {
-                iroha_logger::warn!(
-                    tx = %hash,
-                    ?e,
-                    "dropping transaction during queue pop (nexus fee recheck)"
-                );
-                drop(tx_arc);
-                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
-                    self.fee_admission_reservations.lock().release(&hash);
-                    self.untrack_active_transaction();
-                    self.untrack_expiry_hash(&hash);
-                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
-                        self.decrease_per_user_tx_count(authority);
-                    }
-                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-                    if let Some(plan) = removed_plan.as_ref() {
-                        self.record_plan_journal_remove(hash, plan);
-                    }
-                    #[cfg(feature = "telemetry")]
-                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
-                    self.tx_enqueued_at_ms.remove(&hash);
-                    self.fifo_order_by_hash.remove(&hash);
-                    self.remove_queued_age(&hash);
-                    if let Some(reason) = Self::queue_rejection_reason(&e) {
-                        let _ = self.events_sender.send(
-                            TransactionEvent {
-                                hash,
-                                block_height: None,
-                                lane_id: routing.lane_id,
-                                dataspace_id: routing.dataspace_id,
-                                status: TransactionStatus::Rejected(Box::new(reason)),
-                            }
-                            .into(),
-                        );
-                    }
-                }
-                self.remove_tx_encoded_len(&hash);
-                self.tx_gas_cost.remove(&hash);
-                self.tx_enqueued_at_ms.remove(&hash);
-                self.fifo_order_by_hash.remove(&hash);
-                self.remove_queued_age(&hash);
-                continue;
-            }
-
-            #[cfg(test)]
-            let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
-            let encoded_len = self
-                .tx_encoded_len
-                .get(&hash)
-                .map(|entry| *entry.value())
-                .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_arc.as_accepted()));
-            let gas_cost = self
-                .tx_gas_cost
-                .get(&hash)
-                .map(|entry| *entry.value())
-                .unwrap_or_else(|| Self::compute_proposal_gas_cost(tx_arc.as_accepted()));
-            #[cfg(feature = "telemetry")]
-            let telemetry_clone = telemetry_handle.clone();
-            self.record_inflight_guard();
-            let guard = TransactionGuard {
-                tx: tx_arc,
-                queue: Arc::clone(self),
-                routing,
-                routing_plan,
-                #[cfg(test)]
-                queue_position,
-                encoded_len,
-                gas_cost,
-                released: false,
-                #[cfg(feature = "telemetry")]
-                telemetry: Some(telemetry_clone),
-            };
-            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-            return Some(guard);
-        }
-    }
-
     /// Rebuild the hash queue when it is empty but transactions remain in the map.
     /// Skip resync if there are in-flight guards to avoid re-enqueuing active selections.
     fn resync_hash_queue_if_needed_with_telemetry(
@@ -7891,7 +10092,7 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return false;
         }
-        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
+        if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
             return false;
         }
         if self.inflight_guards.load(Ordering::Relaxed) > 0 {
@@ -7902,44 +10103,88 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return false;
         }
-        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
+        if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
             return false;
         }
 
-        let total = self.active_len();
+        let total = self.materialized_active_len();
         let live_reservations = self.lane_reservations.lock().live_hashes();
-        // Sort by hash to keep the recovery order deterministic across peers.
-        let mut hashes: Vec<SignedTxHash> = self
-            .txs
-            .iter()
-            .map(|entry| *entry.key())
-            .filter(|hash| !live_reservations.contains(hash))
-            .collect();
-        hashes.sort();
+        // Rebuild only from the durable admission ordinals. Hash order is deterministic but is
+        // not FIFO and would let an index-recovery boundary reorder already accepted work.
+        let ordered_hashes = {
+            let mut ordered = Vec::with_capacity(total.saturating_sub(live_reservations.len()));
+            let mut seen_ordinals = BTreeSet::new();
+            let mut invalid = None;
+            for hash in self
+                .txs
+                .iter()
+                .map(|entry| *entry.key())
+                .filter(|hash| !live_reservations.contains(hash))
+            {
+                let Some(order) = self
+                    .fifo_order_by_hash
+                    .get(&hash)
+                    .map(|entry| *entry.value())
+                else {
+                    invalid = Some((
+                        hash,
+                        "queued transaction is missing its durable FIFO order identity".to_owned(),
+                    ));
+                    break;
+                };
+                if let Err(reason) = order.validate() {
+                    invalid = Some((hash, reason.to_owned()));
+                    break;
+                }
+                if !seen_ordinals.insert(order.ordinal) {
+                    invalid = Some((
+                        hash,
+                        format!(
+                            "durable FIFO ordinal {} is assigned to multiple queued transactions",
+                            order.ordinal
+                        ),
+                    ));
+                    break;
+                }
+                ordered.push((order.ordinal, hash));
+            }
+            if invalid.is_none() && ordered.len() > self.tx_hashes.capacity() {
+                invalid = Some((
+                    ordered
+                        .first()
+                        .expect("non-zero queue capacity makes an oversized recovery nonempty")
+                        .1,
+                    "durable FIFO recovery exceeds queue capacity".to_owned(),
+                ));
+            }
+            if let Some((hash, reason)) = invalid {
+                drop(_guard);
+                self.mark_accepted_work_validation_fault(
+                    hash,
+                    "queue_fifo_resync",
+                    &reason,
+                    backpressure_telemetry,
+                );
+                return false;
+            }
+            ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+            ordered
+                .into_iter()
+                .map(|(_, hash)| hash)
+                .collect::<Vec<_>>()
+        };
 
-        let mut inserted = 0usize;
-        let mut inserted_hashes = Vec::new();
+        let inserted = ordered_hashes.len();
         {
             let mut age_ring = self.queued_age_ring.lock();
-            for hash in hashes {
-                if let Err(error) = self.ensure_fifo_order_locked(hash, None) {
-                    warn!(tx = %hash, %error, "queue hash resync cannot recover FIFO order");
-                    break;
-                }
-                if self.tx_hashes.push(hash).is_err() {
-                    warn!(
-                        queued = self.tx_hashes.len(),
-                        total,
-                        "queue hash resync reached capacity before re-enqueuing all transactions"
-                    );
-                    break;
-                }
+            for hash in ordered_hashes.iter().copied() {
+                self.tx_hashes
+                    .push(hash)
+                    .expect("preflighted durable FIFO recovery must fit queue capacity");
                 self.removed_hashes.remove(&hash);
-                inserted_hashes.push(hash);
-                inserted = inserted.saturating_add(1);
             }
             if inserted > 0 {
-                self.rebuild_queued_age_index_locked(&mut age_ring, inserted_hashes);
+                self.rebuild_queued_age_index_locked(&mut age_ring, ordered_hashes);
             }
         }
 
@@ -7968,8 +10213,18 @@ impl Queue {
         self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry)
     }
 
-    /// Return the number of transactions tracked by the queue (queued + in-flight).
+    /// Return the number of transactions tracked by the queue.
+    ///
+    /// Durable reservation owners awaiting exact payload replay consume capacity alongside
+    /// materialized queued and in-flight transactions.
     pub fn active_len(&self) -> usize {
+        self.materialized_active_len().saturating_add(
+            self.missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+        )
+    }
+
+    fn materialized_active_len(&self) -> usize {
         self.active_count.load(Ordering::Relaxed)
     }
 
@@ -7982,8 +10237,17 @@ impl Queue {
         self.queued_count.load(Ordering::Relaxed)
     }
 
-    /// Return the queue's estimated retained transaction bytes.
+    /// Return the queue's estimated retained bytes, including payload-less reservation owners.
     pub fn retained_bytes(&self) -> u64 {
+        self.materialized_retained_bytes().saturating_add(
+            Self::retained_byte_cost_floor_for_transactions(
+                self.missing_reservation_payload_count
+                    .load(Ordering::Relaxed),
+            ),
+        )
+    }
+
+    fn materialized_retained_bytes(&self) -> u64 {
         self.retained_bytes.load(Ordering::Relaxed)
     }
 
@@ -8120,8 +10384,7 @@ impl Queue {
         });
     }
 
-    /// Put transactions into provided vector until they fill the whole block or there are no
-    /// more transactions in the queue, using narrow [`State`] accessors.
+    /// Put transactions into the provided vector from one lifecycle-fenced state generation.
     ///
     /// Sumeragi's single consumer must serialize this operation with every other transaction pop
     /// and transaction-guard return for this queue.
@@ -8131,9 +10394,11 @@ impl Queue {
         max_txs_in_block: NonZeroUsize,
         transactions: &mut Vec<TransactionGuard>,
     ) {
-        self.get_transactions_for_block_internal(max_txs_in_block, transactions, |expired| {
-            self.pop_from_queue_with_state(state, expired)
-        });
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let _ = self.sync_nexus_routing_with_state(state);
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view);
+        self.get_transactions_for_block(&state_view, max_txs_in_block, transactions);
     }
 
     fn get_transactions_for_block_internal<F>(
@@ -8310,39 +10575,30 @@ impl Queue {
         age_ring.push_back((hash, enqueued_at_ms));
     }
 
-    fn validate_reservation_scope_against_state(
-        &self,
-        state: &State,
+    fn validate_reservation_scope_against_view(
+        state_view: &impl StateReadOnly,
         scope: LaneQueueReservationScopeV1,
     ) -> Result<(), LaneQueueReservationError> {
-        let incarnation_before = state
+        let incarnation = state_view
             .lane_incarnation_at_height(scope.lane_id, scope.proposal_height)
             .ok_or(LaneQueueReservationError::StaleLaneIncarnation)?;
-        if incarnation_before != scope.lane_incarnation {
+        if incarnation != scope.lane_incarnation {
             return Err(LaneQueueReservationError::StaleLaneIncarnation);
         }
-        let active_dataspace = {
-            let nexus = state.nexus.read();
-            crate::state::nexus_active_lane_dataspace_at_height(
-                scope.lane_id,
-                &nexus,
-                scope.proposal_height,
-            )
-        };
+        let active_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+            scope.lane_id,
+            state_view.nexus(),
+            scope.proposal_height,
+        );
         if active_dataspace != Some(scope.dataspace_id) {
             return Err(LaneQueueReservationError::InactiveRoute);
-        }
-        if state.lane_incarnation_at_height(scope.lane_id, scope.proposal_height)
-            != Some(incarnation_before)
-        {
-            return Err(LaneQueueReservationError::StaleLaneIncarnation);
         }
         Ok(())
     }
 
     fn validate_live_reservation_against_queue(
         &self,
-        record: &LaneQueueReservationRecordV3,
+        record: &LaneQueueReservationRecordV5,
     ) -> Result<(), LaneQueueReservationError> {
         let hash = record.key.signed_transaction_hash;
         let Some(tx) = self.txs.get(&hash) else {
@@ -8405,8 +10661,8 @@ impl Queue {
     fn ensure_fifo_order_locked(
         &self,
         hash: SignedTxHash,
-        durable: Option<LaneQueueFifoOrderV3>,
-    ) -> Result<LaneQueueFifoOrderV3, LaneQueueReservationError> {
+        durable: Option<LaneQueueFifoOrderV5>,
+    ) -> Result<LaneQueueFifoOrderV5, LaneQueueReservationError> {
         if let Some(existing) = self
             .fifo_order_by_hash
             .get(&hash)
@@ -8432,7 +10688,7 @@ impl Queue {
                     "lane queue FIFO ordinal space is exhausted".to_owned(),
                 ));
             }
-            let order = LaneQueueFifoOrderV3::new(*next)?;
+            let order = LaneQueueFifoOrderV5::new(*next)?;
             *next = next.checked_add(1).unwrap_or(0);
             order
         };
@@ -8452,7 +10708,7 @@ impl Queue {
     fn install_fifo_order_locked(
         &self,
         hash: SignedTxHash,
-        order: LaneQueueFifoOrderV3,
+        order: LaneQueueFifoOrderV5,
     ) -> Result<(), LaneQueueReservationError> {
         order
             .validate()
@@ -8479,9 +10735,9 @@ impl Queue {
     /// hashes are restored. Caller must hold `push_remove_lock`.
     fn reconcile_durable_fifo_orders_locked(
         &self,
-        records: &[LaneQueueReservationRecordV3],
+        records: &[LaneQueueReservationRecordV5],
     ) -> Result<(), LaneQueueReservationError> {
-        let mut durable_by_hash = HashMap::<SignedTxHash, LaneQueueFifoOrderV3>::new();
+        let mut durable_by_hash = HashMap::<SignedTxHash, LaneQueueFifoOrderV5>::new();
         let mut durable_ordinal_owner = BTreeMap::<u64, SignedTxHash>::new();
         for record in records {
             record
@@ -8524,7 +10780,7 @@ impl Queue {
             ));
         }
 
-        let mut assigned = HashMap::<SignedTxHash, LaneQueueFifoOrderV3>::new();
+        let mut assigned = HashMap::<SignedTxHash, LaneQueueFifoOrderV5>::new();
         let mut used = durable_ordinal_owner.into_keys().collect::<BTreeSet<_>>();
         let mut lower = 0_u64;
         let mut cursor = 0usize;
@@ -8548,7 +10804,7 @@ impl Queue {
                         "{needed} replayed FIFO entries do not fit before durable ordinal {anchor_ordinal}"
                     )));
                 }
-                let order = LaneQueueFifoOrderV3::new(candidate)?;
+                let order = LaneQueueFifoOrderV5::new(candidate)?;
                 assigned.insert(*hash, order);
                 used.insert(candidate);
                 candidate = candidate.checked_add(1).unwrap_or(0);
@@ -8577,7 +10833,7 @@ impl Queue {
                     )
                 })?;
             }
-            let order = LaneQueueFifoOrderV3::new(candidate)?;
+            let order = LaneQueueFifoOrderV5::new(candidate)?;
             assigned.insert(*hash, order);
             used.insert(candidate);
             candidate = candidate.checked_add(1).unwrap_or(0);
@@ -8648,7 +10904,7 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn fifo_with_released_reservations_locked(
         &self,
-        records: &[LaneQueueReservationRecordV3],
+        records: &[LaneQueueReservationRecordV5],
     ) -> Result<Vec<SignedTxHash>, LaneQueueReservationError> {
         let mut hashes = self.fifo_snapshot_locked();
         let mut members = hashes.iter().copied().collect::<HashSet<_>>();
@@ -8718,6 +10974,206 @@ impl Queue {
                 .map_or(0, |entry| *entry.value());
             self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
         }
+    }
+
+    /// Restore one hash removed by selection to its exact durable FIFO position.
+    ///
+    /// Caller must hold `push_remove_lock`. The stable ordinal, rather than the point at which a
+    /// failed validation is observed, determines the restored position.
+    fn restore_popped_hash_locked(&self, hash: SignedTxHash) -> Result<(), String> {
+        if !self.txs.contains_key(&hash) {
+            return Err("selected transaction is no longer tracked".to_owned());
+        }
+        if self
+            .queued_tx_enqueued_at_ms
+            .get(&hash)
+            .is_some_and(|_| !self.removed_hashes.contains_key(&hash))
+        {
+            return Ok(());
+        }
+        if self
+            .lane_reservations
+            .lock()
+            .live_by_hash
+            .contains_key(&hash)
+        {
+            return Err(
+                "selected transaction concurrently acquired lane reservation ownership".to_owned(),
+            );
+        }
+
+        let mut hashes = self.fifo_snapshot_locked();
+        if !hashes.contains(&hash) {
+            hashes.push(hash);
+        }
+        if hashes.len() > self.tx_hashes.capacity() {
+            return Err("restored transaction would exceed FIFO capacity".to_owned());
+        }
+
+        let mut ordered = Vec::with_capacity(hashes.len());
+        let mut seen_ordinals = BTreeSet::new();
+        for queued_hash in hashes {
+            let order = self
+                .fifo_order_by_hash
+                .get(&queued_hash)
+                .map(|entry| *entry.value())
+                .ok_or_else(|| {
+                    format!(
+                        "queued transaction {queued_hash} is missing its durable FIFO order identity"
+                    )
+                })?;
+            order.validate().map_err(str::to_owned)?;
+            if !seen_ordinals.insert(order.ordinal) {
+                return Err(format!(
+                    "FIFO ordinal {} is assigned to multiple queued transactions",
+                    order.ordinal
+                ));
+            }
+            ordered.push((order.ordinal, queued_hash));
+        }
+        ordered.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+        self.replace_fifo_locked(
+            &ordered
+                .into_iter()
+                .map(|(_, queued_hash)| queued_hash)
+                .collect::<Vec<_>>(),
+        );
+        self.removed_hashes.remove(&hash);
+        Ok(())
+    }
+
+    /// Restore a popped guard when a live global-admission claim still owns the transaction.
+    ///
+    /// Returns `Ok(false)` only when no globally bound durable claim remains, allowing the
+    /// caller to perform the legacy destructive guard settlement. `Ok(true)` means exact FIFO
+    /// ownership was restored. Every error is fail-closed: callers must retain the transaction,
+    /// routing metadata, and durable journal claim and latch restart recovery.
+    ///
+    /// Caller must hold `push_remove_lock`.
+    fn restore_globally_bound_transaction_guard_locked(
+        &self,
+        tx: &CheckedTransaction<'static>,
+        routing: RoutingDecision,
+        routing_plan: &RoutingPlan,
+    ) -> Result<bool, String> {
+        let hash = tx.hash();
+        let Some(claim) = self
+            .durable_plan_claims
+            .get(&hash)
+            .map(|entry| entry.value().clone())
+        else {
+            return Ok(false);
+        };
+        if claim.global_admission_identity.is_none() {
+            return Ok(false);
+        }
+
+        if claim.entrypoint_hash != tx.as_accepted().hash_as_entrypoint()
+            || claim.signed_transaction_hash
+                != exact_signed_transaction_hash(tx.as_accepted().entrypoint())
+            || &claim.routing_plan != routing_plan
+        {
+            return Err(
+                "globally admitted guard differs from its exact durable transaction or routing claim"
+                    .to_owned(),
+            );
+        }
+        let binding = claim.global_admission_binding().map_err(|reason| {
+            format!("globally admitted guard has a malformed durable claim: {reason}")
+        })?;
+        binding
+            .validate_for_transaction_and_plan(tx.as_accepted().entrypoint(), routing_plan)
+            .map_err(|reason| {
+                format!(
+                    "globally admitted guard does not match its canonical durable claim: {reason}"
+                )
+            })?;
+
+        let Some(tracked) = self.txs.get(&hash).map(|entry| Arc::clone(entry.value())) else {
+            return Err(
+                "globally admitted guard has no live tracked transaction to restore".to_owned(),
+            );
+        };
+        let tracked_transaction = tracked.as_accepted();
+        if tracked_transaction.entrypoint() != tx.as_accepted().entrypoint()
+            || tracked_transaction.hash_as_entrypoint() != tx.as_accepted().hash_as_entrypoint()
+            || exact_signed_transaction_hash(tracked_transaction.entrypoint())
+                != exact_signed_transaction_hash(tx.as_accepted().entrypoint())
+        {
+            return Err(
+                "globally admitted guard differs from the live tracked transaction".to_owned(),
+            );
+        }
+        if routing != routing_plan.coordinator_route()
+            || self
+                .routing_decisions
+                .get(&hash)
+                .is_none_or(|entry| *entry.value() != routing)
+            || self
+                .routing_plans
+                .get(&hash)
+                .is_none_or(|entry| entry.value() != routing_plan)
+        {
+            return Err(
+                "globally admitted guard differs from the live immutable routing indexes"
+                    .to_owned(),
+            );
+        }
+
+        self.restore_popped_hash_locked(hash).map_err(|reason| {
+            format!("globally admitted guard failed exact FIFO restoration: {reason}")
+        })?;
+        Ok(true)
+    }
+
+    fn restore_popped_globally_bound_hash(
+        &self,
+        hash: SignedTxHash,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<(), String> {
+        {
+            let _queue_guard = self.push_remove_lock.lock();
+            self.restore_popped_hash_locked(hash)?;
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
+        Ok(())
+    }
+
+    fn retain_popped_hash_after_validation_failure(
+        &self,
+        hash: SignedTxHash,
+        stage: &'static str,
+        reason: &(impl fmt::Display + ?Sized),
+        telemetry: Option<&StateTelemetry>,
+    ) {
+        let (newly_latched, restore_error) = {
+            let _queue_guard = self.push_remove_lock.lock();
+            let newly_latched = !self
+                .accepted_work_validation_fault
+                .swap(true, Ordering::AcqRel);
+            let restore_error = self.restore_popped_hash_locked(hash).err();
+            (newly_latched, restore_error)
+        };
+        if newly_latched {
+            if let Some(restore_error) = restore_error.as_deref() {
+                iroha_logger::error!(
+                    tx = %hash,
+                    stage,
+                    %reason,
+                    restore_error,
+                    "accepted queue ownership failed immutable revalidation and could not be restored in memory; durable replay is required"
+                );
+            } else {
+                iroha_logger::error!(
+                    tx = %hash,
+                    stage,
+                    %reason,
+                    "accepted queue ownership failed immutable revalidation; restored exact FIFO ownership and disabled admission and transaction selection until restart recovery"
+                );
+            }
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
+        status::set_tx_queue_pressure(self.pressure_snapshot());
     }
 
     fn push_queued_hash(&self, hash: SignedTxHash, enqueued_at_ms: u64) -> bool {
@@ -8930,6 +11386,13 @@ impl Queue {
                 self.expiry_ring_members.remove(&hash);
                 continue;
             };
+            if self.has_globally_bound_durable_claim(hash) {
+                // A globally bound claim remains owned until canonical execution, explicit
+                // cancellation, or authenticated conflict reconciliation. The TTL sweeper has
+                // no State view and therefore must conservatively retain this durable owner.
+                ring.push_back(hash);
+                continue;
+            }
             if self.is_expired_at(entry.value().as_accepted(), now) {
                 expired = expired.saturating_add(1);
                 to_remove.push(hash);
@@ -8958,6 +11421,10 @@ impl Queue {
         let _guard = self.push_remove_lock.lock();
         let mut removed = 0usize;
         for hash in to_remove {
+            if self.has_globally_bound_durable_claim(hash) {
+                self.track_expiry_hash(hash);
+                continue;
+            }
             if self
                 .lane_reservations
                 .lock()
@@ -8970,9 +11437,10 @@ impl Queue {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_active_transaction();
-                let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
-                if let Some(plan) = removed_plan.as_ref() {
-                    self.record_plan_journal_remove(hash, plan);
+                let (routing, _removed_plan, journal_removal) =
+                    self.remove_routing_metadata_plan_first(hash);
+                if let Some(removal) = journal_removal {
+                    self.record_plan_journal_remove(removal);
                 }
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
@@ -9033,7 +11501,7 @@ impl Queue {
     ///
     /// Caller must hold `push_remove_lock` to exclude concurrent enqueue operations.
     fn compact_hash_queue_locked(&self) -> usize {
-        let mut retained = Vec::with_capacity(self.active_len());
+        let mut retained = Vec::with_capacity(self.materialized_active_len());
         let mut dropped = 0usize;
         let mut inserted_hashes = Vec::new();
         let live_reservations = self.lane_reservations.lock().live_hashes();
@@ -9213,14 +11681,37 @@ impl Queue {
                 state.has_committed_transaction(hash).then_some(hash)
             })
             .collect::<BTreeSet<_>>();
-        let expired = guards
-            .iter()
-            .filter(|guard| !guard.released)
-            .filter_map(|guard| {
-                let hash = guard.tx.hash();
-                self.is_expired(guard.tx.as_accepted()).then_some(hash)
-            })
-            .collect::<BTreeSet<_>>();
+        let state_view = state.view();
+        let mut expired = BTreeSet::new();
+        for guard in guards.iter().filter(|guard| !guard.released) {
+            if !self.is_expired(guard.tx.as_accepted()) {
+                continue;
+            }
+            let hash = guard.tx.hash();
+            match self.global_admission_registry_match_for_hash(hash, &state_view) {
+                Ok(Some(_)) => {
+                    // Pending, canonical, and conflicting global bindings all retain their
+                    // guard here. Authenticated conflict reconciliation owns exact deletion.
+                }
+                Ok(None) => {
+                    expired.insert(hash);
+                }
+                Err(reason) => {
+                    drop(state_view);
+                    self.mark_accepted_work_validation_fault(
+                        hash,
+                        "guard_return_global_admission_registry",
+                        &reason,
+                        None,
+                    );
+                    return Err(TransactionGuardReturnError::GlobalAdmissionRegistry {
+                        hash,
+                        reason,
+                    });
+                }
+            }
+        }
+        drop(state_view);
         let live_guard_count = guards.iter().filter(|guard| !guard.released).count();
 
         #[cfg(feature = "telemetry")]
@@ -9355,7 +11846,12 @@ impl Queue {
                         }
                         let _ = routing_ledger::take(&hash);
                         let _ = routing_ledger::take_plan(&hash);
-                        journal_removals.push((hash, guard.routing_plan.digest()));
+                        if let Some(removal) =
+                            self.exact_plan_journal_removal(hash, guard.routing_plan.digest())
+                        {
+                            journal_removals.push(removal);
+                        }
+                        self.durable_plan_claims.remove(&hash);
                         if stale_hash_queued {
                             self.removed_hashes.insert(hash, ());
                         } else {
@@ -9382,7 +11878,12 @@ impl Queue {
                         }
                         let _ = routing_ledger::take(&hash);
                         let _ = routing_ledger::take_plan(&hash);
-                        journal_removals.push((hash, guard.routing_plan.digest()));
+                        if let Some(removal) =
+                            self.exact_plan_journal_removal(hash, guard.routing_plan.digest())
+                        {
+                            journal_removals.push(removal);
+                        }
+                        self.durable_plan_claims.remove(&hash);
                         if stale_hash_queued {
                             self.removed_hashes.insert(hash, ());
                         } else {
@@ -9489,13 +11990,19 @@ impl Queue {
             let mut removed_inner = 0usize;
             let mut journal_removals = Vec::new();
             for hash in hashes {
+                let journal_removal = self
+                    .routing_plans
+                    .get(&hash)
+                    .and_then(|plan| self.exact_plan_journal_removal(hash, plan.value().digest()));
                 let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_expiry_hash(&hash);
                 let _ = self.routing_decisions.remove(&hash);
-                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                    journal_removals.push((hash, plan.digest()));
+                let _ = self.routing_plans.remove(&hash);
+                if let Some(removal) = journal_removal {
+                    journal_removals.push(removal);
                 }
+                self.durable_plan_claims.remove(&hash);
                 let _ = routing_ledger::take(&hash);
                 let _ = routing_ledger::take_plan(&hash);
                 self.remove_tx_encoded_len(&hash);
@@ -9513,6 +12020,10 @@ impl Queue {
                     self.record_teu_dequeue(&hash, telemetry);
                     removed_inner = removed_inner.saturating_add(1);
                 }
+            }
+            {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
             }
             journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
             // Keep removed markers until the consumer drains stale hashes or a push triggers
@@ -9865,9 +12376,9 @@ impl Queue {
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    fn reroute_pending_transactions(
+    fn revalidate_pending_transactions(
         &self,
-        router: &Arc<dyn LaneRouter>,
+        _router: &Arc<dyn LaneRouter>,
         state_view: &StateView<'_>,
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
@@ -9889,38 +12400,48 @@ impl Queue {
             }
         }
 
-        let mut unresolved_routes = Vec::new();
-        for entry in &self.txs {
-            let tx = entry.value();
+        let tracked = self
+            .txs
+            .iter()
+            .map(|entry| (*entry.key(), Arc::clone(entry.value())))
+            .collect::<Vec<_>>();
+        let mut invalid_ownership = Vec::new();
+        for (hash, tx) in tracked {
             if !self.is_pending(tx.as_ref(), state_view) {
                 #[cfg(feature = "telemetry")]
                 {
-                    self.tx_teu.remove(entry.key());
+                    self.tx_teu.remove(&hash);
                 }
                 continue;
             }
-            let routing_plan = match router
-                .try_route_plan_with_view(tx.as_accepted(), state_view)
-                .and_then(|plan| {
-                    resolve_routing_plan_for_queue_admission(plan, &routing_nexus, block_height)
-                }) {
+            let routing_plan = match self.immutable_queued_routing_plan_in_view(
+                hash,
+                tx.as_ref(),
+                state_view,
+                &routing_nexus,
+                block_height,
+            ) {
                 Ok(plan) => plan,
                 Err(err) => {
-                    warn!(
-                        tx = %entry.key(),
+                    iroha_logger::error!(
+                        tx = %hash,
                         reason = %err,
                         reason_label = err.as_label(),
-                        "skipping reroute for queued transaction due to unresolved route"
+                        "queued transaction failed immutable routing validation during Nexus reconfiguration"
                     );
-                    unresolved_routes.push((*entry.key(), err.to_string()));
+                    invalid_ownership.push((hash, err));
                     continue;
                 }
             };
             let routing = routing_plan.coordinator_route();
-            self.routing_decisions.insert(*entry.key(), routing);
-            self.routing_plans
-                .insert(*entry.key(), routing_plan.clone());
-            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
+            debug_assert_eq!(
+                self.routing_decisions
+                    .get(&hash)
+                    .map(|entry| *entry.value()),
+                Some(routing),
+                "immutable plan and cached coordinator route must remain aligned"
+            );
+            self.record_routing_plan_in_ledger(hash, routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -9929,7 +12450,7 @@ impl Queue {
                     dataspace_id: routing.dataspace_id,
                     teu,
                 };
-                self.tx_teu.insert(*entry.key(), info);
+                self.tx_teu.insert(hash, info);
                 self.lane_teu_pending
                     .entry(routing.lane_id)
                     .and_modify(|agg| {
@@ -9948,14 +12469,15 @@ impl Queue {
         }
 
         #[cfg(feature = "telemetry")]
-        let reroute_rejection_telemetry = Some(state_view.telemetry);
+        let validation_telemetry = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
-        let reroute_rejection_telemetry = None;
-        for (hash, reason) in unresolved_routes {
-            self.reject_queued_transaction_for_unresolved_route(
-                hash,
+        let validation_telemetry = None;
+        if let Some((hash, reason)) = invalid_ownership.first() {
+            self.mark_accepted_work_validation_fault(
+                *hash,
+                "nexus_reconfiguration",
                 reason,
-                reroute_rejection_telemetry,
+                validation_telemetry,
             );
         }
 
@@ -9964,144 +12486,15 @@ impl Queue {
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    fn reroute_pending_transactions_with_state(
+    fn revalidate_pending_transactions_with_state(
         &self,
         router: &Arc<dyn LaneRouter>,
         state: &State,
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
     ) {
-        let routing_nexus =
-            nexus_with_route_catalogs(&state.nexus_snapshot(), lane_catalog, dataspace_catalog);
-        let block_height = state_height_for_routing(state);
-        #[cfg(feature = "telemetry")]
-        {
-            self.tx_teu.clear();
-            self.lane_teu_pending.clear();
-            self.dataspace_teu_pending.clear();
-            for lane in lane_catalog.lanes() {
-                self.lane_teu_pending.insert(lane.id, PendingTeu::default());
-                for dataspace in dataspace_catalog.entries() {
-                    self.dataspace_teu_pending
-                        .insert((lane.id, dataspace.id), PendingTeu::default());
-                }
-            }
-        }
-
-        let committed_transactions = state.transactions.view();
-        let mut route_view: Option<StateView<'_>> = None;
-        let mut unresolved_routes = Vec::new();
-        for entry in &self.txs {
-            let tx = entry.value();
-            if self.is_expired(tx.as_accepted())
-                || committed_transactions.get(entry.key()).is_some()
-            {
-                #[cfg(feature = "telemetry")]
-                {
-                    self.tx_teu.remove(entry.key());
-                }
-                continue;
-            }
-            let routing_plan = match router.try_route_plan_without_state(tx.as_accepted()) {
-                Ok(Some(plan)) => {
-                    match resolve_routing_plan_for_queue_admission(
-                        plan,
-                        &routing_nexus,
-                        block_height,
-                    ) {
-                        Ok(plan) => plan,
-                        Err(err) => {
-                            warn!(
-                                tx = %entry.key(),
-                                reason = %err,
-                                reason_label = err.as_label(),
-                                "skipping reroute for queued transaction due to unresolved route"
-                            );
-                            unresolved_routes.push((*entry.key(), err.to_string()));
-                            continue;
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let state_view = route_view.get_or_insert_with(|| state.view());
-                    match router
-                        .try_route_plan_with_view(tx.as_accepted(), state_view)
-                        .and_then(|plan| {
-                            resolve_routing_plan_for_queue_admission(
-                                plan,
-                                &routing_nexus,
-                                block_height,
-                            )
-                        }) {
-                        Ok(plan) => plan,
-                        Err(err) => {
-                            warn!(
-                                tx = %entry.key(),
-                                reason = %err,
-                                reason_label = err.as_label(),
-                                "skipping reroute for queued transaction due to unresolved route"
-                            );
-                            unresolved_routes.push((*entry.key(), err.to_string()));
-                            continue;
-                        }
-                    }
-                }
-                Err(err) => {
-                    warn!(
-                        tx = %entry.key(),
-                        reason = %err,
-                        reason_label = err.as_label(),
-                        "skipping reroute for queued transaction due to unresolved route"
-                    );
-                    unresolved_routes.push((*entry.key(), err.to_string()));
-                    continue;
-                }
-            };
-            let routing = routing_plan.coordinator_route();
-            self.routing_decisions.insert(*entry.key(), routing);
-            self.routing_plans
-                .insert(*entry.key(), routing_plan.clone());
-            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
-            #[cfg(feature = "telemetry")]
-            {
-                let teu = Self::compute_teu_weight(tx.as_accepted());
-                let info = TxTeuInfo {
-                    lane_id: routing.lane_id,
-                    dataspace_id: routing.dataspace_id,
-                    teu,
-                };
-                self.tx_teu.insert(*entry.key(), info);
-                self.lane_teu_pending
-                    .entry(routing.lane_id)
-                    .and_modify(|agg| {
-                        agg.teu = agg.teu.saturating_add(teu);
-                        agg.tx_count += 1;
-                    })
-                    .or_insert(PendingTeu { teu, tx_count: 1 });
-                self.dataspace_teu_pending
-                    .entry((routing.lane_id, routing.dataspace_id))
-                    .and_modify(|agg| {
-                        agg.teu = agg.teu.saturating_add(teu);
-                        agg.tx_count += 1;
-                    })
-                    .or_insert(PendingTeu { teu, tx_count: 1 });
-            }
-        }
-
-        #[cfg(feature = "telemetry")]
-        let reroute_rejection_telemetry = Some(state.metrics());
-        #[cfg(not(feature = "telemetry"))]
-        let reroute_rejection_telemetry = None;
-        for (hash, reason) in unresolved_routes {
-            self.reject_queued_transaction_for_unresolved_route(
-                hash,
-                reason,
-                reroute_rejection_telemetry,
-            );
-        }
-
-        #[cfg(feature = "telemetry")]
-        self.publish_teu_backlog_metrics(Some(state.metrics()));
+        let state_view = state.view();
+        self.revalidate_pending_transactions(router, &state_view, lane_catalog, dataspace_catalog);
     }
 
     /// Expose a handle for observing queue load.
@@ -10251,7 +12644,8 @@ impl Queue {
         self.lane_compliance.read().clone()
     }
 
-    /// Refresh routing, limits, manifests, and telemetry after a Nexus catalog update.
+    /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
+    /// update while preserving immutable plans for already accepted work.
     pub fn reconfigure_nexus(
         &self,
         nexus: &Nexus,
@@ -10290,10 +12684,16 @@ impl Queue {
                 .set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
         }
 
-        self.reroute_pending_transactions(&router, state_view, &lane_catalog, &dataspace_catalog);
+        self.revalidate_pending_transactions(
+            &router,
+            state_view,
+            &lane_catalog,
+            &dataspace_catalog,
+        );
     }
 
-    /// Refresh routing, limits, manifests, and telemetry after a Nexus catalog update.
+    /// Refresh router configuration, limits, manifests, and telemetry after a Nexus catalog
+    /// update while preserving immutable plans for already accepted work.
     pub fn reconfigure_nexus_with_state(
         &self,
         nexus: &Nexus,
@@ -10333,7 +12733,7 @@ impl Queue {
                 .set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
         }
 
-        self.reroute_pending_transactions_with_state(
+        self.revalidate_pending_transactions_with_state(
             &router,
             state,
             &lane_catalog,
@@ -10369,7 +12769,7 @@ pub mod tests {
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         fs,
-        num::{NonZeroU32, NonZeroUsize},
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         path::PathBuf,
         sync::{
             Arc,
@@ -10419,7 +12819,7 @@ pub mod tests {
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
     #[allow(unused_imports)]
     use super::*;
@@ -10439,6 +12839,231 @@ pub mod tests {
     };
 
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
+
+    fn synthetic_queue_plan_admission_context(
+        routing_plan: &RoutingPlan,
+    ) -> QueuePlanAdmissionContextV2 {
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0xA6; 32], iroha_crypto::Algorithm::Ed25519);
+        let validators = vec![PeerId::new(validator_key.public_key().clone())];
+        QueuePlanAdmissionContextV2 {
+            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: routing_plan
+                .legs()
+                .into_iter()
+                .map(|leg| QueuePlanRouteIncarnationV2 {
+                    leg,
+                    lane_incarnation: Hash::new(
+                        norito::to_bytes(&leg).expect("encode synthetic context leg"),
+                    ),
+                    validator_set_hash_version:
+                        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validators),
+                    validator_set: validators.clone(),
+                    validator_count: 1,
+                    durability_threshold: 1,
+                })
+                .collect(),
+        }
+    }
+
+    fn install_single_validator_topology_for_queue_test(state: &State, seed: u8) {
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        topology.push(PeerId::new(validator_key.public_key().clone()));
+        topology.commit();
+    }
+
+    struct GloballyBoundGuardFixture {
+        state: State,
+        queue: Arc<Queue>,
+        time_handle: iroha_primitives::time::MockTimeHandle,
+        transaction: AcceptedTransaction<'static>,
+        follower_transaction: AcceptedTransaction<'static>,
+        binding: crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        transaction_time_to_live: Duration,
+        _dir: TempDir,
+    }
+
+    impl GloballyBoundGuardFixture {
+        fn pop_guard(&self) -> TransactionGuard {
+            let mut expired = Vec::new();
+            let guard = self
+                .queue
+                .pop_from_queue(&self.state.view(), &mut expired)
+                .expect("globally admitted transaction must be selectable");
+            assert!(expired.is_empty());
+            guard
+        }
+
+        fn assert_live_journal_claim(&self) {
+            let records = self
+                .queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("fixture journal")
+                .replay()
+                .expect("replay fixture journal");
+            assert!(
+                records.iter().any(|record| {
+                    record
+                        .claim_digest()
+                        .is_ok_and(|digest| digest == self.binding.journal_record_digest)
+                }),
+                "exact globally admitted journal claim must remain live"
+            );
+        }
+
+        fn assert_restored_fifo_owner(&self) {
+            self.assert_restored_fifo_owner_with_order(&[self.transaction.hash()]);
+        }
+
+        fn assert_restored_fifo_owner_with_order(&self, expected_fifo: &[SignedTxHash]) {
+            let hash = self.transaction.hash();
+            assert_eq!(self.queue.active_len(), expected_fifo.len());
+            assert_eq!(self.queue.queued_len(), expected_fifo.len());
+            assert!(self.queue.txs.contains_key(&hash));
+            assert!(self.queue.routing_decisions.contains_key(&hash));
+            assert!(self.queue.routing_plans.contains_key(&hash));
+            assert!(
+                self.queue
+                    .durable_plan_claims
+                    .get(&hash)
+                    .is_some_and(|claim| claim.global_admission_identity.is_some())
+            );
+            {
+                let _queue_guard = self.queue.push_remove_lock.lock();
+                assert_eq!(self.queue.fifo_snapshot_locked(), expected_fifo);
+            }
+            assert_eq!(self.queue.inflight_guards.load(Ordering::Relaxed), 0);
+            assert!(!self.queue.accepted_work_validation_faulted());
+            self.assert_live_journal_claim();
+        }
+
+        fn assert_terminally_removed(&self) {
+            let hash = self.transaction.hash();
+            assert_eq!(self.queue.active_len(), 0);
+            assert_eq!(self.queue.queued_len(), 0);
+            assert!(!self.queue.txs.contains_key(&hash));
+            assert!(!self.queue.routing_decisions.contains_key(&hash));
+            assert!(!self.queue.routing_plans.contains_key(&hash));
+            assert!(!self.queue.durable_plan_claims.contains_key(&hash));
+            assert!(
+                self.queue
+                    .plan_journal
+                    .lock()
+                    .as_ref()
+                    .expect("fixture journal")
+                    .replay()
+                    .expect("replay terminal fixture journal")
+                    .is_empty()
+            );
+            assert!(!self.queue.accepted_work_validation_faulted());
+        }
+    }
+
+    fn globally_bound_guard_fixture() -> GloballyBoundGuardFixture {
+        let dir = tempdir().expect("global guard fixture directory");
+        let journal_path = dir.path().join("global_guard_queue_plan.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for global guard fixture");
+        install_single_validator_topology_for_queue_test(&state, 0xB9);
+
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let config = config_factory();
+        let transaction_time_to_live = config.transaction_time_to_live;
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            config,
+            &time_source,
+            router,
+            &[],
+        ));
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install global guard fixture journal");
+
+        let transaction = accepted_tx_by_someone(&time_source);
+        let follower_transaction = accepted_tx_by_someone(&time_source);
+        let routing_plan = queue
+            .route_plan_with_state(&transaction, &state)
+            .expect("route global guard fixture transaction");
+        let admission_context = queue
+            .plan_admission_context_with_state(&state, &routing_plan)
+            .expect("capture global guard fixture context");
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            Hash::new(b"global-transaction-guard-fixture"),
+            transaction.entrypoint(),
+            &routing_plan,
+            admission_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build global guard fixture binding");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction.clone(),
+                &state,
+                routing_plan,
+                &binding,
+            )
+            .expect("admit global guard fixture binding");
+
+        GloballyBoundGuardFixture {
+            state,
+            queue,
+            time_handle,
+            transaction,
+            follower_transaction,
+            binding,
+            transaction_time_to_live,
+            _dir: dir,
+        }
+    }
+
+    fn install_queue_plan_registry_value_for_guard_test(
+        state: &State,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding_hash: Hash,
+    ) {
+        let registry_key = binding.registry_key();
+        let marker_key: Name = format!(
+            "queue_plan_admission_v2_{}_{}",
+            hex::encode(registry_key.chain_id_digest.as_ref()),
+            hex::encode(registry_key.entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .expect("global guard fixture registry marker key");
+        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash,
+        };
+        let marker_payload =
+            norito::to_bytes(&marker_value).expect("encode global guard fixture registry value");
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(marker_key, marker_payload);
+        world.commit();
+    }
 
     fn seed_committed_height_for_queue_test(state: &State, height: u64) {
         let mut block_hashes = state.block_hashes.block();
@@ -10847,7 +13472,7 @@ pub mod tests {
             &time_source,
             vec![InstructionBox::from(Log::new(
                 Level::INFO,
-                "lane lifecycle reroute".into(),
+                "lane lifecycle revalidation".into(),
             ))],
             Metadata::default(),
         );
@@ -11063,7 +13688,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route() {
+    fn reconfiguration_retains_pending_transaction_when_its_lane_was_removed() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -11154,47 +13779,40 @@ pub mod tests {
         let active_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         *queue.lane_catalog.write() = Arc::new(active_catalog.clone());
-        queue.reroute_pending_transactions_with_state(
+        queue.revalidate_pending_transactions_with_state(
             &router,
             &state,
             &active_catalog,
             dataspace_catalog.as_ref(),
         );
 
-        assert_eq!(queue.active_len(), 0);
-        assert_eq!(queue.queued_len(), 0);
-        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 0);
-        assert!(queue.txs.get(&tx_hash).is_none());
-        assert!(queue.routing_decisions.get(&tx_hash).is_none());
-        assert!(queue.routing_plans.get(&tx_hash).is_none());
-        assert!(routing_ledger::get(&tx_hash).is_none());
-        assert!(routing_ledger::get_plan(&tx_hash).is_none());
-        #[cfg(feature = "telemetry")]
-        {
-            assert!(queue.tx_teu.get(&tx_hash).is_none());
-            assert!(
-                queue.lane_teu_pending.get(&retired_lane).is_none(),
-                "retired lane must not retain TEU backlog after reroute rejection"
-            );
-            assert!(
-                queue
-                    .lane_teu_pending
-                    .iter()
-                    .all(|entry| entry.key() != &retired_lane
-                        && entry.value().teu == 0
-                        && entry.value().tx_count == 0),
-                "active lane TEU aggregates must be reset when the only queued transaction is rejected"
-            );
-            assert!(
-                queue
-                    .dataspace_teu_pending
-                    .iter()
-                    .all(|entry| entry.key().0 != retired_lane
-                        && entry.value().teu == 0
-                        && entry.value().tx_count == 0),
-                "active dataspace TEU aggregates must be reset when the only queued transaction is rejected"
-            );
-        }
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_tx_count_for_user(&authority_id), 1);
+        assert!(queue.txs.get(&tx_hash).is_some());
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&tx_hash)
+                .map(|entry| *entry.value()),
+            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&tx_hash)
+                .map(|entry| entry.coordinator_route()),
+            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL))
+        );
+        assert!(
+            queue.accepted_work_validation_faulted(),
+            "removing a route under accepted work must fail closed"
+        );
+        assert!(queue.transaction_selection_durability_faulted());
         assert!(
             active_catalog
                 .lanes()
@@ -11205,7 +13823,7 @@ pub mod tests {
     }
 
     #[test]
-    fn proposal_queue_syncs_stale_router_from_committed_nexus() {
+    fn proposal_queue_preserves_admitted_route_across_policy_change() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -11214,8 +13832,10 @@ pub mod tests {
         } = nexus_routing_fixture();
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(10);
-        let (lane_catalog, dataspace_catalog) =
-            Queue::test_catalogs_for_routes(&[(lane_id, dataspace_id)]);
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
@@ -11261,22 +13881,33 @@ pub mod tests {
             *queue
                 .routing_decisions
                 .get(&tx_hash)
-                .expect("refreshed routing"),
-            RoutingDecision::new(lane_id, dataspace_id)
+                .expect("immutable routing"),
+            RoutingDecision::default()
+        );
+        let admitted = queue
+            .txs
+            .get(&tx_hash)
+            .expect("tracked transaction")
+            .as_accepted()
+            .clone();
+        assert_eq!(
+            queue
+                .route_plan_with_state(&admitted, &state)
+                .expect("queued plan remains active")
+                .coordinator_route(),
+            RoutingDecision::default()
         );
         assert!(!queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
+        assert!(!queue.accepted_work_validation_faulted());
 
         let mut popped = Vec::new();
         queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut popped);
         assert_eq!(popped.len(), 1);
-        assert_eq!(
-            popped[0].routing(),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+        assert_eq!(popped[0].routing(), RoutingDecision::default());
     }
 
     #[test]
-    fn proposal_queue_reconfigures_pending_default_route_to_autoscaled_elastic_lane() {
+    fn autoscale_scale_out_preserves_pending_default_route() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -11362,24 +13993,25 @@ pub mod tests {
             *queue
                 .routing_decisions
                 .get(&tx_hash)
-                .expect("rerouted decision"),
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+                .expect("immutable decision"),
+            RoutingDecision::default()
         );
-        let rerouted_plan = queue
+        let admitted_plan = queue
             .routing_plans
             .get(&tx_hash)
-            .expect("rerouted plan")
+            .expect("admitted plan")
             .clone();
         assert_eq!(
-            rerouted_plan.coordinator_route(),
-            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
-            "autoscale scale-out must refresh the full proposal routing plan"
+            admitted_plan.coordinator_route(),
+            RoutingDecision::default(),
+            "autoscale scale-out must preserve the exact admitted proposal routing plan"
         );
         assert_eq!(
             routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
-            Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
-            "autoscale scale-out must refresh the local routing ledger plan"
+            Some(RoutingDecision::default()),
+            "the local routing ledger must preserve the exact admitted plan"
         );
+        assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
             state.lane_manifests.read().status(LaneId::new(1)).is_some(),
@@ -11481,7 +14113,7 @@ pub mod tests {
             *queue
                 .routing_decisions
                 .get(&tx_hash)
-                .expect("rerouted decision"),
+                .expect("immutable decision"),
             RoutingDecision::default(),
             "future-created autoscale lanes must not receive pending default-route traffic before activation"
         );
@@ -11489,10 +14121,10 @@ pub mod tests {
             queue
                 .routing_plans
                 .get(&tx_hash)
-                .expect("rerouted plan")
+                .expect("immutable plan")
                 .coordinator_route(),
             RoutingDecision::default(),
-            "reroute must refresh the full plan to the active default route"
+            "reconfiguration must preserve the admitted active default route"
         );
         assert_eq!(
             routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
@@ -11502,7 +14134,7 @@ pub mod tests {
     }
 
     #[test]
-    fn proposal_queue_reconfigures_pending_default_route_after_autoscale_scale_in() {
+    fn forced_scale_in_under_pending_work_retains_identity_and_fails_closed() {
         let NexusRoutingFixture {
             mut state,
             authority_id,
@@ -11615,45 +14247,33 @@ pub mod tests {
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
-        let rerouted = *queue
+        let admitted = *queue
             .routing_decisions
             .get(&tx_hash)
-            .expect("rerouted decision");
-        assert_ne!(rerouted.lane_id, LaneId::new(1));
-        assert!(
-            rerouted.lane_id == LaneId::SINGLE || rerouted.lane_id == LaneId::new(2),
-            "scale-in should reroute onto an active default-route candidate, got {rerouted:?}"
-        );
+            .expect("admitted decision");
         assert_eq!(
-            rerouted.dataspace_id,
-            DataSpaceId::UNIVERSAL,
-            "scale-in reroute should preserve the default dataspace"
+            admitted,
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
+            "forced retirement must not mutate accepted ownership"
         );
-        assert_eq!(
-            queue
-                .lane_catalog
-                .read()
-                .lanes()
-                .iter()
-                .find(|lane| lane.id == rerouted.lane_id)
-                .expect("rerouted lane should remain active")
-                .dataspace_id,
-            rerouted.dataspace_id
-        );
-        let rerouted_plan = queue
+        let admitted_plan = queue
             .routing_plans
             .get(&tx_hash)
-            .expect("rerouted plan")
+            .expect("admitted plan")
             .clone();
         assert_eq!(
-            rerouted_plan.coordinator_route(),
-            rerouted,
-            "autoscale scale-in must refresh the full proposal routing plan"
+            admitted_plan.coordinator_route(),
+            admitted,
+            "autoscale scale-in must preserve the full admitted proposal routing plan"
         );
         assert_eq!(
             routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
-            Some(rerouted),
-            "autoscale scale-in must refresh the local routing ledger plan"
+            Some(admitted),
+            "autoscale scale-in must preserve the local routing ledger plan"
+        );
+        assert!(
+            queue.accepted_work_validation_faulted(),
+            "forced retirement under pending work must stop selection until recovery"
         );
         assert!(
             queue
@@ -11899,7 +14519,7 @@ pub mod tests {
         }
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (alice, _) = gen_account_in("wonderland");
         let (bob, _) = gen_account_in("wonderland");
         let baseline = registry("/srv/default.manifest.json", alice.clone(), 1);
@@ -13376,6 +15996,83 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_plan_journal_install_is_startup_only_and_rejection_does_not_touch_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let make_queue = || {
+            Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::new(StaticRouter {
+                    lane: LaneId::SINGLE,
+                    dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                &[],
+            )
+        };
+
+        let active_queue = make_queue();
+        active_queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("seed pre-install queue ownership");
+        let active_path = dir.path().join("active-queue.norito");
+        let active_error = active_queue
+            .install_plan_journal(&active_path, 1024 * 1024, true)
+            .expect_err("journal installation after queue admission must fail");
+        assert_eq!(active_error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(active_error.to_string().contains("startup-only"));
+        assert!(
+            !active_path.exists(),
+            "rejection must precede file creation"
+        );
+        assert!(active_queue.plan_journal.lock().is_none());
+        assert_eq!(active_queue.active_len(), 1);
+
+        let claimed_queue = make_queue();
+        let claimed_tx = accepted_tx_by_someone(&time_source);
+        let claimed_hash = claimed_tx.hash();
+        let claimed_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        claimed_queue.durable_plan_claims.insert(
+            claimed_hash,
+            QueuePlanDurableClaimIndexEntry {
+                entrypoint_hash: claimed_tx.hash_as_entrypoint(),
+                signed_transaction_hash: exact_signed_transaction_hash(claimed_tx.entrypoint()),
+                routing_plan: claimed_plan.clone(),
+                admission_context: synthetic_queue_plan_admission_context(&claimed_plan),
+                global_admission_identity: None,
+                enqueue_timestamp_ms: 0,
+                journal_record_digest: Hash::new(b"orphan durable claim"),
+            },
+        );
+        let claimed_path = dir.path().join("durable-claim.norito");
+        let claimed_error = claimed_queue
+            .install_plan_journal(&claimed_path, 1024 * 1024, true)
+            .expect_err("journal installation over a durable-claim index must fail");
+        assert_eq!(claimed_error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(claimed_error.to_string().contains("startup-only"));
+        assert!(
+            !claimed_path.exists(),
+            "rejection must precede file creation"
+        );
+        assert!(claimed_queue.plan_journal.lock().is_none());
+        assert_eq!(claimed_queue.active_len(), 0);
+        assert!(
+            claimed_queue
+                .durable_plan_claims
+                .contains_key(&claimed_hash)
+        );
+    }
+
+    #[test]
     fn queue_plan_journal_replays_matching_plan_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
@@ -13389,6 +16086,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA7);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13434,7 +16132,6 @@ pub mod tests {
 
         assert_eq!(summary.records, 1);
         assert_eq!(summary.replayed, 1);
-        assert_eq!(summary.tombstoned_stale, 0);
         let journal_len_after_replay = std::fs::metadata(&journal_path)
             .expect("journal metadata after replay")
             .len();
@@ -13475,6 +16172,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA0);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13530,6 +16228,1271 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let validators = (0_u8..4)
+            .map(|seed| {
+                let key_pair = iroha_crypto::KeyPair::from_seed(
+                    vec![seed.saturating_add(0x91); 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                );
+                PeerId::new(key_pair.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for validator in &validators {
+                topology.push(validator.clone());
+            }
+            topology.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        let tx = accepted_tx_by_someone(&time_source);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve legacy single-lane plan");
+
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture exact queue-plan admission context");
+
+        assert_eq!(context.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2);
+        assert_eq!(context.authority_height, 0);
+        assert_eq!(context.proposal_height, 1);
+        assert_eq!(context.predecessor_block_hash, None);
+        assert_eq!(context.routing_plan_digest, plan.digest());
+        assert_eq!(context.route_incarnations.len(), 1);
+        let coordinator = context
+            .route_incarnations
+            .first()
+            .expect("single plan has one coordinator");
+        assert_eq!(coordinator.leg.role, RouteLegRole::Coordinator);
+        assert_eq!(coordinator.validator_set_hash, HashOf::new(&validators));
+        assert_eq!(coordinator.validator_count, 4);
+        assert_eq!(coordinator.durability_threshold, 2);
+        assert!(!hash_is_zero(coordinator.lane_incarnation));
+        assert_eq!(
+            queue.plan_admission_authorities_with_state(
+                &state,
+                coordinator.leg.route,
+                context.proposal_height,
+            ),
+            validators
+        );
+
+        let dynamic_dataspace = DataSpaceId::new(73);
+        let dynamic_queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: dynamic_dataspace,
+            }),
+            &[],
+        );
+        let dynamic_tx = accepted_tx_by_someone(&time_source);
+        let dynamic_plan = dynamic_queue
+            .route_plan_with_state(&dynamic_tx, &state)
+            .expect("disabled-Nexus legacy default lane permits dynamic dataspaces");
+        assert_eq!(
+            dynamic_plan.coordinator_route(),
+            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace)
+        );
+        let dynamic_context = dynamic_queue
+            .plan_admission_context_with_state(&state, &dynamic_plan)
+            .expect("legacy dynamic-dataspace context must use the default lane incarnation");
+        assert_eq!(dynamic_context.route_incarnations.len(), 1);
+        assert_eq!(
+            dynamic_context.route_incarnations[0].leg.route,
+            RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace)
+        );
+        assert_eq!(
+            dynamic_context.route_incarnations[0].lane_incarnation,
+            coordinator.lane_incarnation
+        );
+        assert_eq!(
+            dynamic_context.route_incarnations[0].validator_set_hash,
+            HashOf::new(&validators)
+        );
+
+        seed_committed_height_for_queue_test(&state, 1);
+        let height_bound_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture context after one committed predecessor");
+        assert_eq!(height_bound_context.authority_height, 1);
+        assert_eq!(height_bound_context.proposal_height, 2);
+        assert_eq!(
+            height_bound_context.predecessor_block_hash,
+            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [1; Hash::LENGTH]
+            )))
+        );
+    }
+
+    #[test]
+    fn strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-queue-plan-journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0x95; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(validator_key.public_key().clone()));
+            topology.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(731));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install strict claim journal");
+        let empty_journal_len = std::fs::metadata(&journal_path)
+            .expect("strict claim journal baseline metadata")
+            .len();
+        let tx = accepted_tx_by_someone(&time_source);
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_hash = entrypoint.hash();
+        let signed_transaction_hash = exact_signed_transaction_hash(&entrypoint);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve exact strict-claim route");
+        let exact_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture exact strict-claim context");
+        let mut stale_context = exact_context.clone();
+        stale_context.route_incarnations[0].lane_incarnation =
+            Hash::new(b"stale-queue-plan-incarnation");
+
+        let stale_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &stale_context,
+            )
+            .expect_err("stale context must fail before durable admission");
+        assert!(matches!(
+            stale_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("admission context no longer matches")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("strict claim journal metadata")
+                .len(),
+            empty_journal_len,
+            "stale context must not append a queue-plan record"
+        );
+
+        let claim = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx,
+                &state,
+                plan.clone(),
+                &exact_context,
+            )
+            .expect("exact context must cross the strict durability boundary");
+        assert_eq!(claim.version, QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2);
+        assert_eq!(claim.context, exact_context);
+        assert_eq!(claim.routing_plan, plan.clone());
+        assert_eq!(claim.signed_transaction_hash, signed_transaction_hash);
+        assert_eq!(claim.entrypoint_hash, entrypoint_hash);
+        assert_eq!(
+            claim.journal_record_digest,
+            queue_plan_journal_record_claim_digest(
+                entrypoint,
+                plan,
+                exact_context,
+                claim.enqueue_timestamp_ms,
+                claim.global_admission_identity.clone(),
+            )
+            .expect("reconstruct exact journal-record claim")
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert!(
+            std::fs::metadata(&journal_path)
+                .expect("strict claim journal metadata after admission")
+                .len()
+                > empty_journal_len
+        );
+        let persisted = queue
+            .plan_journal
+            .lock()
+            .as_ref()
+            .expect("strict claim journal")
+            .replay()
+            .expect("replay exact strict claim record");
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].routing_plan, claim.routing_plan);
+        assert_eq!(persisted[0].admission_context, claim.context);
+        assert_eq!(
+            persisted[0]
+                .claim_digest()
+                .expect("digest persisted V4 record"),
+            claim.journal_record_digest
+        );
+    }
+
+    #[test]
+    fn strict_durable_claim_retry_survives_height_advance_before_and_after_restart_replay() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-idempotent-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0x97; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(validator_key.public_key().clone()));
+            topology.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(911));
+        let original_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let mutable_router = Arc::new(MutableRouter::new(original_route));
+        let make_queue = || {
+            let router: Arc<dyn LaneRouter> = mutable_router.clone();
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[])
+        };
+        let queue = make_queue();
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install V4 claim journal");
+        seed_committed_height_for_queue_test(&state, 1);
+        let tx = accepted_tx_by_someone(&time_source);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve strict retry route");
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture strict retry context");
+        let first = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect("persist first exact claim");
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&tx, &state)
+                .expect("recover exact first public-retry claim"),
+            Some(first.clone())
+        );
+        let first_len = std::fs::metadata(&journal_path)
+            .expect("claim journal metadata")
+            .len();
+
+        seed_committed_height_for_queue_test(&state, 3);
+        let current_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture context after committed-height advance");
+        assert_ne!(current_context, context);
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&tx, &state)
+                .expect("height drift must recover the original immutable public-retry claim"),
+            Some(first.clone())
+        );
+        assert!(
+            queue.has_revalidatable_durable_plan_claim_with_state(&tx, &state, &plan, &context,),
+            "an exact still-owned claim must remain retryable after height advance"
+        );
+        let same_process_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect("height-advanced lost-response retry must reuse the exact claim");
+        assert_eq!(same_process_retry, first);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("claim journal metadata after retry")
+                .len(),
+            first_len,
+            "same-process retry must not append a second Put"
+        );
+
+        let mut mutated_context = context.clone();
+        mutated_context.routing_plan_digest = Hash::new(b"mutated-retry-plan-digest");
+        assert!(!queue.has_revalidatable_durable_plan_claim_with_state(
+            &tx,
+            &state,
+            &plan,
+            &mutated_context,
+        ));
+        let mutated_context_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &mutated_context,
+            )
+            .expect_err("mutated retry context must not reuse or replace the durable claim");
+        assert!(matches!(
+            mutated_context_error.err,
+            Error::UnresolvedRoute { .. }
+        ));
+
+        let mutated_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(41)));
+        assert!(!queue.has_revalidatable_durable_plan_claim_with_state(
+            &tx,
+            &state,
+            &mutated_plan,
+            &context,
+        ));
+        let mutated_plan_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                mutated_plan,
+                &context,
+            )
+            .expect_err("mutated retry plan must fail closed");
+        assert!(matches!(
+            mutated_plan_error.err,
+            Error::UnresolvedRoute { .. }
+        ));
+
+        let mutated_tx = accepted_tx_by_someone(&time_source);
+        assert!(!queue.has_revalidatable_durable_plan_claim_with_state(
+            &mutated_tx,
+            &state,
+            &plan,
+            &context,
+        ));
+        let mutated_tx_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                mutated_tx,
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect_err("a different transaction must not reuse an earlier durable claim");
+        assert!(matches!(
+            mutated_tx_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("admission context no longer matches")
+        ));
+
+        mutable_router.set(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(42)));
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&tx, &state)
+                .expect("policy drift must recover the original immutable public-retry claim"),
+            Some(first.clone())
+        );
+        assert!(
+            queue.has_revalidatable_durable_plan_claim_with_state(&tx, &state, &plan, &context,),
+            "router drift must not invalidate immutable admitted ownership"
+        );
+        let changed_policy_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect("routing-policy drift must preserve an old exact durable claim");
+        assert_eq!(changed_policy_retry, first);
+        mutable_router.set(original_route);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("claim journal metadata after mutation negatives")
+                .len(),
+            first_len,
+            "mutation negatives must not append or replace a durable Put"
+        );
+        drop(queue);
+
+        let replay_queue = make_queue();
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen V4 claim journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("rebuild queue and durable-claim index");
+        assert_eq!(summary.replayed, 1);
+        assert_eq!(replay_queue.active_len(), 1);
+        assert!(
+            replay_queue
+                .has_revalidatable_durable_plan_claim_with_state(&tx, &state, &plan, &context,),
+            "replayed exact claim must remain safely retryable at the advanced height"
+        );
+        let replay_retry = replay_queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect("height-advanced restart retry must return rebuilt exact claim");
+        assert_eq!(replay_retry, first);
+        assert_eq!(replay_queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("claim journal metadata after restart retry")
+                .len(),
+            first_len,
+            "restart retry must not append a second Put"
+        );
+
+        let replay_mutation_error = replay_queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &mutated_context,
+            )
+            .expect_err("replay must rebuild exact claim identity, not a mutable approximation");
+        assert!(matches!(
+            replay_mutation_error.err,
+            Error::UnresolvedRoute { .. }
+        ));
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(tx.hash(), nonzero!(1_usize));
+            transactions
+                .commit()
+                .expect("commit retried transaction identity");
+        }
+        assert!(
+            !replay_queue
+                .has_revalidatable_durable_plan_claim_with_state(&tx, &state, &plan, &context,)
+        );
+        let committed_retry_error = replay_queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx, &state, plan, &context,
+            )
+            .expect_err("a committed claim must not be resurrected as pending");
+        assert!(matches!(committed_retry_error.err, Error::InBlockchain));
+        assert_eq!(replay_queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("claim journal metadata after committed retry")
+                .len(),
+            first_len,
+            "committed retry must not append another durable Put"
+        );
+    }
+
+    #[test]
+    fn strict_durable_claim_rolls_over_to_exact_current_height_and_overlapping_roster() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-current-rollover-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        let validators = (0_u8..5)
+            .map(|offset| {
+                let keypair = iroha_crypto::KeyPair::from_seed(
+                    vec![0xB0_u8.saturating_add(offset); 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                );
+                PeerId::new(keypair.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for validator in &validators[..4] {
+                topology.push(validator.clone());
+            }
+            topology.commit();
+        }
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_211));
+        let make_queue = || {
+            Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::new(StaticRouter {
+                    lane: LaneId::SINGLE,
+                    dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                &[],
+            )
+        };
+        let queue = make_queue();
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install rollover journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve rollover route");
+        let original_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture original rollover context");
+        let original_claim = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_context,
+            )
+            .expect("persist original rollover claim");
+        let original_len = fs::metadata(&journal_path)
+            .expect("rollover journal metadata")
+            .len();
+
+        seed_committed_height_for_queue_test(&state, 3);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for validator in &validators[1..] {
+                topology.push(validator.clone());
+            }
+            topology.commit();
+        }
+        let current_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture exact current rollover context");
+        assert_ne!(current_context, original_context);
+        assert_eq!(current_context.route_incarnations[0].validator_count, 4);
+        assert_eq!(
+            current_context.route_incarnations[0].durability_threshold, 2,
+            "four-authority rollover requires f+1 durable copies"
+        );
+        assert_eq!(
+            validators[..4]
+                .iter()
+                .filter(|validator| validators[1..].contains(validator))
+                .count(),
+            3,
+            "fixture must model a three-of-four overlapping authority rotation"
+        );
+        assert!(
+            queue.has_revalidatable_durable_plan_claim_with_state(
+                &tx,
+                &state,
+                &plan,
+                &current_context,
+            ),
+            "each overlapping current authority must be able to request the exact rollover"
+        );
+
+        let current_claim = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &current_context,
+            )
+            .expect("exact current context must durably replace the old claim");
+        assert_eq!(current_claim.context, current_context);
+        assert_eq!(current_claim.routing_plan, plan);
+        assert_eq!(
+            current_claim.enqueue_timestamp_ms, original_claim.enqueue_timestamp_ms,
+            "claim rollover must preserve FIFO ownership time"
+        );
+        assert_ne!(
+            current_claim.journal_record_digest,
+            original_claim.journal_record_digest
+        );
+        assert_eq!(queue.active_len(), 1);
+        let rollover_len = fs::metadata(&journal_path)
+            .expect("rollover journal metadata after replacement")
+            .len();
+        assert!(rollover_len > original_len);
+        assert!(
+            !queue.has_revalidatable_durable_plan_claim_with_state(
+                &tx,
+                &state,
+                &plan,
+                &original_context,
+            ),
+            "once rebound, the obsolete roster generation must not replace the current claim"
+        );
+        let exact_current_retry = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &current_context,
+            )
+            .expect("current claim retry must be idempotent");
+        assert_eq!(exact_current_retry, current_claim);
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("rollover journal metadata after exact retry")
+                .len(),
+            rollover_len,
+            "exact current retry must not append another Put"
+        );
+        drop(queue);
+
+        let replay_queue = make_queue();
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen rollover journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay current rollover claim");
+        assert_eq!(summary.replayed, 1);
+        let rebuilt = replay_queue
+            .durable_plan_claims
+            .get(&tx.hash())
+            .expect("rebuild current rollover claim");
+        assert_eq!(rebuilt.admission_context, current_context);
+        assert_eq!(
+            rebuilt.enqueue_timestamp_ms,
+            original_claim.enqueue_timestamp_ms
+        );
+        drop(rebuilt);
+        let restart_retry = replay_queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx,
+                &state,
+                plan,
+                &current_context,
+            )
+            .expect("restart current-context retry must be idempotent");
+        assert_eq!(restart_retry, current_claim);
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("rollover journal metadata after restart retry")
+                .len(),
+            rollover_len
+        );
+    }
+
+    #[test]
+    fn strict_durable_claim_rollover_recovers_every_replacement_fault_boundary() {
+        let cases = [
+            (
+                "before-append",
+                QueuePlanJournalTestFault::ReplaceBeforeAppend,
+                false,
+                false,
+            ),
+            (
+                "partial-write",
+                QueuePlanJournalTestFault::ReplacePartialWrite,
+                true,
+                false,
+            ),
+            (
+                "after-full-write",
+                QueuePlanJournalTestFault::ReplaceAfterFullWrite,
+                true,
+                true,
+            ),
+            (
+                "file-sync",
+                QueuePlanJournalTestFault::ReplaceSync,
+                true,
+                true,
+            ),
+            (
+                "parent-sync",
+                QueuePlanJournalTestFault::ReplaceParentSync,
+                true,
+                true,
+            ),
+        ];
+
+        for (label, fault, indeterminate, replacement_survives) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let journal_path = dir.path().join(format!("rollover-{label}.norito"));
+            let mut state = State::new(
+                world_with_test_domains(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut nexus = state.nexus_snapshot();
+            nexus.enabled = false;
+            state.set_nexus(nexus).expect("apply disabled Nexus state");
+            install_single_validator_topology_for_queue_test(&state, 0xBC);
+            seed_committed_height_for_queue_test(&state, 1);
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_313));
+            let make_queue = || {
+                Queue::test_with_router_for_routes(
+                    config_factory(),
+                    &time_source,
+                    Arc::new(StaticRouter {
+                        lane: LaneId::SINGLE,
+                        dataspace: DataSpaceId::UNIVERSAL,
+                    }),
+                    &[],
+                )
+            };
+            let queue = make_queue();
+            queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install fault-boundary rollover journal");
+            let tx = accepted_tx_by_someone(&time_source);
+            let plan = queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve fault-boundary rollover route");
+            let original_context = queue
+                .plan_admission_context_with_state(&state, &plan)
+                .expect("capture original fault-boundary context");
+            queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    &original_context,
+                )
+                .expect("persist original fault-boundary claim");
+            let original_claim_len = fs::metadata(&journal_path)
+                .expect("fault-boundary journal baseline metadata")
+                .len();
+
+            seed_committed_height_for_queue_test(&state, 3);
+            let current_context = queue
+                .plan_admission_context_with_state(&state, &plan)
+                .expect("capture current fault-boundary context");
+            queue.inject_plan_journal_fault(fault);
+            let failure = queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    &current_context,
+                )
+                .expect_err("injected claim replacement boundary must not acknowledge");
+            assert_eq!(
+                matches!(
+                    &failure.err,
+                    Error::PlanJournalDurabilityIndeterminate { .. }
+                ),
+                indeterminate,
+                "unexpected typed rollover failure for {label}: {failure:?}"
+            );
+            assert_eq!(queue.active_len(), 1);
+            assert_eq!(
+                queue
+                    .durable_plan_claims
+                    .get(&tx.hash())
+                    .expect("old in-memory claim remains until durable success")
+                    .admission_context,
+                original_context,
+                "failed rollover must not speculatively publish the new claim for {label}"
+            );
+            if label == "before-append" {
+                assert_eq!(
+                    fs::metadata(&journal_path)
+                        .expect("pre-append rollover journal metadata")
+                        .len(),
+                    original_claim_len,
+                    "pre-append rollover rejection must leave durable bytes unchanged"
+                );
+            }
+            drop(queue);
+
+            let replay_queue = make_queue();
+            assert_eq!(
+                replay_queue
+                    .install_plan_journal(&journal_path, 1024 * 1024, true)
+                    .unwrap_or_else(|error| panic!("repair rollover {label}: {error}")),
+                1
+            );
+            replay_queue
+                .replay_plan_journal(&state)
+                .unwrap_or_else(|error| panic!("replay rollover {label}: {error}"));
+            let recovered_context = replay_queue
+                .durable_plan_claims
+                .get(&tx.hash())
+                .expect("recovered fault-boundary claim")
+                .admission_context
+                .clone();
+            assert_eq!(
+                recovered_context,
+                if replacement_survives {
+                    current_context.clone()
+                } else {
+                    original_context.clone()
+                },
+                "restart must select the last complete replacement for {label}"
+            );
+            let converged = replay_queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx,
+                    &state,
+                    plan,
+                    &current_context,
+                )
+                .unwrap_or_else(|error| panic!("converge rollover {label}: {error:?}"));
+            assert_eq!(converged.context, current_context);
+            assert_eq!(replay_queue.active_len(), 1);
+            assert_eq!(
+                replay_queue
+                    .plan_journal
+                    .lock()
+                    .as_ref()
+                    .expect("reopened rollover journal")
+                    .live_record_count()
+                    .expect("count converged rollover record"),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn strict_durable_claim_retry_does_not_resurrect_removed_queue_ownership() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict-claim-removed-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0x9A);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(987));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install removed-claim journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve removed-claim route");
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture removed-claim context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &context,
+            )
+            .expect("persist claim before ownership removal");
+        assert_eq!(queue.remove_committed_hashes([hash], None), 1);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("removed-claim journal")
+                .live_record_count()
+                .expect("count live records after removal"),
+            0
+        );
+        let removed_len = std::fs::metadata(&journal_path)
+            .expect("removed-claim journal metadata")
+            .len();
+        queue.durable_plan_claims.remove(&hash);
+        assert!(
+            queue.removed_hashes.contains_key(&hash),
+            "removed ownership marker must outlive the durable-claim index entry"
+        );
+        assert!(
+            !queue.has_revalidatable_durable_plan_claim_with_state(&tx, &state, &plan, &context,)
+        );
+
+        let removed_retry_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx, &state, plan, &context,
+            )
+            .expect_err("removed queue ownership must not be resurrected by an exact retry");
+        assert!(matches!(
+            removed_retry_error.err,
+            Error::UnresolvedRoute { ref reason } if reason.contains("previously removed")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("removed-claim journal metadata after retry")
+                .len(),
+            removed_len,
+            "removed retry must not append a replacement Put"
+        );
+    }
+
+    #[test]
+    fn v4_replay_rejects_same_lane_id_after_incarnation_recreation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("stale-incarnation-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0x98; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(validator_key.public_key().clone()));
+            topology.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_012));
+        let make_queue = || {
+            Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::new(StaticRouter {
+                    lane: LaneId::SINGLE,
+                    dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                &[],
+            )
+        };
+        let queue = make_queue();
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install V4 stale-incarnation journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve original incarnation route");
+        let original_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture original incarnation context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_context,
+            )
+            .expect("persist original incarnation claim");
+        let original_journal_len = std::fs::metadata(&journal_path)
+            .expect("stale-incarnation journal metadata")
+            .len();
+
+        {
+            let mut nexus = state.nexus.write();
+            let mut lanes = nexus.lane_catalog.lanes().to_vec();
+            lanes[0].alias = "recreated-single-lane".to_owned();
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(1_u32), lanes).expect("recreated lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        state.reseed_static_lane_incarnations_for_tests();
+        let current_context = make_queue()
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture recreated incarnation context");
+        assert_ne!(
+            current_context.route_incarnations[0].lane_incarnation,
+            original_context.route_incarnations[0].lane_incarnation,
+            "same numeric lane id must receive a distinct incarnation"
+        );
+        assert!(
+            !queue.has_revalidatable_durable_plan_claim_with_state(
+                &tx,
+                &state,
+                &plan,
+                &original_context,
+            ),
+            "same lane id with a new active incarnation must not reuse the old claim"
+        );
+        let recreated_retry_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_context,
+            )
+            .expect_err("same-ID ABA must invalidate a same-process durable-claim retry");
+        assert!(matches!(
+            recreated_retry_error.err,
+            Error::UnresolvedRoute { ref reason }
+                if reason.contains("active lane incarnation")
+        ));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("stale-incarnation journal metadata after rejected retry")
+                .len(),
+            original_journal_len,
+            "incarnation-conflicting retry must not append another Put"
+        );
+        drop(queue);
+
+        let replay_queue = make_queue();
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen stale-incarnation journal"),
+            1
+        );
+        let error = replay_queue
+            .replay_plan_journal(&state)
+            .expect_err("recreated lane incarnation must fail startup without rebinding");
+        assert!(
+            error
+                .to_string()
+                .contains("retaining immutable ownership evidence"),
+            "unexpected ABA replay error: {error}"
+        );
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert!(replay_queue.durable_plan_claims.get(&hash).is_none());
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("retained stale-incarnation journal")
+                .live_record_count()
+                .expect("count live records"),
+            1
+        );
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("retained incarnation journal metadata")
+                .len(),
+            original_journal_len,
+            "ABA rejection must not append, replace, or remove the old claim"
+        );
+    }
+
+    #[test]
+    fn v4_replay_revalidates_original_generation_across_height_advance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("height-advance-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0x99; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(validator_key.public_key().clone()));
+            topology.commit();
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_113));
+        let make_queue = || {
+            Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::new(StaticRouter {
+                    lane: LaneId::SINGLE,
+                    dataspace: DataSpaceId::UNIVERSAL,
+                }),
+                &[],
+            )
+        };
+        let queue = make_queue();
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install V4 height-advance journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve original-height route");
+        let original_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture original-height context");
+        let original_claim = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx,
+                &state,
+                plan,
+                &original_context,
+            )
+            .expect("persist original-height claim");
+        drop(queue);
+
+        seed_committed_height_for_queue_test(&state, 2);
+        let rotated_validator =
+            iroha_crypto::KeyPair::from_seed(vec![0x9B; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(rotated_validator.public_key().clone()));
+            topology.commit();
+        }
+        let replay_queue = make_queue();
+        replay_queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen V4 height-advance journal");
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay against a later committed height");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
+        let rebuilt = replay_queue
+            .durable_plan_claims
+            .get(&hash)
+            .expect("rebuild original durable claim");
+        assert_eq!(rebuilt.admission_context, original_context);
+        assert_eq!(
+            rebuilt.enqueue_timestamp_ms,
+            original_claim.enqueue_timestamp_ms
+        );
+        assert_ne!(
+            rebuilt.admission_context.route_incarnations[0].validator_set_hash,
+            HashOf::new(&vec![PeerId::new(rotated_validator.public_key().clone())]),
+            "ordinary roster rotation must retain the exact acknowledged roster binding"
+        );
+    }
+
+    #[test]
+    fn v4_replay_preserves_immutable_admitted_plan_across_router_policy_drift() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("immutable-plan-policy-drift-v4.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0xBD);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_417));
+        let admitted_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let current_route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(91));
+        let mutable_router = Arc::new(MutableRouter::new(admitted_route));
+        let make_queue = || {
+            let router: Arc<dyn LaneRouter> = mutable_router.clone();
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[])
+        };
+        let queue = make_queue();
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install immutable-plan journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let admitted_plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve admitted plan");
+        let admitted_context = queue
+            .plan_admission_context_with_state(&state, &admitted_plan)
+            .expect("capture admitted plan context");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                tx.clone(),
+                &state,
+                admitted_plan.clone(),
+                &admitted_context,
+            )
+            .expect("persist immutable admitted plan");
+        let original_len = fs::metadata(&journal_path)
+            .expect("immutable-plan journal metadata")
+            .len();
+        drop(queue);
+
+        mutable_router.set(current_route);
+        let replay_queue = make_queue();
+        replay_queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen immutable-plan journal");
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("resolve current policy")
+                .coordinator_route(),
+            current_route
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("policy drift must not mutate acknowledged ownership");
+        assert_eq!(summary.replayed, 1);
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&hash)
+                .expect("replayed immutable plan"),
+            admitted_plan
+        );
+        assert_eq!(
+            replay_queue
+                .durable_plan_claims
+                .get(&hash)
+                .expect("replayed immutable claim")
+                .admission_context,
+            admitted_context
+        );
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("immutable-plan journal after replay")
+                .len(),
+            original_len,
+            "router policy drift must not append a replacement or tombstone the admitted plan"
+        );
+    }
+
+    #[test]
     fn strict_queue_plan_journal_rejects_when_uninstalled_or_explicitly_disabled() {
         let mut state = State::new(
             world_with_test_domains(),
@@ -13541,6 +17504,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA1);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13605,6 +17569,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xAD);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13613,34 +17578,42 @@ pub mod tests {
         let cases = [
             (
                 "prewrite",
-                vec![QueuePlanJournalTestFault::PutBeforeAppend],
+                vec![QueuePlanJournalTestFault::ReplaceBeforeAppend],
                 false,
                 0,
+                false,
             ),
             (
                 "partial",
-                vec![QueuePlanJournalTestFault::PutPartialWrite],
-                false,
+                vec![QueuePlanJournalTestFault::ReplacePartialWrite],
+                true,
                 0,
+                true,
             ),
             (
-                "put-sync-cleanup",
-                vec![QueuePlanJournalTestFault::PutSync],
-                false,
-                0,
-            ),
-            (
-                "cleanup-prewrite",
-                vec![
-                    QueuePlanJournalTestFault::PutSync,
-                    QueuePlanJournalTestFault::CleanupBeforeAppend,
-                ],
+                "complete-write",
+                vec![QueuePlanJournalTestFault::ReplaceAfterFullWrite],
                 true,
                 1,
+                true,
+            ),
+            (
+                "file-sync",
+                vec![QueuePlanJournalTestFault::ReplaceSync],
+                true,
+                1,
+                true,
+            ),
+            (
+                "parent-sync",
+                vec![QueuePlanJournalTestFault::ReplaceParentSync],
+                true,
+                1,
+                true,
             ),
         ];
 
-        for (label, faults, expect_indeterminate, expected_replayable) in cases {
+        for (label, faults, expect_indeterminate, expected_replayable, expect_faulted) in cases {
             let dir = tempfile::tempdir().expect("tempdir");
             let journal_path = dir.path().join(format!("optional-{label}.norito"));
             let queue = Queue::test_with_router_for_routes(
@@ -13652,6 +17625,9 @@ pub mod tests {
             queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("install optional-admission journal");
+            let empty_journal_len = fs::metadata(&journal_path)
+                .expect("optional-admission journal baseline metadata")
+                .len();
             queue.inject_plan_journal_fault_script(faults);
 
             let tx = accepted_tx_by_someone(&time_source);
@@ -13682,6 +17658,20 @@ pub mod tests {
                 !queue.txs.contains_key(&hash),
                 "failed admission retained process ownership for {label}"
             );
+            assert_eq!(
+                queue.plan_journal_durability_faulted(),
+                expect_faulted,
+                "unexpected journal fault state for {label}"
+            );
+            if label == "prewrite" {
+                assert_eq!(
+                    fs::metadata(&journal_path)
+                        .expect("prewrite journal metadata")
+                        .len(),
+                    empty_journal_len,
+                    "prewrite rejection must leave the bootstrap-only journal unchanged"
+                );
+            }
             drop(queue);
 
             let replay_queue = Queue::test_with_router_for_routes(
@@ -13711,7 +17701,7 @@ pub mod tests {
     }
 
     #[test]
-    fn strict_queue_plan_journal_write_failure_rejects_without_live_record() {
+    fn strict_queue_plan_journal_partial_write_is_indeterminate_and_repairs_without_live_record() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("strict_queue_plan_write_failure.norito");
         let mut state = State::new(
@@ -13724,6 +17714,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA2);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13734,18 +17725,23 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
-        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::PutPartialWrite);
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::ReplacePartialWrite);
 
         let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
         let plan = queue.route_plan_with_state(&tx, &state).expect("route");
         let error = queue
             .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
-            .expect_err("injected journal write failure must reject");
+            .expect_err("an injected partial replacement write must be indeterminate");
 
         assert!(matches!(
             error.err,
-            Error::PlanJournalDurabilityRejected { .. }
+            Error::PlanJournalDurabilityIndeterminate {
+                transaction_hash,
+                ..
+            } if transaction_hash == hash
         ));
+        assert!(queue.plan_journal_durability_faulted());
         let next_tx = accepted_tx_by_someone(&time_source);
         let next_plan = queue
             .route_plan_with_state(&next_tx, &state)
@@ -13772,7 +17768,7 @@ pub mod tests {
     }
 
     #[test]
-    fn strict_queue_plan_journal_sync_failure_rejects_and_tombstones_put() {
+    fn strict_queue_plan_journal_sync_failure_is_indeterminate_and_replays_exact_put() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("strict_queue_plan_sync_failure.norito");
         let mut state = State::new(
@@ -13785,6 +17781,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA3);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13795,33 +17792,37 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
-        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::PutSync);
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::ReplaceSync);
 
         let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
         let plan = queue.route_plan_with_state(&tx, &state).expect("route");
         let error = queue
             .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
-            .expect_err("injected journal sync failure must reject");
+            .expect_err("an injected replacement sync failure must be indeterminate");
 
         assert!(matches!(
             error.err,
-            Error::PlanJournalDurabilityRejected { .. }
+            Error::PlanJournalDurabilityIndeterminate {
+                transaction_hash,
+                ..
+            } if transaction_hash == hash
         ));
         assert_eq!(queue.active_len(), 0);
-        assert!(
-            !queue.plan_journal_durability_faulted(),
-            "a durably synchronized cleanup proves the failed Put is not live"
-        );
+        assert!(queue.plan_journal_durability_faulted());
 
         let next_tx = accepted_tx_by_someone(&time_source);
-        let next_hash = next_tx.hash();
         let next_plan = queue
             .route_plan_with_state(&next_tx, &state)
-            .expect("route after durable cleanup");
-        queue
+            .expect("route after indeterminate sync");
+        let next_error = queue
             .push_with_lane_with_state_and_routing_plan_strict_durable(next_tx, &state, next_plan)
-            .expect("a durable cleanup must leave strict admission healthy");
-        assert_eq!(queue.active_len(), 1);
+            .expect_err("an indeterminate sync must fault later strict admission");
+        assert!(matches!(
+            next_error.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason.contains("restart recovery is required")
+        ));
         drop(queue);
 
         let replay_queue =
@@ -13831,21 +17832,21 @@ pub mod tests {
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("reopen journal after sync failure"),
             1,
-            "only the later acknowledged transaction may remain replayable"
+            "the complete replacement Put must be reconciled after restart"
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal after durable cleanup");
+            .expect("replay complete Put after indeterminate sync");
         assert_eq!(summary.replayed, 1);
-        assert!(replay_queue.txs.contains_key(&next_hash));
+        assert!(replay_queue.txs.contains_key(&hash));
     }
 
     #[test]
-    fn strict_queue_plan_journal_cleanup_prewrite_failure_is_unknown_and_replays_exact_put() {
+    fn strict_queue_plan_journal_full_write_ambiguity_replays_exact_put() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir
             .path()
-            .join("strict_queue_plan_cleanup_prewrite_failure.norito");
+            .join("strict_queue_plan_full_write_ambiguity.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -13856,6 +17857,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA4);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13866,10 +17868,7 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
-        queue.inject_plan_journal_fault_script([
-            QueuePlanJournalTestFault::PutSync,
-            QueuePlanJournalTestFault::CleanupBeforeAppend,
-        ]);
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::ReplaceAfterFullWrite);
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash();
@@ -13877,7 +17876,7 @@ pub mod tests {
         let plan = queue.route_plan_with_state(&tx, &state).expect("route");
         let error = queue
             .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan.clone())
-            .expect_err("missing cleanup must make the exact Put outcome unknown");
+            .expect_err("a complete replacement write without durability proof must be unknown");
 
         assert!(matches!(
             error.err,
@@ -13901,7 +17900,7 @@ pub mod tests {
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("reopen outcome-unknown journal"),
             1,
-            "the complete Put must survive when cleanup never started"
+            "the complete replacement Put must survive process restart"
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
@@ -13922,11 +17921,11 @@ pub mod tests {
     }
 
     #[test]
-    fn strict_queue_plan_journal_rollback_sync_failure_is_indeterminate_and_faults_queue() {
+    fn strict_queue_plan_journal_parent_sync_failure_is_indeterminate_and_faults_queue() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir
             .path()
-            .join("strict_queue_plan_rollback_sync_failure.norito");
+            .join("strict_queue_plan_parent_sync_failure.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -13937,6 +17936,7 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
+        install_single_validator_topology_for_queue_test(&state, 0xA5);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -13945,7 +17945,7 @@ pub mod tests {
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
-            router,
+            Arc::clone(&router),
             &[],
         ));
         queue
@@ -13954,23 +17954,26 @@ pub mod tests {
 
         let already_queued = accepted_tx_by_someone(&time_source);
         let already_queued_hash = already_queued.hash();
+        let already_queued_entrypoint = already_queued.entrypoint().clone();
         let already_queued_plan = queue
             .route_plan_with_state(&already_queued, &state)
             .expect("route existing transaction");
         queue
-            .push_with_lane_with_state_and_routing_plan(already_queued, &state, already_queued_plan)
+            .push_with_lane_with_state_and_routing_plan(
+                already_queued,
+                &state,
+                already_queued_plan.clone(),
+            )
             .expect("admit existing transaction before durability fault");
-        queue.inject_plan_journal_fault_script([
-            QueuePlanJournalTestFault::PutSync,
-            QueuePlanJournalTestFault::CleanupSync,
-        ]);
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::ReplaceParentSync);
 
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
+        let entrypoint = tx.entrypoint().clone();
         let plan = queue.route_plan_with_state(&tx, &state).expect("route");
         let error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
-            .expect_err("failed put and rollback syncs must be indeterminate");
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan.clone())
+            .expect_err("failed replacement parent sync must be indeterminate");
 
         assert!(matches!(
             error.err,
@@ -14046,12 +18049,355 @@ pub mod tests {
             Error::PlanJournalDurabilityRejected { ref reason }
                 if reason.contains("restart recovery is required")
         ));
+
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen parent-sync-ambiguous journal"),
+            2,
+            "both complete Put records must remain live after process restart"
+        );
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count live parent-sync-ambiguous records"),
+            2
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("reconcile both complete Put records");
+        assert_eq!(summary.records, 2);
+        assert_eq!(summary.replayed, 2);
+        assert_eq!(summary.tombstoned_committed, 0);
+        assert_eq!(summary.tombstoned_expired, 0);
+        assert_eq!(
+            replay_queue.active_len(),
+            2,
+            "each live Put must regain queue ownership exactly once"
+        );
+        assert_eq!(replay_queue.queued_len(), 2);
+        let replayed_already_queued = replay_queue
+            .txs
+            .get(&already_queued_hash)
+            .expect("earlier transaction must regain ownership");
+        assert_eq!(
+            replayed_already_queued.value().as_accepted().entrypoint(),
+            &already_queued_entrypoint
+        );
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&already_queued_hash)
+                .expect("earlier transaction routing plan"),
+            already_queued_plan
+        );
+        drop(replayed_already_queued);
+        let replayed_ambiguous = replay_queue
+            .txs
+            .get(&hash)
+            .expect("parent-sync-ambiguous transaction must regain ownership");
+        assert_eq!(
+            replayed_ambiguous.value().as_accepted().entrypoint(),
+            &entrypoint
+        );
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&hash)
+                .expect("parent-sync-ambiguous transaction routing plan"),
+            plan
+        );
     }
 
     #[test]
-    fn queue_plan_journal_replay_tombstones_malformed_committed_expired_and_rejected_records() {
+    fn queue_plan_journal_replay_tombstones_only_committed_and_expired_records() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("queue_plan_replay_outcomes.norito");
+        let journal_path = dir.path().join("queue_plan_terminal_outcomes.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![0x96; 32], iroha_crypto::Algorithm::Ed25519);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(validator_key.public_key().clone()));
+            topology.commit();
+        }
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let mut config = config_factory();
+        config.capacity = nonzero!(8_usize);
+        let queue =
+            Queue::test_with_router_for_routes(config, &time_source, Arc::clone(&router), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install outcome journal");
+        let plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        let admission_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture replay fixture admission context");
+
+        let committed = accepted_tx_by_someone(&time_source);
+        let expired = accepted_tx_by_someone(&time_source);
+        let terminal_enqueue_timestamp_ms = Queue::duration_to_millis(time_source.get_unix_time());
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(committed.hash(), nonzero!(1_usize));
+            transactions.commit().expect("commit replay fixture hash");
+        }
+
+        time_handle.advance(config.transaction_time_to_live + Duration::from_millis(1));
+        let accepted = accepted_tx_by_someone(&time_source);
+        let accepted_hash = accepted.hash();
+        let accepted_enqueue_timestamp_ms = Queue::duration_to_millis(time_source.get_unix_time());
+
+        let records = [
+            QueuePlanJournalRecordV4::new(
+                committed.entrypoint().clone(),
+                plan.clone(),
+                admission_context.clone(),
+                terminal_enqueue_timestamp_ms,
+                None,
+            ),
+            QueuePlanJournalRecordV4::new(
+                expired.entrypoint().clone(),
+                plan.clone(),
+                admission_context.clone(),
+                terminal_enqueue_timestamp_ms,
+                None,
+            ),
+            QueuePlanJournalRecordV4::new(
+                accepted.entrypoint().clone(),
+                plan,
+                admission_context,
+                accepted_enqueue_timestamp_ms,
+                None,
+            ),
+        ];
+        {
+            let mut journal_guard = queue.plan_journal.lock();
+            let journal = journal_guard.as_mut().expect("installed outcome journal");
+            let mut flush = QueuePlanJournalFlush::default();
+            for record in records {
+                flush = flush.combine(
+                    journal
+                        .put_deferred_flush(record)
+                        .expect("append replay outcome"),
+                );
+            }
+            journal.flush_deferred(flush).expect("sync replay outcomes");
+        }
+        drop(queue);
+
+        let replay_queue = Queue::test_with_router_for_routes(config, &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen outcome journal"),
+            3
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay terminal outcomes");
+
+        assert_eq!(
+            summary,
+            QueuePlanJournalReplaySummary {
+                records: 3,
+                replayed: 1,
+                tombstoned_committed: 1,
+                tombstoned_expired: 1,
+                tombstoned_conflicting_global_admission: 0,
+            }
+        );
+        assert_eq!(replay_queue.active_len(), 1);
+        assert!(replay_queue.txs.contains_key(&accepted_hash));
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count surviving replay record"),
+            1,
+            "only committed and expired records may be durably tombstoned"
+        );
+    }
+
+    #[test]
+    fn exact_queue_plan_rejection_leaves_same_plan_aba_successor_untouched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_exact_rejection_aba.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0xB7);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let entrypoint = tx.entrypoint().clone();
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("route transaction");
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture admission context");
+        let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
+        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            Hash::new(b"queue-plan-original-request"),
+            &entrypoint,
+            &plan,
+            context.clone(),
+            enqueue_timestamp_ms,
+        )
+        .expect("build original binding");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                tx.clone(),
+                &state,
+                plan.clone(),
+                &original_binding,
+            )
+            .expect("admit original binding");
+
+        let successor_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            Hash::new(b"queue-plan-successor-request"),
+            &entrypoint,
+            &plan,
+            context.clone(),
+            enqueue_timestamp_ms,
+        )
+        .expect("build successor binding");
+        assert_eq!(
+            original_binding.routing_plan_digest,
+            successor_binding.routing_plan_digest
+        );
+        assert_ne!(
+            original_binding.journal_record_digest,
+            successor_binding.journal_record_digest
+        );
+        let successor_record = QueuePlanJournalRecordV4::new(
+            entrypoint,
+            plan.clone(),
+            context.clone(),
+            enqueue_timestamp_ms,
+            Some(successor_binding.global_admission_identity()),
+        );
+        assert_eq!(
+            successor_record
+                .claim_digest()
+                .expect("hash successor record"),
+            successor_binding.journal_record_digest
+        );
+        queue
+            .plan_journal
+            .lock()
+            .as_mut()
+            .expect("installed journal")
+            .replace_strict_durable(successor_record.clone())
+            .expect("durably replace with ABA successor");
+        queue.durable_plan_claims.insert(
+            hash,
+            QueuePlanDurableClaimIndexEntry {
+                entrypoint_hash: successor_binding.entrypoint_hash.clone(),
+                signed_transaction_hash: successor_binding.signed_transaction_hash.clone(),
+                routing_plan: plan,
+                admission_context: context,
+                global_admission_identity: Some(successor_binding.global_admission_identity()),
+                enqueue_timestamp_ms,
+                journal_record_digest: successor_binding.journal_record_digest,
+            },
+        );
+
+        assert!(
+            !queue
+                .reject_exact_queue_plan_admission_claim(&original_binding)
+                .expect("delayed original rejection is idempotent"),
+            "a delayed old binding must not remove its same-plan ABA successor"
+        );
+        assert!(queue.txs.contains_key(&hash));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            queue
+                .durable_plan_claims
+                .get(&hash)
+                .expect("successor durable claim")
+                .global_admission_binding()
+                .expect("rebuild successor binding"),
+            successor_binding
+        );
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .replay()
+                .expect("replay successor owner"),
+            vec![successor_record]
+        );
+
+        assert!(
+            queue
+                .reject_exact_queue_plan_admission_claim(&successor_binding)
+                .expect("reject exact successor"),
+            "the exact live binding must be durably removed"
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert_eq!(queue.active_len(), 0);
+        assert!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .replay()
+                .expect("replay exact removal")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_admission_rejection.norito");
         let (policy_authority, policy_keypair) = gen_account_in("wonderland");
         let policy_domain_id =
             DomainId::try_new("wonderland", "universal").expect("policy domain id");
@@ -14085,33 +18431,24 @@ pub mod tests {
         state
             .set_nexus(nexus)
             .expect("apply disabled Nexus state for legacy route test");
-        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        install_single_validator_topology_for_queue_test(&state, 0x96);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
             dataspace: DataSpaceId::UNIVERSAL,
         });
-        let mut config = config_factory();
-        config.capacity = nonzero!(8_usize);
-        config.capacity_per_user = nonzero!(1_usize);
+        let config = config_factory();
         let queue =
             Queue::test_with_router_for_routes(config, &time_source, Arc::clone(&router), &[]);
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install outcome journal");
+            .expect("install admission-rejection journal");
         let plan =
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-
-        let malformed = accepted_tx_by_someone(&time_source);
-        let committed = accepted_tx_by_someone(&time_source);
-        let expired = accepted_tx_by_someone(&time_source);
-        {
-            let mut transactions = state.transactions.block();
-            transactions.insert_block_with_single_tx(committed.hash(), nonzero!(1_usize));
-            transactions.commit().expect("commit replay fixture hash");
-        }
-
-        time_handle.advance(config.transaction_time_to_live + Duration::from_millis(1));
-        let preparation_rejected = accepted_tx_with(
+        let admission_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture replay fixture admission context");
+        let rejected = accepted_tx_with(
             policy_authority.clone(),
             &policy_keypair,
             &time_source,
@@ -14126,87 +18463,38 @@ pub mod tests {
             )],
             Metadata::default(),
         );
-        let (same_authority, same_authority_key) = gen_account_in("wonderland");
-        let accepted = accepted_tx_by(same_authority.clone(), &same_authority_key, &time_source);
-        time_handle.advance(Duration::from_millis(1));
-        let rejected = accepted_tx_by(same_authority, &same_authority_key, &time_source);
-        assert_ne!(accepted.hash(), rejected.hash());
-
-        let records = [
-            QueuePlanJournalRecordV2::new(
-                malformed.entrypoint().clone(),
-                HashOf::from_untyped_unchecked(Hash::new(b"malformed-queue-plan-record-hash")),
-                plan.clone(),
-                1,
-            ),
-            QueuePlanJournalRecordV2::new(
-                committed.entrypoint().clone(),
-                committed.hash(),
-                plan.clone(),
-                2,
-            ),
-            QueuePlanJournalRecordV2::new(
-                expired.entrypoint().clone(),
-                expired.hash(),
-                plan.clone(),
-                3,
-            ),
-            QueuePlanJournalRecordV2::new(
-                preparation_rejected.entrypoint().clone(),
-                preparation_rejected.hash(),
-                plan.clone(),
-                4,
-            ),
-            QueuePlanJournalRecordV2::new(
-                accepted.entrypoint().clone(),
-                accepted.hash(),
-                plan.clone(),
-                5,
-            ),
-            QueuePlanJournalRecordV2::new(rejected.entrypoint().clone(), rejected.hash(), plan, 6),
-        ];
-        {
-            let mut journal_guard = queue.plan_journal.lock();
-            let journal = journal_guard.as_mut().expect("installed outcome journal");
-            let mut flush = QueuePlanJournalFlush::default();
-            for record in records {
-                flush = flush.combine(
-                    journal
-                        .put_deferred_flush(record)
-                        .expect("append replay outcome"),
-                );
-            }
-            journal.flush_deferred(flush).expect("sync replay outcomes");
-        }
+        let rejected_hash = rejected.hash();
+        queue
+            .record_plan_journal_put_durable(
+                &rejected,
+                &plan,
+                &admission_context,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
+                true,
+            )
+            .expect("persist admission-rejection fixture");
         drop(queue);
 
         let replay_queue = Queue::test_with_router_for_routes(config, &time_source, router, &[]);
         assert_eq!(
             replay_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("reopen outcome journal"),
-            6
+                .expect("reopen admission-rejection journal"),
+            1
         );
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay every terminal outcome");
-
-        assert_eq!(
-            summary,
-            QueuePlanJournalReplaySummary {
-                records: 6,
-                replayed: 1,
-                tombstoned_committed: 1,
-                tombstoned_expired: 1,
-                tombstoned_stale: 0,
-                tombstoned_malformed: 1,
-                rejected: 2,
-            }
+            .expect_err("a current admission failure must abort startup");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("failed current admission")
+                && error.to_string().contains("retaining its durable record"),
+            "unexpected replay error: {error}"
         );
-        assert_eq!(replay_queue.active_len(), 1);
-        assert!(replay_queue.txs.contains_key(&accepted.hash()));
-        assert!(!replay_queue.txs.contains_key(&preparation_rejected.hash()));
-        assert!(!replay_queue.txs.contains_key(&rejected.hash()));
+        assert_eq!(replay_queue.active_len(), 0);
+        assert!(!replay_queue.txs.contains_key(&rejected_hash));
         assert_eq!(
             replay_queue
                 .plan_journal
@@ -14214,14 +18502,112 @@ pub mod tests {
                 .as_ref()
                 .expect("installed replay journal")
                 .live_record_count()
-                .expect("count surviving replay record"),
+                .expect("count retained admission-rejection record"),
             1,
-            "every terminal record must be durably tombstoned"
+            "current admission failure must retain acknowledged durable ownership"
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_stale_plan_after_restart() {
+    fn queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_stateless_rejection.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state.set_nexus(nexus).expect("apply disabled Nexus state");
+        install_single_validator_topology_for_queue_test(&state, 0xBE);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_521));
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::clone(&router),
+            &[],
+        );
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install stateless-rejection journal");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let wrong_chain = ChainId::from("wrong-chain-for-queue-journal-replay");
+        let signed = TransactionBuilder::new_with_time_source(
+            wrong_chain,
+            authority,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "wrong-chain journal fixture".into(),
+        ))])
+        .sign(keypair.private_key());
+        let unchecked = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
+        let hash = unchecked.hash();
+        let plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        let context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture stateless-rejection context");
+        queue
+            .record_plan_journal_put_durable(
+                &unchecked,
+                &plan,
+                &context,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
+                true,
+            )
+            .expect("persist wrong-chain journal fixture");
+        let original_len = fs::metadata(&journal_path)
+            .expect("stateless-rejection journal metadata")
+            .len();
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        replay_queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen stateless-rejection journal");
+        let error = replay_queue
+            .replay_plan_journal(&state)
+            .expect_err("wrong-chain journal entrypoint must fail startup");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            error
+                .to_string()
+                .contains("failed canonical stateless validation"),
+            "unexpected stateless replay error: {error}"
+        );
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed stateless-rejection journal")
+                .live_record_count()
+                .expect("count retained stateless-rejection record"),
+            1
+        );
+        assert_eq!(
+            fs::metadata(&journal_path)
+                .expect("stateless-rejection journal after failed replay")
+                .len(),
+            original_len,
+            "stateless failure must not append a tombstone or replacement"
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_retains_unverifiable_plan_and_fails_startup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let state = State::new(
@@ -14246,12 +18632,15 @@ pub mod tests {
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash();
         let plan = RoutingPlan::single(RoutingDecision::new(lane, dataspace));
+        let admission_context = synthetic_queue_plan_admission_context(&plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist replay fixture");
@@ -14270,14 +18659,26 @@ pub mod tests {
                 .expect("install replay journal"),
             1
         );
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("unverifiable acknowledged routing must fail startup");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(
+            error.to_string().contains("retaining"),
+            "unexpected replay error: {error}"
+        );
         assert!(!replay_queue.txs.contains_key(&hash));
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count retained live record"),
+            1,
+            "unverifiable recovery must never tombstone acknowledged ownership"
+        );
         drop(replay_queue);
 
         let final_router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
@@ -14290,13 +18691,13 @@ pub mod tests {
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_stale_nexus_policy_after_restart() {
+    fn queue_plan_journal_retains_admitted_plan_when_current_policy_route_lacks_authority() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let NexusRoutingFixture {
@@ -14362,12 +18763,15 @@ pub mod tests {
             })
             .expect("stale plan resolves against stale Nexus catalogs");
         assert_eq!(stale_plan.coordinator_route(), old_route);
+        let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &stale_plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist stale-plan fixture");
@@ -14386,18 +18790,24 @@ pub mod tests {
                 .expect("install replay journal"),
             1
         );
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("missing current route authority must fail startup");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(
+            error.to_string().contains("retaining"),
+            "unexpected replay error: {error}"
+        );
         assert!(!replay_queue.txs.contains_key(&hash));
         assert_eq!(
-            replay_queue.routing_policy.read().rules[0].lane,
-            current_route.lane_id,
-            "journal replay must synchronize from committed Nexus before comparing plans"
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count retained policy record"),
+            1
         );
         drop(replay_queue);
 
@@ -14405,13 +18815,13 @@ pub mod tests {
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_stale_dataspace_rebind_after_restart() {
+    fn queue_plan_journal_retains_dataspace_rebind_without_current_authority() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -14532,12 +18942,15 @@ pub mod tests {
             stale_plan.coordinator_route(),
             RoutingDecision::new(lane, old_dataspace)
         );
+        let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &stale_plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist stale-dataspace fixture");
@@ -14560,32 +18973,24 @@ pub mod tests {
                 .expect("install replay journal"),
             1
         );
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("missing re-bound route authority must fail startup");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
-        assert!(!replay_queue.txs.contains_key(&hash));
         assert!(
-            replay_queue
-                .dataspace_catalog
-                .read()
-                .by_id(old_dataspace)
-                .is_none(),
-            "journal replay must synchronize away from the stale dataspace catalog"
+            error.to_string().contains("retaining"),
+            "unexpected replay error: {error}"
         );
+        assert!(!replay_queue.txs.contains_key(&hash));
         assert_eq!(
             replay_queue
-                .lane_catalog
-                .read()
-                .lanes()
-                .iter()
-                .find(|entry| entry.id == lane)
-                .map(|entry| entry.dataspace_id),
-            Some(current_dataspace),
-            "journal replay must synchronize the lane's committed dataspace binding"
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count retained dataspace-rebind record"),
+            1
         );
         drop(replay_queue);
 
@@ -14593,13 +18998,13 @@ pub mod tests {
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_elastic_plan_when_range_corrupt_after_restart() {
+    fn queue_plan_journal_retains_retired_elastic_plan_without_rebinding() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -14646,31 +19051,35 @@ pub mod tests {
             .expect("install journal");
 
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
-        let mut selected = None;
-        for max_cycles in 1_u64..=256 {
-            let tx = accepted_ivm_tx_by(
-                authority_id.clone(),
-                &authority_keypair,
-                &time_source,
-                max_cycles,
-            );
-            let plan = queue
-                .route_plan_with_state(&tx, &state)
-                .expect("valid autoscale route should resolve");
-            if plan.coordinator_route().lane_id == LaneId::new(1) {
-                selected = Some((tx, plan));
-                break;
-            }
-        }
-        let (tx, stale_plan) =
-            selected.expect("fixture should find a transaction routed to elastic lane");
+        let (tx, stale_plan) = (0_u32..512)
+            .map(|idx| {
+                let tx = accepted_tx_with(
+                    authority_id.clone(),
+                    &authority_keypair,
+                    &time_source,
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("journal corrupt elastic range {idx}").into(),
+                    ))],
+                    Metadata::default(),
+                );
+                let plan = queue
+                    .route_plan_with_state(&tx, &state)
+                    .expect("valid autoscale route should resolve");
+                (tx, plan)
+            })
+            .find(|(_, plan)| plan.coordinator_route().lane_id == LaneId::new(1))
+            .expect("fixture should find a transaction routed to elastic lane");
         let hash = tx.hash();
+        let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &stale_plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist stale-elastic-plan fixture");
@@ -14705,27 +19114,35 @@ pub mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
 
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("retired elastic ownership must fail startup without rebinding");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(error.to_string().contains("retaining"));
         assert!(!replay_queue.txs.contains_key(&hash));
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count retained elastic record"),
+            1
+        );
         drop(replay_queue);
 
         let final_queue = Queue::test(config_factory(), &time_source);
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_future_created_autoscale_plan_after_restart() {
+    fn queue_plan_journal_retains_inactive_future_autoscale_plan_fail_closed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -14775,12 +19192,15 @@ pub mod tests {
         let hash = tx.hash();
         let forged_plan =
             RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
+        let admission_context = synthetic_queue_plan_admission_context(&forged_plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &forged_plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist forged future-lane fixture");
@@ -14802,20 +19222,18 @@ pub mod tests {
             "live routing must not select the future-created elastic lane"
         );
 
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("future-lane evidence must fail startup without rebinding");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(error.to_string().contains("retaining"));
         assert!(!replay_queue.txs.contains_key(&hash));
         assert!(replay_queue.routing_decisions.get(&hash).is_none());
         assert!(replay_queue.routing_plans.get(&hash).is_none());
         assert_eq!(
             routing_ledger::get_plan(&hash),
             None,
-            "tombstoned future-created plan must not enter the local routing ledger"
+            "retained future-created plan must not enter the local routing ledger"
         );
         drop(replay_queue);
 
@@ -14823,13 +19241,13 @@ pub mod tests {
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
     #[test]
-    fn queue_plan_journal_tombstones_stale_native_amx_participant_after_restart() {
+    fn queue_plan_journal_retains_inactive_native_amx_participant_without_rebinding() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
         let mut state = State::new(
@@ -14933,6 +19351,7 @@ pub mod tests {
             ],
             Metadata::default(),
         );
+        let hash = tx.hash();
         let stale_plan = ConfigLaneRouter::new(
             policy.clone(),
             dataspace_catalog.clone(),
@@ -14954,13 +19373,15 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
 
-        let hash = tx.hash();
+        let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
             .record_plan_journal_put_durable(
                 &tx,
-                hash,
                 &stale_plan,
+                &admission_context,
                 Queue::duration_to_millis(time_source.get_unix_time()),
+                None,
+                None,
                 true,
             )
             .expect("persist stale Native participant fixture");
@@ -14980,13 +19401,11 @@ pub mod tests {
             current_plan
         );
 
-        let summary = replay_queue
+        let error = replay_queue
             .replay_plan_journal(&state)
-            .expect("replay journal");
+            .expect_err("incomplete Native AMX authority must fail startup");
 
-        assert_eq!(summary.records, 1);
-        assert_eq!(summary.replayed, 0);
-        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(error.to_string().contains("retaining"));
         assert!(!replay_queue.txs.contains_key(&hash));
         drop(replay_queue);
 
@@ -14994,8 +19413,8 @@ pub mod tests {
         assert_eq!(
             final_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("install tombstoned journal"),
-            0
+                .expect("install retained journal"),
+            1
         );
     }
 
@@ -15008,6 +19427,7 @@ pub mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        install_single_validator_topology_for_queue_test(&state, 0xA8);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -15055,6 +19475,7 @@ pub mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
+        install_single_validator_topology_for_queue_test(&state, 0xA9);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -15104,6 +19525,208 @@ pub mod tests {
     }
 
     #[test]
+    fn globally_bound_guard_drop_restores_exact_fifo_with_absent_registry() {
+        let fixture = globally_bound_guard_fixture();
+        let hash = fixture.transaction.hash();
+        let follower_hash = fixture.follower_transaction.hash();
+        fixture
+            .queue
+            .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
+            .expect("enqueue FIFO follower");
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read absent global guard registry"),
+            QueuePlanAdmissionRegistryMatch::Absent
+        );
+
+        let guard = fixture.pop_guard();
+        assert_eq!(fixture.queue.active_len(), 2);
+        assert_eq!(fixture.queue.queued_len(), 1);
+        drop(guard);
+
+        fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_restores_exact_fifo_with_exact_registry() {
+        let fixture = globally_bound_guard_fixture();
+        let hash = fixture.transaction.hash();
+        let follower_hash = fixture.follower_transaction.hash();
+        fixture
+            .queue
+            .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
+            .expect("enqueue FIFO follower");
+        install_queue_plan_registry_value_for_guard_test(
+            &fixture.state,
+            &fixture.binding,
+            fixture.binding.canonical_hash(),
+        );
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read exact global guard registry"),
+            QueuePlanAdmissionRegistryMatch::Exact
+        );
+
+        let guard = fixture.pop_guard();
+        drop(guard);
+
+        fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
+        let fixture = globally_bound_guard_fixture();
+        let hash = fixture.transaction.hash();
+
+        let guard = fixture.pop_guard();
+        drop(guard);
+        fixture.assert_restored_fifo_owner();
+
+        install_queue_plan_registry_value_for_guard_test(
+            &fixture.state,
+            &fixture.binding,
+            Hash::new(b"conflicting-global-guard-binding"),
+        );
+        assert_eq!(
+            fixture
+                .state
+                .queue_plan_admission_binding_registry_match(&fixture.binding)
+                .expect("read conflicting global guard registry"),
+            QueuePlanAdmissionRegistryMatch::Conflict
+        );
+        fixture
+            .time_handle
+            .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
+
+        let mut expired = Vec::new();
+        assert!(
+            fixture
+                .queue
+                .pop_from_queue(&fixture.state.view(), &mut expired)
+                .is_none(),
+            "the conflicting globally admitted owner must be rejected, not selected"
+        );
+        assert!(expired.is_empty());
+        assert!(
+            fixture.queue.removed_hashes.contains_key(&hash),
+            "exact conflict rejection must leave a stale-FIFO removal marker"
+        );
+        fixture.assert_terminally_removed();
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_is_terminally_idempotent_across_remove_and_clear_orderings() {
+        let removed_before_drop = globally_bound_guard_fixture();
+        let hash = removed_before_drop.transaction.hash();
+        let guard = removed_before_drop.pop_guard();
+        assert_eq!(
+            removed_before_drop
+                .queue
+                .remove_committed_hashes([hash], None),
+            1
+        );
+        drop(guard);
+        removed_before_drop.assert_terminally_removed();
+
+        let removed_after_drop = globally_bound_guard_fixture();
+        let hash = removed_after_drop.transaction.hash();
+        drop(removed_after_drop.pop_guard());
+        removed_after_drop.assert_restored_fifo_owner();
+        assert_eq!(
+            removed_after_drop
+                .queue
+                .remove_committed_hashes([hash], None),
+            1
+        );
+        removed_after_drop.assert_terminally_removed();
+
+        let cleared_before_drop = globally_bound_guard_fixture();
+        let guard = cleared_before_drop.pop_guard();
+        cleared_before_drop.queue.clear_all();
+        drop(guard);
+        cleared_before_drop.assert_terminally_removed();
+
+        let cleared_after_drop = globally_bound_guard_fixture();
+        drop(cleared_after_drop.pop_guard());
+        cleared_after_drop.assert_restored_fifo_owner();
+        cleared_after_drop.queue.clear_all();
+        cleared_after_drop.assert_terminally_removed();
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_restores_during_unwind() {
+        let fixture = globally_bound_guard_fixture();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = fixture.pop_guard();
+            panic!("exercise globally bound guard unwind");
+        }));
+        assert!(unwind.is_err());
+
+        fixture.assert_restored_fifo_owner();
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_restore_failure_retains_evidence_and_latches_fault() {
+        let fixture = globally_bound_guard_fixture();
+        let hash = fixture.transaction.hash();
+        let guard = fixture.pop_guard();
+        assert!(
+            fixture.queue.fifo_order_by_hash.remove(&hash).is_some(),
+            "remove exact FIFO identity to force restoration failure"
+        );
+
+        drop(guard);
+
+        assert!(fixture.queue.accepted_work_validation_faulted());
+        assert_eq!(fixture.queue.active_len(), 1);
+        assert_eq!(fixture.queue.queued_len(), 0);
+        assert!(fixture.queue.txs.contains_key(&hash));
+        assert!(fixture.queue.routing_decisions.contains_key(&hash));
+        assert!(fixture.queue.routing_plans.contains_key(&hash));
+        assert!(
+            fixture
+                .queue
+                .durable_plan_claims
+                .get(&hash)
+                .is_some_and(|claim| claim.global_admission_identity.is_some())
+        );
+        assert_eq!(fixture.queue.inflight_guards.load(Ordering::Relaxed), 0);
+        fixture.assert_live_journal_claim();
+    }
+
+    #[test]
+    fn globally_bound_guard_drop_routing_drift_retains_evidence_and_latches_fault() {
+        let fixture = globally_bound_guard_fixture();
+        let hash = fixture.transaction.hash();
+        let guard = fixture.pop_guard();
+        fixture.queue.routing_decisions.insert(
+            hash,
+            RoutingDecision::new(LaneId::new(77), DataSpaceId::new(88)),
+        );
+
+        drop(guard);
+
+        assert!(fixture.queue.accepted_work_validation_faulted());
+        assert_eq!(fixture.queue.active_len(), 1);
+        assert_eq!(fixture.queue.queued_len(), 0);
+        assert!(fixture.queue.txs.contains_key(&hash));
+        assert!(fixture.queue.routing_plans.contains_key(&hash));
+        assert!(
+            fixture
+                .queue
+                .durable_plan_claims
+                .get(&hash)
+                .is_some_and(|claim| claim.global_admission_identity.is_some())
+        );
+        assert_eq!(fixture.queue.inflight_guards.load(Ordering::Relaxed), 0);
+        fixture.assert_live_journal_claim();
+    }
+
+    #[test]
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -15127,7 +19750,7 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
 
         let first = accepted_tx_by_someone(&time_source);
         let first_hash = first.hash();
@@ -15136,8 +19759,9 @@ pub mod tests {
         queue.push(first, state.view()).expect("push first");
         queue.push(second, state.view()).expect("push second");
 
-        let snapshot = queue
-            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(1).expect("non-zero bound"));
+        let (snapshot, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(1).expect("non-zero bound"))
+            .expect("queue selection must remain healthy");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].hash(), first_hash);
         assert!(queue.contains_transaction_hash(first_hash));
@@ -15166,8 +19790,9 @@ pub mod tests {
             .expect("oldest transaction becomes in-flight");
         assert_eq!(inflight.as_ref().hash(), first_hash);
 
-        let snapshot = queue
-            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(2).expect("non-zero bound"));
+        let (snapshot, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), NonZeroUsize::new(2).expect("non-zero bound"))
+            .expect("queue selection must remain healthy");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].hash(), second_hash);
         assert!(
@@ -15206,16 +19831,22 @@ pub mod tests {
         assert!(
             queue
                 .bounded_pending_snapshot(&state.view(), one)
+                .expect("queue selection must remain healthy")
+                .0
                 .is_empty(),
             "first call spends its only scan slot pruning the first stale entry"
         );
         assert!(
             queue
                 .bounded_pending_snapshot(&state.view(), one)
+                .expect("queue selection must remain healthy")
+                .0
                 .is_empty(),
             "second call spends its only scan slot pruning the second stale entry"
         );
-        let snapshot = queue.bounded_pending_snapshot(&state.view(), one);
+        let (snapshot, _lease) = queue
+            .bounded_pending_snapshot(&state.view(), one)
+            .expect("queue selection must remain healthy");
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].hash(), third_hash);
     }
@@ -16963,6 +21594,7 @@ pub mod tests {
         .expect("Failed to accept Transaction.")
     }
 
+    #[cfg(feature = "telemetry")]
     fn accepted_ivm_tx_by(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -17007,6 +21639,7 @@ pub mod tests {
         .expect("Failed to accept IVM transaction.")
     }
 
+    #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         let mut program = ProgramMetadata {
             version_major: 1,
@@ -17080,7 +21713,7 @@ pub mod tests {
     }
 
     #[test]
-    fn gossip_batch_refreshes_stale_routing_metadata() {
+    fn gossip_batch_preserves_admitted_routing_across_policy_change() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world_with_test_domains(), kura, query_handle);
@@ -17125,29 +21758,33 @@ pub mod tests {
         nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
         state.set_nexus(nexus).expect("apply fresh Nexus state");
 
-        let directly_refreshed = queue
+        let immutable_route = queue
             .route_plan_with_state(&tx, &state)
             .map(|plan| plan.coordinator_route())
-            .expect("state-aware route should refresh");
-        assert_eq!(directly_refreshed, refreshed);
+            .expect("admitted route should remain active");
+        assert_eq!(immutable_route, RoutingDecision::default());
 
         let batch = queue.gossip_batch_with_state(1, &state);
 
         assert_eq!(batch.len(), 1);
-        assert_eq!(batch[0].routing, refreshed);
+        assert_eq!(batch[0].routing, RoutingDecision::default());
         assert_eq!(
             queue
                 .routing_decisions
                 .get(&hash)
                 .map(|entry| *entry.value()),
-            Some(refreshed)
+            Some(RoutingDecision::default())
         );
-        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+        assert_eq!(
+            crate::queue::routing_ledger::get(&hash),
+            Some(RoutingDecision::default())
+        );
+        assert!(!queue.accepted_work_validation_faulted());
         let _ = crate::queue::routing_ledger::take(&hash);
     }
 
     #[test]
-    fn gossip_batch_refreshes_stale_native_amx_participant_plan() {
+    fn gossip_batch_fails_closed_on_corrupt_native_amx_plan_index() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
@@ -17184,17 +21821,17 @@ pub mod tests {
 
         let batch = queue.gossip_batch_with_state(1, &fixture.state);
 
-        assert_eq!(batch.len(), 1);
-        assert_eq!(batch[0].tx.as_ref().hash(), hash);
-        assert_eq!(batch[0].routing, fixture.current_plan.coordinator_route());
-        assert_eq!(batch[0].routing_plan, fixture.current_plan);
+        assert!(batch.is_empty());
+        assert!(queue.accepted_work_validation_faulted());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
         assert_eq!(
             queue.routing_plans.get(&hash).map(|entry| entry.clone()),
-            Some(fixture.current_plan.clone())
+            Some(fixture.stale_plan.clone())
         );
         assert_eq!(
             crate::queue::routing_ledger::get_plan(&hash),
-            Some(fixture.current_plan)
+            Some(fixture.stale_plan)
         );
         let _ = crate::queue::routing_ledger::take_plan(&hash);
         let _ = crate::queue::routing_ledger::take(&hash);
@@ -17965,7 +22602,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reroute_pending_transactions_with_state_uses_view_router_fallback() {
+    fn reconfiguration_does_not_consult_replacement_router_for_pending_work() {
         struct ViewOnlyRouter {
             lane: LaneId,
             dataspace: DataSpaceId,
@@ -18011,7 +22648,7 @@ pub mod tests {
         let lane_catalog = queue.lane_catalog.read().clone();
         let dataspace_catalog = queue.dataspace_catalog.read().clone();
 
-        queue.reroute_pending_transactions_with_state(
+        queue.revalidate_pending_transactions_with_state(
             &router,
             state.as_ref(),
             &lane_catalog,
@@ -18027,7 +22664,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reroute_pending_transactions_with_state_removes_state_free_future_created_autoscale_hint() {
+    fn reconfiguration_ignores_state_free_future_lane_hint_for_pending_work() {
         let state = state_with_future_created_autoscale_lane(7, 6);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
@@ -18049,27 +22686,36 @@ pub mod tests {
 
         let router: Arc<dyn LaneRouter> = Arc::new(FutureCreatedNoStateRouter);
         let nexus = state.nexus_snapshot();
-        queue.reroute_pending_transactions_with_state(
+        queue.revalidate_pending_transactions_with_state(
             &router,
             &state,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
         );
 
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.txs.get(&hash).is_some());
         assert_eq!(
-            queue.active_len(),
-            0,
-            "inactive state-free reroute must remove the queued transaction"
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(RoutingDecision::default())
         );
-        assert_eq!(queue.queued_len(), 0);
-        assert!(queue.txs.get(&hash).is_none());
-        assert!(queue.routing_decisions.get(&hash).is_none());
-        assert!(queue.routing_plans.get(&hash).is_none());
         assert_eq!(
-            routing_ledger::get_plan(&hash),
-            None,
-            "inactive state-free reroute must clear the local routing ledger"
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|entry| entry.coordinator_route()),
+            Some(RoutingDecision::default())
         );
+        assert_eq!(
+            routing_ledger::get_plan(&hash).map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::default()),
+            "replacement router hints must not rewrite the admitted routing ledger"
+        );
+        assert!(!queue.accepted_work_validation_faulted());
     }
 
     #[test]
@@ -18256,7 +22902,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reconfigure_nexus_with_state_refreshes_stale_native_amx_participant_plan() {
+    fn reconfigure_nexus_with_state_fails_closed_on_corrupt_native_amx_plan_index() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
@@ -18302,25 +22948,26 @@ pub mod tests {
                 .routing_decisions
                 .get(&hash)
                 .map(|entry| *entry.value()),
-            Some(fixture.current_plan.coordinator_route())
+            Some(fixture.stale_plan.coordinator_route())
         );
         assert_eq!(
             queue
                 .routing_plans
                 .get(&hash)
                 .map(|entry| entry.value().clone()),
-            Some(fixture.current_plan.clone())
+            Some(fixture.stale_plan.clone())
         );
         assert_eq!(
             crate::queue::routing_ledger::get_plan(&hash),
-            Some(fixture.current_plan)
+            Some(fixture.stale_plan)
         );
+        assert!(queue.accepted_work_validation_faulted());
         let _ = crate::queue::routing_ledger::take_plan(&hash);
         let _ = crate::queue::routing_ledger::take(&hash);
     }
 
     #[test]
-    fn reconfigure_nexus_with_view_refreshes_stale_native_amx_participant_plan() {
+    fn reconfigure_nexus_with_view_fails_closed_on_corrupt_native_amx_plan_index() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
@@ -18368,25 +23015,26 @@ pub mod tests {
                 .routing_decisions
                 .get(&hash)
                 .map(|entry| *entry.value()),
-            Some(fixture.current_plan.coordinator_route())
+            Some(fixture.stale_plan.coordinator_route())
         );
         assert_eq!(
             queue
                 .routing_plans
                 .get(&hash)
                 .map(|entry| entry.value().clone()),
-            Some(fixture.current_plan.clone())
+            Some(fixture.stale_plan.clone())
         );
         assert_eq!(
             crate::queue::routing_ledger::get_plan(&hash),
-            Some(fixture.current_plan)
+            Some(fixture.stale_plan)
         );
+        assert!(queue.accepted_work_validation_faulted());
         let _ = crate::queue::routing_ledger::take_plan(&hash);
         let _ = crate::queue::routing_ledger::take(&hash);
     }
 
     #[test]
-    fn proposal_pop_refreshes_stale_native_amx_participant_plan() {
+    fn proposal_pop_restores_fifo_and_fails_closed_on_corrupt_native_amx_plan_index() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
@@ -18412,6 +23060,11 @@ pub mod tests {
                 None,
             )
             .expect("current Native AMX plan should enqueue");
+        let second = accepted_tx_by_someone(&time_source);
+        let second_hash = second.hash();
+        queue
+            .push(second, fixture.state.view())
+            .expect("enqueue later FIFO transaction");
         queue.routing_plans.insert(hash, fixture.stale_plan.clone());
         queue
             .routing_decisions
@@ -18424,27 +23077,30 @@ pub mod tests {
 
         let state_view = fixture.state.view();
         let mut expired = Vec::new();
-        let guard = queue
-            .pop_from_queue(&state_view, &mut expired)
-            .expect("proposal pop should refresh stale Native AMX plan");
+        let guard = queue.pop_from_queue(&state_view, &mut expired);
         drop(state_view);
 
         assert!(expired.is_empty());
-        assert_eq!(guard.as_ref().hash(), hash);
-        assert_eq!(guard.routing(), fixture.current_plan.coordinator_route());
-        assert_eq!(guard.routing_plan(), fixture.current_plan);
+        assert!(guard.is_none());
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
+        assert_eq!(
+            queue.fifo_snapshot_locked(),
+            vec![hash, second_hash],
+            "failed selection must restore the original hash ahead of later FIFO ownership"
+        );
+        assert!(queue.accepted_work_validation_faulted());
         assert_eq!(
             queue
                 .routing_plans
                 .get(&hash)
                 .map(|entry| entry.value().clone()),
-            Some(fixture.current_plan.clone())
+            Some(fixture.stale_plan.clone())
         );
         assert_eq!(
             crate::queue::routing_ledger::get_plan(&hash),
-            Some(fixture.current_plan)
+            Some(fixture.stale_plan)
         );
-        drop(guard);
         let _ = crate::queue::routing_ledger::take_plan(&hash);
         let _ = crate::queue::routing_ledger::take(&hash);
     }
@@ -19884,7 +24540,7 @@ pub mod tests {
     }
 
     #[test]
-    fn proposal_pop_refreshes_stale_routing_metadata() {
+    fn proposal_pop_ignores_router_policy_drift_for_admitted_work() {
         let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -19925,19 +24581,22 @@ pub mod tests {
         let mut expired = Vec::new();
         let guard = queue
             .pop_from_queue(&state_view, &mut expired)
-            .expect("proposal pop should return refreshed tx");
+            .expect("proposal pop should return admitted tx");
         drop(state_view);
 
         assert!(expired.is_empty());
-        assert_eq!(guard.routing(), refreshed);
+        assert_eq!(guard.routing(), RoutingDecision::default());
         assert_eq!(
             queue
                 .routing_decisions
                 .get(&hash)
                 .map(|entry| *entry.value()),
-            Some(refreshed)
+            Some(RoutingDecision::default())
         );
-        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+        assert_eq!(
+            crate::queue::routing_ledger::get(&hash),
+            Some(RoutingDecision::default())
+        );
 
         let transactions = vec![guard.clone_accepted()];
         let new_block = BlockBuilder::new(transactions)
@@ -19951,7 +24610,10 @@ pub mod tests {
             ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
 
         drop(guard);
-        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(refreshed));
+        assert_eq!(
+            crate::queue::routing_ledger::get(&hash),
+            Some(RoutingDecision::default())
+        );
 
         let tx_event = valid_block
             .produce_events()
@@ -19959,15 +24621,15 @@ pub mod tests {
                 PipelineEventBox::Transaction(event) if event.hash() == &hash => Some(event),
                 _ => None,
             })
-            .expect("missing transaction event for refreshed routed transaction");
+            .expect("missing transaction event for admitted routed transaction");
 
-        assert_eq!(tx_event.lane_id(), refreshed.lane_id);
-        assert_eq!(tx_event.dataspace_id(), refreshed.dataspace_id);
+        assert_eq!(tx_event.lane_id(), LaneId::SINGLE);
+        assert_eq!(tx_event.dataspace_id(), DataSpaceId::UNIVERSAL);
         let _ = crate::queue::routing_ledger::take(&hash);
     }
 
     #[test]
-    fn proposal_pop_rejects_transaction_that_becomes_unroutable() {
+    fn proposal_pop_ignores_replacement_router_failure_for_admitted_work() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world_with_test_domains(), kura, query_handle);
@@ -19994,11 +24656,22 @@ pub mod tests {
         let mut guards = Vec::new();
         queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
 
-        assert!(guards.is_empty());
+        assert_eq!(guards.len(), 1);
         assert_eq!(queue.queued_len(), 0);
-        assert_eq!(queue.active_len(), 0);
-        assert!(!queue.routing_decisions.contains_key(&hash));
-        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(guards[0].routing(), RoutingDecision::default());
+        assert_eq!(
+            queue
+                .routing_decisions
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(RoutingDecision::default())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get(&hash),
+            Some(RoutingDecision::default())
+        );
+        assert!(!queue.accepted_work_validation_faulted());
 
         let mut saw_rejected = false;
         while let Ok(event) = event_receiver.try_recv() {
@@ -20008,25 +24681,110 @@ pub mod tests {
             if event.hash != hash {
                 continue;
             }
-            let TransactionStatus::Rejected(reason) = &event.status else {
+            let TransactionStatus::Rejected(_) = &event.status else {
                 continue;
             };
-            assert_eq!(event.lane_id, LaneId::SINGLE);
-            assert_eq!(event.dataspace_id, DataSpaceId::UNIVERSAL);
-            assert!(matches!(
-                reason.as_ref(),
-                TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError(message)
-                ) if message.contains("transaction routing could not be resolved")
-                    && message.contains("lane 99")
-            ));
             saw_rejected = true;
             break;
         }
         assert!(
-            saw_rejected,
-            "expected rejected pipeline event for unroutable queued tx"
+            !saw_rejected,
+            "replacement-router failure must not reject already accepted work"
         );
+    }
+
+    #[test]
+    fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let (authority, keypair) = gen_account_in("queue_fee_drift");
+        let domain_id =
+            DomainId::try_new("queue_fee_drift", "universal").expect("fee drift domain");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let fee_asset =
+            AssetDefinitionId::new(domain_id, "xor".parse().expect("fee drift asset name"));
+        let definition = AssetDefinition::numeric(fee_asset.clone())
+            .with_name("queue fee drift XOR".to_owned())
+            .build(&authority);
+        let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
+        let payer_asset = Asset::new(payer_asset_id.clone(), Quantity::from(10_u32));
+        let world = World::with_assets([domain], [account], [definition], [payer_asset], []);
+        let mut state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+            nexus.fees.fee_asset_id = fee_asset.canonical_address();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
+        }
+
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset,
+                Quantity::from(1_u32),
+            )],
+            None,
+        );
+        let signed = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            authority,
+            &time_source,
+            fee_payment,
+        )
+        .with_instructions([InstructionBox::from(Log::new(
+            Level::INFO,
+            "fee drift".into(),
+        ))])
+        .sign(keypair.private_key());
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let tx = AcceptedTransaction::accept_with_time_source(
+            signed,
+            &chain_id,
+            Duration::from_millis(10),
+            tx_limits,
+            &iroha_config::parameters::actual::Crypto::default(),
+            &time_source,
+        )
+        .expect("accept fee drift transaction");
+        let hash = tx.hash();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue
+            .push(tx, state.view())
+            .expect("initial funded fee admission should succeed");
+
+        let mut assets = state.world.assets.block();
+        assets
+            .remove(payer_asset_id)
+            .expect("remove payer balance to force fee revalidation drift");
+        assets.commit();
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.fifo_snapshot_locked(), vec![hash]);
+        assert!(queue.txs.contains_key(&hash));
+        assert!(queue.routing_plans.contains_key(&hash));
+        assert!(queue.accepted_work_validation_faulted());
     }
 
     #[test]
@@ -20101,7 +24859,7 @@ pub mod tests {
     }
 
     #[test]
-    fn unresolved_route_event_prefers_full_plan_over_divergent_legacy_route() {
+    fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
         let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
         let stale = RoutingDecision::default();
         let kura = Kura::blank_kura_for_testing();
@@ -20145,9 +24903,14 @@ pub mod tests {
         queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
 
         assert!(guards.is_empty());
-        assert_eq!(queue.active_len(), 0);
-        assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
-        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(RoutingPlan::single(expected))
+        );
+        assert_eq!(crate::queue::routing_ledger::get(&hash), Some(stale));
+        assert!(queue.accepted_work_validation_faulted());
 
         let mut saw_rejected = false;
         while let Ok(event) = event_receiver.try_recv() {
@@ -20157,24 +24920,15 @@ pub mod tests {
             if event.hash != hash {
                 continue;
             }
-            let TransactionStatus::Rejected(reason) = &event.status else {
+            let TransactionStatus::Rejected(_) = &event.status else {
                 continue;
             };
-            assert_eq!(event.lane_id, expected.lane_id);
-            assert_eq!(event.dataspace_id, expected.dataspace_id);
-            assert!(matches!(
-                reason.as_ref(),
-                TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::InternalError(message)
-                ) if message.contains("transaction routing could not be resolved")
-                    && message.contains("lane 99")
-            ));
             saw_rejected = true;
             break;
         }
         assert!(
-            saw_rejected,
-            "expected rejected event to carry full-plan route"
+            !saw_rejected,
+            "accepted work with corrupt routing indexes must not be rejected or tombstoned"
         );
     }
 
@@ -20609,10 +25363,11 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let mut admitted_hashes = Vec::new();
         for _ in 0..3 {
-            queue
-                .push(accepted_tx_by_someone(&time_source), state.view())
-                .expect("push succeeds");
+            let tx = accepted_tx_by_someone(&time_source);
+            admitted_hashes.push(tx.as_ref().hash());
+            queue.push(tx, state.view()).expect("push succeeds");
         }
 
         while queue.tx_hashes.pop().is_some() {}
@@ -20622,6 +25377,14 @@ pub mod tests {
         let mut guards = Vec::new();
         queue.get_transactions_for_block(&state.view(), nonzero!(2_usize), &mut guards);
         assert_eq!(guards.len(), 2, "resync should repopulate hashes");
+        assert_eq!(
+            guards
+                .iter()
+                .map(|guard| guard.as_ref().hash())
+                .collect::<Vec<_>>(),
+            admitted_hashes[..2],
+            "empty-index recovery must preserve admitted FIFO order"
+        );
         drop(guards);
 
         assert_eq!(
@@ -20630,6 +25393,57 @@ pub mod tests {
             "remaining queue size should be tracked"
         );
         queue.assert_pressure_counters_consistent_for_tests();
+    }
+
+    #[test]
+    fn resync_fails_closed_without_a_complete_unique_durable_fifo_index() {
+        let state = Arc::new(State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        for corrupt in ["missing", "duplicate"] {
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            let first = accepted_tx_by_someone(&time_source);
+            let first_hash = first.as_ref().hash();
+            queue.push(first, state.view()).expect("push first");
+            let second = accepted_tx_by_someone(&time_source);
+            let second_hash = second.as_ref().hash();
+            queue.push(second, state.view()).expect("push second");
+
+            match corrupt {
+                "missing" => {
+                    queue.fifo_order_by_hash.remove(&second_hash);
+                }
+                "duplicate" => {
+                    let first_order = *queue
+                        .fifo_order_by_hash
+                        .get(&first_hash)
+                        .expect("first FIFO order");
+                    queue.fifo_order_by_hash.insert(second_hash, first_order);
+                }
+                _ => unreachable!(),
+            }
+            while queue.tx_hashes.pop().is_some() {}
+
+            let mut guards = Vec::new();
+            queue.get_transactions_for_block(&state.view(), nonzero!(2_usize), &mut guards);
+
+            assert!(guards.is_empty(), "{corrupt} FIFO index admitted work");
+            assert_eq!(queue.active_len(), 2, "{corrupt} FIFO index lost ownership");
+            assert!(queue.txs.contains_key(&first_hash));
+            assert!(queue.txs.contains_key(&second_hash));
+            assert!(
+                queue.accepted_work_validation_faulted(),
+                "{corrupt} FIFO index did not latch a fail-closed fault"
+            );
+            assert!(
+                queue.tx_hashes.is_empty(),
+                "{corrupt} FIFO index caused a partial rebuild"
+            );
+        }
     }
 
     #[tokio::test]
@@ -21670,14 +26484,17 @@ pub mod tests {
         }
 
         let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
-        let key = LaneQueueReservationKeyV1 {
-            version: LaneQueueReservationKeyV1::VERSION,
+        let key = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"reservation-key-signed-transaction",
             )),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new(
                 b"reservation-key-entrypoint",
             )),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"reservation-key-queue-plan-admission-binding",
+            ),
             routing_plan_digest: Hash::new(b"reservation-key-routing-plan"),
             coordinator_leg: RouteLeg::new(route, RouteLegRole::Coordinator),
             lane_id: route.lane_id,
@@ -21692,7 +26509,7 @@ pub mod tests {
         assert_eq!(key.validate(), Ok(()));
         let framed = norito::to_bytes(&key).expect("encode current reservation key");
         assert_eq!(
-            norito::decode_from_bytes::<LaneQueueReservationKeyV1>(&framed)
+            norito::decode_from_bytes::<LaneQueueReservationKeyV2>(&framed)
                 .expect("decode current reservation key"),
             key
         );
@@ -21714,11 +26531,11 @@ pub mod tests {
         let legacy_framed =
             norito::to_bytes(&legacy).expect("encode legacy versionless reservation key");
         assert!(
-            norito::decode_from_bytes::<LaneQueueReservationKeyV1>(&legacy_framed).is_err(),
+            norito::decode_from_bytes::<LaneQueueReservationKeyV2>(&legacy_framed).is_err(),
             "a versionless reservation key must fail closed"
         );
 
-        for malformed_version in [0, LaneQueueReservationKeyV1::VERSION + 1] {
+        for malformed_version in [0, LaneQueueReservationKeyV2::VERSION + 1] {
             let mut malformed = key;
             malformed.version = malformed_version;
             assert_eq!(
@@ -21739,6 +26556,62 @@ pub mod tests {
         );
         assert!(queue.lane_reservation_journal_installed());
         path
+    }
+
+    #[test]
+    fn global_candidate_lease_excludes_autonomous_reservation_until_exact_drop() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        install_test_reservation_journal(&queue, &dir);
+
+        let transaction = accepted_tx_by_someone(&time_source);
+        let hash = transaction.hash();
+        queue
+            .push_with_lane_with_state(transaction, &state)
+            .expect("enqueue globally selectable transaction");
+
+        let (snapshot, lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+            .expect("global selection remains healthy");
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(AcceptedTransaction::hash)
+                .collect::<Vec<_>>(),
+            vec![hash]
+        );
+        assert!(
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(
+                        &state,
+                        b"leased-autonomous-owner",
+                        b"leased-autonomous-proposal",
+                    ),
+                    nonzero!(1_usize),
+                )
+                .expect("leased hash is skipped rather than conflicted")
+                .is_empty(),
+            "an autonomous slot must not reserve globally selected work"
+        );
+
+        drop(lease);
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"released-autonomous-owner",
+                    b"released-autonomous-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("dropping the exact global lease restores autonomous eligibility");
+        assert_eq!(reserved.len(), 1);
+        assert_eq!(reserved[0].key().signed_transaction_hash, hash);
     }
 
     #[test]
@@ -21856,12 +26729,12 @@ pub mod tests {
     }
 
     fn lane_reservation_release_barrier(
-        keys: Vec<LaneQueueReservationKeyV1>,
+        keys: Vec<LaneQueueReservationKeyV2>,
         retirement_seed: &[u8],
-    ) -> LaneQueueReservationReleaseBarrierV2 {
+    ) -> LaneQueueReservationReleaseBarrierV3 {
         let first = keys.first().expect("release barrier needs a reservation");
-        LaneQueueReservationReleaseBarrierV2 {
-            version: LaneQueueReservationReleaseBarrierV2::VERSION,
+        LaneQueueReservationReleaseBarrierV3 {
+            version: LaneQueueReservationReleaseBarrierV3::VERSION,
             chain_id_hash: Hash::new(b"queue-release-chain"),
             epoch: 7,
             lane_id: first.lane_id,
@@ -21913,7 +26786,7 @@ pub mod tests {
             LaneQueueReservationOutcome::Retained
         );
         let mut expected_live = keys.clone();
-        expected_live.sort_by_key(LaneQueueReservationKeyV1::digest);
+        expected_live.sort_by_key(LaneQueueReservationKeyV2::digest);
         assert_eq!(queue.live_lane_reservations(), expected_live);
         assert_eq!(queue.queued_len(), 0);
         assert!(matches!(
@@ -22016,7 +26889,7 @@ pub mod tests {
                         .iter()
                         .map(|key| reservations.live_by_hash[&key.signed_transaction_hash].clone())
                         .collect();
-                    let completion = LaneQueueReservationReleaseCompletionV3 {
+                    let completion = LaneQueueReservationReleaseCompletionV5 {
                         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                         barrier: barrier.clone(),
                         ordered_records,
@@ -22696,11 +27569,82 @@ pub mod tests {
             queue.install_lane_reservation_journal(&path, 1024 * 1024),
             Err(LaneQueueReservationError::InflightSelection)
         ));
+        assert!(
+            !path.exists(),
+            "a rejected startup installation must not create or repair its journal path"
+        );
         drop(attempt);
         queue
             .install_lane_reservation_journal(&path, 1024 * 1024)
             .expect("install after selection window closes");
         assert!(queue.lane_reservation_journal_installed());
+    }
+
+    #[test]
+    fn second_reservation_journal_installer_cannot_touch_its_losing_path() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let dir = tempdir().expect("tempdir");
+        let installed_path = dir.path().join("installed.norito");
+        let losing_path = dir.path().join("losing.norito");
+        queue
+            .install_lane_reservation_journal(&installed_path, 1024 * 1024)
+            .expect("install the one active reservation journal");
+
+        assert!(matches!(
+            queue.install_lane_reservation_journal(&losing_path, 1024 * 1024),
+            Err(LaneQueueReservationError::JournalAlreadyInstalled)
+        ));
+        assert!(
+            !losing_path.exists(),
+            "the losing installer must fail before opening, creating, repairing, or truncating storage"
+        );
+    }
+
+    #[test]
+    fn concurrent_reservation_journal_installers_publish_one_untouched_winner() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        let paths = [
+            dir.path().join("candidate-a.norito"),
+            dir.path().join("candidate-b.norito"),
+        ];
+        let start = Arc::new(Barrier::new(3));
+        let attempts = paths
+            .iter()
+            .cloned()
+            .map(|path| {
+                let queue = Arc::clone(&queue);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    let result = queue.install_lane_reservation_journal(&path, 1024 * 1024);
+                    (path, result)
+                })
+            })
+            .collect::<Vec<_>>();
+        start.wait();
+        let results = attempts
+            .into_iter()
+            .map(|attempt| attempt.join().expect("join concurrent installer"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            results.iter().filter(|(_, result)| result.is_ok()).count(),
+            1,
+            "exactly one concurrent installer must publish"
+        );
+        for (path, result) in results {
+            match result {
+                Ok(_) => assert!(path.exists(), "the winning journal must be durable"),
+                Err(LaneQueueReservationError::JournalAlreadyInstalled) => assert!(
+                    !path.exists(),
+                    "the losing installer must not touch its candidate path"
+                ),
+                Err(error) => panic!("unexpected concurrent installation error: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -22714,6 +27658,7 @@ pub mod tests {
             let dir = tempdir().expect("tempdir");
             let path = dir.path().join(format!("ambiguous-{fault:?}.norito"));
             let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            let pressure_rx = queue.backpressure_handle().subscribe();
             queue
                 .install_lane_reservation_journal(&path, 1024 * 1024)
                 .expect("install reservation journal");
@@ -22736,7 +27681,10 @@ pub mod tests {
             );
             assert!(matches!(result, Err(LaneQueueReservationError::Journal(_))));
             assert!(queue.lane_reservation_durability_faulted());
-            assert!(queue.current_backpressure().is_saturated());
+            assert!(
+                pressure_rx.borrow().is_saturated(),
+                "ambiguous append must publish saturated pressure to existing observers"
+            );
             assert_eq!(queue.active_len(), 1);
             assert_eq!(queue.queued_len(), 1);
             assert!(queue.live_lane_reservations().is_empty());
@@ -22787,6 +27735,357 @@ pub mod tests {
                 "a fully framed append owns the payload; a torn prefix is truncated"
             );
         }
+    }
+
+    #[test]
+    fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain() {
+        #[derive(Clone, Copy, Debug)]
+        enum TerminalAppend {
+            Release,
+            OrderedRelease,
+            PrepareRelease,
+            CompleteRelease,
+            Commit,
+            ForgetCommitDuringStartup,
+            ForgetReleaseDuringStartup,
+            Prune,
+        }
+
+        for terminal in [
+            TerminalAppend::Release,
+            TerminalAppend::OrderedRelease,
+            TerminalAppend::PrepareRelease,
+            TerminalAppend::CompleteRelease,
+            TerminalAppend::Commit,
+            TerminalAppend::ForgetCommitDuringStartup,
+            TerminalAppend::ForgetReleaseDuringStartup,
+            TerminalAppend::Prune,
+        ] {
+            let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+            let state = lane_reservation_test_state();
+            let dir = tempdir().expect("tempdir");
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            install_test_reservation_journal(&queue, &dir);
+            for _ in 0..2 {
+                queue
+                    .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+                    .expect("enqueue terminal-fault reservation candidate");
+            }
+            let scope = lane_reservation_scope(
+                &state,
+                format!("terminal-fault-owner-{terminal:?}").as_bytes(),
+                format!("terminal-fault-proposal-{terminal:?}").as_bytes(),
+            );
+            let reserved = queue
+                .reserve_transactions_for_lane(&state, scope, nonzero!(2_usize))
+                .expect("reserve terminal-fault batch");
+            let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
+            let barrier = lane_reservation_release_barrier(
+                keys.clone(),
+                format!("terminal-fault-retirement-{terminal:?}").as_bytes(),
+            );
+            let unrelated_lane = LaneId::new(93);
+            let unrelated_dataspace = DataSpaceId::new(93);
+            let unrelated_incarnation =
+                Hash::new(format!("terminal-fault-unrelated-{terminal:?}").as_bytes());
+            assert!(
+                !queue.lane_has_pending_work(
+                    unrelated_lane,
+                    unrelated_dataspace,
+                    unrelated_incarnation,
+                ),
+                "{terminal:?}: healthy unrelated route must initially be drainable"
+            );
+            let pressure_rx = queue.backpressure_handle().subscribe();
+            assert!(
+                !pressure_rx.borrow().is_saturated(),
+                "{terminal:?}: pressure must be healthy before fault injection"
+            );
+
+            let inject_ambiguous_append = || {
+                queue
+                    .lane_reservations
+                    .lock()
+                    .journal_mut()
+                    .expect("installed reservation journal")
+                    .inject_next_append_fault(ReservationJournalAppendFault::SyncAfterFullWrite);
+            };
+            let result = match terminal {
+                TerminalAppend::Release => {
+                    inject_ambiguous_append();
+                    queue.release_lane_reservation(&keys[0]).map(|_| ())
+                }
+                TerminalAppend::OrderedRelease => {
+                    inject_ambiguous_append();
+                    queue.release_lane_reservations_in_order(&keys).map(|_| ())
+                }
+                TerminalAppend::PrepareRelease => {
+                    inject_ambiguous_append();
+                    queue
+                        .prepare_lane_reservation_release_barrier(&barrier)
+                        .map(|_| ())
+                }
+                TerminalAppend::CompleteRelease => {
+                    queue
+                        .prepare_lane_reservation_release_barrier(&barrier)
+                        .expect("prepare completion-fault release");
+                    inject_ambiguous_append();
+                    queue
+                        .finalize_lane_reservation_release_barrier(&barrier)
+                        .map(|_| ())
+                }
+                TerminalAppend::Commit => {
+                    inject_ambiguous_append();
+                    queue.commit_lane_reservation(&keys[0]).map(|_| ())
+                }
+                TerminalAppend::ForgetCommitDuringStartup => {
+                    queue
+                        .commit_lane_reservation(&keys[0])
+                        .expect("persist startup commit barrier");
+                    inject_ambiguous_append();
+                    queue.finalize_plan_journal_startup_disabled()
+                }
+                TerminalAppend::ForgetReleaseDuringStartup => {
+                    queue
+                        .prepare_lane_reservation_release_barrier(&barrier)
+                        .expect("prepare startup release completion");
+                    {
+                        let mut store = queue.lane_reservations.lock();
+                        let ordered_records = barrier
+                            .ordered_keys
+                            .iter()
+                            .map(|key| store.live_by_hash[&key.signed_transaction_hash].clone())
+                            .collect();
+                        let completion = LaneQueueReservationReleaseCompletionV5 {
+                            version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
+                            barrier: barrier.clone(),
+                            ordered_records,
+                        };
+                        store
+                            .journal_mut()
+                            .expect("installed reservation journal")
+                            .complete_release(completion.clone())
+                            .expect("persist simulated release completion");
+                        for key in &barrier.ordered_keys {
+                            store.live_by_hash.remove(&key.signed_transaction_hash);
+                        }
+                        store
+                            .release_barriers
+                            .retain(|prepared| prepared != &barrier);
+                        store.completed_releases.push(completion);
+                        store
+                            .journal_mut()
+                            .expect("installed reservation journal")
+                            .inject_next_append_fault(
+                                ReservationJournalAppendFault::SyncAfterFullWrite,
+                            );
+                    }
+                    queue.finalize_completed_releases(None)
+                }
+                TerminalAppend::Prune => {
+                    inject_ambiguous_append();
+                    queue
+                        .prune_lane_reservations(scope.lane_id, scope.lane_incarnation)
+                        .map(|_| ())
+                }
+            };
+
+            assert!(
+                matches!(result, Err(LaneQueueReservationError::Journal(_))),
+                "{terminal:?}: ambiguous terminal append must report a journal error"
+            );
+            assert!(
+                queue.lane_reservation_durability_faulted(),
+                "{terminal:?}: terminal ambiguity must latch the process fault"
+            );
+            assert!(
+                pressure_rx.borrow().is_saturated(),
+                "{terminal:?}: terminal ambiguity must publish saturated pressure to existing observers"
+            );
+            assert!(
+                !queue.lane_reservation_group_is_finalized_for_diagnostics(&keys),
+                "{terminal:?}: diagnostics must fail closed after terminal ambiguity"
+            );
+            assert!(
+                queue.lane_has_pending_work(
+                    unrelated_lane,
+                    unrelated_dataspace,
+                    unrelated_incarnation,
+                ),
+                "{terminal:?}: terminal ambiguity must block even unrelated lane drain"
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_reservation_compaction_fails_closed_after_terminal_application() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("ambiguous-compaction.norito");
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue
+            .install_lane_reservation_journal(&path, 1)
+            .expect("install aggressively compacting reservation journal");
+        queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect("enqueue compaction-fault reservation candidate");
+        let key = *queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"compaction-fault-owner",
+                    b"compaction-fault-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("reserve compaction-fault transaction")[0]
+            .key();
+        let unrelated_lane = LaneId::new(94);
+        let unrelated_dataspace = DataSpaceId::new(94);
+        let unrelated_incarnation = Hash::new(b"compaction-fault-unrelated-incarnation");
+        assert!(!queue.lane_has_pending_work(
+            unrelated_lane,
+            unrelated_dataspace,
+            unrelated_incarnation,
+        ));
+        let pressure_rx = queue.backpressure_handle().subscribe();
+        assert!(
+            !pressure_rx.borrow().is_saturated(),
+            "pressure must be healthy before compaction fault injection"
+        );
+        queue
+            .lane_reservations
+            .lock()
+            .journal_mut()
+            .expect("installed reservation journal")
+            .inject_next_compaction_fault(
+                ReservationJournalCompactionFault::AfterRenameBeforeParentSync,
+            );
+
+        assert_eq!(
+            queue
+                .release_lane_reservation(&key)
+                .expect("terminal release remains durably applied before compaction"),
+            LaneQueueReservationOutcome::Finalized
+        );
+        assert!(queue.live_lane_reservations().is_empty());
+        assert!(queue.lane_reservation_commit_barriers().is_empty());
+        assert!(queue.lane_reservation_release_barriers().is_empty());
+        assert!(
+            queue.lane_reservation_durability_faulted(),
+            "rename-before-parent-sync ambiguity must latch the process fault"
+        );
+        assert!(
+            pressure_rx.borrow().is_saturated(),
+            "compaction ambiguity must publish saturated pressure to existing observers"
+        );
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+            "a fully applied terminal transition must still fail diagnostics closed while its compacted replacement is ambiguous"
+        );
+        assert!(
+            queue
+                .lane_has_pending_work(unrelated_lane, unrelated_dataspace, unrelated_incarnation,),
+            "compaction ambiguity must block even unrelated lane drain"
+        );
+        let mut selected = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut selected);
+        assert!(
+            selected.is_empty(),
+            "the FIFO-restored transaction must remain nonselectable until restart recovery"
+        );
+    }
+
+    #[test]
+    fn install_replay_reconciliation_fault_publishes_backpressure_after_unlock() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let reservation_path = dir.path().join("install-reconciliation-fault.norito");
+        let (transactions, keys) = {
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            let transactions = (0..2)
+                .map(|_| accepted_tx_by_someone(&time_source))
+                .collect::<Vec<_>>();
+            for transaction in &transactions {
+                queue
+                    .push_with_lane_with_state(transaction.clone(), &state)
+                    .expect("enqueue install-reconciliation candidate");
+            }
+            let reserved = queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(
+                        &state,
+                        b"install-reconciliation-owner",
+                        b"install-reconciliation-proposal",
+                    ),
+                    nonzero!(2_usize),
+                )
+                .expect("reserve install-reconciliation batch");
+            let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
+            let barrier =
+                lane_reservation_release_barrier(keys.clone(), b"install-reconciliation-retire");
+            queue
+                .prepare_lane_reservation_release_barrier(&barrier)
+                .expect("persist prepared install-reconciliation release");
+            let mut reservations = queue.lane_reservations.lock();
+            let ordered_records = barrier
+                .ordered_keys
+                .iter()
+                .map(|key| reservations.live_by_hash[&key.signed_transaction_hash].clone())
+                .collect();
+            reservations
+                .journal_mut()
+                .expect("installed reservation journal")
+                .complete_release(LaneQueueReservationReleaseCompletionV5 {
+                    version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
+                    barrier,
+                    ordered_records,
+                })
+                .expect("persist completed release before simulated restart");
+            (transactions, keys)
+        };
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        for transaction in transactions {
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("replay transaction payload before reservation reconciliation");
+        }
+        let pressure_rx = queue.backpressure_handle().subscribe();
+        assert!(
+            !pressure_rx.borrow().is_saturated(),
+            "pressure must be healthy before install-time reconciliation"
+        );
+        *queue.install_reconciliation_append_fault.lock() =
+            Some(ReservationJournalAppendFault::SyncAfterFullWrite);
+
+        assert!(matches!(
+            queue.install_lane_reservation_journal(&reservation_path, 1024 * 1024),
+            Err(LaneQueueReservationError::Journal(_))
+        ));
+        assert!(
+            queue.lane_reservation_durability_faulted(),
+            "ambiguous install-time ForgetRelease must latch the process fault"
+        );
+        assert!(
+            pressure_rx.borrow().is_saturated(),
+            "install-time reconciliation must publish saturated pressure after releasing the reservation store"
+        );
+        assert!(
+            queue.lane_reservations.try_lock().is_some(),
+            "install error must release the reservation store before returning"
+        );
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&keys),
+            "install-time reconciliation ambiguity must fail diagnostics closed"
+        );
     }
 
     #[test]
@@ -22887,6 +28186,168 @@ pub mod tests {
     }
 
     #[test]
+    fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-owner-capacity.norito");
+        let reservation_path = dir.path().join("lane-reservations-owner-capacity.norito");
+        let one_slot_config = || Config {
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+            ..config_factory()
+        };
+        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction_hash = transaction.hash();
+        let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
+        {
+            let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("enqueue journaled transaction");
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(
+                        &state,
+                        b"owner-capacity-owner",
+                        b"owner-capacity-proposal",
+                    ),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve before restart");
+        }
+
+        let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
+        let replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore the payload-less reservation owner");
+        assert_eq!(replay.restored, 1);
+        assert_eq!(replay.awaiting_transaction_replay, 1);
+        assert!(queue.txs.is_empty());
+        assert_eq!(queue.materialized_active_len(), 0);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+        let pressure = queue.pressure_snapshot();
+        assert_eq!(pressure.tracked_tx_count, 1);
+        assert!(pressure.saturated_by_count);
+
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install the payload journal");
+        let unrelated = accepted_tx_by_someone(&time_source);
+        assert_ne!(unrelated.hash(), transaction_hash);
+        let failure = queue
+            .push_with_lane_with_state(unrelated, &state)
+            .expect_err("unrelated work must not consume the restored owner's slot");
+        assert!(matches!(failure.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+
+        assert_eq!(
+            queue
+                .replay_plan_journal(&state)
+                .expect("the exact payload must replace its reserved capacity")
+                .replayed,
+            1
+        );
+        assert_eq!(queue.materialized_active_len(), 1);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.retained_bytes(), retained_cost);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(
+            queue
+                .lane_reservations
+                .lock()
+                .missing_payload_hashes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-owner-bytes.norito");
+        let reservation_path = dir.path().join("lane-reservations-owner-bytes.norito");
+        let transaction = accepted_tx_by_someone(&time_source);
+        let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
+        let bounded_config = || Config {
+            capacity: nonzero!(2_usize),
+            capacity_per_user: nonzero!(2_usize),
+            max_retained_bytes: NonZeroU64::new(retained_cost)
+                .expect("transaction retained cost is non-zero"),
+            ..config_factory()
+        };
+        {
+            let queue = Arc::new(Queue::test(bounded_config(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("enqueue transaction at the exact retained-byte limit");
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(&state, b"owner-bytes-owner", b"owner-bytes-proposal"),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve before restart");
+        }
+
+        let queue = Arc::new(Queue::test(bounded_config(), &time_source));
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore the payload-less reservation owner");
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+        assert!(queue.pressure_snapshot().saturated_by_bytes);
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install the payload journal");
+
+        let failure = queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect_err("unrelated work must not consume the restored owner's byte budget");
+        assert!(matches!(failure.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+
+        assert_eq!(
+            queue
+                .replay_plan_journal(&state)
+                .expect("the exact payload must replace its reserved byte charge")
+                .replayed,
+            1
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), retained_cost);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
     fn restart_commit_barrier_tombstones_pending_plan_before_replay() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let state = lane_reservation_test_state();
@@ -22945,6 +28406,62 @@ pub mod tests {
         assert_eq!(replay.records, 0);
         assert_eq!(queue.active_len(), 0);
         assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-stale-commit.norito");
+        let reservation_path = dir.path().join("lane-reservations-stale-commit.norito");
+        let hash;
+        {
+            let queue = Arc::new(Queue::test(config_factory(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            let transaction = accepted_tx_by_someone(&time_source);
+            hash = transaction.hash();
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("enqueue journaled transaction");
+            let mut stale = *queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(&state, b"stale-commit-owner", b"stale-commit-proposal"),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve transaction")[0]
+                .key();
+            stale.routing_plan_digest = Hash::new(b"stale reservation commit plan digest");
+
+            let error = queue
+                .remove_plan_journal_for_reservation_commit(&stale)
+                .expect_err("a stale commit digest must not append a no-op tombstone");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(queue.plan_journal_durability_faulted());
+            assert!(queue.txs.contains_key(&hash));
+            assert!(queue.durable_plan_claims.contains_key(&hash));
+        }
+
+        let replay_queue = Arc::new(Queue::test(config_factory(), &time_source));
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("reopen plan journal after rejected stale tombstone"),
+            1,
+            "the exact live owner must survive the rejected stale cleanup and restart"
+        );
+        let replay = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay exact plan after rejected stale tombstone");
+        assert_eq!(replay.records, 1);
+        assert_eq!(replay.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&hash));
     }
 
     #[test]
@@ -23165,6 +28682,10 @@ pub mod tests {
         let (kura, _) =
             Kura::new_with_configured_lane_catalog(&kura_config, &lane_geometry, &lane_catalog)
                 .expect("open authenticated two-lane reservation Kura");
+        // Exercise the production startup sequence here. `State::new` is the unit-test
+        // convenience constructor and eagerly installs a marker for its initial single-lane
+        // catalog; that marker necessarily precedes (and therefore conflicts with) the
+        // authenticated two-lane configured-primary anchor established below.
         let mut state = State::try_new(
             world_with_test_domains(),
             kura,
@@ -23189,9 +28710,14 @@ pub mod tests {
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = lane_geometry;
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         state
             .set_nexus_from_config(nexus)
             .expect("install two-lane reservation test Nexus");
+        install_single_validator_topology_for_queue_test(&state, 0xC1);
         let plan = RoutingPlan::native_amx(
             coordinator,
             vec![RouteLeg::new(participant, RouteLegRole::Participant)],
@@ -23205,8 +28731,33 @@ pub mod tests {
         let dir = tempdir().expect("tempdir");
         install_test_reservation_journal(&queue, &dir);
         queue
-            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
-            .expect("enqueue Native AMX transaction");
+            .install_plan_journal(
+                dir.path().join("native-amx-queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install Native AMX queue-plan journal");
+        let transaction = accepted_tx_by_someone(&time_source);
+        let admission_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture Native AMX admission context");
+        let admission_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            Hash::new(b"native-amx-reservation-request"),
+            transaction.entrypoint(),
+            &plan,
+            admission_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build Native AMX global admission binding");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction,
+                &state,
+                plan.clone(),
+                &admission_binding,
+            )
+            .expect("durably enqueue globally bound Native AMX transaction");
 
         let participant_scope = LaneQueueReservationScopeV1 {
             lane_id: participant.lane_id,
@@ -23220,14 +28771,6 @@ pub mod tests {
             reservation_owner_hash: Hash::new(b"participant-owner"),
             proposal_identity_hash: Hash::new(b"participant-proposal"),
         };
-        assert!(
-            queue
-                .reserve_transactions_for_lane(&state, participant_scope, nonzero!(1_usize))
-                .expect("participant selection must safely return no full transaction")
-                .is_empty()
-        );
-        assert_eq!(queue.queued_len(), 1);
-
         let coordinator_scope = LaneQueueReservationScopeV1 {
             lane_id: coordinator.lane_id,
             dataspace_id: coordinator.dataspace_id,
@@ -23236,6 +28779,41 @@ pub mod tests {
                 .expect("coordinator lane incarnation"),
             ..participant_scope
         };
+        assert_eq!(
+            state
+                .queue_plan_admission_binding_registry_match(&admission_binding)
+                .expect("read absent Native AMX admission registry"),
+            QueuePlanAdmissionRegistryMatch::Absent
+        );
+        assert!(
+            queue
+                .reserve_transactions_for_lane(&state, coordinator_scope, nonzero!(1_usize))
+                .expect("uncertified Native AMX selection must safely retain FIFO ownership")
+                .is_empty(),
+            "a durable local binding is not autonomous ownership authority before the global \
+             carrier commits its exact registry marker"
+        );
+        assert_eq!(queue.queued_len(), 1);
+
+        install_queue_plan_registry_value_for_guard_test(
+            &state,
+            &admission_binding,
+            admission_binding.canonical_hash(),
+        );
+        assert_eq!(
+            state
+                .queue_plan_admission_binding_registry_match(&admission_binding)
+                .expect("read exact Native AMX admission registry"),
+            QueuePlanAdmissionRegistryMatch::Exact
+        );
+        assert!(
+            queue
+                .reserve_transactions_for_lane(&state, participant_scope, nonzero!(1_usize))
+                .expect("participant selection must safely return no full transaction")
+                .is_empty()
+        );
+        assert_eq!(queue.queued_len(), 1);
+
         assert!(
             queue
                 .reserve_transactions_for_lane_bounded(

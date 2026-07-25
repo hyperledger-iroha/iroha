@@ -1202,6 +1202,8 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    use crate::{NodeHandle, config::StorageConfig};
+
     use super::*;
 
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
@@ -1704,6 +1706,74 @@ mod tests {
                 .resume_terminal_handoffs(&repair)
                 .expect("no pending repair"),
             0
+        );
+    }
+
+    #[test]
+    fn node_startup_defers_repair_required_potr_handoff() {
+        let (admission, gateway_key, provider_key) = governed_fixture();
+        let gateway_public = gateway_public_key(&gateway_key);
+        let receipt = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x48; 16],
+            PotrStatus::MissedDeadline,
+            0,
+        );
+        let receipt_digest = receipt.signed_receipt_digest().expect("receipt digest");
+        let dir = TempDir::new().expect("state dir");
+        let root = dir.path().canonicalize().expect("canonical state dir");
+        let config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .build();
+        let tracker = PotrTracker::open(
+            &config.data_dir().join("potr-receipts"),
+            config.runtime_retention().state_entry_limit(),
+            config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .expect("tracker");
+        let failing = RecordingRepair::failing(1);
+        assert!(matches!(
+            tracker.record_receipt(receipt, &gateway_public, &admission, &failing),
+            Err(PotrTrackerError::RepairHandoff(_))
+        ));
+        drop(tracker);
+
+        let first_restart = NodeHandle::try_new(config.clone())
+            .expect("repair-required PoTR handoff must not brick node startup");
+        assert_eq!(
+            first_restart
+                .potr_receipt_status(&receipt_digest)
+                .expect("receipt status")
+                .expect("persisted receipt")
+                .repair_receipt_digest,
+            None
+        );
+        assert!(matches!(
+            first_restart.resume_potr_terminal_handoffs(&first_restart),
+            Err(PotrTrackerError::RepairHandoff(_))
+        ));
+        assert_eq!(
+            first_restart
+                .potr_receipt_status(&receipt_digest)
+                .expect("receipt status")
+                .expect("persisted receipt")
+                .repair_receipt_digest,
+            None,
+            "a repair-incapable adapter must not fabricate a receipt"
+        );
+        drop(first_restart);
+
+        let second_restart = NodeHandle::try_new(config)
+            .expect("pending repair-required PoTR handoff must remain restart-safe");
+        assert_eq!(
+            second_restart
+                .potr_receipt_status(&receipt_digest)
+                .expect("receipt status")
+                .expect("persisted receipt")
+                .repair_receipt_digest,
+            None
         );
     }
 

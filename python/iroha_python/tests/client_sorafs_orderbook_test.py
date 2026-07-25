@@ -1,21 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
-from typing import Any, Callable
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
-from iroha_python import ToriiClient
-from iroha_python.client import (
-    _normalize_sorafs_orderbook_channel,
-    _normalize_sorafs_orderbook_fill,
-    _normalize_sorafs_orderbook_order,
-    _normalize_sorafs_orderbook_receipt,
-    _normalize_sorafs_orderbook_trade,
-    _normalize_sorafs_orderbook_xor_quantity,
-)
-from iroha_torii_client.client import ToriiCanonicalRequestAuth
 from requests.structures import CaseInsensitiveDict
+
+import iroha_python.client as client_module
+from iroha_python import ToriiClient
 
 from .helpers import StubResponse
 
@@ -28,7 +23,13 @@ class SequencedSession(requests.Session):
         self._responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    def request(self, method: str | bytes, url: str | bytes, *args: Any, **kwargs: Any) -> requests.Response:
+    def request(
+        self,
+        method: str | bytes,
+        url: str | bytes,
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
         self.calls.append(
             {
                 "method": method,
@@ -76,349 +77,301 @@ class FakeWebSocket:
         self.closed = True
 
 
-def _sample_orderbook_event() -> dict[str, Any]:
+def _fixed(seed: int) -> list[int]:
+    return [seed] * 32
+
+
+def _cursor() -> dict[str, Any]:
+    return {"height": 42, "block_hash": _fixed(0xA0)}
+
+
+def _order() -> dict[str, Any]:
     return {
-        "sequence": 9,
-        "kind": "settlement_receipt_accepted",
-        "generated_at_unix": 1_700_000_104,
-        "order_id_hex": None,
-        "trade_ids_hex": ["22" * 32],
-        "settlement_channel_ids_hex": ["33" * 32],
-        "receipt_id_hex": "44" * 32,
-        "expired_order_ids_hex": ["11" * 32],
-        "open_order_count": 1,
-        "open_settlement_channel_count": 1,
-        "settlement_receipt_count": 1,
-    }
-
-
-def _sample_orderbook_signature() -> dict[str, str]:
-    return {
-        "algorithm": "Ed25519",
-        "public_key_hex": "aa" * 32,
-        "signature_hex": "bb" * 64,
-    }
-
-
-def _sample_orderbook_order() -> dict[str, Any]:
-    return {
-        "version": 1,
-        "order_id_hex": "11" * 32,
-        "side": "bid",
-        "tier": "hot",
-        "price_per_gib": "340282366920938463463374607431768211456.000000001",
-        "quantity_gib": 4,
+        "order_id": _fixed(0x11),
+        "owner": "alice@wonderland",
+        "canonical_order": base64.b64encode(b"canonical-order").decode("ascii"),
+        "admitted_policy_digest": _fixed(0x12),
+        "admitted_at_unix": 1_700_000_000,
+        "admission_sequence": 7,
         "remaining_gib": 2,
-        "owner_account_hex": "cafe",
-        "expiry_unix": 1_800_000_000,
-        "nonce": 7,
-        "maker_fee_bps": 25,
-        "taker_fee_bps": 35,
-        "signature": _sample_orderbook_signature(),
+        "status": {"status": "open", "value": None},
+        "updated_at_unix": 1_700_000_001,
+        "canonical_cancel": None,
+        "cancelled_at_unix": None,
+        "cancelled_policy_digest": None,
     }
 
 
-def _sample_orderbook_trade() -> dict[str, Any]:
+def _trade() -> dict[str, Any]:
     return {
-        "version": 1,
-        "trade_id_hex": "22" * 32,
-        "maker_order_id_hex": "11" * 32,
-        "taker_order_id_hex": "77" * 32,
-        "tier": "hot",
-        "price_per_gib": "340282366920938463463374607431768211456.000000001",
-        "filled_gib": 2,
-        "maker_fee": "0.000000001",
-        "taker_fee": "1.000000001",
-        "timestamp_unix": 1_700_000_100,
+        "trade_id": _fixed(0x22),
+        "maker_order_id": _fixed(0x11),
+        "taker_order_id": _fixed(0x13),
+        "trade_sequence": 3,
+        "canonical_trade": base64.b64encode(b"canonical-trade").decode("ascii"),
+        "channel_id": _fixed(0x33),
+        "book_revision": 9,
+        "recorded_at_unix": 1_700_000_100,
     }
 
 
-def _sample_orderbook_channel() -> dict[str, Any]:
+def _channel() -> dict[str, Any]:
     return {
-        "version": 1,
-        "channel_id_hex": "33" * 32,
-        "trade_id_hex": "22" * 32,
-        "buyer_account_hex": "face",
-        "provider_id_hex": "55" * 32,
+        "channel_id": _fixed(0x33),
+        "trade_id": _fixed(0x22),
+        "buyer": "alice@wonderland",
+        "provider": "provider@storage",
+        "provider_id": _fixed(0x55),
+        "settlement_authority": "settlement@governance",
         "total_bytes": 2_147_483_648,
         "remaining_bytes": 1_073_741_824,
-        "xor_locked": "340282366920938463463374607431768211456.000000001",
-        "status": "open",
+        "initial_xor_locked": "10",
+        "remaining_xor_locked": "5",
+        "status": {"status": "open", "value": None},
         "opened_at_unix": 1_700_000_101,
+        "expires_at_unix": 1_800_000_000,
         "updated_at_unix": 1_700_000_102,
     }
 
 
-def _sample_orderbook_receipt() -> dict[str, Any]:
+def _receipt() -> dict[str, Any]:
     return {
-        "version": 1,
-        "receipt_id_hex": "44" * 32,
-        "channel_id_hex": "33" * 32,
-        "trade_id_hex": "22" * 32,
-        "range": {"start": 0, "end": 1024},
-        "chunk_hash_hex": "66" * 32,
-        "bytes_delivered": 1024,
-        "xor_debited": "340282366920938463463374607431768211456.000000001",
-        "provider_credit": "1.000000001",
-        "fee_amount": "0.000000001",
-        "issued_at_unix": 1_700_000_103,
-        "settlement_signature": _sample_orderbook_signature(),
+        "receipt_id": _fixed(0x44),
+        "channel_id": _fixed(0x33),
+        "trade_id": _fixed(0x22),
+        "canonical_receipt": base64.b64encode(b"canonical-receipt").decode("ascii"),
+        "admitted_policy_digest": _fixed(0x12),
+        "admitted_at_unix": 1_700_000_103,
+        "recorded_by": "settlement@governance",
     }
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        "0",
-        "0.000000001",
-        str(1 << 128),
-        str((1 << 511) - 1),
-        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047",
-    ],
-    ids=["zero", "nanoxor", "over-u128", "max-mantissa", "max-scaled"],
-)
-def test_sorafs_orderbook_xor_quantity_parser_preserves_exact_boundaries(
-    value: str,
-) -> None:
-    assert _normalize_sorafs_orderbook_xor_quantity(value, "amount") == value
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        1,
-        1.0,
-        True,
-        None,
-        "",
-        "+1",
-        "-1",
-        " 1",
-        "1 ",
-        "01",
-        "1.",
-        ".1",
-        "1.0",
-        "1.000000000",
-        "1e0",
-        "0.0000000001",
-        str(1 << 511),
-        "1" * 156,
-        "1" * 10_000,
-    ],
-    ids=[
-        "json-integer",
-        "json-float",
-        "json-bool",
-        "json-null",
-        "empty",
-        "plus",
-        "negative",
-        "leading-space",
-        "trailing-space",
-        "leading-zero",
-        "missing-fraction",
-        "missing-whole",
-        "trailing-zero",
-        "nine-trailing-zeros",
-        "exponent",
-        "over-scale",
-        "mantissa-overflow",
-        "text-bound-overflow",
-        "oversized-input",
-    ],
-)
-def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
-    value: Any,
-) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        _normalize_sorafs_orderbook_xor_quantity(value, "amount")
-
-
-@pytest.mark.parametrize(
-    ("parser", "factory", "retired_field"),
-    [
-        (
-            _normalize_sorafs_orderbook_order,
-            _sample_orderbook_order,
-            "price_per_gib_micro_xor",
-        ),
-        (
-            _normalize_sorafs_orderbook_trade,
-            _sample_orderbook_trade,
-            "maker_fee_micro_xor",
-        ),
-        (
-            _normalize_sorafs_orderbook_channel,
-            _sample_orderbook_channel,
-            "xor_locked_micro",
-        ),
-        (
-            _normalize_sorafs_orderbook_receipt,
-            _sample_orderbook_receipt,
-            "provider_credit_micro",
-        ),
-    ],
-)
-def test_sorafs_orderbook_exact_records_reject_legacy_duplicate_fields(
-    parser: Callable[[Any, str], dict[str, Any]],
-    factory: Callable[[], dict[str, Any]],
-    retired_field: str,
-) -> None:
-    record = factory()
-    record[retired_field] = "1"
-
-    with pytest.raises(ValueError, match="unknown or retired"):
-        parser(record, "record")
-
-
-def test_sorafs_orderbook_fill_rejects_retired_and_unknown_fields() -> None:
-    fill = {
-        "trade": _sample_orderbook_trade(),
-        "maker_remaining_gib": 0,
-        "taker_remaining_gib": 2,
-        "gross_value": "1",
-        "gross_value_micro_xor": "1000000",
+def _status() -> dict[str, int]:
+    return {
+        "open_orders": 1,
+        "partially_filled_orders": 0,
+        "filled_orders": 1,
+        "cancelled_orders": 0,
+        "expired_orders": 0,
+        "trades": 1,
+        "settlement_receipts": 1,
+        "settlement_channels": 1,
+        "open_settlement_channels": 1,
+        "book_revision": 10,
+        "next_admission_sequence": 8,
+        "next_trade_sequence": 4,
+        "updated_at_unix": 1_700_000_104,
     }
-    with pytest.raises(ValueError, match="gross_value_micro_xor"):
-        _normalize_sorafs_orderbook_fill(fill, "fill")
-
-    order = _sample_orderbook_order()
-    order["unexpected_amount"] = "1"
-    with pytest.raises(ValueError, match="unexpected_amount"):
-        _normalize_sorafs_orderbook_order(order, "order")
 
 
-def test_sorafs_orderbook_read_helper_normalizes_events() -> None:
-    event = _sample_orderbook_event()
+def _finalized_event() -> dict[str, Any]:
+    return {
+        "sequence": 9,
+        "block_height": 42,
+        "block_hash": _fixed(0xA0),
+        "event_index": 2,
+        "event": {
+            "kind": {"kind": "receipt_recorded", "detail": None},
+            "order_id": None,
+            "trade_id": _fixed(0x22),
+            "channel_id": _fixed(0x33),
+            "receipt_id": _fixed(0x44),
+            "provider_id": _fixed(0x55),
+            "book_revision": 10,
+            "authority": "settlement@governance",
+            "occurred_at_unix_ms": 1_700_000_104_000,
+        },
+    }
+
+
+def _submission_receipt() -> dict[str, Any]:
+    return {
+        "payload": {
+            "tx_hash": "hash:TX",
+            "entrypoint_hash": "hash:ENTRYPOINT",
+            "signed_transaction_hash": "hash:SIGNED",
+            "submitted_at_ms": 1_700_000_200_000,
+            "submitted_at_height": 42,
+            "signer": "ed0120ABCDEF",
+        },
+        "signature": "AB" * 64,
+    }
+
+
+def _page(field: str, records: list[dict[str, Any]], cursor_field: str) -> dict[str, Any]:
+    return {
+        "finalized_cursor": _cursor(),
+        field: records,
+        "has_more": False,
+        cursor_field: None,
+    }
+
+
+def test_orderbook_has_no_competing_local_wire_parsers() -> None:
+    assert not hasattr(client_module, "_normalize_sorafs_orderbook_order")
+    assert not hasattr(client_module, "_sorafs_orderbook_payload_bytes")
+
+
+def test_sorafs_orderbook_read_helpers_parse_finalized_pages() -> None:
     session = SequencedSession(
         [
             StubResponse(
                 200,
                 {
-                    "since": 0,
-                    "limit": 10,
-                    "count": 1,
-                    "next_since": 9,
-                    "events": [event],
+                    "source": "finalized_chain",
+                    "status": _status(),
+                    "orders": _page(
+                        "orders",
+                        [_order()],
+                        "next_after_order_id",
+                    ),
                 },
-            )
+            ),
+            StubResponse(
+                200,
+                {
+                    "source": "finalized_chain",
+                    "trades": _page(
+                        "trades",
+                        [_trade()],
+                        "next_after_trade_id",
+                    ),
+                },
+            ),
+            StubResponse(
+                200,
+                {
+                    "source": "finalized_chain",
+                    "channels": _page(
+                        "channels",
+                        [_channel()],
+                        "next_after_channel_id",
+                    ),
+                },
+            ),
+            StubResponse(
+                200,
+                {
+                    "source": "finalized_chain",
+                    "receipts": _page(
+                        "receipts",
+                        [_receipt()],
+                        "next_after_receipt_id",
+                    ),
+                },
+            ),
+            StubResponse(
+                200,
+                {
+                    "source": "finalized_chain",
+                    "events": {
+                        "finalized_cursor": _cursor(),
+                        "events": [_finalized_event()],
+                        "has_more": False,
+                        "next_after": None,
+                    },
+                },
+            ),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    anchor_hex = "a0" * 32
+
+    book = client.get_sorafs_orderbook(
+        expected_finalized_height=42,
+        expected_finalized_block_hash_hex=anchor_hex,
+        after_id_hex="10" * 32,
+        limit=25,
+        headers={"X-Trace": "book"},
+    )
+    assert book["source"] == "finalized_chain"
+    assert book["status"]["book_revision"] == 10
+    assert book["orders"]["orders"][0]["order_id"] == _fixed(0x11)
+    assert session.calls[0]["params"] == {
+        "expected_finalized_height": 42,
+        "expected_finalized_block_hash_hex": anchor_hex,
+        "after_id_hex": "10" * 32,
+        "limit": 25,
+    }
+    assert session.calls[0]["headers"]["X-Trace"] == "book"
+
+    assert client.list_sorafs_orderbook_trades()["trades"]["trades"][0] == _trade()
+    assert client.list_sorafs_orderbook_channels()["channels"]["channels"][0] == _channel()
+    assert client.list_sorafs_orderbook_receipts()["receipts"]["receipts"][0] == _receipt()
 
     events = client.list_sorafs_orderbook_events(
-        since=0,
-        limit="10",
-        if_none_match='"old-events"',
+        expected_finalized_height=42,
+        expected_finalized_block_hash_hex=anchor_hex,
+        after_sequence=8,
+        after_block_height=41,
+        after_block_hash_hex="9f" * 32,
+        after_event_index=1,
+        limit=10,
+        if_none_match='"events-v1"',
     )
-
     assert events is not None
-    assert events["events"][0]["kind"] == "settlement_receipt_accepted"
-    assert events["events"][0]["receipt_id_hex"] == "44" * 32
-    assert session.calls[0]["params"] == {"since": 0, "limit": 10}
-    assert session.calls[0]["headers"]["If-None-Match"] == '"old-events"'
+    assert events["events"]["events"][0]["event"]["receipt_id"] == _fixed(0x44)
+    assert session.calls[4]["params"]["after_sequence"] == 8
+    assert session.calls[4]["headers"]["If-None-Match"] == '"events-v1"'
 
 
-def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
-    order = _sample_orderbook_order()
-    trade = _sample_orderbook_trade()
-    channel = _sample_orderbook_channel()
-    receipt = _sample_orderbook_receipt()
-    session = SequencedSession(
-        [
-            StubResponse(
-                200,
-                {
-                    "status": "accepted",
-                    "sequence": 12,
-                    "open_order_count": 1,
-                    "accepted_order": order,
-                    "fills": [
-                        {
-                            "trade": trade,
-                            "maker_remaining_gib": 0,
-                            "taker_remaining_gib": 2,
-                            "gross_value": "340282366920938463463374607431768211456.000000001",
-                        }
-                    ],
-                    "settlement_channels_opened": [channel],
-                    "expired_order_ids_hex": ["11" * 32],
-                },
-            ),
-            StubResponse(
-                200,
-                {
-                    "status": "cancelled",
-                    "reason": "owner_requested",
-                    "open_order_count": 0,
-                    "cancelled_order": order,
-                },
-            ),
-            StubResponse(
-                200,
-                {
-                    "status": "accepted",
-                    "settlement_receipt_count": 1,
-                    "open_settlement_channel_count": 1,
-                    "accepted_receipt": receipt,
-                    "updated_channel": channel,
-                },
-            ),
-        ]
-    )
-    signed_messages: list[bytes] = []
-
-    def signer(message: bytes) -> bytes:
-        signed_messages.append(message)
-        return b"signed-request"
-
-    auth = ToriiCanonicalRequestAuth(
-        account_id="alice@wonderland",
-        signer=signer,
-        timestamp_ms=1234,
-        nonce="nonce-1",
-    )
+def test_sorafs_orderbook_event_list_honors_not_modified() -> None:
+    session = SequencedSession([StubResponse(304, None)])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    submitted = client.submit_sorafs_orderbook_order(
+    assert client.list_sorafs_orderbook_events(if_none_match='"same"') is None
+    assert session.calls[0]["headers"]["If-None-Match"] == '"same"'
+
+
+def test_sorafs_orderbook_submit_helpers_forward_signed_transactions() -> None:
+    receipt = _submission_receipt()
+    session = SequencedSession([StubResponse(202, receipt) for _ in range(3)])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.submit_sorafs_orderbook_order(
         b"\x01\x02\x03",
-        canonical_auth=auth,
         headers={"X-Trace": "order-submit"},
-    )
-    assert submitted["status"] == "accepted"
-    assert submitted["fills"][0]["gross_value"] == (
-        "340282366920938463463374607431768211456.000000001"
-    )
+    ) == receipt
+    assert client.submit_sorafs_orderbook_cancel(memoryview(b"\x04\x05")) == receipt
+    assert client.submit_sorafs_orderbook_receipt(bytearray([6])) == receipt
+
     assert session.calls[0]["url"] == "http://torii.example/v1/sorafs/orderbook/orders"
     assert session.calls[0]["data"] == b"\x01\x02\x03"
-    assert session.calls[0]["headers"]["Content-Type"] == "application/octet-stream"
+    assert session.calls[0]["headers"]["Content-Type"] == "application/x-norito"
     assert session.calls[0]["headers"]["X-Trace"] == "order-submit"
-    assert session.calls[0]["headers"]["X-Iroha-Account"] == "alice@wonderland"
-    assert session.calls[0]["headers"]["X-Iroha-Nonce"] == "nonce-1"
-    assert signed_messages[0].startswith(b"POST\n/v1/sorafs/orderbook/orders\n")
-
-    cancelled = client.submit_sorafs_orderbook_cancel([4, 5], canonical_auth=auth)
-    assert cancelled["status"] == "cancelled"
-    assert cancelled["cancelled_order"]["order_id_hex"] == "11" * 32
+    assert "X-Iroha-Signature" not in session.calls[0]["headers"]
     assert session.calls[1]["data"] == b"\x04\x05"
-
-    receipt_result = client.submit_sorafs_orderbook_receipt(
-        bytearray([6]),
-        canonical_auth=auth,
-    )
-    assert receipt_result["accepted_receipt"]["receipt_id_hex"] == "44" * 32
     assert session.calls[2]["url"] == "http://torii.example/v1/sorafs/orderbook/receipts"
 
 
-def test_sorafs_orderbook_stream_helper_parses_and_normalizes_sse() -> None:
-    event = _sample_orderbook_event()
+def test_sorafs_orderbook_helpers_reject_retired_and_unbounded_inputs() -> None:
+    client = ToriiClient("http://torii.example", session=SequencedSession([]), max_retries=0)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'since'"):
+        client.list_sorafs_orderbook_events(since=8)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'canonical_auth'"):
+        client.submit_sorafs_orderbook_order(  # type: ignore[call-arg]
+            b"\x01",
+            canonical_auth=object(),
+        )
+    with pytest.raises(ValueError, match="1..=500"):
+        client.list_sorafs_orderbook_events(limit=501)
+    with pytest.raises(ValueError, match="all four finalized event cursor"):
+        client.list_sorafs_orderbook_events(after_sequence=8)
+    with pytest.raises(TypeError, match="bytes-like canonical versioned SignedTransaction"):
+        client.submit_sorafs_orderbook_cancel([4, 5])
+    with pytest.raises(ValueError, match="must not be empty"):
+        client.submit_sorafs_orderbook_receipt(b"")
+
+
+def test_sorafs_orderbook_stream_helper_parses_finalized_sse() -> None:
+    event = _finalized_event()
     session = SequencedSession(
         [
             SseStubResponse(
                 [
                     "id: 9",
-                    "event: settlement_receipt_accepted",
+                    "event: receipt_recorded",
                     f"data: {json.dumps(event)}",
                     "",
                 ]
@@ -428,7 +381,10 @@ def test_sorafs_orderbook_stream_helper_parses_and_normalizes_sse() -> None:
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     iterator = client.stream_sorafs_orderbook_events(
-        since=8,
+        after_sequence=8,
+        after_block_height=41,
+        after_block_hash_hex="9f" * 32,
+        after_event_index=1,
         limit=1,
         last_event_id="8",
         max_retries=0,
@@ -436,37 +392,23 @@ def test_sorafs_orderbook_stream_helper_parses_and_normalizes_sse() -> None:
     )
     streamed = next(iterator)
 
-    assert streamed.event == "settlement_receipt_accepted"
+    assert streamed.event == "receipt_recorded"
     assert streamed.id == "9"
-    assert streamed.data["receipt_id_hex"] == "44" * 32
-    assert session.calls[0]["params"] == {"since": 8, "limit": 1}
+    assert streamed.data["event"]["receipt_id"] == _fixed(0x44)
+    assert session.calls[0]["params"] == {
+        "after_sequence": 8,
+        "after_block_height": 41,
+        "after_block_hash_hex": "9f" * 32,
+        "after_event_index": 1,
+        "limit": 1,
+    }
     assert session.calls[0]["headers"]["Last-Event-ID"] == "8"
 
 
-def test_sorafs_orderbook_stream_helper_validates_inputs_before_request() -> None:
-    client = ToriiClient("http://torii.example", session=SequencedSession([]), max_retries=0)
-
-    with pytest.raises(ValueError, match="positive"):
-        client.stream_sorafs_orderbook_events(limit=0)
-    with pytest.raises(ValueError, match="canonical_auth is required"):
-        client.submit_sorafs_orderbook_order(b"\x01", canonical_auth=None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="must not be empty"):
-        client.submit_sorafs_orderbook_receipt(
-            b"",
-            canonical_auth=ToriiCanonicalRequestAuth(
-                account_id="alice@wonderland",
-                signer=lambda _message: b"sig",
-            ),
-        )
-
-
-def test_sorafs_orderbook_websocket_helper_opens_and_normalizes_frames() -> None:
-    event = _sample_orderbook_event()
+def test_sorafs_orderbook_websocket_helper_uses_finalized_cursor() -> None:
+    event = _finalized_event()
     socket = FakeWebSocket(
-        [
-            json.dumps({"event": "settlement_receipt_accepted", "data": event}),
-            json.dumps({"event": "lagged", "data": {"skipped": 2}}),
-        ]
+        [json.dumps({"event": "receipt_recorded", "data": event})]
     )
     captured: dict[str, Any] = {}
 
@@ -476,36 +418,47 @@ def test_sorafs_orderbook_websocket_helper_opens_and_normalizes_frames() -> None
         return socket
 
     client = ToriiClient("https://torii.example", session=SequencedSession([]), max_retries=0)
-    assert (
-        client.build_sorafs_orderbook_events_websocket_url(since=8, limit=1)
-        == "wss://torii.example/v1/sorafs/orderbook/events/ws?since=8&limit=1"
+    url = client.build_sorafs_orderbook_events_websocket_url(
+        after_sequence=8,
+        after_block_height=41,
+        after_block_hash_hex="9f" * 32,
+        after_event_index=1,
+        limit=1,
     )
+    parsed = urlparse(url)
+    assert parsed.scheme == "wss"
+    assert parsed.path == "/v1/sorafs/orderbook/events/ws"
+    assert parse_qs(parsed.query) == {
+        "after_sequence": ["8"],
+        "after_block_height": ["41"],
+        "after_block_hash_hex": ["9f" * 32],
+        "after_event_index": ["1"],
+        "limit": ["1"],
+    }
 
     iterator = client.stream_sorafs_orderbook_events_websocket(
-        since=8,
+        after_sequence=8,
+        after_block_height=41,
+        after_block_hash_hex="9f" * 32,
+        after_event_index=1,
         limit=1,
         subprotocols=["iroha.sorafs.orderbook.v1"],
         websocket_factory=factory,
         with_metadata=True,
     )
-    first = next(iterator)
-    assert first.event == "settlement_receipt_accepted"
-    assert first.data["receipt_id_hex"] == "44" * 32
-    assert captured["url"] == "wss://torii.example/v1/sorafs/orderbook/events/ws?since=8&limit=1"
+    streamed = next(iterator)
+    assert streamed.event == "receipt_recorded"
+    assert streamed.data["event"]["receipt_id"] == _fixed(0x44)
     assert captured["kwargs"]["subprotocols"] == ["iroha.sorafs.orderbook.v1"]
-
-    lagged = next(iterator)
-    assert lagged.event == "lagged"
-    assert lagged.data == {"skipped": 2}
 
     iterator.close()
     assert socket.closed is True
 
 
-def test_sorafs_orderbook_websocket_helper_validates_inputs_before_connect() -> None:
+def test_sorafs_orderbook_websocket_helper_validates_before_connect() -> None:
     client = ToriiClient("http://torii.example", session=SequencedSession([]), max_retries=0)
 
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="1..=500"):
         client.build_sorafs_orderbook_events_websocket_url(limit=0)
     with pytest.raises(ValueError, match="must start with '/'"):
         client.connect_sorafs_orderbook_events_websocket(

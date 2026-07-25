@@ -1,6 +1,6 @@
 //! CLI wrapper around the trustless verifier used for SoraNet gateway CAR payloads.
 //! Only the `dag-scope=full` path is supported today; chunk plans and PoR roots
-//! are reconstructed and can be cross-checked against registry pin records.
+//! are reconstructed and checked against the manifest's mandatory commitments.
 
 #![allow(unexpected_cfgs)]
 
@@ -19,7 +19,7 @@ use norito::{
     json::{self, Value},
 };
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig, validate_manifest_car_replay};
-use sorafs_manifest::{ManifestV1, ValidationOutcomeV1, pin_registry::PinRecordV1};
+use sorafs_manifest::{ManifestV1, ValidationOutcomeV1};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -28,7 +28,7 @@ use std::os::unix::fs::OpenOptionsExt;
 #[command(
     author,
     version,
-    about = "Verify SoraNet gateway CAR payloads against manifests and registry pin records.",
+    about = "Verify SoraNet gateway CAR payloads against mandatory manifest commitments.",
     propagate_version = true
 )]
 struct Args {
@@ -43,10 +43,6 @@ struct Args {
     /// Optional path to the gate config (defaults to SNNet-15 M0 pack).
     #[arg(long)]
     config: Option<PathBuf>,
-
-    /// Optional pin record to cross-check chunk plan + PoR roots (`.to` or JSON).
-    #[arg(long)]
-    pin_record: Option<PathBuf>,
 
     /// Write the verification summary JSON to this path (defaults to stdout).
     #[arg(long)]
@@ -90,11 +86,6 @@ fn run() -> Result<i32> {
         .wrap_err_with(|| format!("failed to read CAR `{}`", args.car.display()))?;
 
     if args.validation_outcome {
-        if args.pin_record.is_some() {
-            return Err(eyre::eyre!(
-                "--validation-outcome emits manifest/CAR replay outcomes; omit --pin-record or use summary mode for pin-record validation"
-            ));
-        }
         let generated_at = match args.generated_at.as_deref() {
             Some(generated_at) => parse_generated_at(generated_at)?,
             None => unix_time_now()
@@ -116,13 +107,6 @@ fn run() -> Result<i32> {
     let outcome = verifier
         .verify_full(&manifest, &car_bytes)
         .map_err(|err| eyre::eyre!(err))?;
-
-    if let Some(pin_path) = args.pin_record.as_ref() {
-        let pin_record = load_pin_record(pin_path)?;
-        outcome
-            .validate_pin_record(&pin_record)
-            .map_err(|err| eyre::eyre!(err))?;
-    }
 
     let mut summary = outcome.to_summary_json();
     if let Some(object) = summary.as_object_mut() {
@@ -176,19 +160,6 @@ fn load_manifest(path: &Path) -> Result<ManifestV1> {
     }
     decode_from_bytes(&bytes)
         .wrap_err_with(|| format!("failed to decode manifest bytes `{}`", path.display()))
-}
-
-fn load_pin_record(path: &Path) -> Result<PinRecordV1> {
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read pin record `{}`", path.display()))?;
-    if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
-        let text = String::from_utf8(bytes)
-            .wrap_err_with(|| format!("pin record at `{}` is not valid UTF-8", path.display()))?;
-        return json::from_json(&text)
-            .wrap_err_with(|| format!("failed to parse pin record JSON `{}`", path.display()));
-    }
-    decode_from_bytes(&bytes)
-        .wrap_err_with(|| format!("failed to decode pin record `{}`", path.display()))
 }
 
 fn default_config_path() -> PathBuf {

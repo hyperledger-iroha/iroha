@@ -126,10 +126,12 @@ SDKs аша I18NI0000000058X):
 - `iroha app sorafs pin list|show`, `alias list`, һәм I18NI000000087X уратып.
   булавка-реестр REST ос нөктәләре һәм сеймал I18NT0000000000001X JSON менән аттестация блоктары
   аудит дәлилдәре өсөн.
-- I18NI000000088X һәм I18NI000000089X X ҡабул итеү I18NT000000002X
-  йәки JSON күрһәтә плюс факультатив псевдоним дәлилдәр һәм вариҫтар; дөрөҫ формалашҡан дәлилдәр
-  `400`, иҫке иҫбатлауҙар өҫтөндә I18NI0000000091X менән I18NI0000000000000000000092
-  ҡаты тамамланған дәлилдәр ҡайтарыу I18NI000000093X.
+- `torii /v1/sorafs/pin/register` accepts the closed JSON V1 request.
+  Its required `manifest_payload` is exact canonical padded base64 of canonical
+  Norito `ManifestV1` bytes. Torii derives the digest, chunker, content length,
+  pin policy, and fee inputs solely from the decoded manifest and rejects
+  retired duplicate summary fields. `alias` and a nonzero
+  `successor_of_hex` predecessor remain optional.
 - I18NI000000094X көҙгөләрен ремонтлау сират фильтрҙары, шул уҡ ваҡытта
   I18NI0000000955X ҡултамғалы эшсе ғәмәлдәрен тапшырыу йәки slash
   тәҡдимдәре I18NT000000013X. Слэш тәҡдимдәре идара итеүҙе раҫлау резюмеһы инә ала

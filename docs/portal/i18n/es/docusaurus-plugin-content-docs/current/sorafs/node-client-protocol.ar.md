@@ -114,10 +114,12 @@ Utilice el software SF-6 (CLI Rust para `sorafs_fetch` y SDK)
 
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` para REST
   Haga clic en los pines y Norito JSON para obtener la certificación de atestación.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` manifiestos
-  بنمط Norito أو JSON مع pruebas اختيارية للـ alias yالـ sucesor؛ تؤدي pruebas
-  Pruebas de `400` y pruebas de `503` y de `Warning: 110`
-  pruebas المنتهية تمامًا `412`.
+- `torii /v1/sorafs/pin/register` acepta la solicitud JSON V1 cerrada.
+  `manifest_payload` debe ser el base64 canónico con padding exacto de los bytes
+  Norito `ManifestV1` canónicos. Torii deriva el digest, chunker, longitud de
+  contenido, política de pin y entradas de tarifa únicamente del manifest
+  decodificado, y rechaza los campos de resumen duplicados retirados. `alias` y
+  un predecessor `successor_of_hex` distinto de cero siguen siendo opcionales.
 - RESTO (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تضمن هياكل atestación حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.

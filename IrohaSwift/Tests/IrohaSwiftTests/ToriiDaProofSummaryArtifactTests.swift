@@ -33,7 +33,8 @@ final class ToriiDaProofSummaryArtifactTests: XCTestCase {
         XCTAssertEqual(proof["chunk_digest"] as? String, "0a0b")
         XCTAssertEqual(proof["segment_leaves"] as? [String], ["aa", "bb"])
         XCTAssertEqual(proof["chunk_segments"] as? [String], ["cc"])
-        XCTAssertEqual(proof["chunk_roots"] as? [String], ["dd"])
+        XCTAssertEqual(proof["chunk_count"] as? UInt64, 2)
+        XCTAssertEqual(proof["chunk_merkle_path"] as? [String], ["dd"])
         XCTAssertEqual(proof["verified"] as? Bool, true)
     }
 
@@ -98,7 +99,8 @@ private func makeStubProofSummary() -> ToriiDaProofSummary {
         leafBytes: Data([0xDE, 0xAD, 0xBE, 0xEF]),
         segmentLeavesHex: ["AA", "BB"],
         chunkSegmentsHex: ["CC"],
-        chunkRootsHex: ["DD"],
+        chunkCount: 2,
+        chunkMerklePathHex: ["DD"],
         verified: true
     )
     return ToriiDaProofSummary(

@@ -14,14 +14,19 @@ summary: Implemented PoR/PDP/PoTR streaming APIs, challenge-bound CLI requests, 
 
 > **Status (Jul 2026):** `sorafs_cli proof stream` streams PoR samples, reads
 > the durable status of an explicit governed PDP challenge, replays cached
-> PoTR receipts, writes deterministic governance-evidence bundles, and fails
-> closed on gateway or local verification failures. Torii exposes the
+> PoTR receipts, validates the exact approved native pin projection before
+> every request, writes payload-free governance-evidence bundles, and fails
+> closed on transport, projection, sequence, gateway, or local verification
+> failures. Torii exposes the
 > `/v1/sorafs/proof/stream` NDJSON endpoint plus the authenticated five-route
 > PDP provider protocol with Prometheus counters, histograms, and in-flight
 > gauges. PDP sampling inputs come only from the recorded challenge; clients
 > must supply its non-zero `challenge_id` and cannot choose a sample count or
-> seed. Production promotion remains blocked on the chain-authoritative repair
-> handoff and genuine multi-provider deployment evidence.
+> seed. Proof failures use the exact-chain durable native repair-transaction
+> handoff and finalized-lease-gated storage execution. Promotion remains
+> blocked on proving one cross-peer terminal outcome and collecting genuine
+> multi-provider deployment evidence. The former local repair
+> manager/checkpoint authority and its GC/reconciliation consumers are deleted.
 
 ## API Concepts
 
@@ -31,25 +36,32 @@ summary: Implemented PoR/PDP/PoTR streaming APIs, challenge-bound CLI requests, 
   - `challenge_id` (PDP only)
   - `sample_count` (PoR only)
   - `deadline_ms` (PoTR only)
+  - `expected_finalized_height`
+  - `expected_finalized_block_hash`
   - `nonce`
 - `ProofStreamResponse` (streamed items):
-  - `sample_index`, `chunk_index`, `proof`, `verification_status`, `latency_ms`.
+  - `request_digest`, finalized cursor, canonical proof-kind projection, and
+    the kind-specific proof or signed receipt payload.
 
 CLI commands:
-- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=por --samples=128`
-- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=pdp --challenge-id-hex=<hex32>`
-- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=potr --deadline-ms=90000`
+- `sorafs_cli proof stream --manifest=manifest.to --torii-url=https://torii.example --provider-id-hex=<hex32> --bearer-token-env=SORAFS_PROOF_BEARER_TOKEN --proof-kind=por --samples=128`
+- `sorafs_cli proof stream --manifest=manifest.to --torii-url=https://torii.example --provider-id-hex=<hex32> --bearer-token-env=SORAFS_PROOF_BEARER_TOKEN --proof-kind=pdp --challenge-id-hex=<hex32>`
+- `sorafs_cli proof stream --manifest=manifest.to --torii-url=https://torii.example --provider-id-hex=<hex32> --bearer-token-env=SORAFS_PROOF_BEARER_TOKEN --proof-kind=potr --deadline-ms=90000 --orchestrator-job-id-hex=<hex16>`
 
 Operator features:
-- `sorafs_cli proof stream` reads NDJSON, verifies PoR samples locally, and
-  records a summary JSON blob for CI/governance archives.
+- `sorafs_cli proof stream` first authenticates exact native
+  `GET /v1/sorafs/pin/{digest_hex}` state from the same HTTPS origin. It
+  requires `Approved`, equality with the local canonical manifest, and a
+  non-zero finalized cursor, then reads NDJSON and verifies the exact
+  request-bound sequence through EOF.
 - Torii bounds PoR `sample_count` to `1..=500`, requires a non-zero PDP
   `challenge_id`, rejects PDP client-selected sampling inputs, and requires a
   non-zero PoTR deadline before manifest lookup.
-- `--governance-evidence-dir` copies the manifest, metadata, and proof summary
-  into a deterministic evidence directory.
-- `--max-failures` and `--max-verification-failures` let rehearsals tolerate a
-  bounded number of expected failures; defaults remain fail-closed.
+- `--governance-evidence-dir` copies the manifest, redacted origin/path
+  metadata, and payload-free proof summary into an evidence directory.
+- Authentication comes only from the runtime environment named by
+  `--bearer-token-env`. HTTP, userinfo, queries, fragments, redirects,
+  `--stream-token`, and failure-budget overrides are rejected.
 
 ## Telemetry
 
@@ -79,6 +91,9 @@ Operator features:
       challenge_id: Option<Hash>,    // Required for PDP; governed and non-zero
       sample_count: Option<u32>,     // Required for PoR only; 1..=500
       deadline_ms: Option<u32>,      // Required for PoTR
+      sample_seed: Option<u64>,      // PoR only; folded into request-bound sampling
+      expected_finalized_height: Option<u64>,
+      expected_finalized_block_hash: Option<Hash>,
       nonce: [u8; 16],               // Client-supplied to prevent replay
       orchestrator_job_id: Option<Uuid>,
       tier: Option<ProofTier>,       // hot | warm | archive (maps to PDP/PoTR tiers)
@@ -86,27 +101,32 @@ Operator features:
   enum ProofKind { Por, Pdp, Potr }
   enum ProofTier { Hot, Warm, Archive }
   ```
-  This schema allows the orchestrator and CLI to route requests for PoR, PoTR,
-  and PDP without divergent wire formats. PDP requests must set
+  The CLI always populates both finalized-cursor fields from an authenticated,
+  approved native pin readback. This schema allows the orchestrator and CLI to
+  route requests for PoR, PoTR, and PDP without divergent wire formats. PDP requests must set
   `proof_kind=Pdp` and `challenge_id`, and must omit `sample_count`,
   `sample_seed`, and `deadline_ms`. PoTR requests must set `deadline_ms` and
   omit challenge and sampling fields.
 - **Streaming response items.**
   ```norito
   struct ProofStreamItemV1 {
+      request_digest: Hash,
       manifest_digest: Hash,
       provider_id: ProviderId,
+      finalized_block_height: u64,
+      finalized_block_hash: Hash,
       proof_kind: ProofKind,
-      sample_index: Option<u32>,
+      leaf_index_flat: Option<u64>,
       chunk_index: Option<u32>,
-      receipt: ProofReceiptV1,
-      verification_status: VerificationStatus,
-      latency_ms: u32,
+      proof: Option<PorProof>,
+      receipt: Option<PotrReceiptV1>,
+      result: VerificationStatus,
+      latency_ms: Option<u32>,
       failure_reason: Option<FailureReason>,
       trace_id: Option<Uuid>,
   }
   ```
-  - For PoTR, `sample_index` is `None` and `receipt` carries the signed deadline proof (`PotrReceiptV1`).
+  - For PoTR, `leaf_index_flat` is `None` and `receipt` carries the signed deadline proof (`PotrReceiptV1`).
   - For PDP, the streamed item reports the durable lifecycle and terminal
     decision for the exact recorded challenge. Canonical proof bytes enter
     through `/v1/sorafs/pdp/proof`.
@@ -142,9 +162,11 @@ alerting remain consistent. The CLI/SDK map them to user-facing error messages a
 - **Non-goals.** WebSocket transport is deemed unnecessary; HTTP/2 streaming satisfies bidirectional needs
   and keeps security posture aligned with existing MTLS gateways.
 - **CLI implementation.**
-  - The Rust CLI reads NDJSON lines, emits or suppresses per-item events,
-    verifies PoR samples, enforces failure budgets, and writes the final
-    metrics summary.
+  - The Rust CLI uses an HTTPS-only, no-redirect, no-proxy, identity-encoding
+    client for the authenticated pin readback and stream on one origin. It
+    consumes bounded canonical NDJSON through EOF, verifies the exact sequence,
+    emits only payload-free projections when requested, requires zero
+    failures, and writes the final metrics summary.
   - SDK streaming helpers should preserve the same request/response schema and
     failure taxonomy as they are added.
 

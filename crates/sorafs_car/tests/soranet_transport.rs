@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use sorafs_car::{
     CarBuildPlan, CarWriteStats, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
+    compute_por_root,
     gateway::GatewayFetchedManifest,
     multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderId, ProviderReport},
 };
@@ -60,7 +61,7 @@ fn build_fixture() -> FetchFixture {
         }],
     };
     let (manifest, manifest_bytes, manifest_digest) =
-        build_manifest(&plan, &chunker_handle, &car_stats, governance);
+        build_manifest(&payload, &plan, &chunker_handle, &car_stats, governance);
 
     FetchFixture {
         payload,
@@ -74,6 +75,7 @@ fn build_fixture() -> FetchFixture {
 }
 
 fn build_manifest(
+    payload: &[u8],
     plan: &CarBuildPlan,
     _chunker_handle: &str,
     car_stats: &CarWriteStats,
@@ -87,6 +89,7 @@ fn build_manifest(
             chunker_registry::DEFAULT_MULTIHASH_CODE,
         ))
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(compute_por_root(payload, plan).expect("derive canonical fixture PoR root"))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)
@@ -213,6 +216,7 @@ fn manifest_without_governance_rejects_verification() {
     let mut session = build_fetch_session(&fixture);
 
     let (manifest_without_governance, manifest_bytes, manifest_digest) = build_manifest(
+        &fixture.payload,
         &fixture.plan,
         &fixture.chunker_handle,
         &fixture.car_stats,

@@ -7,7 +7,15 @@ This note summarises the authorization and abuse controls around SoraFS control-
 - `RegisterPinManifest` is public on the universal lane. Submission collects the SoraFS public pin fee from the submitter into the governance treasury, records the fee metadata on the pin record, activates the manifest immediately, and auto-issues the minimum replication order whenever active capacity declarations can satisfy the manifest policy.
 - The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/expire (`CanIssueSorafsReplicationOrder`) and complete (`CanCompleteSorafsReplicationOrder`), pricing set, and provider credit upsert. `ApprovePinManifest` remains available to attach or ratify the council envelope on an already active manifest.
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry; use the governance config seed or the `RegisterProviderOwner`/`UnregisterProviderOwner` instructions to manage bindings.
-- Repair worker endpoints (`/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`) require signed `RepairWorkerSignaturePayloadV1` requests from a worker account (i105 account id/signatory key) that holds `CanOperateSorafsRepair { provider_id }`. The signed payload includes `manifest_digest` and must match `manifest_digest_hex` in the request; provider owners are auto-granted this permission and may delegate it via `GrantPermission`; revoke with `RevokePermission` during rotation.
+- Repair command endpoints accept exactly one caller-signed Iroha transaction
+  containing the route-specific native instruction. Claims, renewals,
+  completion, failure, and escalation require the transaction authority to
+  hold `CanOperateSorafsRepair { provider_id }`; renew/terminal actions must
+  also match the exact committed task revision, active lease owner, and lease
+  generation. Provider owners may delegate and revoke the scoped permission
+  with `GrantPermission`/`RevokePermission`. Deleted
+  `RepairWorkerSignaturePayloadV1` bodies are not accepted as a compatibility
+  format, and Torii never injects an authority into an unsigned request.
 - The SoraFS storage pin API (`/v1/sorafs/storage/pin`) requires a matching approved paid pin registry record for the manifest digest, chunk profile, content length, policy, chunk plan digest, and fee payer. The recorded fee asset, treasury, and amount are treated as the committed on-chain receipt, so later governance pricing or treasury changes do not invalidate an already-paid manifest. It no longer treats bearer tokens or CIDR allow-lists as the source of admission authority; quota limits still apply before ingest.
 - Local moderation quarantine review, release, and encrypted object store/read endpoints require canonical request signatures from accounts holding the `sorafs_moderation_operator` role. Keep this as a dedicated empty role for the Torii API gate; do not attach broad ledger permissions to it unless a separate governance change requires them.
 - SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require `X-SoraNet-Privacy-Token` (or `X-API-Token`), a non-empty CIDR allow-list, and the token/burst limits under `torii.soranet_privacy_ingest`; requests outside the namespace or over budget are rejected before metrics ingestion.
@@ -51,7 +59,6 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   ```bash
   iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \
-    --chunk-digest 0123abcd... \
     --submitted-epoch 0 \
     --config /etc/iroha/config.toml
   ```

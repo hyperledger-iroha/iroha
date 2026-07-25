@@ -2,18 +2,535 @@
 
 use std::fmt;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
+    ChainId,
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
-    transaction::TransactionEntrypoint,
+    transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use norito::codec::{Decode, Encode};
 
-/// Schema version for Torii proxy requests with an explicit transaction admission mode.
-pub const TORII_PROXY_REQUEST_VERSION_V3: u16 = 3;
+/// Schema version for Torii proxy requests with generation-bound durable admission.
+pub const TORII_PROXY_REQUEST_VERSION_V5: u16 = 5;
 /// Schema version for peer-to-peer Torii proxy responses.
 pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
+/// Maximum participant routes admitted in one Native AMX routing-plan hint.
+pub const TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1: usize =
+    crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS;
+/// Current first-release QueuePlan global-admission binding layout.
+pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2: u16 = 2;
+/// Current first-release QueuePlan authority-attestation layout.
+pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2: u16 = 2;
+/// Current first-release QueuePlan admission-certificate layout.
+pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
+
+const QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2: &[u8] = b"iroha:torii:queue-plan-admission-chain:v2\0";
+const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
+    b"iroha:torii:queue-plan-admission-binding:v2\0";
+const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2: &[u8] =
+    b"iroha:torii:queue-plan-admission-attestation:v2\0";
+
+/// Return the chain identity carried by every QueuePlan admission binding.
+#[must_use]
+pub fn queue_plan_admission_chain_id_digest(chain_id: &ChainId) -> Hash {
+    Hash::new_from_chunks(&[
+        QUEUE_PLAN_ADMISSION_CHAIN_DOMAIN_V2,
+        chain_id.as_str().as_bytes(),
+    ])
+}
+
+/// Globally unique registry key for one transaction-entrypoint admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct QueuePlanAdmissionRegistryKeyV2 {
+    /// Registry-key layout version.
+    pub version: u16,
+    /// Chain that owns the entrypoint.
+    pub chain_id_digest: Hash,
+    /// Typed canonical transaction-entrypoint identity.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+}
+
+/// Immutable value claimed by a QueuePlan global-admission registry key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct QueuePlanAdmissionRegistryValueV2 {
+    /// Registry-value layout version.
+    pub version: u16,
+    /// Domain-separated hash of the complete admission binding.
+    pub binding_hash: Hash,
+}
+
+/// One exact queue-journal claim shared by every authority in an admission certificate.
+///
+/// The complete context carries ordered rosters for every coordinator/participant leg. The
+/// journal digest covers the exact transaction wire, routing plan, context, canonical ingress
+/// timestamp, chain digest, and deterministic request identity. Authorities never substitute a
+/// locally sampled timestamp or independently reconstructed claim.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionBindingV2 {
+    /// Binding layout version.
+    pub version: u16,
+    /// Domain-separated chain identity.
+    pub chain_id_digest: Hash,
+    /// Deterministic QueuePlanSynced proxy request identity.
+    pub request_id: Hash,
+    /// Typed canonical transaction-entrypoint identity.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Real signed-transaction identity when the entrypoint contains one.
+    pub signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+    /// Complete canonical routing-plan digest.
+    pub routing_plan_digest: Hash,
+    /// Exact lifecycle, incarnation, and ordered per-leg authority context.
+    pub admission_context: crate::queue::QueuePlanAdmissionContextV2,
+    /// Canonical ingress timestamp persisted identically by every authority.
+    pub enqueue_timestamp_ms: u64,
+    /// Exact queue-plan journal record layout.
+    pub queue_plan_journal_version: u16,
+    /// Exact durable-claim layout returned by queue admission.
+    pub durable_admission_version: u16,
+    /// Domain-separated digest of the exact canonical journal record.
+    pub journal_record_digest: Hash,
+}
+
+impl QueuePlanAdmissionBindingV2 {
+    /// Build the single exact binding an ingress node sends to every authority.
+    ///
+    /// # Errors
+    /// Returns an error when the supplied context is not canonical for the routing plan or the
+    /// exact version-4 journal record cannot be encoded.
+    pub fn new(
+        chain_id: &ChainId,
+        request_id: Hash,
+        transaction: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+        admission_context: crate::queue::QueuePlanAdmissionContextV2,
+        enqueue_timestamp_ms: u64,
+    ) -> Result<Self, String> {
+        admission_context.validate_for_routing_plan(routing_plan)?;
+        let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
+            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+            chain_id_digest: queue_plan_admission_chain_id_digest(chain_id),
+            request_id,
+        };
+        let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan.clone(),
+            admission_context.clone(),
+            enqueue_timestamp_ms,
+            Some(global_admission_identity.clone()),
+        )
+        .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
+        Ok(Self {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            chain_id_digest: global_admission_identity.chain_id_digest,
+            request_id: global_admission_identity.request_id,
+            entrypoint_hash: transaction.hash(),
+            signed_transaction_hash: signed_transaction_hash(transaction),
+            routing_plan_digest: routing_plan.digest(),
+            admission_context,
+            enqueue_timestamp_ms,
+            queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
+            durable_admission_version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            journal_record_digest,
+        })
+    }
+
+    /// Reconstruct a shared binding from one exact locally durable queue claim.
+    ///
+    /// # Errors
+    /// Returns an error for ordinary claims without a global identity or for any inconsistent
+    /// version, transaction, routing, context, or journal field.
+    pub fn try_from_durable_admission(
+        durable: &crate::queue::QueuePlanDurableAdmissionV2,
+    ) -> Result<Self, String> {
+        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+            return Err("QueuePlan durable-admission version is unsupported".to_owned());
+        }
+        let identity = durable
+            .global_admission_identity
+            .as_ref()
+            .ok_or_else(|| "QueuePlan durable admission has no global identity".to_owned())?;
+        if identity.version != crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2 {
+            return Err("QueuePlan global-admission identity version is unsupported".to_owned());
+        }
+        let binding = Self {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            chain_id_digest: identity.chain_id_digest,
+            request_id: identity.request_id,
+            entrypoint_hash: durable.entrypoint_hash.clone(),
+            signed_transaction_hash: durable.signed_transaction_hash.clone(),
+            routing_plan_digest: durable.routing_plan.digest(),
+            admission_context: durable.context.clone(),
+            enqueue_timestamp_ms: durable.enqueue_timestamp_ms,
+            queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
+            durable_admission_version: durable.version,
+            journal_record_digest: durable.journal_record_digest,
+        };
+        binding.validate_structure()?;
+        Ok(binding)
+    }
+
+    /// Return the global identity persisted inside the exact queue-plan journal record.
+    #[must_use]
+    pub fn global_admission_identity(&self) -> crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
+        crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
+            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+            chain_id_digest: self.chain_id_digest,
+            request_id: self.request_id,
+        }
+    }
+
+    /// Return the canonical routing plan carried redundantly by the context.
+    ///
+    /// # Errors
+    /// Returns an error when the context cannot encode a canonical routing plan or its advertised
+    /// digest differs.
+    pub fn routing_plan(&self) -> Result<crate::queue::RoutingPlan, String> {
+        let routing_plan = self.admission_context.routing_plan()?;
+        self.admission_context
+            .validate_for_routing_plan(&routing_plan)?;
+        if routing_plan.digest() != self.routing_plan_digest {
+            return Err("QueuePlan binding routing digest differs from its context".to_owned());
+        }
+        Ok(routing_plan)
+    }
+
+    /// Validate all fields that do not require the exact transaction wire.
+    ///
+    /// # Errors
+    /// Returns the first unsupported version, zero identity, context, routing, or journal failure.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        if self.version != QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2 {
+            return Err("QueuePlan admission-binding version is unsupported".to_owned());
+        }
+        if self.chain_id_digest == Hash::prehashed([0; Hash::LENGTH])
+            || self.request_id == Hash::prehashed([0; Hash::LENGTH])
+            || self.journal_record_digest == Hash::prehashed([0; Hash::LENGTH])
+        {
+            return Err("QueuePlan admission binding contains a zero identity hash".to_owned());
+        }
+        if self.admission_context.version != crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2 {
+            return Err("QueuePlan admission-context version is unsupported".to_owned());
+        }
+        if self.queue_plan_journal_version != crate::queue::QUEUE_PLAN_JOURNAL_VERSION {
+            return Err("QueuePlan journal version is unsupported".to_owned());
+        }
+        if self.durable_admission_version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+            return Err("QueuePlan durable-admission version is unsupported".to_owned());
+        }
+        self.routing_plan().map(|_| ())
+    }
+
+    /// Validate this binding against the exact request transaction and routing plan.
+    ///
+    /// # Errors
+    /// Returns an error when any typed transaction identity, plan/context field, chain identity,
+    /// or canonical version-4 journal-record digest differs.
+    pub fn validate_for_request(
+        &self,
+        chain_id: &ChainId,
+        transaction: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+    ) -> Result<(), String> {
+        if self.chain_id_digest != queue_plan_admission_chain_id_digest(chain_id) {
+            return Err("QueuePlan admission binding belongs to another chain".to_owned());
+        }
+        self.validate_for_transaction_and_plan(transaction, routing_plan)
+    }
+
+    /// Validate the exact transaction, routing plan, and journal record when the trusted caller
+    /// has already established the chain identity.
+    ///
+    /// # Errors
+    /// Returns an error for any typed transaction identity, plan/context, or journal mismatch.
+    pub fn validate_for_transaction_and_plan(
+        &self,
+        transaction: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+    ) -> Result<(), String> {
+        self.validate_structure()?;
+        if self.entrypoint_hash != transaction.hash()
+            || self.signed_transaction_hash != signed_transaction_hash(transaction)
+        {
+            return Err(
+                "QueuePlan admission binding has a different transaction identity".to_owned(),
+            );
+        }
+        if self.routing_plan_digest != routing_plan.digest() {
+            return Err("QueuePlan admission binding has a different routing plan".to_owned());
+        }
+        self.admission_context
+            .validate_for_routing_plan(routing_plan)?;
+        let exact_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan.clone(),
+            self.admission_context.clone(),
+            self.enqueue_timestamp_ms,
+            Some(self.global_admission_identity()),
+        )
+        .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
+        if exact_digest != self.journal_record_digest {
+            return Err(
+                "QueuePlan admission binding does not cover the exact journal record".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Return the domain-separated hash attested by coordinator authorities.
+    #[must_use]
+    pub fn canonical_hash(&self) -> Hash {
+        let bytes = norito::to_bytes(self)
+            .expect("QueuePlan admission binding must have a canonical Norito encoding");
+        Hash::new_from_chunks(&[QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2, bytes.as_slice()])
+    }
+
+    /// Return the immutable WSV registry key for this transaction entrypoint.
+    #[must_use]
+    pub fn registry_key(&self) -> QueuePlanAdmissionRegistryKeyV2 {
+        QueuePlanAdmissionRegistryKeyV2 {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            chain_id_digest: self.chain_id_digest,
+            entrypoint_hash: self.entrypoint_hash.clone(),
+        }
+    }
+
+    /// Return the immutable WSV registry value for this exact binding.
+    #[must_use]
+    pub fn registry_value(&self) -> QueuePlanAdmissionRegistryValueV2 {
+        QueuePlanAdmissionRegistryValueV2 {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash: self.canonical_hash(),
+        }
+    }
+}
+
+fn signed_transaction_hash(
+    entrypoint: &TransactionEntrypoint,
+) -> Option<HashOf<SignedTransaction>> {
+    match entrypoint {
+        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(HashOf::new(reveal.signed_transaction()))
+        }
+        TransactionEntrypoint::SealedCommitment(_)
+        | TransactionEntrypoint::PrivateKaigi(_)
+        | TransactionEntrypoint::Time(_) => None,
+    }
+}
+
+/// One compact signature over a shared QueuePlan admission binding.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionAttestationV2 {
+    /// Attestation layout version.
+    pub version: u16,
+    /// Signer's index in the exact ordered coordinator validator set.
+    pub validator_index: u16,
+    /// Signature over the binding hash and validator index.
+    pub signature: Signature,
+}
+
+/// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct QueuePlanAdmissionCertificateV2 {
+    /// Certificate layout version.
+    pub version: u16,
+    /// One canonical binding shared by every attestation.
+    pub binding: QueuePlanAdmissionBindingV2,
+    /// Strictly increasing validator-index attestations.
+    pub attestations: Vec<QueuePlanAdmissionAttestationV2>,
+}
+
+/// Strength required while validating a QueuePlan admission certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueuePlanAdmissionCertificateStrengthV2 {
+    /// A bounded nonempty subset, used for authenticated authority responses.
+    Partial,
+    /// Exactly the context's durability threshold, used by global admission controls.
+    Quorum,
+}
+
+/// Fully authenticated QueuePlan admission certificate and its registry projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedQueuePlanAdmissionCertificateV2 {
+    /// Exact decoded certificate.
+    pub certificate: QueuePlanAdmissionCertificateV2,
+    /// Domain-separated binding identity.
+    pub binding_hash: Hash,
+    /// Immutable WSV registry key.
+    pub registry_key: QueuePlanAdmissionRegistryKeyV2,
+    /// Immutable WSV registry value.
+    pub registry_value: QueuePlanAdmissionRegistryValueV2,
+    /// Exact coordinator route authorized by the binding.
+    pub coordinator_route: crate::queue::RoutingDecision,
+    /// Number of distinct attestations required for durable availability.
+    pub durability_threshold: usize,
+}
+
+#[derive(Encode)]
+struct QueuePlanAdmissionAttestationPayloadV2 {
+    version: u16,
+    binding_hash: Hash,
+    validator_index: u16,
+}
+
+/// Return canonical domain-separated signing bytes for one authority index.
+///
+/// # Errors
+/// Returns a Norito encoding error if the fixed attestation payload cannot be encoded.
+pub fn queue_plan_admission_attestation_signing_bytes_v2(
+    binding_hash: Hash,
+    validator_index: u16,
+) -> Result<Vec<u8>, norito::Error> {
+    let payload = QueuePlanAdmissionAttestationPayloadV2 {
+        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+        binding_hash,
+        validator_index,
+    };
+    let encoded = norito::to_bytes(&payload)?;
+    let mut bytes =
+        Vec::with_capacity(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2.len() + encoded.len());
+    bytes.extend_from_slice(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2);
+    bytes.extend_from_slice(&encoded);
+    Ok(bytes)
+}
+
+/// Validate one already-decoded QueuePlan admission certificate.
+///
+/// # Errors
+/// Returns the first structural, chain, roster, threshold, ordering, or signature failure.
+pub fn validate_queue_plan_admission_certificate_v2(
+    chain_id: &ChainId,
+    certificate: QueuePlanAdmissionCertificateV2,
+    strength: QueuePlanAdmissionCertificateStrengthV2,
+) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
+    validate_queue_plan_admission_certificate_for_chain_digest_v2(
+        queue_plan_admission_chain_id_digest(chain_id),
+        certificate,
+        strength,
+    )
+}
+
+/// Validate a QueuePlan certificate against a caller-authenticated chain digest.
+///
+/// Torii uses this after validating the request binding against its local chain and exact
+/// transaction. Consensus-facing callers should prefer
+/// [`validate_queue_plan_admission_certificate_v2`] with a trusted [`ChainId`].
+///
+/// # Errors
+/// Returns the first structural, chain, roster, threshold, ordering, or signature failure.
+pub fn validate_queue_plan_admission_certificate_for_chain_digest_v2(
+    expected_chain_id_digest: Hash,
+    certificate: QueuePlanAdmissionCertificateV2,
+    strength: QueuePlanAdmissionCertificateStrengthV2,
+) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
+    if certificate.version != QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2 {
+        return Err("QueuePlan admission-certificate version is unsupported".to_owned());
+    }
+    certificate.binding.validate_structure()?;
+    if certificate.binding.chain_id_digest != expected_chain_id_digest {
+        return Err("QueuePlan admission certificate belongs to another chain".to_owned());
+    }
+    let routing_plan = certificate.binding.routing_plan()?;
+    let coordinator = certificate
+        .binding
+        .admission_context
+        .route_incarnations
+        .first()
+        .ok_or_else(|| "QueuePlan admission context has no coordinator".to_owned())?;
+    let durability_threshold = usize::from(coordinator.durability_threshold);
+    let attestation_count = certificate.attestations.len();
+    if attestation_count == 0 || attestation_count > durability_threshold {
+        return Err(
+            "QueuePlan admission certificate has an empty or oversized attestation set".to_owned(),
+        );
+    }
+    if strength == QueuePlanAdmissionCertificateStrengthV2::Quorum
+        && attestation_count != durability_threshold
+    {
+        return Err(
+            "QueuePlan admission certificate does not contain the exact durability quorum"
+                .to_owned(),
+        );
+    }
+    let binding_hash = certificate.binding.canonical_hash();
+    let mut previous_index = None;
+    for attestation in &certificate.attestations {
+        if attestation.version != QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2 {
+            return Err("QueuePlan admission-attestation version is unsupported".to_owned());
+        }
+        if previous_index.is_some_and(|previous| previous >= attestation.validator_index) {
+            return Err(
+                "QueuePlan admission attestations are duplicated or not canonically ordered"
+                    .to_owned(),
+            );
+        }
+        previous_index = Some(attestation.validator_index);
+        let validator = coordinator
+            .validator_set
+            .get(usize::from(attestation.validator_index))
+            .ok_or_else(|| "QueuePlan admission attestation index is out of bounds".to_owned())?;
+        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(
+            binding_hash,
+            attestation.validator_index,
+        )
+        .map_err(|error| format!("QueuePlan attestation payload cannot be encoded: {error}"))?;
+        attestation
+            .signature
+            .verify(validator.public_key(), &signing_bytes)
+            .map_err(|error| format!("QueuePlan admission attestation is invalid: {error}"))?;
+    }
+    let registry_key = certificate.binding.registry_key();
+    let registry_value = certificate.binding.registry_value();
+    Ok(ValidatedQueuePlanAdmissionCertificateV2 {
+        coordinator_route: routing_plan.coordinator_route(),
+        certificate,
+        binding_hash,
+        registry_key,
+        registry_value,
+        durability_threshold,
+    })
+}
+
+/// Decode canonical bounded certificate bytes and require an exact durability quorum.
+///
+/// This is the validation boundary used by merge-sidecar admission and WSV staging. Partial
+/// authority responses must use [`validate_queue_plan_admission_certificate_v2`] directly.
+///
+/// # Errors
+/// Returns an error for an empty/oversized body, bounded-decode failure, noncanonical Norito
+/// bytes, or any structural, chain, quorum, roster, ordering, or signature mismatch.
+pub fn decode_and_validate_queue_plan_admission_certificate_v2(
+    chain_id: &ChainId,
+    bytes: &[u8],
+) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
+    let max_bytes = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err("QueuePlan admission certificate is empty or oversized".to_owned());
+    }
+    let decode_limits = norito::DecodeLimits::new(
+        iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
+        max_bytes,
+        max_bytes,
+        max_bytes.saturating_mul(4),
+        64,
+    );
+    let certificate = norito::decode_from_bytes_with_limits::<QueuePlanAdmissionCertificateV2>(
+        bytes,
+        decode_limits,
+    )
+    .map_err(|error| format!("QueuePlan admission certificate cannot be decoded: {error}"))?;
+    let canonical = norito::to_bytes(&certificate)
+        .map_err(|error| format!("QueuePlan admission certificate cannot be encoded: {error}"))?;
+    if canonical != bytes {
+        return Err("QueuePlan admission certificate is not canonical Norito".to_owned());
+    }
+    validate_queue_plan_admission_certificate_v2(
+        chain_id,
+        certificate,
+        QueuePlanAdmissionCertificateStrengthV2::Quorum,
+    )
+}
 
 /// Stable lane/dataspace assignment determined at ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
@@ -97,6 +614,12 @@ pub enum ToriiRoutingPlanHintErrorKind {
     UnexpectedCoordinatorRole,
     /// A participant leg was encoded with a non-participant role.
     UnexpectedParticipantRole,
+    /// A Native AMX hint contains more participant routes than the protocol permits.
+    NativeAmxParticipantLimitExceeded,
+    /// A Native AMX hint repeats one participant route.
+    NativeAmxDuplicateParticipantRoute,
+    /// Native AMX participant routes are not in canonical dataspace/lane order.
+    NativeAmxParticipantsOutOfOrder,
     /// A Native AMX hint advertised a digest that does not match its route legs.
     NativeAmxPlanDigestMismatch,
 }
@@ -107,6 +630,10 @@ pub struct ToriiRoutingPlanHintError {
     kind: ToriiRoutingPlanHintErrorKind,
     leg_index: Option<usize>,
     actual_role: Option<ToriiRouteLegRoleV1>,
+    participant_count: Option<usize>,
+    participant_limit: Option<usize>,
+    previous_route: Option<ToriiRouteHintV1>,
+    actual_route: Option<ToriiRouteHintV1>,
     advertised_digest: Option<Hash>,
     computed_digest: Option<Hash>,
 }
@@ -119,6 +646,10 @@ impl ToriiRoutingPlanHintError {
             kind: ToriiRoutingPlanHintErrorKind::UnexpectedCoordinatorRole,
             leg_index: None,
             actual_role: Some(actual),
+            participant_count: None,
+            participant_limit: None,
+            previous_route: None,
+            actual_route: None,
             advertised_digest: None,
             computed_digest: None,
         }
@@ -131,6 +662,65 @@ impl ToriiRoutingPlanHintError {
             kind: ToriiRoutingPlanHintErrorKind::UnexpectedParticipantRole,
             leg_index: Some(index),
             actual_role: Some(actual),
+            participant_count: None,
+            participant_limit: None,
+            previous_route: None,
+            actual_route: None,
+            advertised_digest: None,
+            computed_digest: None,
+        }
+    }
+
+    /// Construct an error for a Native AMX participant vector above the protocol limit.
+    #[must_use]
+    pub const fn native_amx_participant_limit_exceeded(count: usize, limit: usize) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::NativeAmxParticipantLimitExceeded,
+            leg_index: None,
+            actual_role: None,
+            participant_count: Some(count),
+            participant_limit: Some(limit),
+            previous_route: None,
+            actual_route: None,
+            advertised_digest: None,
+            computed_digest: None,
+        }
+    }
+
+    /// Construct an error for a repeated Native AMX participant route.
+    #[must_use]
+    pub const fn native_amx_duplicate_participant_route(
+        index: usize,
+        route: ToriiRouteHintV1,
+    ) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::NativeAmxDuplicateParticipantRoute,
+            leg_index: Some(index),
+            actual_role: None,
+            participant_count: None,
+            participant_limit: None,
+            previous_route: Some(route),
+            actual_route: Some(route),
+            advertised_digest: None,
+            computed_digest: None,
+        }
+    }
+
+    /// Construct an error for noncanonical Native AMX participant ordering.
+    #[must_use]
+    pub const fn native_amx_participants_out_of_order(
+        index: usize,
+        previous: ToriiRouteHintV1,
+        actual: ToriiRouteHintV1,
+    ) -> Self {
+        Self {
+            kind: ToriiRoutingPlanHintErrorKind::NativeAmxParticipantsOutOfOrder,
+            leg_index: Some(index),
+            actual_role: None,
+            participant_count: None,
+            participant_limit: None,
+            previous_route: Some(previous),
+            actual_route: Some(actual),
             advertised_digest: None,
             computed_digest: None,
         }
@@ -143,6 +733,10 @@ impl ToriiRoutingPlanHintError {
             kind: ToriiRoutingPlanHintErrorKind::NativeAmxPlanDigestMismatch,
             leg_index: None,
             actual_role: None,
+            participant_count: None,
+            participant_limit: None,
+            previous_route: None,
+            actual_route: None,
             advertised_digest: Some(advertised),
             computed_digest: Some(computed),
         }
@@ -160,10 +754,34 @@ impl ToriiRoutingPlanHintError {
         self.actual_role
     }
 
-    /// Return the malformed participant index, when this error is participant-role related.
+    /// Return the malformed participant index, when this error identifies one route leg.
     #[must_use]
     pub const fn leg_index(&self) -> Option<usize> {
         self.leg_index
+    }
+
+    /// Return the advertised participant count, when this error is count-related.
+    #[must_use]
+    pub const fn participant_count(&self) -> Option<usize> {
+        self.participant_count
+    }
+
+    /// Return the maximum participant count, when this error is count-related.
+    #[must_use]
+    pub const fn participant_limit(&self) -> Option<usize> {
+        self.participant_limit
+    }
+
+    /// Return the preceding participant route, when this error is order-related.
+    #[must_use]
+    pub const fn previous_route(&self) -> Option<ToriiRouteHintV1> {
+        self.previous_route
+    }
+
+    /// Return the malformed participant route, when this error is route-related.
+    #[must_use]
+    pub const fn actual_route(&self) -> Option<ToriiRouteHintV1> {
+        self.actual_route
     }
 
     /// Return the advertised Native AMX plan digest, when this error is digest-related.
@@ -192,6 +810,42 @@ impl fmt::Display for ToriiRoutingPlanHintError {
                         write!(f, "unexpected participant role {actual:?} at index {index}")
                     }
                     _ => f.write_str("unexpected participant role"),
+                }
+            }
+            ToriiRoutingPlanHintErrorKind::NativeAmxParticipantLimitExceeded => {
+                match (self.participant_count, self.participant_limit) {
+                    (Some(count), Some(limit)) => write!(
+                        f,
+                        "native AMX participant count {count} exceeds protocol limit {limit}"
+                    ),
+                    _ => f.write_str("native AMX participant count exceeds protocol limit"),
+                }
+            }
+            ToriiRoutingPlanHintErrorKind::NativeAmxDuplicateParticipantRoute => {
+                match (self.leg_index, self.actual_route) {
+                    (Some(index), Some(route)) => write!(
+                        f,
+                        "duplicate native AMX participant route at index {index}: dataspace {}, lane {}",
+                        route.dataspace_id.as_u64(),
+                        route.lane_id.as_u32()
+                    ),
+                    _ => f.write_str("duplicate native AMX participant route"),
+                }
+            }
+            ToriiRoutingPlanHintErrorKind::NativeAmxParticipantsOutOfOrder => {
+                match (self.leg_index, self.previous_route, self.actual_route) {
+                    (Some(index), Some(previous), Some(actual)) => write!(
+                        f,
+                        "native AMX participant routes are out of canonical (dataspace, lane) order \
+                         at index {index}: previous ({}, {}), actual ({}, {})",
+                        previous.dataspace_id.as_u64(),
+                        previous.lane_id.as_u32(),
+                        actual.dataspace_id.as_u64(),
+                        actual.lane_id.as_u32()
+                    ),
+                    _ => f.write_str(
+                        "native AMX participant routes are out of canonical (dataspace, lane) order",
+                    ),
                 }
             }
             ToriiRoutingPlanHintErrorKind::NativeAmxPlanDigestMismatch => {
@@ -238,8 +892,9 @@ impl ToriiRoutingPlanHintV1 {
     /// Convert this hint to a full routing plan after validating redundant wire fields.
     ///
     /// # Errors
-    /// Returns an error when leg roles are not canonical or a Native AMX hint's advertised digest
-    /// does not match the digest recomputed from its route legs.
+    /// Returns an error when leg roles are not canonical, the participant vector exceeds the
+    /// protocol limit or is not in strict canonical route order, or a Native AMX hint's advertised
+    /// digest does not match the digest recomputed from its route legs.
     pub fn try_into_routing_plan(
         self,
     ) -> Result<crate::queue::RoutingPlan, ToriiRoutingPlanHintError> {
@@ -264,14 +919,42 @@ impl ToriiRoutingPlanHintV1 {
                         coordinator.role,
                     ));
                 }
+                if participants.len() > TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1 {
+                    return Err(
+                        ToriiRoutingPlanHintError::native_amx_participant_limit_exceeded(
+                            participants.len(),
+                            TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1,
+                        ),
+                    );
+                }
 
                 let mut participant_legs = Vec::with_capacity(participants.len());
+                let mut previous_route: Option<ToriiRouteHintV1> = None;
                 for (index, leg) in participants.into_iter().enumerate() {
                     if leg.role != ToriiRouteLegRoleV1::Participant {
                         return Err(ToriiRoutingPlanHintError::unexpected_participant_role(
                             index, leg.role,
                         ));
                     }
+                    if let Some(previous) = previous_route {
+                        let previous_key = (previous.dataspace_id, previous.lane_id);
+                        let actual_key = (leg.route.dataspace_id, leg.route.lane_id);
+                        if actual_key == previous_key {
+                            return Err(
+                                ToriiRoutingPlanHintError::native_amx_duplicate_participant_route(
+                                    index, leg.route,
+                                ),
+                            );
+                        }
+                        if actual_key < previous_key {
+                            return Err(
+                                ToriiRoutingPlanHintError::native_amx_participants_out_of_order(
+                                    index, previous, leg.route,
+                                ),
+                            );
+                        }
+                    }
+                    previous_route = Some(leg.route);
                     participant_legs.push(crate::queue::RouteLeg::from(leg));
                 }
 
@@ -529,20 +1212,21 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub remote_ip: Option<String>,
 }
 
-/// Queue admission durability requested for a proxied transaction.
+/// First-release queue admission contract for a proxied transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum ToriiProxyTransactionAdmissionV1 {
-    /// Acknowledge after ordinary queue admission without a synchronous queue-plan barrier.
-    #[codec(index = 0)]
-    Deferred,
-    /// Acknowledge only after the exact queue-plan record crosses its durability boundary.
-    #[codec(index = 1)]
+pub enum ToriiProxyTransactionAdmissionV2 {
+    /// Acknowledge only after the exact QueuePlan certificate is globally committed.
+    ///
+    /// Index two deliberately leaves both retired V1 tags invalid, so neither
+    /// ordinary deferred admission nor its pre-global "synced" sibling can be
+    /// reinterpreted under the first-release contract.
+    #[codec(index = 2)]
     QueuePlanSynced,
 }
 
-/// Canonical version-2 Torii request body forwarded over the P2P control plane.
+/// Canonical version-4 Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum ToriiProxyRequestKindV2 {
+pub enum ToriiProxyRequestKindV4 {
     /// Submit a signed transaction to the authoritative lane validator.
     #[codec(index = 0)]
     SubmitTransaction {
@@ -551,7 +1235,12 @@ pub enum ToriiProxyRequestKindV2 {
         /// Full routing plan resolved by the ingress node.
         expected_plan: ToriiRoutingPlanHintV1,
         /// Durability boundary the route-owning peer must satisfy before acknowledging.
-        admission: ToriiProxyTransactionAdmissionV1,
+        admission: ToriiProxyTransactionAdmissionV2,
+        /// Exact shared journal binding required for a durable admission.
+        ///
+        /// This must be present only for `QueuePlanSynced` and is revalidated by
+        /// every forwarding and admitting authority.
+        admission_binding: Option<QueuePlanAdmissionBindingV2>,
     },
     /// Execute a signed query on the authoritative lane validator.
     #[codec(index = 1)]
@@ -592,9 +1281,9 @@ pub enum ToriiProxyRequestKindV2 {
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 
-/// Version-3 P2P Torii proxy request sent from ingress to an authoritative peer.
+/// Version-5 P2P Torii proxy request sent from ingress to an authoritative peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct ToriiProxyRequestV3 {
+pub struct ToriiProxyRequestV5 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
     /// Correlation id selected by the ingress node.
@@ -606,7 +1295,7 @@ pub struct ToriiProxyRequestV3 {
     /// Peer ids already traversed by the request to prevent proxy loops.
     pub visited_peer_ids: Vec<PeerId>,
     /// Canonical request to execute on the authoritative peer.
-    pub request: ToriiProxyRequestKindV2,
+    pub request: ToriiProxyRequestKindV4,
 }
 
 /// One HTTP header preserved across the Torii proxy response snapshot.
@@ -704,6 +1393,15 @@ mod tests {
         request: TransientBoolToriiProxyRequestKindV1,
     }
 
+    /// Frozen admission discriminants from the retired pre-global layout.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
+    enum ObsoleteToriiProxyTransactionAdmissionV1 {
+        #[codec(index = 0)]
+        Deferred,
+        #[codec(index = 1)]
+        QueuePlanSynced,
+    }
+
     fn torii_read_endpoint_wire_index(endpoint: ToriiReadEndpointV1) -> u32 {
         let encoded = norito::codec::Encode::encode(&endpoint);
         assert_eq!(
@@ -714,12 +1412,12 @@ mod tests {
         u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
     }
 
-    fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV1) -> u32 {
+    fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV2) -> u32 {
         let encoded = norito::codec::Encode::encode(&admission);
         assert_eq!(
             encoded.len(),
             4,
-            "ToriiProxyTransactionAdmissionV1 should encode as a u32 variant index"
+            "ToriiProxyTransactionAdmissionV2 should encode as a u32 variant index"
         );
         u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
     }
@@ -727,26 +1425,167 @@ mod tests {
     #[test]
     fn torii_transaction_admission_wire_indexes_are_stable() {
         assert_eq!(
-            torii_transaction_admission_wire_index(ToriiProxyTransactionAdmissionV1::Deferred),
-            0
-        );
-        assert_eq!(
             torii_transaction_admission_wire_index(
-                ToriiProxyTransactionAdmissionV1::QueuePlanSynced
+                ToriiProxyTransactionAdmissionV2::QueuePlanSynced
             ),
-            1
+            2
         );
     }
 
     #[test]
-    fn torii_proxy_v3_envelope_roundtrips_exact_request() {
-        let request = ToriiProxyRequestV3 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
-            request_id: Hash::new(b"torii-proxy-v3-roundtrip"),
+    fn obsolete_transaction_admission_tags_fail_closed() {
+        for obsolete in [
+            ObsoleteToriiProxyTransactionAdmissionV1::Deferred,
+            ObsoleteToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        ] {
+            let encoded = norito::codec::Encode::encode(&obsolete);
+            assert!(
+                ToriiProxyTransactionAdmissionV2::decode(&mut encoded.as_slice()).is_err(),
+                "retired admission tag {obsolete:?} must not decode under the V2 contract"
+            );
+        }
+    }
+
+    #[test]
+    fn native_admission_binds_participants_but_uses_only_coordinator_quorum() {
+        let chain_id: ChainId = "queue-plan-native-coordinator-quorum"
+            .parse()
+            .expect("fixture chain id");
+        let transaction_signer =
+            iroha_crypto::KeyPair::from_seed(vec![0x81; 32], iroha_crypto::Algorithm::Ed25519);
+        let authority =
+            iroha_data_model::account::AccountId::new(transaction_signer.public_key().clone());
+        let transaction = TransactionEntrypoint::External(
+            iroha_data_model::transaction::TransactionBuilder::new(
+                chain_id.clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(transaction_signer.private_key()),
+        );
+        let coordinator_route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
+        let participant_route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(8));
+        let routing_plan = RoutingPlan::native_amx(
+            coordinator_route,
+            vec![RouteLeg::new(participant_route, RouteLegRole::Participant)],
+        );
+        let coordinator_signers = (0_u8..4)
+            .map(|seed| {
+                iroha_crypto::KeyPair::from_seed(
+                    vec![seed.saturating_add(0x90); 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+            })
+            .collect::<Vec<_>>();
+        let participant_signer =
+            iroha_crypto::KeyPair::from_seed(vec![0xA0; 32], iroha_crypto::Algorithm::Ed25519);
+        let coordinator_roster = coordinator_signers
+            .iter()
+            .map(|signer| PeerId::new(signer.public_key().clone()))
+            .collect::<Vec<_>>();
+        let participant_roster = vec![PeerId::new(participant_signer.public_key().clone())];
+        let context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: vec![
+                crate::queue::QueuePlanRouteIncarnationV2 {
+                    leg: RouteLeg::new(coordinator_route, RouteLegRole::Coordinator),
+                    lane_incarnation: Hash::new(b"native-admission-coordinator-incarnation"),
+                    validator_set_hash_version:
+                        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&coordinator_roster),
+                    validator_set: coordinator_roster,
+                    validator_count: 4,
+                    durability_threshold: 2,
+                },
+                crate::queue::QueuePlanRouteIncarnationV2 {
+                    leg: RouteLeg::new(participant_route, RouteLegRole::Participant),
+                    lane_incarnation: Hash::new(b"native-admission-participant-incarnation"),
+                    validator_set_hash_version:
+                        iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&participant_roster),
+                    validator_set: participant_roster,
+                    validator_count: 1,
+                    durability_threshold: 1,
+                },
+            ],
+        };
+        let binding = QueuePlanAdmissionBindingV2::new(
+            &chain_id,
+            Hash::new(b"native-admission-request"),
+            &transaction,
+            &routing_plan,
+            context,
+            42,
+        )
+        .expect("build Native admission binding");
+        assert_eq!(
+            binding.routing_plan().expect("bound Native routing plan"),
+            routing_plan,
+            "participant routing evidence must remain inside the shared binding"
+        );
+        let sign = |validator_index: u16, signer: &iroha_crypto::KeyPair| {
+            let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(
+                binding.canonical_hash(),
+                validator_index,
+            )
+            .expect("encode attestation preimage");
+            QueuePlanAdmissionAttestationV2 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                validator_index,
+                signature: Signature::try_new(signer.private_key(), &signing_bytes)
+                    .expect("sign admission attestation"),
+            }
+        };
+        let certificate = QueuePlanAdmissionCertificateV2 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding: binding.clone(),
+            attestations: vec![
+                sign(0, &coordinator_signers[0]),
+                sign(1, &coordinator_signers[1]),
+            ],
+        };
+        let validated = validate_queue_plan_admission_certificate_v2(
+            &chain_id,
+            certificate,
+            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        )
+        .expect("coordinator quorum certifies the participant-bound plan");
+        assert_eq!(validated.coordinator_route, coordinator_route);
+        assert_eq!(validated.durability_threshold, 2);
+
+        let participant_attestations = vec![
+            sign(0, &participant_signer),
+            sign(1, &coordinator_signers[1]),
+        ];
+        let participant_certificate = QueuePlanAdmissionCertificateV2 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding,
+            attestations: participant_attestations,
+        };
+        assert!(
+            validate_queue_plan_admission_certificate_v2(
+                &chain_id,
+                participant_certificate,
+                QueuePlanAdmissionCertificateStrengthV2::Quorum,
+            )
+            .is_err(),
+            "participant authority must not substitute for coordinator durability quorum"
+        );
+    }
+
+    #[test]
+    fn torii_proxy_v5_envelope_roundtrips_exact_request() {
+        let request = ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+            request_id: Hash::new(b"torii-proxy-v5-roundtrip"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::new(3),
@@ -759,9 +1598,9 @@ mod tests {
             }),
         };
 
-        let encoded = norito::to_bytes(&request).expect("encode V3 Torii proxy request");
-        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV3>(&encoded)
-            .expect("decode V3 Torii proxy request");
+        let encoded = norito::to_bytes(&request).expect("encode V5 Torii proxy request");
+        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV5>(&encoded)
+            .expect("decode V5 Torii proxy request");
         assert_eq!(decoded, request);
     }
 
@@ -796,7 +1635,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v3() {
+    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v5() {
         let historical = historical_v2_submit_fixture();
         let historical_bytes =
             norito::to_bytes(&historical).expect("encode checked-in historical V2 Submit fixture");
@@ -812,8 +1651,8 @@ mod tests {
             historical
         );
         assert!(
-            norito::decode_from_bytes::<ToriiProxyRequestV3>(&historical_bytes).is_err(),
-            "the checked-in V2 request must not decode as a V3 request"
+            norito::decode_from_bytes::<ToriiProxyRequestV5>(&historical_bytes).is_err(),
+            "the checked-in V2 request must not decode as a V5 request"
         );
 
         let historical_network = HistoricalNetworkMessage::ToriiProxyRequest(Box::new(historical));
@@ -836,7 +1675,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v3() {
+    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v5() {
         let keypair =
             iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
@@ -891,17 +1730,17 @@ mod tests {
                 legacy
             );
             assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV3>(&legacy_bytes).is_err(),
-                "the genuine V2 frame must not decode as a V3 request"
+                norito::decode_from_bytes::<ToriiProxyRequestV5>(&legacy_bytes).is_err(),
+                "the genuine V2 frame must not decode as a V5 request"
             );
 
-            let mut relabeled_as_v3 = legacy_bytes;
-            relabeled_as_v3[6..22]
-                .copy_from_slice(&<ToriiProxyRequestV3 as norito::NoritoSerialize>::schema_hash());
+            let mut relabeled_as_v5 = legacy_bytes;
+            relabeled_as_v5[6..22]
+                .copy_from_slice(&<ToriiProxyRequestV5 as norito::NoritoSerialize>::schema_hash());
             assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV3>(&relabeled_as_v3).is_err(),
-                "even a V3 schema label must not turn the legacy one-byte bool payload into the \
-                 four-byte V3 admission enum; no compatibility fallback is permitted"
+                norito::decode_from_bytes::<ToriiProxyRequestV5>(&relabeled_as_v5).is_err(),
+                "even a V5 schema label must not turn the legacy one-byte bool payload into the \
+                 V5 admission-binding shape; no compatibility fallback is permitted"
             );
         }
     }
@@ -940,6 +1779,21 @@ mod tests {
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::ContractDeploymentState),
             49
         );
+    }
+
+    fn native_amx_participant_legs(count: usize) -> Vec<RouteLeg> {
+        (0..count)
+            .map(|index| {
+                let ordinal = u32::try_from(index + 1).expect("participant fixture index fits u32");
+                RouteLeg::new(
+                    RoutingDecision::new(
+                        LaneId::new(ordinal),
+                        DataSpaceId::new(u64::from(ordinal)),
+                    ),
+                    RouteLegRole::Participant,
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -1013,6 +1867,117 @@ mod tests {
         assert_eq!(
             RoutingPlan::try_from(native_hint).expect("native AMX routing hint should validate"),
             native_plan
+        );
+    }
+
+    #[test]
+    fn torii_routing_plan_hint_enforces_native_amx_participant_limit() {
+        assert_eq!(
+            TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1, 255,
+            "Torii hint bound must remain source-bound to the Native AMX protocol cap"
+        );
+        let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let maximum_plan = RoutingPlan::native_amx(
+            coordinator,
+            native_amx_participant_legs(TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1),
+        );
+        assert_eq!(
+            ToriiRoutingPlanHintV1::from(maximum_plan.clone()).try_into_routing_plan(),
+            Ok(maximum_plan),
+            "the exact participant limit must remain admissible"
+        );
+
+        let oversized_count = TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1 + 1;
+        let oversized_hint = ToriiRoutingPlanHintV1::from(RoutingPlan::native_amx(
+            coordinator,
+            native_amx_participant_legs(oversized_count),
+        ));
+        let error = oversized_hint
+            .try_into_routing_plan()
+            .expect_err("a participant vector above the protocol cap must fail closed");
+        assert_eq!(
+            error,
+            ToriiRoutingPlanHintError::native_amx_participant_limit_exceeded(
+                oversized_count,
+                TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1,
+            )
+        );
+        assert_eq!(
+            error.kind(),
+            ToriiRoutingPlanHintErrorKind::NativeAmxParticipantLimitExceeded
+        );
+        assert_eq!(error.participant_count(), Some(oversized_count));
+        assert_eq!(
+            error.participant_limit(),
+            Some(TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1)
+        );
+        assert_eq!(
+            error.to_string(),
+            "native AMX participant count 256 exceeds protocol limit 255"
+        );
+    }
+
+    #[test]
+    fn torii_routing_plan_hint_rejects_duplicate_participants_without_deduplication() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let plan = RoutingPlan::native_amx(coordinator, native_amx_participant_legs(2));
+        let mut hint = ToriiRoutingPlanHintV1::from(plan);
+        let ToriiRoutingPlanHintV1::NativeAmx { participants, .. } = &mut hint else {
+            panic!("expected native AMX hint");
+        };
+        let duplicate = participants[0];
+        participants.insert(1, duplicate);
+
+        let error = hint
+            .try_into_routing_plan()
+            .expect_err("duplicate participant hints must not be silently deduplicated");
+        assert_eq!(
+            error,
+            ToriiRoutingPlanHintError::native_amx_duplicate_participant_route(1, duplicate.route)
+        );
+        assert_eq!(
+            error.kind(),
+            ToriiRoutingPlanHintErrorKind::NativeAmxDuplicateParticipantRoute
+        );
+        assert_eq!(error.leg_index(), Some(1));
+        assert_eq!(error.previous_route(), Some(duplicate.route));
+        assert_eq!(error.actual_route(), Some(duplicate.route));
+        assert_eq!(
+            error.to_string(),
+            "duplicate native AMX participant route at index 1: dataspace 1, lane 1"
+        );
+    }
+
+    #[test]
+    fn torii_routing_plan_hint_rejects_out_of_order_participants_without_sorting() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let plan = RoutingPlan::native_amx(coordinator, native_amx_participant_legs(2));
+        let mut hint = ToriiRoutingPlanHintV1::from(plan);
+        let ToriiRoutingPlanHintV1::NativeAmx { participants, .. } = &mut hint else {
+            panic!("expected native AMX hint");
+        };
+        participants.swap(0, 1);
+        let previous = participants[0].route;
+        let actual = participants[1].route;
+
+        let error = hint
+            .try_into_routing_plan()
+            .expect_err("out-of-order participant hints must not be silently sorted");
+        assert_eq!(
+            error,
+            ToriiRoutingPlanHintError::native_amx_participants_out_of_order(1, previous, actual,)
+        );
+        assert_eq!(
+            error.kind(),
+            ToriiRoutingPlanHintErrorKind::NativeAmxParticipantsOutOfOrder
+        );
+        assert_eq!(error.leg_index(), Some(1));
+        assert_eq!(error.previous_route(), Some(previous));
+        assert_eq!(error.actual_route(), Some(actual));
+        assert_eq!(
+            error.to_string(),
+            "native AMX participant routes are out of canonical (dataspace, lane) order at index \
+             1: previous (2, 2), actual (1, 1)"
         );
     }
 

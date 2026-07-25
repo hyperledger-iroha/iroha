@@ -121,10 +121,12 @@ com.atualizacoes.
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` يشمل نظام التشغيل
   نقاط النهاية REST تقوم بتسجيل الدبوس والطباعة Norito JSON bruto com blocos de
   شهادة لأدلة السمع.
-- `iroha app sorafs storage pin` و `torii /v1/sorafs/pin/register` بيانات الاسيتام
-  Norito أو JSON com الأسماء المستعارة للإثباتات والخيارات اللاحقة؛ البراهين المشوهة
-  geram `400`، البراهين التي لا معنى لها retornam `503` com `Warning: 110`، البراهين الإلكترونية التي انتهت صلاحيتها
-  ريتورنام `412`.
+- يقبل `torii /v1/sorafs/pin/register` طلب JSON V1 المغلق. يجب أن يكون
+  `manifest_payload` ترميز base64 مبطنًا canonical ودقيقًا لبايتات
+  `ManifestV1` canonical بنمط Norito. يشتق Torii الـ digest والـ chunker وطول
+  المحتوى وسياسة pin ومدخلات الرسوم حصريًا من الـ manifest المفكوك، ويرفض
+  حقول الملخص المكررة المتقاعدة. يبقى `alias` وسلف `successor_of_hex` غير
+  الصفري اختياريين.
 - نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
   تتضمن استراتيجيات التصديق حتى يتمكن العملاء من التحقق من بياناتهم ضد نظام التشغيل
   آخر رؤوس الكتلة قبل التشغيل.

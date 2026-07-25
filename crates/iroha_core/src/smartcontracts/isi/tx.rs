@@ -1315,6 +1315,7 @@ pub(crate) mod tests {
             ),
             execution_batch: Some(batch),
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
         }
     }
 

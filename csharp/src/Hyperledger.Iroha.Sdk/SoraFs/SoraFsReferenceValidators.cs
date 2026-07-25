@@ -2,8 +2,63 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.SoraFs;
+
+/// <summary>
+/// Canonical V1 orderbook payload selectors accepted by the Rust reference validator.
+/// </summary>
+public enum SoraFsOrderbookPayloadKind : uint
+{
+    /// <summary>An <c>OrderRequestV1</c>.</summary>
+    OrderRequest = 1,
+    /// <summary>An <c>OrderCancelV1</c>.</summary>
+    OrderCancel = 2,
+    /// <summary>A <c>TradeEventV1</c>.</summary>
+    TradeEvent = 3,
+    /// <summary>A <c>SettlementChannelV1</c>.</summary>
+    SettlementChannel = 4,
+    /// <summary>A <c>SettlementReceiptV1</c>.</summary>
+    SettlementReceipt = 5,
+}
+
+/// <summary>
+/// Canonical V1 PDP payload selectors accepted by the Rust reference validator.
+/// </summary>
+public enum SoraFsPdpPayloadKind : uint
+{
+    /// <summary>A <c>PdpCommitmentV1</c>.</summary>
+    Commitment = 1,
+    /// <summary>A <c>PdpChallengeV1</c>.</summary>
+    Challenge = 2,
+    /// <summary>A <c>PdpProofV1</c>.</summary>
+    Proof = 3,
+}
+
+/// <summary>Canonical V1 order side selector.</summary>
+public enum SoraFsOrderbookSide : uint
+{
+    Bid = 1,
+    Ask = 2,
+}
+
+/// <summary>Canonical V1 storage tier selector.</summary>
+public enum SoraFsOrderbookTier : uint
+{
+    Hot = 1,
+    Warm = 2,
+    Archive = 3,
+}
+
+/// <summary>Canonical V1 order cancellation reason selector.</summary>
+public enum SoraFsOrderbookCancelReason : uint
+{
+    OwnerRequested = 1,
+    Expired = 2,
+    Governance = 3,
+    Replaced = 4,
+}
 
 /// <summary>
 /// One ordered Governance DAG block supplied to signed-head-chain validation.
@@ -87,12 +142,16 @@ public static class SoraFsReferenceValidators
     /// </summary>
     public const int GovernanceDagCidBytesV1 = 32;
 
+    /// <summary>Maximum canonical owner-account byte length for V1 orders.</summary>
+    public const int OrderbookOwnerAccountMaxBytesV1 = 256;
+
     /// <summary>
     /// Current <c>ValidationOutcomeV1</c> schema version.
     /// </summary>
     public const int ValidationOutcomeVersionV1 = 1;
 
     private const string LibraryName = "connect_norito_bridge";
+    private const int Ed25519PrivateKeyBytes = 32;
     private const string ErrorsDocument =
         "docs/portal/docs/sorafs/reference-sdk/errors.md";
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -138,6 +197,303 @@ public static class SoraFsReferenceValidators
     public static bool IsAvailable()
     {
         return IsAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Reports whether the current native bridge exposes all orderbook and PDP
+    /// reference-validator entrypoints.
+    /// </summary>
+    public static bool IsOrderbookPdpAvailable()
+    {
+        return IsOrderbookPdpAvailable(PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Validates one canonical orderbook payload.
+    /// </summary>
+    public static string ValidateOrderbookPayloadJson(
+        SoraFsOrderbookPayloadKind kind,
+        byte[] noritoBytes,
+        string? label = null)
+    {
+        return ValidateOrderbookPayloadJson(
+            kind,
+            noritoBytes,
+            label,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Validates one canonical orderbook payload with a caller-bound outcome timestamp.
+    /// </summary>
+    public static string ValidateOrderbookPayloadJson(
+        SoraFsOrderbookPayloadKind kind,
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix)
+    {
+        return ValidateOrderbookPayloadJson(
+            kind,
+            noritoBytes,
+            label,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>Signs one canonical mutable V1 orderbook payload.</summary>
+    public static byte[] SignOrderbookPayload(
+        SoraFsOrderbookPayloadKind kind,
+        byte[] noritoBytes,
+        byte[] privateKey)
+    {
+        return SignOrderbookPayload(
+            kind,
+            noritoBytes,
+            privateKey,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>Derives the canonical V1 order identifier.</summary>
+    public static byte[] DeriveOrderbookOrderId(byte[] ownerAccount, ulong nonce)
+    {
+        return DeriveOrderbookOrderId(
+            ownerAccount,
+            nonce,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>Builds and signs canonical <c>OrderRequestV1</c> bytes.</summary>
+    public static byte[] BuildSignedOrderbookOrderRequest(
+        SoraFsOrderbookSide side,
+        SoraFsOrderbookTier tier,
+        string pricePerGib,
+        ulong quantityGib,
+        byte[] ownerAccount,
+        ulong expiryUnix,
+        ulong nonce,
+        uint makerFeeBps,
+        uint takerFeeBps,
+        byte[] privateKey,
+        ulong? remainingGib = null,
+        byte[]? orderId = null,
+        byte[]? providerId = null)
+    {
+        return BuildSignedOrderbookOrderRequest(
+            side,
+            tier,
+            pricePerGib,
+            quantityGib,
+            ownerAccount,
+            expiryUnix,
+            nonce,
+            makerFeeBps,
+            takerFeeBps,
+            privateKey,
+            remainingGib,
+            orderId,
+            providerId,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>Builds and signs canonical <c>OrderCancelV1</c> bytes.</summary>
+    public static byte[] BuildSignedOrderbookOrderCancel(
+        byte[] orderId,
+        byte[] ownerAccount,
+        SoraFsOrderbookCancelReason reason,
+        ulong nonce,
+        byte[] privateKey)
+    {
+        return BuildSignedOrderbookOrderCancel(
+            orderId,
+            ownerAccount,
+            reason,
+            nonce,
+            privateKey,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>Builds and signs canonical <c>SettlementReceiptV1</c> bytes.</summary>
+    public static byte[] BuildSignedOrderbookSettlementReceipt(
+        byte[] receiptId,
+        byte[] channelId,
+        byte[] tradeId,
+        ulong rangeStart,
+        ulong rangeEnd,
+        byte[] chunkHash,
+        ulong bytesDelivered,
+        string xorDebited,
+        string providerCredit,
+        string feeAmount,
+        ulong issuedAtUnix,
+        byte[] privateKey)
+    {
+        return BuildSignedOrderbookSettlementReceipt(
+            receiptId,
+            channelId,
+            tradeId,
+            rangeStart,
+            rangeEnd,
+            chunkHash,
+            bytesDelivered,
+            xorDebited,
+            providerCredit,
+            feeAmount,
+            issuedAtUnix,
+            privateKey,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Diagnoses one canonical PDP payload. A successful outcome is structural
+    /// only and does not authorize production acceptance.
+    /// </summary>
+    public static string ValidatePdpPayloadJson(
+        SoraFsPdpPayloadKind kind,
+        byte[] noritoBytes,
+        string? label = null)
+    {
+        return ValidatePdpPayloadJson(
+            kind,
+            noritoBytes,
+            label,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Diagnoses one canonical PDP payload with a caller-bound outcome timestamp.
+    /// </summary>
+    public static string ValidatePdpPayloadJson(
+        SoraFsPdpPayloadKind kind,
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix)
+    {
+        return ValidatePdpPayloadJson(
+            kind,
+            noritoBytes,
+            label,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Diagnoses canonical PDP commitment/challenge binding.
+    /// </summary>
+    public static string ValidatePdpCommitmentChallengeJson(
+        byte[] commitment,
+        byte[] challenge,
+        string? commitmentLabel = null,
+        string? challengeLabel = null)
+    {
+        return ValidatePdpCommitmentChallengeJson(
+            commitment,
+            challenge,
+            commitmentLabel,
+            challengeLabel,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Diagnoses canonical PDP commitment/challenge binding with a caller-bound
+    /// outcome timestamp.
+    /// </summary>
+    public static string ValidatePdpCommitmentChallengeJson(
+        byte[] commitment,
+        byte[] challenge,
+        string? commitmentLabel,
+        string? challengeLabel,
+        long generatedAtUnix)
+    {
+        return ValidatePdpCommitmentChallengeJson(
+            commitment,
+            challenge,
+            commitmentLabel,
+            challengeLabel,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Diagnoses canonical PDP challenge/proof binding.
+    /// </summary>
+    public static string ValidatePdpChallengeProofJson(
+        byte[] challenge,
+        byte[] proof,
+        string? challengeLabel = null,
+        string? proofLabel = null)
+    {
+        return ValidatePdpChallengeProofJson(
+            challenge,
+            proof,
+            challengeLabel,
+            proofLabel,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Diagnoses canonical PDP challenge/proof binding with a caller-bound
+    /// outcome timestamp.
+    /// </summary>
+    public static string ValidatePdpChallengeProofJson(
+        byte[] challenge,
+        byte[] proof,
+        string? challengeLabel,
+        string? proofLabel,
+        long generatedAtUnix)
+    {
+        return ValidatePdpChallengeProofJson(
+            challenge,
+            proof,
+            challengeLabel,
+            proofLabel,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
+    }
+
+    /// <summary>
+    /// Exhaustively diagnoses canonical PDP commitment, challenge, proof,
+    /// signature, coverage, and Merkle witnesses without evaluating admission.
+    /// </summary>
+    public static string ValidatePdpBundleJson(
+        byte[] commitment,
+        byte[] challenge,
+        byte[] proof,
+        string? commitmentLabel = null,
+        string? challengeLabel = null,
+        string? proofLabel = null)
+    {
+        return ValidatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            commitmentLabel,
+            challengeLabel,
+            proofLabel,
+            CurrentEpochSeconds());
+    }
+
+    /// <summary>
+    /// Exhaustively diagnoses a canonical PDP bundle with a caller-bound
+    /// outcome timestamp.
+    /// </summary>
+    public static string ValidatePdpBundleJson(
+        byte[] commitment,
+        byte[] challenge,
+        byte[] proof,
+        string? commitmentLabel,
+        string? challengeLabel,
+        string? proofLabel,
+        long generatedAtUnix)
+    {
+        return ValidatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            commitmentLabel,
+            challengeLabel,
+            proofLabel,
+            generatedAtUnix,
+            PInvokeSoraFsReferenceNativeBoundary.Instance);
     }
 
     /// <summary>
@@ -219,6 +575,514 @@ public static class SoraFsReferenceValidators
         {
             return false;
         }
+    }
+
+    internal static bool IsOrderbookPdpAvailable(ISoraFsReferenceNativeBoundary native)
+    {
+        try
+        {
+            return native.AbiVersion() >= RequiredBridgeAbiVersion
+                && native.HasOrderbookPdpSymbols();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    internal static string ValidateOrderbookPayloadJson(
+        SoraFsOrderbookPayloadKind kind,
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        if (!Enum.IsDefined(kind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+        var payload = CopyInput(noritoBytes, nameof(noritoBytes));
+        var labelBytes = EncodeLabel(
+            ValidateLabel(
+                label,
+                $"sdk:sorafs.orderbook.{OrderbookKindLabel(kind)}",
+                nameof(label)),
+            nameof(label));
+        RequireAggregateBound("Orderbook validation", payload.Length, labelBytes.Length);
+        RequireOrderbookPdpBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidateOrderbookPayload(
+                (uint)kind,
+                payload,
+                labelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS orderbook native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS orderbook validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
+    internal static byte[] SignOrderbookPayload(
+        SoraFsOrderbookPayloadKind kind,
+        byte[] noritoBytes,
+        byte[] privateKey,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        if (!Enum.IsDefined(kind)
+            || kind is not (SoraFsOrderbookPayloadKind.OrderRequest
+                or SoraFsOrderbookPayloadKind.OrderCancel
+                or SoraFsOrderbookPayloadKind.SettlementReceipt))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+        var payload = CopyInput(noritoBytes, nameof(noritoBytes));
+        var key = CopyPrivateKey(privateKey);
+        RequireAggregateBound("Orderbook signing", payload.Length, key.Length);
+        RequireOrderbookPdpBridge(native);
+        try
+        {
+            return ReadNativeBytes(
+                "SoraFS orderbook signing",
+                native.SignOrderbookPayload((uint)kind, payload, key),
+                native);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException("SoraFS orderbook native signing failed.", error);
+        }
+        finally
+        {
+            Array.Clear(key);
+        }
+    }
+
+    internal static byte[] DeriveOrderbookOrderId(
+        byte[] ownerAccount,
+        ulong nonce,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        var owner = CopyOwnerAccount(ownerAccount);
+        RequirePositive(nonce, nameof(nonce));
+        RequireOrderbookPdpBridge(native);
+        var output = new byte[32];
+        int code;
+        try
+        {
+            code = native.DeriveOrderbookOrderId(owner, nonce, output);
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS orderbook native order-id derivation failed.",
+                error);
+        }
+        if (code != 0)
+        {
+            throw new InvalidOperationException(
+                $"SoraFS orderbook order-id derivation failed with bridge error code {code}.");
+        }
+        return output;
+    }
+
+    internal static byte[] BuildSignedOrderbookOrderRequest(
+        SoraFsOrderbookSide side,
+        SoraFsOrderbookTier tier,
+        string pricePerGib,
+        ulong quantityGib,
+        byte[] ownerAccount,
+        ulong expiryUnix,
+        ulong nonce,
+        uint makerFeeBps,
+        uint takerFeeBps,
+        byte[] privateKey,
+        ulong? remainingGib,
+        byte[]? orderId,
+        byte[]? providerId,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        RequireDefined(side, nameof(side));
+        RequireDefined(tier, nameof(tier));
+        RequirePositive(quantityGib, nameof(quantityGib));
+        var remaining = remainingGib ?? quantityGib;
+        RequirePositive(remaining, nameof(remainingGib));
+        RequirePositive(expiryUnix, nameof(expiryUnix));
+        RequirePositive(nonce, nameof(nonce));
+        RequireFeeBps(makerFeeBps, nameof(makerFeeBps));
+        RequireFeeBps(takerFeeBps, nameof(takerFeeBps));
+        var owner = CopyOwnerAccount(ownerAccount);
+        var provider = CopyProviderId(side, providerId);
+        var price = EncodeXorQuantity(pricePerGib, nameof(pricePerGib), positive: true);
+        var canonicalOrderId = DeriveOrderbookOrderId(owner, nonce, native);
+        if (orderId is not null)
+        {
+            var supplied = CopyFixed32(orderId, nameof(orderId));
+            if (!supplied.AsSpan().SequenceEqual(canonicalOrderId))
+            {
+                throw new ArgumentException(
+                    "orderId must equal the canonical owner-and-nonce derivation.",
+                    nameof(orderId));
+            }
+        }
+        var key = CopyPrivateKey(privateKey);
+        RequireAggregateBound(
+            "Orderbook order request builder",
+            canonicalOrderId.Length,
+            price.Length,
+            owner.Length,
+            provider.Length,
+            key.Length);
+        RequireOrderbookPdpBridge(native);
+        try
+        {
+            return ReadNativeBytes(
+                "SoraFS orderbook order request builder",
+                native.BuildSignedOrderbookOrderRequest(
+                    canonicalOrderId,
+                    (uint)side,
+                    (uint)tier,
+                    price,
+                    quantityGib,
+                    remaining,
+                    owner,
+                    provider,
+                    expiryUnix,
+                    nonce,
+                    makerFeeBps,
+                    takerFeeBps,
+                    key),
+                native);
+        }
+        finally
+        {
+            Array.Clear(key);
+        }
+    }
+
+    internal static byte[] BuildSignedOrderbookOrderCancel(
+        byte[] orderId,
+        byte[] ownerAccount,
+        SoraFsOrderbookCancelReason reason,
+        ulong nonce,
+        byte[] privateKey,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        RequireDefined(reason, nameof(reason));
+        RequirePositive(nonce, nameof(nonce));
+        var id = CopyFixed32(orderId, nameof(orderId));
+        var owner = CopyOwnerAccount(ownerAccount);
+        var key = CopyPrivateKey(privateKey);
+        RequireAggregateBound("Orderbook cancel builder", id.Length, owner.Length, key.Length);
+        RequireOrderbookPdpBridge(native);
+        try
+        {
+            return ReadNativeBytes(
+                "SoraFS orderbook cancel builder",
+                native.BuildSignedOrderbookOrderCancel(
+                    id,
+                    owner,
+                    (uint)reason,
+                    nonce,
+                    key),
+                native);
+        }
+        finally
+        {
+            Array.Clear(key);
+        }
+    }
+
+    internal static byte[] BuildSignedOrderbookSettlementReceipt(
+        byte[] receiptId,
+        byte[] channelId,
+        byte[] tradeId,
+        ulong rangeStart,
+        ulong rangeEnd,
+        byte[] chunkHash,
+        ulong bytesDelivered,
+        string xorDebited,
+        string providerCredit,
+        string feeAmount,
+        ulong issuedAtUnix,
+        byte[] privateKey,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        RequirePositive(rangeEnd, nameof(rangeEnd));
+        RequirePositive(bytesDelivered, nameof(bytesDelivered));
+        RequirePositive(issuedAtUnix, nameof(issuedAtUnix));
+        var receipt = CopyFixed32(receiptId, nameof(receiptId));
+        var channel = CopyFixed32(channelId, nameof(channelId));
+        var trade = CopyFixed32(tradeId, nameof(tradeId));
+        var chunk = CopyFixed32(chunkHash, nameof(chunkHash));
+        var debit = EncodeXorQuantity(xorDebited, nameof(xorDebited), positive: true);
+        var credit = EncodeXorQuantity(providerCredit, nameof(providerCredit), positive: false);
+        var fee = EncodeXorQuantity(feeAmount, nameof(feeAmount), positive: false);
+        var key = CopyPrivateKey(privateKey);
+        RequireAggregateBound(
+            "Orderbook settlement receipt builder",
+            receipt.Length,
+            channel.Length,
+            trade.Length,
+            chunk.Length,
+            debit.Length,
+            credit.Length,
+            fee.Length,
+            key.Length);
+        RequireOrderbookPdpBridge(native);
+        try
+        {
+            return ReadNativeBytes(
+                "SoraFS orderbook settlement receipt builder",
+                native.BuildSignedOrderbookSettlementReceipt(
+                    receipt,
+                    channel,
+                    trade,
+                    rangeStart,
+                    rangeEnd,
+                    chunk,
+                    bytesDelivered,
+                    debit,
+                    credit,
+                    fee,
+                    issuedAtUnix,
+                    key),
+                native);
+        }
+        finally
+        {
+            Array.Clear(key);
+        }
+    }
+
+    internal static string ValidatePdpPayloadJson(
+        SoraFsPdpPayloadKind kind,
+        byte[] noritoBytes,
+        string? label,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        if (!Enum.IsDefined(kind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+        var payload = CopyInput(noritoBytes, nameof(noritoBytes));
+        var labelBytes = EncodeLabel(
+            ValidateLabel(
+                label,
+                $"sdk:sorafs.pdp.{PdpKindLabel(kind)}",
+                nameof(label)),
+            nameof(label));
+        RequireAggregateBound("PDP validation", payload.Length, labelBytes.Length);
+        RequireOrderbookPdpBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidatePdpPayload(
+                (uint)kind,
+                payload,
+                labelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException("SoraFS PDP native validation failed.", error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS PDP validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
+    internal static string ValidatePdpCommitmentChallengeJson(
+        byte[] commitment,
+        byte[] challenge,
+        string? commitmentLabel,
+        string? challengeLabel,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        var commitmentPayload = CopyInput(commitment, nameof(commitment));
+        var challengePayload = CopyInput(challenge, nameof(challenge));
+        var commitmentLabelBytes = EncodeLabel(
+            ValidateLabel(
+                commitmentLabel,
+                "sdk:sorafs.pdp.commitment",
+                nameof(commitmentLabel)),
+            nameof(commitmentLabel));
+        var challengeLabelBytes = EncodeLabel(
+            ValidateLabel(
+                challengeLabel,
+                "sdk:sorafs.pdp.challenge",
+                nameof(challengeLabel)),
+            nameof(challengeLabel));
+        RequireAggregateBound(
+            "PDP commitment/challenge validation",
+            commitmentPayload.Length,
+            commitmentLabelBytes.Length,
+            challengePayload.Length,
+            challengeLabelBytes.Length);
+        RequireOrderbookPdpBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidatePdpCommitmentChallenge(
+                commitmentPayload,
+                commitmentLabelBytes,
+                challengePayload,
+                challengeLabelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS PDP commitment/challenge native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS PDP commitment/challenge validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
+    internal static string ValidatePdpChallengeProofJson(
+        byte[] challenge,
+        byte[] proof,
+        string? challengeLabel,
+        string? proofLabel,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        var challengePayload = CopyInput(challenge, nameof(challenge));
+        var proofPayload = CopyInput(proof, nameof(proof));
+        var challengeLabelBytes = EncodeLabel(
+            ValidateLabel(
+                challengeLabel,
+                "sdk:sorafs.pdp.challenge",
+                nameof(challengeLabel)),
+            nameof(challengeLabel));
+        var proofLabelBytes = EncodeLabel(
+            ValidateLabel(proofLabel, "sdk:sorafs.pdp.proof", nameof(proofLabel)),
+            nameof(proofLabel));
+        RequireAggregateBound(
+            "PDP challenge/proof validation",
+            challengePayload.Length,
+            challengeLabelBytes.Length,
+            proofPayload.Length,
+            proofLabelBytes.Length);
+        RequireOrderbookPdpBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidatePdpChallengeProof(
+                challengePayload,
+                challengeLabelBytes,
+                proofPayload,
+                proofLabelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS PDP challenge/proof native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS PDP challenge/proof validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
+    }
+
+    internal static string ValidatePdpBundleJson(
+        byte[] commitment,
+        byte[] challenge,
+        byte[] proof,
+        string? commitmentLabel,
+        string? challengeLabel,
+        string? proofLabel,
+        long generatedAtUnix,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        ValidateGeneratedAt(generatedAtUnix);
+        var commitmentPayload = CopyInput(commitment, nameof(commitment));
+        var challengePayload = CopyInput(challenge, nameof(challenge));
+        var proofPayload = CopyInput(proof, nameof(proof));
+        var commitmentLabelBytes = EncodeLabel(
+            ValidateLabel(
+                commitmentLabel,
+                "sdk:sorafs.pdp.commitment",
+                nameof(commitmentLabel)),
+            nameof(commitmentLabel));
+        var challengeLabelBytes = EncodeLabel(
+            ValidateLabel(
+                challengeLabel,
+                "sdk:sorafs.pdp.challenge",
+                nameof(challengeLabel)),
+            nameof(challengeLabel));
+        var proofLabelBytes = EncodeLabel(
+            ValidateLabel(proofLabel, "sdk:sorafs.pdp.proof", nameof(proofLabel)),
+            nameof(proofLabel));
+        RequireAggregateBound(
+            "PDP bundle validation",
+            commitmentPayload.Length,
+            commitmentLabelBytes.Length,
+            challengePayload.Length,
+            challengeLabelBytes.Length,
+            proofPayload.Length,
+            proofLabelBytes.Length);
+        RequireOrderbookPdpBridge(native);
+        NativeValidationResult result;
+        try
+        {
+            result = native.ValidatePdpBundle(
+                commitmentPayload,
+                commitmentLabelBytes,
+                challengePayload,
+                challengeLabelBytes,
+                proofPayload,
+                proofLabelBytes,
+                checked((ulong)generatedAtUnix));
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                "SoraFS PDP bundle native validation failed.",
+                error);
+        }
+        return ReadAndValidateOutcome(
+            "SoraFS PDP bundle validation",
+            result,
+            checked((ulong)generatedAtUnix),
+            native);
     }
 
     internal static string ValidateGovernanceDagBlockJson(
@@ -424,6 +1288,161 @@ public static class SoraFsReferenceValidators
         }
     }
 
+    private static void RequireDefined<T>(T value, string parameterName)
+        where T : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw new ArgumentOutOfRangeException(parameterName);
+        }
+    }
+
+    private static void RequirePositive(ulong value, string parameterName)
+    {
+        if (value == 0)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, "Value must be greater than zero.");
+        }
+    }
+
+    private static void RequireFeeBps(uint value, string parameterName)
+    {
+        if (value > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                "Orderbook fees must fit in unsigned 16-bit basis points.");
+        }
+    }
+
+    private static byte[] CopyFixed32(byte[] value, string parameterName)
+    {
+        var copied = CopyInput(value, parameterName);
+        if (copied.Length != 32)
+        {
+            throw new ArgumentException("Value must contain exactly 32 bytes.", parameterName);
+        }
+        return copied;
+    }
+
+    private static byte[] CopyOwnerAccount(byte[] value)
+    {
+        var copied = CopyInput(value, nameof(value));
+        if (copied.Length == 0 || copied.Length > OrderbookOwnerAccountMaxBytesV1)
+        {
+            throw new ArgumentException(
+                $"ownerAccount must contain 1..{OrderbookOwnerAccountMaxBytesV1} bytes.",
+                nameof(value));
+        }
+        return copied;
+    }
+
+    private static byte[] CopyProviderId(SoraFsOrderbookSide side, byte[]? value)
+    {
+        if (side == SoraFsOrderbookSide.Bid)
+        {
+            if (value is not null && value.Length != 0)
+            {
+                throw new ArgumentException(
+                    "providerId must be absent or empty for bid orders.",
+                    "providerId");
+            }
+            return Array.Empty<byte>();
+        }
+        if (value is null || value.Length != 32)
+        {
+            throw new ArgumentException(
+                "providerId must contain exactly 32 bytes for ask orders.",
+                "providerId");
+        }
+        var copied = (byte[])value.Clone();
+        var nonZero = false;
+        foreach (var item in copied)
+        {
+            if (item != 0)
+            {
+                nonZero = true;
+                break;
+            }
+        }
+        if (!nonZero)
+        {
+            throw new ArgumentException(
+                "providerId must not be all zero.",
+                "providerId");
+        }
+        return copied;
+    }
+
+    private static byte[] CopyPrivateKey(byte[] value)
+    {
+        var copied = CopyInput(value, nameof(value));
+        if (copied.Length != Ed25519PrivateKeyBytes)
+        {
+            throw new ArgumentException(
+                $"Ed25519 privateKey must contain exactly {Ed25519PrivateKeyBytes} bytes.",
+                nameof(value));
+        }
+        return copied;
+    }
+
+    private static byte[] EncodeXorQuantity(
+        string value,
+        string parameterName,
+        bool positive)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        NumericV1.QuantityValue quantity;
+        try
+        {
+            quantity = NumericV1.QuantityValue.ParseCanonical(value);
+        }
+        catch (NumericV1.NumericException error)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be a canonical XOR quantity.",
+                parameterName,
+                error);
+        }
+        if (quantity.Scale > 9)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must have at most nine fractional digits.",
+                parameterName);
+        }
+        if (positive && quantity.Mantissa.IsZero)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                $"{parameterName} must be greater than zero.");
+        }
+        return StrictUtf8.GetBytes(value);
+    }
+
+    private static string OrderbookKindLabel(SoraFsOrderbookPayloadKind kind)
+    {
+        return kind switch
+        {
+            SoraFsOrderbookPayloadKind.OrderRequest => "order-request",
+            SoraFsOrderbookPayloadKind.OrderCancel => "order-cancel",
+            SoraFsOrderbookPayloadKind.TradeEvent => "trade-event",
+            SoraFsOrderbookPayloadKind.SettlementChannel => "settlement-channel",
+            SoraFsOrderbookPayloadKind.SettlementReceipt => "settlement-receipt",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
+    }
+
+    private static string PdpKindLabel(SoraFsPdpPayloadKind kind)
+    {
+        return kind switch
+        {
+            SoraFsPdpPayloadKind.Commitment => "commitment",
+            SoraFsPdpPayloadKind.Challenge => "challenge",
+            SoraFsPdpPayloadKind.Proof => "proof",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
+    }
+
     private static void RequireAggregateBound(string operation, params int[] lengths)
     {
         long aggregate = 0;
@@ -471,6 +1490,77 @@ public static class SoraFsReferenceValidators
         {
             throw new InvalidOperationException(
                 $"{LibraryName} does not expose the Governance DAG reference symbols.");
+        }
+    }
+
+    private static void RequireOrderbookPdpBridge(ISoraFsReferenceNativeBoundary native)
+    {
+        uint version;
+        try
+        {
+            version = native.AbiVersion();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} is unavailable; install ABI {RequiredBridgeAbiVersion} or later.",
+                error);
+        }
+        if (version < RequiredBridgeAbiVersion)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} ABI {RequiredBridgeAbiVersion} or later is required; found {version}.");
+        }
+        bool hasSymbols;
+        try
+        {
+            hasSymbols = native.HasOrderbookPdpSymbols();
+        }
+        catch (Exception error)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the orderbook/PDP reference symbols.",
+                error);
+        }
+        if (!hasSymbols)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} does not expose the orderbook/PDP reference symbols.");
+        }
+    }
+
+    private static byte[] ReadNativeBytes(
+        string operation,
+        NativeValidationResult result,
+        ISoraFsReferenceNativeBoundary native)
+    {
+        try
+        {
+            if (result.Code != 0)
+            {
+                throw new InvalidOperationException(
+                    $"{operation} failed with bridge error code {result.Code}.");
+            }
+            if (result.Pointer == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"{operation} returned a null output pointer.");
+            }
+            var length = result.Length.ToUInt64();
+            if (length == 0 || length > MaxInputBytesV1)
+            {
+                throw new InvalidOperationException(
+                    $"{operation} returned an empty or oversized output.");
+            }
+            var output = new byte[checked((int)length)];
+            Marshal.Copy(result.Pointer, output, 0, output.Length);
+            return output;
+        }
+        finally
+        {
+            if (result.Pointer != IntPtr.Zero)
+            {
+                native.Free(result.Pointer);
+            }
         }
     }
 
@@ -799,6 +1889,303 @@ public static class SoraFsReferenceValidators
             }
         }
 
+        public bool HasOrderbookPdpSymbols()
+        {
+            if (!NativeLibrary.TryLoad(
+                    LibraryName,
+                    typeof(SoraFsReferenceValidators).Assembly,
+                    null,
+                    out var handle))
+            {
+                return false;
+            }
+            try
+            {
+                return NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_orderbook_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_sign_orderbook_payload",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_derive_orderbook_order_id",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_build_signed_orderbook_order_request",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_pdp_payload_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(
+                        handle,
+                        "connect_norito_sorafs_reference_validate_pdp_bundle_json",
+                        out _)
+                    && NativeLibrary.TryGetExport(handle, "connect_norito_free", out _);
+            }
+            finally
+            {
+                NativeLibrary.Free(handle);
+            }
+        }
+
+        public NativeValidationResult ValidateOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            var code = NativeValidateOrderbookPayload(
+                kind,
+                bytes,
+                (UIntPtr)bytes.Length,
+                label,
+                (UIntPtr)label.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult SignOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] privateKey)
+        {
+            var code = NativeSignOrderbookPayload(
+                kind,
+                bytes,
+                (UIntPtr)bytes.Length,
+                privateKey,
+                (UIntPtr)privateKey.Length,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public int DeriveOrderbookOrderId(
+            byte[] ownerAccount,
+            ulong nonce,
+            byte[] output)
+        {
+            return NativeDeriveOrderbookOrderId(
+                ownerAccount,
+                (UIntPtr)ownerAccount.Length,
+                nonce,
+                output,
+                (UIntPtr)output.Length);
+        }
+
+        public NativeValidationResult BuildSignedOrderbookOrderRequest(
+            byte[] orderId,
+            uint side,
+            uint tier,
+            byte[] pricePerGib,
+            ulong quantityGib,
+            ulong remainingGib,
+            byte[] ownerAccount,
+            byte[] providerId,
+            ulong expiryUnix,
+            ulong nonce,
+            uint makerFeeBps,
+            uint takerFeeBps,
+            byte[] privateKey)
+        {
+            var code = NativeBuildSignedOrderbookOrderRequest(
+                orderId,
+                (UIntPtr)orderId.Length,
+                side,
+                tier,
+                pricePerGib,
+                (UIntPtr)pricePerGib.Length,
+                quantityGib,
+                remainingGib,
+                ownerAccount,
+                (UIntPtr)ownerAccount.Length,
+                providerId,
+                (UIntPtr)providerId.Length,
+                expiryUnix,
+                nonce,
+                makerFeeBps,
+                takerFeeBps,
+                privateKey,
+                (UIntPtr)privateKey.Length,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult BuildSignedOrderbookOrderCancel(
+            byte[] orderId,
+            byte[] ownerAccount,
+            uint reason,
+            ulong nonce,
+            byte[] privateKey)
+        {
+            var code = NativeBuildSignedOrderbookOrderCancel(
+                orderId,
+                (UIntPtr)orderId.Length,
+                ownerAccount,
+                (UIntPtr)ownerAccount.Length,
+                reason,
+                nonce,
+                privateKey,
+                (UIntPtr)privateKey.Length,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult BuildSignedOrderbookSettlementReceipt(
+            byte[] receiptId,
+            byte[] channelId,
+            byte[] tradeId,
+            ulong rangeStart,
+            ulong rangeEnd,
+            byte[] chunkHash,
+            ulong bytesDelivered,
+            byte[] xorDebited,
+            byte[] providerCredit,
+            byte[] feeAmount,
+            ulong issuedAtUnix,
+            byte[] privateKey)
+        {
+            var code = NativeBuildSignedOrderbookSettlementReceipt(
+                receiptId,
+                (UIntPtr)receiptId.Length,
+                channelId,
+                (UIntPtr)channelId.Length,
+                tradeId,
+                (UIntPtr)tradeId.Length,
+                rangeStart,
+                rangeEnd,
+                chunkHash,
+                (UIntPtr)chunkHash.Length,
+                bytesDelivered,
+                xorDebited,
+                (UIntPtr)xorDebited.Length,
+                providerCredit,
+                (UIntPtr)providerCredit.Length,
+                feeAmount,
+                (UIntPtr)feeAmount.Length,
+                issuedAtUnix,
+                privateKey,
+                (UIntPtr)privateKey.Length,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidatePdpPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            var code = NativeValidatePdpPayload(
+                kind,
+                bytes,
+                (UIntPtr)bytes.Length,
+                label,
+                (UIntPtr)label.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidatePdpCommitmentChallenge(
+            byte[] commitment,
+            byte[] commitmentLabel,
+            byte[] challenge,
+            byte[] challengeLabel,
+            ulong generatedAt)
+        {
+            var code = NativeValidatePdpCommitmentChallenge(
+                commitment,
+                (UIntPtr)commitment.Length,
+                commitmentLabel,
+                (UIntPtr)commitmentLabel.Length,
+                challenge,
+                (UIntPtr)challenge.Length,
+                challengeLabel,
+                (UIntPtr)challengeLabel.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidatePdpChallengeProof(
+            byte[] challenge,
+            byte[] challengeLabel,
+            byte[] proof,
+            byte[] proofLabel,
+            ulong generatedAt)
+        {
+            var code = NativeValidatePdpChallengeProof(
+                challenge,
+                (UIntPtr)challenge.Length,
+                challengeLabel,
+                (UIntPtr)challengeLabel.Length,
+                proof,
+                (UIntPtr)proof.Length,
+                proofLabel,
+                (UIntPtr)proofLabel.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
+        public NativeValidationResult ValidatePdpBundle(
+            byte[] commitment,
+            byte[] commitmentLabel,
+            byte[] challenge,
+            byte[] challengeLabel,
+            byte[] proof,
+            byte[] proofLabel,
+            ulong generatedAt)
+        {
+            var code = NativeValidatePdpBundle(
+                commitment,
+                (UIntPtr)commitment.Length,
+                commitmentLabel,
+                (UIntPtr)commitmentLabel.Length,
+                challenge,
+                (UIntPtr)challenge.Length,
+                challengeLabel,
+                (UIntPtr)challengeLabel.Length,
+                proof,
+                (UIntPtr)proof.Length,
+                proofLabel,
+                (UIntPtr)proofLabel.Length,
+                generatedAt,
+                out var output,
+                out var outputLength);
+            return new NativeValidationResult(code, output, outputLength);
+        }
+
         public NativeValidationResult ValidateGovernanceDagBlock(
             byte[] bytes,
             byte[] label,
@@ -873,11 +2260,834 @@ public static class SoraFsReferenceValidators
             return handle.AddrOfPinnedObject();
         }
 
+        private static int NativeSignOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            UIntPtr bytesLength,
+            byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeSignOrderbookPayloadUnix(
+                    kind,
+                    bytes,
+                    bytesLength,
+                    privateKey,
+                    privateKeyLength,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeSignOrderbookPayloadWindows(
+                kind,
+                bytes,
+                checked((uint)bytesLength.ToUInt64()),
+                privateKey,
+                checked((uint)privateKeyLength.ToUInt64()),
+                out output,
+                out var length);
+            outputLength = (UIntPtr)length;
+            return code;
+        }
+
+        private static int NativeDeriveOrderbookOrderId(
+            byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            ulong nonce,
+            byte[] output,
+            UIntPtr outputLength)
+        {
+            return !OperatingSystem.IsWindows()
+                ? NativeDeriveOrderbookOrderIdUnix(
+                    ownerAccount,
+                    ownerAccountLength,
+                    nonce,
+                    output,
+                    outputLength)
+                : NativeDeriveOrderbookOrderIdWindows(
+                    ownerAccount,
+                    checked((uint)ownerAccountLength.ToUInt64()),
+                    nonce,
+                    output,
+                    checked((uint)outputLength.ToUInt64()));
+        }
+
+        private static int NativeBuildSignedOrderbookOrderRequest(
+            byte[] orderId,
+            UIntPtr orderIdLength,
+            uint side,
+            uint tier,
+            byte[] pricePerGib,
+            UIntPtr pricePerGibLength,
+            ulong quantityGib,
+            ulong remainingGib,
+            byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            byte[] providerId,
+            UIntPtr providerIdLength,
+            ulong expiryUnix,
+            ulong nonce,
+            uint makerFeeBps,
+            uint takerFeeBps,
+            byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeBuildSignedOrderbookOrderRequestUnix(
+                    orderId,
+                    orderIdLength,
+                    side,
+                    tier,
+                    pricePerGib,
+                    pricePerGibLength,
+                    quantityGib,
+                    remainingGib,
+                    ownerAccount,
+                    ownerAccountLength,
+                    providerId,
+                    providerIdLength,
+                    expiryUnix,
+                    nonce,
+                    makerFeeBps,
+                    takerFeeBps,
+                    privateKey,
+                    privateKeyLength,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeBuildSignedOrderbookOrderRequestWindows(
+                orderId,
+                checked((uint)orderIdLength.ToUInt64()),
+                side,
+                tier,
+                pricePerGib,
+                checked((uint)pricePerGibLength.ToUInt64()),
+                quantityGib,
+                remainingGib,
+                ownerAccount,
+                checked((uint)ownerAccountLength.ToUInt64()),
+                providerId,
+                checked((uint)providerIdLength.ToUInt64()),
+                expiryUnix,
+                nonce,
+                makerFeeBps,
+                takerFeeBps,
+                privateKey,
+                checked((uint)privateKeyLength.ToUInt64()),
+                out output,
+                out var length);
+            outputLength = (UIntPtr)length;
+            return code;
+        }
+
+        private static int NativeBuildSignedOrderbookOrderCancel(
+            byte[] orderId,
+            UIntPtr orderIdLength,
+            byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            uint reason,
+            ulong nonce,
+            byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeBuildSignedOrderbookOrderCancelUnix(
+                    orderId,
+                    orderIdLength,
+                    ownerAccount,
+                    ownerAccountLength,
+                    reason,
+                    nonce,
+                    privateKey,
+                    privateKeyLength,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeBuildSignedOrderbookOrderCancelWindows(
+                orderId,
+                checked((uint)orderIdLength.ToUInt64()),
+                ownerAccount,
+                checked((uint)ownerAccountLength.ToUInt64()),
+                reason,
+                nonce,
+                privateKey,
+                checked((uint)privateKeyLength.ToUInt64()),
+                out output,
+                out var length);
+            outputLength = (UIntPtr)length;
+            return code;
+        }
+
+        private static int NativeBuildSignedOrderbookSettlementReceipt(
+            byte[] receiptId,
+            UIntPtr receiptIdLength,
+            byte[] channelId,
+            UIntPtr channelIdLength,
+            byte[] tradeId,
+            UIntPtr tradeIdLength,
+            ulong rangeStart,
+            ulong rangeEnd,
+            byte[] chunkHash,
+            UIntPtr chunkHashLength,
+            ulong bytesDelivered,
+            byte[] xorDebited,
+            UIntPtr xorDebitedLength,
+            byte[] providerCredit,
+            UIntPtr providerCreditLength,
+            byte[] feeAmount,
+            UIntPtr feeAmountLength,
+            ulong issuedAtUnix,
+            byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeBuildSignedOrderbookSettlementReceiptUnix(
+                    receiptId,
+                    receiptIdLength,
+                    channelId,
+                    channelIdLength,
+                    tradeId,
+                    tradeIdLength,
+                    rangeStart,
+                    rangeEnd,
+                    chunkHash,
+                    chunkHashLength,
+                    bytesDelivered,
+                    xorDebited,
+                    xorDebitedLength,
+                    providerCredit,
+                    providerCreditLength,
+                    feeAmount,
+                    feeAmountLength,
+                    issuedAtUnix,
+                    privateKey,
+                    privateKeyLength,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeBuildSignedOrderbookSettlementReceiptWindows(
+                receiptId,
+                checked((uint)receiptIdLength.ToUInt64()),
+                channelId,
+                checked((uint)channelIdLength.ToUInt64()),
+                tradeId,
+                checked((uint)tradeIdLength.ToUInt64()),
+                rangeStart,
+                rangeEnd,
+                chunkHash,
+                checked((uint)chunkHashLength.ToUInt64()),
+                bytesDelivered,
+                xorDebited,
+                checked((uint)xorDebitedLength.ToUInt64()),
+                providerCredit,
+                checked((uint)providerCreditLength.ToUInt64()),
+                feeAmount,
+                checked((uint)feeAmountLength.ToUInt64()),
+                issuedAtUnix,
+                privateKey,
+                checked((uint)privateKeyLength.ToUInt64()),
+                out output,
+                out var length);
+            outputLength = (UIntPtr)length;
+            return code;
+        }
+
+        // The bridge ABI uses C `unsigned long`: 32 bits on Windows and
+        // pointer-sized on the mandatory Unix targets.
+        private static int NativeValidateOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            UIntPtr bytesLength,
+            byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidateOrderbookPayloadUnix(
+                    kind,
+                    bytes,
+                    bytesLength,
+                    label,
+                    labelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidateOrderbookPayloadWindows(
+                kind,
+                bytes,
+                checked((uint)bytesLength.ToUInt64()),
+                label,
+                checked((uint)labelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
+        private static int NativeValidatePdpPayload(
+            uint kind,
+            byte[] bytes,
+            UIntPtr bytesLength,
+            byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidatePdpPayloadUnix(
+                    kind,
+                    bytes,
+                    bytesLength,
+                    label,
+                    labelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidatePdpPayloadWindows(
+                kind,
+                bytes,
+                checked((uint)bytesLength.ToUInt64()),
+                label,
+                checked((uint)labelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
+        private static int NativeValidatePdpCommitmentChallenge(
+            byte[] commitment,
+            UIntPtr commitmentLength,
+            byte[] commitmentLabel,
+            UIntPtr commitmentLabelLength,
+            byte[] challenge,
+            UIntPtr challengeLength,
+            byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidatePdpCommitmentChallengeUnix(
+                    commitment,
+                    commitmentLength,
+                    commitmentLabel,
+                    commitmentLabelLength,
+                    challenge,
+                    challengeLength,
+                    challengeLabel,
+                    challengeLabelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidatePdpCommitmentChallengeWindows(
+                commitment,
+                checked((uint)commitmentLength.ToUInt64()),
+                commitmentLabel,
+                checked((uint)commitmentLabelLength.ToUInt64()),
+                challenge,
+                checked((uint)challengeLength.ToUInt64()),
+                challengeLabel,
+                checked((uint)challengeLabelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
+        private static int NativeValidatePdpChallengeProof(
+            byte[] challenge,
+            UIntPtr challengeLength,
+            byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            byte[] proof,
+            UIntPtr proofLength,
+            byte[] proofLabel,
+            UIntPtr proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidatePdpChallengeProofUnix(
+                    challenge,
+                    challengeLength,
+                    challengeLabel,
+                    challengeLabelLength,
+                    proof,
+                    proofLength,
+                    proofLabel,
+                    proofLabelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidatePdpChallengeProofWindows(
+                challenge,
+                checked((uint)challengeLength.ToUInt64()),
+                challengeLabel,
+                checked((uint)challengeLabelLength.ToUInt64()),
+                proof,
+                checked((uint)proofLength.ToUInt64()),
+                proofLabel,
+                checked((uint)proofLabelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
+        private static int NativeValidatePdpBundle(
+            byte[] commitment,
+            UIntPtr commitmentLength,
+            byte[] commitmentLabel,
+            UIntPtr commitmentLabelLength,
+            byte[] challenge,
+            UIntPtr challengeLength,
+            byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            byte[] proof,
+            UIntPtr proofLength,
+            byte[] proofLabel,
+            UIntPtr proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength)
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return NativeValidatePdpBundleUnix(
+                    commitment,
+                    commitmentLength,
+                    commitmentLabel,
+                    commitmentLabelLength,
+                    challenge,
+                    challengeLength,
+                    challengeLabel,
+                    challengeLabelLength,
+                    proof,
+                    proofLength,
+                    proofLabel,
+                    proofLabelLength,
+                    generatedAt,
+                    out output,
+                    out outputLength);
+            }
+            var code = NativeValidatePdpBundleWindows(
+                commitment,
+                checked((uint)commitmentLength.ToUInt64()),
+                commitmentLabel,
+                checked((uint)commitmentLabelLength.ToUInt64()),
+                challenge,
+                checked((uint)challengeLength.ToUInt64()),
+                challengeLabel,
+                checked((uint)challengeLabelLength.ToUInt64()),
+                proof,
+                checked((uint)proofLength.ToUInt64()),
+                proofLabel,
+                checked((uint)proofLabelLength.ToUInt64()),
+                generatedAt,
+                out output,
+                out var windowsLength);
+            outputLength = (UIntPtr)windowsLength;
+            return code;
+        }
+
         [DllImport(
             LibraryName,
             EntryPoint = "connect_norito_bridge_abi_version",
             CallingConvention = CallingConvention.Cdecl)]
         private static extern uint NativeAbiVersion();
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_sign_orderbook_payload",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeSignOrderbookPayloadUnix(
+            uint kind,
+            [In] byte[] bytes,
+            UIntPtr bytesLength,
+            [In] byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_sign_orderbook_payload",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeSignOrderbookPayloadWindows(
+            uint kind,
+            [In] byte[] bytes,
+            uint bytesLength,
+            [In] byte[] privateKey,
+            uint privateKeyLength,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_derive_orderbook_order_id",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeDeriveOrderbookOrderIdUnix(
+            [In] byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            ulong nonce,
+            [Out] byte[] output,
+            UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_derive_orderbook_order_id",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeDeriveOrderbookOrderIdWindows(
+            [In] byte[] ownerAccount,
+            uint ownerAccountLength,
+            ulong nonce,
+            [Out] byte[] output,
+            uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_order_request",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookOrderRequestUnix(
+            [In] byte[] orderId,
+            UIntPtr orderIdLength,
+            uint side,
+            uint tier,
+            [In] byte[] pricePerGib,
+            UIntPtr pricePerGibLength,
+            ulong quantityGib,
+            ulong remainingGib,
+            [In] byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            [In] byte[] providerId,
+            UIntPtr providerIdLength,
+            ulong expiryUnix,
+            ulong nonce,
+            uint makerFeeBps,
+            uint takerFeeBps,
+            [In] byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_order_request",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookOrderRequestWindows(
+            [In] byte[] orderId,
+            uint orderIdLength,
+            uint side,
+            uint tier,
+            [In] byte[] pricePerGib,
+            uint pricePerGibLength,
+            ulong quantityGib,
+            ulong remainingGib,
+            [In] byte[] ownerAccount,
+            uint ownerAccountLength,
+            [In] byte[] providerId,
+            uint providerIdLength,
+            ulong expiryUnix,
+            ulong nonce,
+            uint makerFeeBps,
+            uint takerFeeBps,
+            [In] byte[] privateKey,
+            uint privateKeyLength,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookOrderCancelUnix(
+            [In] byte[] orderId,
+            UIntPtr orderIdLength,
+            [In] byte[] ownerAccount,
+            UIntPtr ownerAccountLength,
+            uint reason,
+            ulong nonce,
+            [In] byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookOrderCancelWindows(
+            [In] byte[] orderId,
+            uint orderIdLength,
+            [In] byte[] ownerAccount,
+            uint ownerAccountLength,
+            uint reason,
+            ulong nonce,
+            [In] byte[] privateKey,
+            uint privateKeyLength,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookSettlementReceiptUnix(
+            [In] byte[] receiptId,
+            UIntPtr receiptIdLength,
+            [In] byte[] channelId,
+            UIntPtr channelIdLength,
+            [In] byte[] tradeId,
+            UIntPtr tradeIdLength,
+            ulong rangeStart,
+            ulong rangeEnd,
+            [In] byte[] chunkHash,
+            UIntPtr chunkHashLength,
+            ulong bytesDelivered,
+            [In] byte[] xorDebited,
+            UIntPtr xorDebitedLength,
+            [In] byte[] providerCredit,
+            UIntPtr providerCreditLength,
+            [In] byte[] feeAmount,
+            UIntPtr feeAmountLength,
+            ulong issuedAtUnix,
+            [In] byte[] privateKey,
+            UIntPtr privateKeyLength,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeBuildSignedOrderbookSettlementReceiptWindows(
+            [In] byte[] receiptId,
+            uint receiptIdLength,
+            [In] byte[] channelId,
+            uint channelIdLength,
+            [In] byte[] tradeId,
+            uint tradeIdLength,
+            ulong rangeStart,
+            ulong rangeEnd,
+            [In] byte[] chunkHash,
+            uint chunkHashLength,
+            ulong bytesDelivered,
+            [In] byte[] xorDebited,
+            uint xorDebitedLength,
+            [In] byte[] providerCredit,
+            uint providerCreditLength,
+            [In] byte[] feeAmount,
+            uint feeAmountLength,
+            ulong issuedAtUnix,
+            [In] byte[] privateKey,
+            uint privateKeyLength,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_orderbook_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateOrderbookPayloadUnix(
+            uint kind,
+            [In] byte[] bytes,
+            UIntPtr bytesLength,
+            [In] byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_orderbook_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidateOrderbookPayloadWindows(
+            uint kind,
+            [In] byte[] bytes,
+            uint bytesLength,
+            [In] byte[] label,
+            uint labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_pdp_payload_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpPayloadUnix(
+            uint kind,
+            [In] byte[] bytes,
+            UIntPtr bytesLength,
+            [In] byte[] label,
+            UIntPtr labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_pdp_payload_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpPayloadWindows(
+            uint kind,
+            [In] byte[] bytes,
+            uint bytesLength,
+            [In] byte[] label,
+            uint labelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpCommitmentChallengeUnix(
+            [In] byte[] commitment,
+            UIntPtr commitmentLength,
+            [In] byte[] commitmentLabel,
+            UIntPtr commitmentLabelLength,
+            [In] byte[] challenge,
+            UIntPtr challengeLength,
+            [In] byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpCommitmentChallengeWindows(
+            [In] byte[] commitment,
+            uint commitmentLength,
+            [In] byte[] commitmentLabel,
+            uint commitmentLabelLength,
+            [In] byte[] challenge,
+            uint challengeLength,
+            [In] byte[] challengeLabel,
+            uint challengeLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpChallengeProofUnix(
+            [In] byte[] challenge,
+            UIntPtr challengeLength,
+            [In] byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            [In] byte[] proof,
+            UIntPtr proofLength,
+            [In] byte[] proofLabel,
+            UIntPtr proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint =
+                "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpChallengeProofWindows(
+            [In] byte[] challenge,
+            uint challengeLength,
+            [In] byte[] challengeLabel,
+            uint challengeLabelLength,
+            [In] byte[] proof,
+            uint proofLength,
+            [In] byte[] proofLabel,
+            uint proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_pdp_bundle_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpBundleUnix(
+            [In] byte[] commitment,
+            UIntPtr commitmentLength,
+            [In] byte[] commitmentLabel,
+            UIntPtr commitmentLabelLength,
+            [In] byte[] challenge,
+            UIntPtr challengeLength,
+            [In] byte[] challengeLabel,
+            UIntPtr challengeLabelLength,
+            [In] byte[] proof,
+            UIntPtr proofLength,
+            [In] byte[] proofLabel,
+            UIntPtr proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out UIntPtr outputLength);
+
+        [DllImport(
+            LibraryName,
+            EntryPoint = "connect_norito_sorafs_reference_validate_pdp_bundle_json",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern int NativeValidatePdpBundleWindows(
+            [In] byte[] commitment,
+            uint commitmentLength,
+            [In] byte[] commitmentLabel,
+            uint commitmentLabelLength,
+            [In] byte[] challenge,
+            uint challengeLength,
+            [In] byte[] challengeLabel,
+            uint challengeLabelLength,
+            [In] byte[] proof,
+            uint proofLength,
+            [In] byte[] proofLabel,
+            uint proofLabelLength,
+            ulong generatedAt,
+            out IntPtr output,
+            out uint outputLength);
 
         [DllImport(
             LibraryName,
@@ -942,6 +3152,89 @@ internal interface ISoraFsReferenceNativeBoundary
     uint AbiVersion();
 
     bool HasGovernanceDagSymbols();
+
+    bool HasOrderbookPdpSymbols();
+
+    NativeValidationResult ValidateOrderbookPayload(
+        uint kind,
+        byte[] bytes,
+        byte[] label,
+        ulong generatedAt);
+
+    NativeValidationResult SignOrderbookPayload(
+        uint kind,
+        byte[] bytes,
+        byte[] privateKey);
+
+    int DeriveOrderbookOrderId(
+        byte[] ownerAccount,
+        ulong nonce,
+        byte[] output);
+
+    NativeValidationResult BuildSignedOrderbookOrderRequest(
+        byte[] orderId,
+        uint side,
+        uint tier,
+        byte[] pricePerGib,
+        ulong quantityGib,
+        ulong remainingGib,
+        byte[] ownerAccount,
+        byte[] providerId,
+        ulong expiryUnix,
+        ulong nonce,
+        uint makerFeeBps,
+        uint takerFeeBps,
+        byte[] privateKey);
+
+    NativeValidationResult BuildSignedOrderbookOrderCancel(
+        byte[] orderId,
+        byte[] ownerAccount,
+        uint reason,
+        ulong nonce,
+        byte[] privateKey);
+
+    NativeValidationResult BuildSignedOrderbookSettlementReceipt(
+        byte[] receiptId,
+        byte[] channelId,
+        byte[] tradeId,
+        ulong rangeStart,
+        ulong rangeEnd,
+        byte[] chunkHash,
+        ulong bytesDelivered,
+        byte[] xorDebited,
+        byte[] providerCredit,
+        byte[] feeAmount,
+        ulong issuedAtUnix,
+        byte[] privateKey);
+
+    NativeValidationResult ValidatePdpPayload(
+        uint kind,
+        byte[] bytes,
+        byte[] label,
+        ulong generatedAt);
+
+    NativeValidationResult ValidatePdpCommitmentChallenge(
+        byte[] commitment,
+        byte[] commitmentLabel,
+        byte[] challenge,
+        byte[] challengeLabel,
+        ulong generatedAt);
+
+    NativeValidationResult ValidatePdpChallengeProof(
+        byte[] challenge,
+        byte[] challengeLabel,
+        byte[] proof,
+        byte[] proofLabel,
+        ulong generatedAt);
+
+    NativeValidationResult ValidatePdpBundle(
+        byte[] commitment,
+        byte[] commitmentLabel,
+        byte[] challenge,
+        byte[] challengeLabel,
+        byte[] proof,
+        byte[] proofLabel,
+        ulong generatedAt);
 
     NativeValidationResult ValidateGovernanceDagBlock(
         byte[] bytes,

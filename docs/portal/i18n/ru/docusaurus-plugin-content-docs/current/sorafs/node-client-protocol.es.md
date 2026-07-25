@@ -132,10 +132,12 @@ SDK через `sorafs_orchestrator`):
 - `iroha app sorafs pin list|show`, `alias list` и `replication list` envuelven los
   конечные точки REST для регистрации контактов и импорта Norito JSON Crudo с блоками
   аттестация для аудиторских доказательств.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` акцептанные манифесты
-  Norito или JSON — дополнительные доказательства псевдонимов и преемников; доказательства
-  elevan `400`, доказательства устарели, экспонен `503` с `Warning: 110`, y доказательства
-  истекший срок `412`.
+- `torii /v1/sorafs/pin/register` принимает закрытый JSON-запрос V1.
+  `manifest_payload` должен быть точным каноническим padded-base64 от байтов
+  канонического Norito `ManifestV1`. Torii выводит digest, chunker, content
+  length, pin policy и fee inputs только из декодированного manifest и отклоняет
+  выведенные из обращения дублирующие summary fields. `alias` и ненулевой
+  predecessor `successor_of_hex` остаются опциональными.
 - Потеря конечных точек REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) включает в себя структуры аттестации для того, чтобы
   Клиенты проверяют данные против заголовков последнего блока перед актом.

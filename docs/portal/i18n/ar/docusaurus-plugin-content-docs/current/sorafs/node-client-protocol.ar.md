@@ -114,10 +114,12 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` تطبع نقاط REST
   الخاصة بسجل الدبابيس وتطبع Norito JSON Raw مع شهادة الكتل لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان البيانات
-  بنمط Norito أو JSON مع إثباتات اختيارية للـ alias والـ Successor؛ لها البراهين
-  المشوهة إلى `400`، وتظهر البراهين القديمة `503` مع `Warning: 110`، بينما
-  البراهين كاملة تمامًا `412`.
+- يقبل `torii /v1/sorafs/pin/register` طلب JSON V1 المغلق. يجب أن يكون
+  `manifest_payload` ترميز base64 مبطنًا canonical ودقيقًا لبايتات
+  `ManifestV1` canonical بنمط Norito. يشتق Torii الـ digest والـ chunker وطول
+  المحتوى وسياسة pin ومدخلات الرسوم حصريًا من الـ manifest المفكوك، ويرفض
+  حقول الملخص المكررة المتقاعدة. يبقى `alias` وسلف `successor_of_hex` غير
+  الصفري اختياريين.
 - نقاط REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
   تتضمن الهياكل التصديق حتى يبدأ العملاء في التحقق من البيانات مقابل الأحدث
   رؤوس الكتل قبل التنفيذ.

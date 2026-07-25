@@ -31,6 +31,14 @@ pub struct ProofStreamRequestV1 {
     pub deadline_ms: Option<u32>,
     /// Optional deterministic seed for sample selection.
     pub sample_seed: Option<u64>,
+    /// Finalized block height expected to authorize the manifest projection.
+    ///
+    /// This must be paired with [`Self::expected_finalized_block_hash`].
+    pub expected_finalized_height: Option<u64>,
+    /// Finalized block hash expected to authorize the manifest projection.
+    ///
+    /// This must be paired with [`Self::expected_finalized_height`].
+    pub expected_finalized_block_hash: Option<[u8; 32]>,
     /// Client-supplied nonce to guard against replay.
     pub nonce: [u8; 16],
     /// Orchestrator job identifier (UUID bytes).
@@ -38,7 +46,7 @@ pub struct ProofStreamRequestV1 {
     /// This is mandatory for PoTR because the manifest, provider, and job
     /// identifier derive the chain-authoritative request-scope identity.
     pub orchestrator_job_id: Option<[u8; 16]>,
-    /// Tier hint for PDP/PoTR (hot/warm/archive).
+    /// Optional storage tier hint (hot/warm/archive).
     pub tier: Option<ProofStreamTier>,
 }
 
@@ -60,8 +68,24 @@ impl ProofStreamRequestV1 {
         {
             return Err(ProofStreamRequestError::InvalidOrchestratorJobId);
         }
+        match (
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash,
+        ) {
+            (Some(0), _) => return Err(ProofStreamRequestError::InvalidFinalizedHeight),
+            (_, Some(hash)) if hash.iter().all(|byte| *byte == 0) => {
+                return Err(ProofStreamRequestError::InvalidFinalizedBlockHash);
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(ProofStreamRequestError::IncompleteFinalizedCursor);
+            }
+            (Some(_), Some(_)) | (None, None) => {}
+        }
         match self.proof_kind {
             ProofStreamKind::Por => {
+                if self.expected_finalized_height.is_none() {
+                    return Err(ProofStreamRequestError::MissingFinalizedCursor);
+                }
                 if self.challenge_id.is_some() {
                     return Err(ProofStreamRequestError::UnexpectedChallengeId);
                 }
@@ -242,6 +266,14 @@ pub enum ProofStreamRequestError {
     ZeroSampleCount,
     #[error("sample count exceeds maximum")]
     SampleCountTooLarge,
+    #[error("PoR requests require a complete finalized-block cursor")]
+    MissingFinalizedCursor,
+    #[error("finalized-block height and hash must be supplied together")]
+    IncompleteFinalizedCursor,
+    #[error("finalized-block height must be greater than zero")]
+    InvalidFinalizedHeight,
+    #[error("finalized-block hash must be non-zero")]
+    InvalidFinalizedBlockHash,
     #[error("deadline must be greater than zero milliseconds")]
     ZeroDeadlineMs,
 }
@@ -307,6 +339,15 @@ impl ProofStreamHttpRequestV1 {
         if let Some(sample_seed) = request.sample_seed {
             map.insert("sample_seed".into(), Value::from(sample_seed));
         }
+        if let Some(height) = request.expected_finalized_height {
+            map.insert("expected_finalized_height".into(), Value::from(height));
+        }
+        if let Some(hash) = request.expected_finalized_block_hash {
+            map.insert(
+                "expected_finalized_block_hash_hex".into(),
+                Value::from(hex::encode(hash)),
+            );
+        }
         map.insert(
             "nonce_b64".into(),
             Value::from(BASE64_STANDARD.encode(request.nonce)),
@@ -336,6 +377,8 @@ impl ProofStreamHttpRequestV1 {
             "sample_count",
             "deadline_ms",
             "sample_seed",
+            "expected_finalized_height",
+            "expected_finalized_block_hash_hex",
             "nonce_b64",
             "orchestrator_job_id_hex",
             "tier",
@@ -369,6 +412,11 @@ impl ProofStreamHttpRequestV1 {
             })
             .transpose()?;
         let sample_seed = optional_u64(object, "sample_seed")?;
+        let expected_finalized_height = optional_u64(object, "expected_finalized_height")?;
+        let expected_finalized_block_hash =
+            optional_string(object, "expected_finalized_block_hash_hex")?
+                .map(|raw| parse_canonical_hex::<32>(raw, "expected_finalized_block_hash_hex"))
+                .transpose()?;
         let nonce = parse_canonical_base64_16(required_string(object, "nonce_b64")?)?;
         let orchestrator_job_id = optional_string(object, "orchestrator_job_id_hex")?
             .map(|raw| parse_canonical_hex::<16>(raw, "orchestrator_job_id_hex"))
@@ -385,6 +433,8 @@ impl ProofStreamHttpRequestV1 {
             sample_count,
             deadline_ms,
             sample_seed,
+            expected_finalized_height,
+            expected_finalized_block_hash,
             nonce,
             orchestrator_job_id,
             tier,
@@ -544,6 +594,8 @@ mod tests {
             sample_count: Some(16),
             deadline_ms: None,
             sample_seed: Some(42),
+            expected_finalized_height: Some(17),
+            expected_finalized_block_hash: Some([0x66; 32]),
             nonce: [0x33; 16],
             orchestrator_job_id: None,
             tier: Some(ProofStreamTier::Hot),
@@ -583,6 +635,35 @@ mod tests {
         assert_eq!(
             request.validate(),
             Err(ProofStreamRequestError::SampleCountTooLarge)
+        );
+    }
+
+    #[test]
+    fn por_requires_a_complete_nonzero_finalized_cursor() {
+        let mut request = base_request();
+        request.expected_finalized_height = None;
+        request.expected_finalized_block_hash = None;
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::MissingFinalizedCursor)
+        );
+
+        request.expected_finalized_height = Some(17);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::IncompleteFinalizedCursor)
+        );
+        request.expected_finalized_height = Some(0);
+        request.expected_finalized_block_hash = Some([0x66; 32]);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::InvalidFinalizedHeight)
+        );
+        request.expected_finalized_height = Some(17);
+        request.expected_finalized_block_hash = Some([0; 32]);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::InvalidFinalizedBlockHash)
         );
     }
 
@@ -705,7 +786,7 @@ mod tests {
         let obj = value
             .as_object()
             .expect("proof stream request should serialize to JSON object");
-        assert_eq!(obj.len(), 7);
+        assert_eq!(obj.len(), 9);
         assert_eq!(
             obj.get("proof_kind").and_then(Value::as_str),
             Some("por"),
@@ -723,6 +804,15 @@ mod tests {
         assert_eq!(
             obj.get("nonce_b64").and_then(Value::as_str),
             Some(BASE64_STANDARD.encode([0x33; 16]).as_str())
+        );
+        assert_eq!(
+            obj.get("expected_finalized_height").and_then(Value::as_u64),
+            Some(17)
+        );
+        assert_eq!(
+            obj.get("expected_finalized_block_hash_hex")
+                .and_then(Value::as_str),
+            Some("66".repeat(32).as_str())
         );
         assert!(!obj.contains_key("challenge_id_hex"));
         assert!(!obj.contains_key("deadline_ms"));
@@ -754,6 +844,8 @@ mod tests {
             "sample_count",
             "deadline_ms",
             "sample_seed",
+            "expected_finalized_height",
+            "expected_finalized_block_hash_hex",
             "orchestrator_job_id_hex",
             "tier",
         ] {
@@ -779,6 +871,30 @@ mod tests {
             ProofStreamHttpRequestV1::from_json_value(&Value::Object(uppercase)),
             Err(ProofStreamHttpRequestError::NonCanonicalHex(
                 "manifest_digest_hex"
+            ))
+        );
+
+        let mut uppercase_cursor = base.clone();
+        uppercase_cursor.insert(
+            "expected_finalized_block_hash_hex".into(),
+            Value::from("AB".repeat(32)),
+        );
+        assert_eq!(
+            ProofStreamHttpRequestV1::from_json_value(&Value::Object(uppercase_cursor)),
+            Err(ProofStreamHttpRequestError::NonCanonicalHex(
+                "expected_finalized_block_hash_hex"
+            ))
+        );
+
+        let mut zero_cursor_hash = base.clone();
+        zero_cursor_hash.insert(
+            "expected_finalized_block_hash_hex".into(),
+            Value::from("00".repeat(32)),
+        );
+        assert_eq!(
+            ProofStreamHttpRequestV1::from_json_value(&Value::Object(zero_cursor_hash)),
+            Err(ProofStreamHttpRequestError::InvalidRequest(
+                ProofStreamRequestError::InvalidFinalizedBlockHash
             ))
         );
 

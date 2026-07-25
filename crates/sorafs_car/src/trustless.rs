@@ -2,9 +2,9 @@
 //!
 //! The verifier consumes a manifest and CAR stream, rebuilds the chunk plan
 //! and PoR tree, and optionally cross-checks the results against a
-//! registry-ready [`PinRecordV1`]. Config is sourced from the gateway
-//! verifier TOML used in the SNNet-15 pack so operators and CI share the
-//! same thresholds.
+//! finalized native [`PinManifestFinalizedRecordV1`]. Config is sourced from
+//! the gateway verifier TOML used in the SNNet-15 pack so operators and CI
+//! share the same thresholds.
 
 use std::{
     fs, io,
@@ -12,14 +12,12 @@ use std::{
 };
 
 use hex::encode as hex_encode;
+use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use norito::{
     Error as NoritoError,
     json::{Map, Value},
 };
-use sorafs_manifest::{
-    ManifestV1,
-    pin_registry::{PinRecordV1, PinRecordValidationError},
-};
+use sorafs_manifest::ManifestV1;
 use thiserror::Error;
 use toml::Value as TomlValue;
 
@@ -146,21 +144,36 @@ pub enum TrustlessVerificationError {
     /// PoR tree was empty for a non-empty payload.
     #[error("PoR root missing from verified payload")]
     MissingPorRoot,
-    /// Pin record failed validation.
-    #[error("pin record invalid: {0}")]
-    PinRecordInvalid(#[from] PinRecordValidationError),
-    /// Pin record points to a different manifest CID.
-    #[error("pin record manifest CID mismatch (expected {expected}, found {found})")]
-    PinRecordManifestCidMismatch { expected: String, found: String },
-    /// Pin record profile handle mismatched the manifest.
-    #[error("pin record profile handle mismatch (expected {expected}, found {found})")]
-    PinRecordProfileMismatch { expected: String, found: String },
-    /// Pin record chunk plan digest mismatched the reconstructed plan.
-    #[error("pin record chunk plan digest mismatch (expected {expected}, found {found})")]
-    PinRecordChunkPlanMismatch { expected: String, found: String },
-    /// Pin record PoR root mismatched the reconstructed tree.
-    #[error("pin record PoR root mismatch (expected {expected}, found {found})")]
-    PinRecordPorRootMismatch { expected: String, found: String },
+    /// Reconstructed chunk plan disagreed with the mandatory manifest commitment.
+    #[error("manifest chunk plan digest mismatch (expected {expected}, found {found})")]
+    ManifestChunkPlanMismatch { expected: String, found: String },
+    /// Reconstructed PoR tree disagreed with the mandatory manifest commitment.
+    #[error("manifest PoR root mismatch (expected {expected}, found {found})")]
+    ManifestPorRootMismatch { expected: String, found: String },
+    /// Finalized pin query returned an inert cursor.
+    #[error("finalized pin cursor is inert (height {height}, block hash {block_hash_hex})")]
+    FinalizedPinCursorInvalid { height: u64, block_hash_hex: String },
+    /// Finalized pin is not approved for serving.
+    #[error("finalized pin status is not approved (found {found:?})")]
+    FinalizedPinStatusInvalid { found: PinStatus },
+    /// Finalized pin points to a different manifest envelope digest.
+    #[error("finalized pin manifest digest mismatch (expected {expected}, found {found})")]
+    FinalizedPinManifestDigestMismatch { expected: String, found: String },
+    /// Finalized pin points to a different manifest CID.
+    #[error("finalized pin manifest CID mismatch (expected {expected}, found {found})")]
+    FinalizedPinManifestCidMismatch { expected: String, found: String },
+    /// Finalized pin profile handle mismatched the manifest.
+    #[error("finalized pin profile handle mismatch (expected {expected}, found {found})")]
+    FinalizedPinProfileMismatch { expected: String, found: String },
+    /// Finalized pin chunk plan digest mismatched the reconstructed plan.
+    #[error("finalized pin chunk plan digest mismatch (expected {expected}, found {found})")]
+    FinalizedPinChunkPlanMismatch { expected: String, found: String },
+    /// Finalized pin PoR root mismatched the reconstructed tree.
+    #[error("finalized pin PoR root mismatch (expected {expected}, found {found})")]
+    FinalizedPinPorRootMismatch { expected: String, found: String },
+    /// Finalized pin payload length mismatched the verified CAR.
+    #[error("finalized pin content length mismatch (expected {expected}, found {found})")]
+    FinalizedPinContentLengthMismatch { expected: u64, found: u64 },
 }
 
 /// Output of a trustless verification run.
@@ -249,42 +262,88 @@ impl TrustlessVerificationOutcome {
         Value::Object(root)
     }
 
-    /// Validate the outcome against a registry pin record.
-    pub fn validate_pin_record(&self, pin: &PinRecordV1) -> Result<(), TrustlessVerificationError> {
-        pin.validate()?;
-
-        let expected_cid_hex = hex_encode(&self.manifest_cid);
-        let found_cid_hex = hex_encode(&pin.manifest_cid);
-        if pin.manifest_cid != self.manifest_cid {
-            return Err(TrustlessVerificationError::PinRecordManifestCidMismatch {
-                expected: expected_cid_hex,
-                found: found_cid_hex,
+    /// Validate the outcome against an approved, finalized native pin record.
+    ///
+    /// This comparison does not authenticate record provenance. Callers must
+    /// obtain `pin` from an authenticated ledger query or a verified state
+    /// proof; arbitrary local files are not trust anchors.
+    pub fn validate_finalized_pin(
+        &self,
+        pin: &PinManifestFinalizedRecordV1,
+    ) -> Result<(), TrustlessVerificationError> {
+        if pin.finalized_cursor.height == 0
+            || pin
+                .finalized_cursor
+                .block_hash
+                .iter()
+                .all(|byte| *byte == 0)
+        {
+            return Err(TrustlessVerificationError::FinalizedPinCursorInvalid {
+                height: pin.finalized_cursor.height,
+                block_hash_hex: hex_encode(pin.finalized_cursor.block_hash),
+            });
+        }
+        if !matches!(pin.manifest.status, PinStatus::Approved(_)) {
+            return Err(TrustlessVerificationError::FinalizedPinStatusInvalid {
+                found: pin.manifest.status,
             });
         }
 
-        if pin.profile_handle != self.profile_handle {
-            return Err(TrustlessVerificationError::PinRecordProfileMismatch {
+        let expected_manifest_digest_hex = self.manifest_digest_hex();
+        let found_manifest_digest_hex = hex_encode(pin.manifest.digest.as_bytes());
+        if pin.manifest.digest.as_bytes() != &self.manifest_digest {
+            return Err(
+                TrustlessVerificationError::FinalizedPinManifestDigestMismatch {
+                    expected: expected_manifest_digest_hex,
+                    found: found_manifest_digest_hex,
+                },
+            );
+        }
+
+        let expected_cid_hex = hex_encode(&self.manifest_cid);
+        let found_cid_hex = hex_encode(pin.manifest.root_cid.as_bytes());
+        if pin.manifest.root_cid.as_bytes().as_slice() != self.manifest_cid {
+            return Err(
+                TrustlessVerificationError::FinalizedPinManifestCidMismatch {
+                    expected: expected_cid_hex,
+                    found: found_cid_hex,
+                },
+            );
+        }
+
+        let found_profile_handle = pin.manifest.chunker.to_handle();
+        if found_profile_handle != self.profile_handle {
+            return Err(TrustlessVerificationError::FinalizedPinProfileMismatch {
                 expected: self.profile_handle.clone(),
-                found: pin.profile_handle.clone(),
+                found: found_profile_handle,
             });
         }
 
         let expected_plan_hex = self.chunk_plan_digest_hex();
-        let found_plan_hex = hex_encode(pin.chunk_plan_digest);
-        if pin.chunk_plan_digest != self.chunk_plan_digest {
-            return Err(TrustlessVerificationError::PinRecordChunkPlanMismatch {
+        let found_plan_hex = hex_encode(pin.manifest.chunk_digest_sha3_256);
+        if pin.manifest.chunk_digest_sha3_256 != self.chunk_plan_digest {
+            return Err(TrustlessVerificationError::FinalizedPinChunkPlanMismatch {
                 expected: expected_plan_hex,
                 found: found_plan_hex,
             });
         }
 
         let expected_root_hex = self.por_root_hex();
-        let found_root_hex = hex_encode(pin.por_root);
-        if pin.por_root != self.por_root {
-            return Err(TrustlessVerificationError::PinRecordPorRootMismatch {
+        let found_root_hex = hex_encode(pin.manifest.por_root);
+        if pin.manifest.por_root != self.por_root {
+            return Err(TrustlessVerificationError::FinalizedPinPorRootMismatch {
                 expected: expected_root_hex,
                 found: found_root_hex,
             });
+        }
+
+        if pin.manifest.content_length != self.report.stats.payload_bytes {
+            return Err(
+                TrustlessVerificationError::FinalizedPinContentLengthMismatch {
+                    expected: self.report.stats.payload_bytes,
+                    found: pin.manifest.content_length,
+                },
+            );
         }
 
         Ok(())
@@ -325,6 +384,18 @@ impl TrustlessVerifier {
         }
 
         let chunk_plan_digest = chunk_plan_digest_sha3(report.chunk_store.chunks());
+        if chunk_plan_digest != manifest.chunk_digest_sha3_256 {
+            return Err(TrustlessVerificationError::ManifestChunkPlanMismatch {
+                expected: hex_encode(manifest.chunk_digest_sha3_256),
+                found: hex_encode(chunk_plan_digest),
+            });
+        }
+        if por_root != manifest.por_root {
+            return Err(TrustlessVerificationError::ManifestPorRootMismatch {
+                expected: hex_encode(manifest.por_root),
+                found: hex_encode(por_root),
+            });
+        }
         let profile_handle = format!(
             "{}.{}@{}",
             manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
@@ -404,7 +475,14 @@ fn read_string(
 
 #[cfg(test)]
 mod tests {
-    use sorafs_manifest::pin_registry::PinRecordValidationError;
+    use iroha_data_model::{
+        account::AccountId,
+        metadata::Metadata,
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
+            PinManifestRecord, PinPolicy,
+        },
+    };
 
     use super::*;
 
@@ -455,7 +533,7 @@ emit_metrics = true
     }
 
     #[test]
-    fn pin_record_validation_reports_mismatch() {
+    fn finalized_pin_validation_reports_mismatch() {
         let manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]);
         let outcome = TrustlessVerificationOutcome {
             manifest_digest: [0x11; 32],
@@ -479,73 +557,129 @@ emit_metrics = true
             },
         };
 
-        let mut pin = PinRecordV1 {
-            manifest_cid,
-            chunk_plan_digest: [0x22; 32],
-            por_root: [0x33; 32],
-            profile_handle: "sorafs.sf1@1.0.0".to_string(),
-            approved_at: 1,
-            retention_epoch: 2,
-            pin_policy: sorafs_manifest::PinPolicy::default(),
-            successor_of: None,
-            governance_envelope_hash: None,
+        let mut manifest = PinManifestRecord::new(
+            ManifestDigest::new(outcome.manifest_digest),
+            ManifestRootCid::try_from(manifest_cid).expect("canonical root CID"),
+            ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".into(),
+                name: "sf1".into(),
+                semver: "1.0.0".into(),
+                multihash_code: 0x1f,
+            },
+            [0x22; 32],
+            [0x33; 32],
+            0,
+            PinPolicy::default(),
+            AccountId::new(
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
+            1,
+            None,
+            None,
+            Metadata::default(),
+        );
+        manifest.approve(2, None);
+        let mut pin = PinManifestFinalizedRecordV1 {
+            finalized_cursor: PinManifestFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x44; 32],
+            },
+            manifest,
         };
 
-        // Manifest CID mismatch should be surfaced first.
-        pin.manifest_cid = sorafs_manifest::canonical_manifest_root_cid([0xCC; 32]);
-        let err = outcome.validate_pin_record(&pin).expect_err("cid mismatch");
+        pin.finalized_cursor.height = 0;
+        let err = outcome
+            .validate_finalized_pin(&pin)
+            .expect_err("zero cursor height");
         assert!(matches!(
             err,
-            TrustlessVerificationError::PinRecordManifestCidMismatch { .. }
+            TrustlessVerificationError::FinalizedPinCursorInvalid { .. }
+        ));
+        pin.finalized_cursor.height = 7;
+
+        pin.manifest.status = PinStatus::Pending;
+        let err = outcome
+            .validate_finalized_pin(&pin)
+            .expect_err("pending pin");
+        assert!(matches!(
+            err,
+            TrustlessVerificationError::FinalizedPinStatusInvalid { .. }
+        ));
+        pin.manifest.approve(2, None);
+
+        pin.manifest.digest = ManifestDigest::new([0xCC; 32]);
+        let err = outcome
+            .validate_finalized_pin(&pin)
+            .expect_err("manifest digest mismatch");
+        assert!(matches!(
+            err,
+            TrustlessVerificationError::FinalizedPinManifestDigestMismatch { .. }
+        ));
+        pin.manifest.digest = ManifestDigest::new(outcome.manifest_digest);
+
+        // Manifest CID mismatch should be surfaced first.
+        pin.manifest.root_cid =
+            ManifestRootCid::try_from(sorafs_manifest::canonical_manifest_root_cid([0xCC; 32]))
+                .expect("canonical root CID");
+        let err = outcome
+            .validate_finalized_pin(&pin)
+            .expect_err("cid mismatch");
+        assert!(matches!(
+            err,
+            TrustlessVerificationError::FinalizedPinManifestCidMismatch { .. }
         ));
 
         // Fix manifest, break profile handle.
-        pin.manifest_cid = outcome.manifest_cid.clone();
-        pin.profile_handle = "sorafs.sf2@1.0.0".to_string();
+        pin.manifest.root_cid =
+            ManifestRootCid::try_from(outcome.manifest_cid.clone()).expect("canonical root CID");
+        pin.manifest.chunker.name = "sf2".to_owned();
         let err = outcome
-            .validate_pin_record(&pin)
+            .validate_finalized_pin(&pin)
             .expect_err("profile mismatch");
         assert!(matches!(
             err,
-            TrustlessVerificationError::PinRecordProfileMismatch { .. }
+            TrustlessVerificationError::FinalizedPinProfileMismatch { .. }
         ));
 
         // Fix profile, break chunk plan digest.
-        pin.profile_handle = outcome.profile_handle.clone();
-        pin.chunk_plan_digest = [0x55; 32];
+        pin.manifest.chunker.name = "sf1".to_owned();
+        pin.manifest.chunk_digest_sha3_256 = [0x55; 32];
         let err = outcome
-            .validate_pin_record(&pin)
+            .validate_finalized_pin(&pin)
             .expect_err("plan mismatch");
         assert!(matches!(
             err,
-            TrustlessVerificationError::PinRecordChunkPlanMismatch { .. }
+            TrustlessVerificationError::FinalizedPinChunkPlanMismatch { .. }
         ));
 
         // Fix plan, break PoR.
-        pin.chunk_plan_digest = outcome.chunk_plan_digest;
-        pin.por_root = [0x99; 32];
-        let err = outcome.validate_pin_record(&pin).expect_err("por mismatch");
+        pin.manifest.chunk_digest_sha3_256 = outcome.chunk_plan_digest;
+        pin.manifest.por_root = [0x99; 32];
+        let err = outcome
+            .validate_finalized_pin(&pin)
+            .expect_err("por mismatch");
         assert!(matches!(
             err,
-            TrustlessVerificationError::PinRecordPorRootMismatch { .. }
+            TrustlessVerificationError::FinalizedPinPorRootMismatch { .. }
         ));
 
-        // Empty profile handle should be caught by PinRecord validation.
-        pin.por_root = outcome.por_root;
-        pin.profile_handle.clear();
+        // Content length remains bound to the verified CAR.
+        pin.manifest.por_root = outcome.por_root;
+        pin.manifest.content_length = 1;
         let err = outcome
-            .validate_pin_record(&pin)
-            .expect_err("pin record validation failure");
+            .validate_finalized_pin(&pin)
+            .expect_err("content length mismatch");
         assert!(matches!(
             err,
-            TrustlessVerificationError::PinRecordInvalid(
-                PinRecordValidationError::UnknownProfileHandle { .. }
-            )
+            TrustlessVerificationError::FinalizedPinContentLengthMismatch { .. }
         ));
 
         // Restore and ensure the happy path succeeds.
-        pin.profile_handle = outcome.profile_handle.clone();
-        let result = outcome.validate_pin_record(&pin);
+        pin.manifest.content_length = outcome.report.stats.payload_bytes;
+        let result = outcome.validate_finalized_pin(&pin);
         assert!(result.is_ok(), "expected successful validation");
     }
 }

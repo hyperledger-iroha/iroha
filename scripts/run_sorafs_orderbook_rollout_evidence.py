@@ -366,7 +366,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=[],
         metavar="PATH",
-        help="Payload-free contract/mirror reconciliation canary JSON.",
+        help="Payload-free finalized-ledger replica/worker reconciliation canary JSON.",
     )
     parser.add_argument(
         "--governance-approval-evidence",

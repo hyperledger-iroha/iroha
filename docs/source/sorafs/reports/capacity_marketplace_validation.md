@@ -29,7 +29,8 @@ The checklist below must be reviewed before enabling the marketplace for externa
 |-------|------------|----------|
 | Dispute records persist with canonical payload digest | Unit test registers a dispute, decodes the stored payload, and asserts pending status to guarantee ledger determinism. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
 | CLI dispute generator matches canonical schema | CLI test covers Base64/Norito outputs and JSON summaries for `CapacityDisputeV1`, ensuring evidence bundles hash deterministically. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test proves dispute/penalty determinism | Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots so slashes are deterministic across peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Dispute journal lifecycle is atomic and replay-safe | Registration stores the pending dispute and revision-one `Opened` journal entry together; resolution stores the terminal record and exact predecessor-bound revision-two `Resolved` entry together. Exact transaction replay is idempotent. | `register_capacity_dispute_exact_replay_is_idempotent`,`capacity_dispute_resolution_is_atomic_terminal_and_replay_safe` |
+| Telemetry cannot create disputes | Proof-failure telemetry may apply deterministic penalties and alerts, but replay leaves the authoritative capacity-dispute map unchanged. | `record_capacity_telemetry_does_not_mutate_capacity_disputes`,`proof_failure_telemetry_replay_is_deterministic` |
 | Runbook documents escalation and revocation flow | Operations guide captures council workflow, evidence requirements, and rollback procedures. | `docs/source/sorafs/dispute_revocation_runbook.md:1` |
 
 ### Treasury Reconciliation
@@ -49,7 +50,11 @@ Re-run the validation suite before sign-off:
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
 cargo test -p iroha_core -- register_capacity_declaration_rejects_provider_mismatch
 cargo test -p iroha_core -- register_capacity_dispute_inserts_record
-cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic
+cargo test -p iroha_core -- register_capacity_dispute_exact_replay_is_idempotent
+cargo test -p iroha_core -- capacity_dispute_requires_governed_recorder_authority
+cargo test -p iroha_core -- capacity_dispute_resolution_is_atomic_terminal_and_replay_safe
+cargo test -p iroha_core -- record_capacity_telemetry_does_not_mutate_capacity_disputes
+cargo test -p iroha_core -- proof_failure_telemetry_replay_is_deterministic
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only

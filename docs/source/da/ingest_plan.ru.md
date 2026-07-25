@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   строки, чтобы значения `policy_source` оставались значимыми в пакетах доказательств. См.
   `crates/iroha_cli/src/commands/da.rs` для подкоманды и `docs/source/da/rent_policy.md`
   для схемы политики.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Паритет реестра выводов теперь распространяется на SDK: `ToriiClient.registerSorafsPinManifest(...)` в
-  JavaScript SDK создает точную полезную нагрузку, используемую `iroha app sorafs pin register`, обеспечивая соблюдение канонических
-  метаданные чанка, политики закрепления, доказательства псевдонимов и дайджесты преемников перед отправкой POST
-  `/v1/sorafs/pin/register`. Это удерживает CI-ботов и автоматизацию от использования CLI при
+- Паритет pin registry теперь распространяется на SDK:
+  `ToriiClient.registerSorafsPinManifest(...)` формирует закрытый JSON-запрос V1
+  с точным каноническим padded-base64 `ManifestV1` в `manifest_payload`. Torii
+  выводит digest, chunker, content length, pin policy и fee inputs только из
+  decoded manifest и отклоняет duplicate summary; optional alias и nonzero
+  predecessor сохраняются. Поэтому CI-ботам и автоматизации не нужно вызывать
+  CLI при использовании `/v1/sorafs/pin/register` для
   запись регистрации манифеста, а помощник поставляется с поддержкой TypeScript/README, поэтому DA-8
   Паритет инструментов «отправить/получить/доказать» полностью удовлетворяется на JS вместе с Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` объединяет все вышеперечисленное: берет билет хранилища, загружает

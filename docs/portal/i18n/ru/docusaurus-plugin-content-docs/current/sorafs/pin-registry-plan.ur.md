@@ -44,46 +44,67 @@ Sidebar_label: Реестр контактов
 
 | Структура | وضاحت | فیلڈز |
 |--------|-------|-------|
-| `PinRecordV1` | каноническая запись манифеста. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` | псевдоним → сопоставление CID манифеста. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
 | `ReplicationOrderV1` | Провайдеры имеют PIN-код манифеста. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
 | `ReplicationReceiptV1` | подтверждение провайдера. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
 | `ManifestPolicyV1` | снимок политики управления. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Ссылка на реализацию: `crates/sorafs_manifest/src/pin_registry.rs` دیکھیں جہاں Rust Norito схемы
-Дополнительные помощники по проверке Инструменты проверки манифеста (поиск в реестре блоков, ограничение политики закрепления)
-Используйте фасады Torii, CLI и инварианты. کریں۔
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-Задачи:
-- `crates/sorafs_manifest/src/pin_registry.rs` схема Norito схемы.
-- Norito макросы и код создания кода (Rust + SDK)۔
-- схемы в документации (`sorafs_architecture_rfc.md`)
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## کنٹریکٹ نفاذ| کام | مالک/مالکان | نوٹس |
-|-----|-------------|------|
-| хранилище реестра (sled/sqlite/off-chain) Модуль смарт-контрактов | Основная инфраструктура/команда смарт-контрактов | детерминированное хеширование с плавающей запятой |
-| Точки входа: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Основная инфраструктура | план проверки سے `ManifestValidator` استعمال کریں۔ привязка псевдонима `RegisterPinManifest` (Torii DTO) کے لیے منصوبہ بند ہے۔ |
-| Переходы между состояниями: последовательность (манифест A -> B), эпохи удержания, уникальность псевдонимов نافذ کریں۔ | Совет управления / Core Infra | уникальность псевдонимов, пределы хранения, а также проверки утверждения/снятия с учета предшественника. Обнаружение многошаговой последовательности и учет репликации |
-| Управляемые параметры: `ManifestPolicyV1` — состояние конфигурации/управления. события управления | Совет управления | обновления политики Использование интерфейса командной строки (CLI) |
-| Эмиссия событий: телеметрия или события Norito (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Наблюдаемость | Схема событий + журналирование |
+## Contract Implementation
 
-Тестирование:
-- Точка входа в модульные тесты (положительный результат + отклонение).
-- проверка свойств цепочки преемственности (без циклов, монотонных эпох).
-- случайные манифесты (ограниченные) и нечеткая проверка.
+| Task | Owner(s) | Notes |
+|------|----------|-------|
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-## Фасад фасада (Torii/SDK انضمام)
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-| جزو | کام | مالک/مالکان |
-|------|-----|-------------|
-| Torii Сервис | `/v1/sorafs/pin` (отправка), `/v1/sorafs/pin/{cid}` (поиск), `/v1/sorafs/aliases` (список/привязка), `/v1/sorafs/replication` (заказы/квитанции). нумерация страниц + фильтрация | Сетевые TL/Core Infra |
-| Аттестация | ответы میں высота/хеш реестра شامل کریں؛ Norito структура аттестации, используемая в SDK, потребляет много ресурсов. | Основная инфраструктура |
-| интерфейс командной строки | `sorafs_manifest_builder` используется для `sorafs_pin` CLI, используется `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | Инструментальная рабочая группа |
-| SDK | Схема Norito — привязки клиента (Rust/Go/TS) генерируют کریں؛ Интеграционные тесты | Команды SDK |
+## Service Facade (Torii/SDK Integration)
 
-Операции:
-- Конечные точки GET и кэш/уровень ETag.
-- Политики Torii для ограничения скорости/авторизации.
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
+
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## Светильники اور CI- Каталог Fixtures: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` — подписанный манифест/псевдоним/снимки заказа.
 - Шаг CI: `ci/check_sorafs_fixtures.sh` регенерировать моментальный снимок, чтобы получить разницу и сбой, если выровнены приспособления CI.
@@ -131,8 +152,8 @@ Sidebar_label: Реестр контактов
 Контрольный список для SF-4
 Фасад REST и подтвержденный список конечных точек, например:
 
-- `GET /v1/sorafs/pin` или `GET /v1/sorafs/pin/{digest}` проявляет واپس کرتے ہیں جن میں
-  привязки псевдонимов, заказы репликации, хеш-код блока, объект аттестации и т. д.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` или `GET /v1/sorafs/replication` в каталоге псевдонимов.
   журнал заказов репликации, согласованная нумерация страниц, фильтры состояния
 

@@ -17,7 +17,6 @@ The gateway conformance suite (`integration_tests/tests/sorafs_gateway_conforman
 | C4 | Unknown capability TLV | 428 | `unsupported_capability` | GREASE capability rejected when `allow_unknown_capabilities=false`. |
 | C5 | Range request missing `dag-scope` header | 428 | `missing_header` | Enforces the trustless `Accept: …; dag-scope=block` contract; `details.header` is `Sora-Dag-Scope`. |
 | C6 | Gzip request when profile disallows compression | 406 | `unsupported_encoding` | Harness sends `Accept-Encoding: gzip`; `details.encoding` records the unsupported encoding. |
-| C7 | Proof tampering (chunk digest mismatch) | 422 | `proof_mismatch` | Gateway rejects PoR proofs whose chunk digest is replaced with the `0xff` tamper sentinel; `details.section` identifies the offending sample. |
 
 Fixtures live under `fixtures/sorafs_gateway/capability_refusal/` and are referenced by the integration tests. Each scenario exposes `request.json`, `response.json`, and `gateway.json` alongside the shared `scenarios.json` index so operators and SDK authors can reproduce the refusal end-to-end using the canonical fixture bundle in `fixtures/sorafs_gateway/1.0.0/`.
 

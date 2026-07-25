@@ -1,9 +1,9 @@
 //! Conformance harness for the `SoraFS` gateway trustless profile (SF-5a).
 //!
-//! This module spins up fixture-backed HTTP adapters and runs the same manifest /
-//! proof verification flow described in `docs/source/sorafs_gateway_profile.md`.
-//! The adapters mimic the responses a real gateway would return so the harness
-//! can validate behaviour deterministically during CI.
+//! This module spins up fixture-backed HTTP adapters and runs manifest and CAR
+//! verification flows described in `docs/source/sorafs_gateway_profile.md`.
+//! Authenticated proof-stream coverage lives in Torii finalized-state tests, where
+//! finalized ledger state and its cursor are available as genuine trust inputs.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -31,10 +31,7 @@ use sorafs_car::{
 use sorafs_manifest::{
     DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, ManifestValidationError, PinPolicy,
     StorageClass, chunker_registry,
-    por::{
-        PorChallengeV1, PorChallengeValidationError, PorProofV1, PorProofValidationError,
-        derive_challenge_id, derive_challenge_seed,
-    },
+    por::{PorChallengeV1, PorProofV1, derive_challenge_id, derive_challenge_seed},
     validation::{PinPolicyConstraints, validate_manifest},
 };
 
@@ -85,7 +82,7 @@ pub const FIXTURE_VERSION: &str = "1.0.0";
 /// Release timestamp (seconds since UNIX epoch) associated with `FIXTURE_VERSION`.
 pub const FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
 
-/// Expected BLAKE3 digest (hex) for the canonical fixture bundle.
+/// Return the stable report label for a scenario outcome.
 fn outcome_label(outcome: ScenarioOutcome) -> &'static str {
     match outcome {
         ScenarioOutcome::Success => "success",
@@ -560,6 +557,7 @@ fn generate_fixture_bundle() -> FixtureBundle {
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(*summary.chunk_store.por_tree().root())
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -999,12 +997,6 @@ fn default_scenarios() -> Vec<ReplayScenario> {
             id: "B2",
             description: "Missing required SoraFS headers refusal",
             expected_status: 428,
-            expected_reason: ScenarioOutcome::Refusal,
-        },
-        ReplayScenario {
-            id: "B3",
-            description: "Corrupted PoR proof refusal",
-            expected_status: 422,
             expected_reason: ScenarioOutcome::Refusal,
         },
         ReplayScenario {
@@ -1522,7 +1514,7 @@ fn sorafs_gateway_replay_matrix() {
     let policy = PinPolicyConstraints::default();
     assert_eq!(
         harness.scenarios.len(),
-        18,
+        17,
         "extend scenarios as harness matures"
     );
     for scenario in &harness.scenarios {
@@ -1902,8 +1894,6 @@ struct HeadResponse {
 
 trait GatewayHttpClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError>;
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError>;
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError>;
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError>;
     fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError>;
     fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError>;
@@ -1918,13 +1908,6 @@ trait GatewayHttpClient {
 enum GatewayError {
     DowngradeAttempt,
     Manifest,
-    Challenge,
-    Proof,
-    MismatchChallengeProfile,
-    MismatchManifestDigestEncoding,
-    MismatchChallengeManifestDigest,
-    MismatchProofManifestDigest,
-    MismatchProofChallengeId,
     MismatchCarSize { _expected: u64, _actual: u64 },
     MismatchCarDigest,
     RangeNotSatisfiable,
@@ -1938,18 +1921,6 @@ enum GatewayError {
 impl From<ManifestValidationError> for GatewayError {
     fn from(_: ManifestValidationError) -> Self {
         Self::Manifest
-    }
-}
-
-impl From<PorChallengeValidationError> for GatewayError {
-    fn from(_: PorChallengeValidationError) -> Self {
-        Self::Challenge
-    }
-}
-
-impl From<PorProofValidationError> for GatewayError {
-    fn from(_: PorProofValidationError) -> Self {
-        Self::Proof
     }
 }
 
@@ -2041,14 +2012,6 @@ impl GatewayHttpClient for SuccessGatewayClient {
         Ok(self.bundle.manifest.clone())
     }
 
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        Ok(self.bundle.challenge.clone())
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        Ok(self.bundle.proof.clone())
-    }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         Ok(self.bundle.car_bytes.clone())
     }
@@ -2084,7 +2047,6 @@ impl UnsupportedChunkerGatewayClient {
         bundle.manifest.chunking.namespace = "unsupported".to_string();
         bundle.manifest.chunking.name = "sf9".to_string();
         bundle.manifest.chunking.aliases = vec!["unsupported.sf9@1.0.0".to_string()];
-        bundle.challenge.chunking_profile = "unsupported.sf9@1.0.0".to_string();
         Self { bundle }
     }
 }
@@ -2092,14 +2054,6 @@ impl UnsupportedChunkerGatewayClient {
 impl GatewayHttpClient for UnsupportedChunkerGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
-    }
-
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        Ok(self.bundle.challenge.clone())
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        Ok(self.bundle.proof.clone())
     }
 
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
@@ -2144,14 +2098,6 @@ impl GatewayHttpClient for DowngradeGatewayClient {
         self.inner.fetch_manifest()
     }
 
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        self.inner.fetch_challenge()
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        self.inner.fetch_proof()
-    }
-
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
         self.inner.stream_car()
     }
@@ -2173,54 +2119,6 @@ impl GatewayHttpClient for DowngradeGatewayClient {
     }
 }
 
-struct CorruptedProofGatewayClient {
-    bundle: FixtureBundle,
-}
-
-impl CorruptedProofGatewayClient {
-    fn new() -> Self {
-        let mut bundle = fixture_bundle();
-        bundle.proof.manifest_digest[0] ^= 0xFF;
-        Self { bundle }
-    }
-}
-
-impl GatewayHttpClient for CorruptedProofGatewayClient {
-    fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
-        Ok(self.bundle.manifest.clone())
-    }
-
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        Ok(self.bundle.challenge.clone())
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        Ok(self.bundle.proof.clone())
-    }
-
-    fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
-        Ok(self.bundle.car_bytes.clone())
-    }
-
-    fn stream_range(&self, range: ByteRange) -> Result<Vec<u8>, GatewayError> {
-        SuccessGatewayClient {
-            bundle: self.bundle.clone(),
-        }
-        .stream_range(range)
-    }
-
-    fn stream_ranges(&self, ranges: &[ByteRange]) -> Result<MultipartRangeResponse, GatewayError> {
-        SuccessGatewayClient {
-            bundle: self.bundle.clone(),
-        }
-        .stream_ranges(ranges)
-    }
-
-    fn head_manifest(&self) -> Result<HeadResponse, GatewayError> {
-        Ok(success_head_response(&self.bundle))
-    }
-}
-
 struct MisalignedRangeGatewayClient {
     bundle: FixtureBundle,
 }
@@ -2236,14 +2134,6 @@ impl MisalignedRangeGatewayClient {
 impl GatewayHttpClient for MisalignedRangeGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
-    }
-
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        Ok(self.bundle.challenge.clone())
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        Ok(self.bundle.proof.clone())
     }
 
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
@@ -2297,14 +2187,6 @@ impl CorruptedCarGatewayClient {
 impl GatewayHttpClient for CorruptedCarGatewayClient {
     fn fetch_manifest(&self) -> Result<ManifestV1, GatewayError> {
         Ok(self.bundle.manifest.clone())
-    }
-
-    fn fetch_challenge(&self) -> Result<PorChallengeV1, GatewayError> {
-        Ok(self.bundle.challenge.clone())
-    }
-
-    fn fetch_proof(&self) -> Result<PorProofV1, GatewayError> {
-        Ok(self.bundle.proof.clone())
     }
 
     fn stream_car(&self) -> Result<Vec<u8>, GatewayError> {
@@ -2718,7 +2600,6 @@ fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult
         "A3" => verify_misaligned_range(&MisalignedRangeGatewayClient::new()),
         "B1" => verify_full_replay(&UnsupportedChunkerGatewayClient::new(), policy),
         "B2" => verify_full_replay(&DowngradeGatewayClient::new(), policy),
-        "B3" => verify_full_replay(&CorruptedProofGatewayClient::new(), policy),
         "B4" => verify_full_replay(&CorruptedCarGatewayClient::new(), policy),
         "B5" => return GatewayResult::refusal(412),
         "B6" => return GatewayResult::refusal(429),
@@ -2744,14 +2625,7 @@ fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult
         Err(GatewayError::RangeNotSatisfiable) => GatewayResult::refusal(416),
         Err(GatewayError::RangeUnexpectedSuccess) => GatewayResult::error(500),
         Err(
-            GatewayError::Challenge
-            | GatewayError::Proof
-            | GatewayError::MismatchChallengeProfile
-            | GatewayError::MismatchManifestDigestEncoding
-            | GatewayError::MismatchChallengeManifestDigest
-            | GatewayError::MismatchProofManifestDigest
-            | GatewayError::MismatchProofChallengeId
-            | GatewayError::MismatchCarSize { .. }
+            GatewayError::MismatchCarSize { .. }
             | GatewayError::MismatchCarDigest
             | GatewayError::RangeLengthMismatch { .. }
             | GatewayError::RangePayloadMismatch
@@ -2767,38 +2641,8 @@ fn verify_full_replay<C: GatewayHttpClient>(
 ) -> Result<(), GatewayError> {
     client.ensure_required_headers()?;
     let manifest = client.fetch_manifest()?;
-    let challenge = client.fetch_challenge()?;
-    let proof = client.fetch_proof()?;
 
     validate_manifest(&manifest, policy)?;
-    challenge.validate()?;
-    proof.validate()?;
-
-    let descriptor = chunker_registry::default_descriptor();
-    let canonical_alias = descriptor
-        .aliases
-        .first()
-        .copied()
-        .unwrap_or("sorafs.sf1@1.0.0");
-    if challenge.chunking_profile != canonical_alias {
-        return Err(GatewayError::MismatchChallengeProfile);
-    }
-
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|_| GatewayError::MismatchManifestDigestEncoding)?;
-    let mut manifest_digest_bytes = [0u8; 32];
-    manifest_digest_bytes.copy_from_slice(manifest_digest.as_bytes());
-
-    if challenge.manifest_digest != manifest_digest_bytes {
-        return Err(GatewayError::MismatchChallengeManifestDigest);
-    }
-    if proof.manifest_digest != manifest_digest_bytes {
-        return Err(GatewayError::MismatchProofManifestDigest);
-    }
-    if proof.challenge_id != challenge.challenge_id {
-        return Err(GatewayError::MismatchProofChallengeId);
-    }
 
     let car_bytes = client.stream_car()?;
     CarVerifier::verify_full_car(&manifest, &car_bytes)?;

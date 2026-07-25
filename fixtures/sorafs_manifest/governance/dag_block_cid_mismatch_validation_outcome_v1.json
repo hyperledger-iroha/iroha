@@ -1,0 +1,86 @@
+{
+  "status": "Error",
+  "code": "SFS-GOV-004",
+  "category": "validation",
+  "message": "governance DAG block CID does not match the expected CID",
+  "action": "Pass the block CID that belongs to this governance DAG block or regenerate the block from canonical payload bytes.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.governance_dag.block",
+    "sorafs.reference.code.SFS-GOV-004"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "GovernanceDagBlockV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "block_cid_hex",
+      "value": "055a390beee142cab881c30c5d2bdd7594195c70a7d74971706fb25b48b04783"
+    },
+    {
+      "key": "block_cid_len",
+      "value": "32"
+    },
+    {
+      "key": "sequence",
+      "value": "0"
+    },
+    {
+      "key": "timestamp",
+      "value": "1700000800"
+    },
+    {
+      "key": "publisher_peer_id",
+      "value": "12D3KooWGovernanceDagPublisher"
+    },
+    {
+      "key": "publisher_peer_id_len",
+      "value": "30"
+    },
+    {
+      "key": "node_cid_hex",
+      "value": "714dbb9d9ea1d4e96bbae3c112401d60dbe0f8501baff695cb2780fb560c9ddb"
+    },
+    {
+      "key": "node_cid_len",
+      "value": "32"
+    },
+    {
+      "key": "node_payload_kind",
+      "value": "por_proof"
+    },
+    {
+      "key": "block_signature_algorithm",
+      "value": "ed25519"
+    },
+    {
+      "key": "block_public_key_len",
+      "value": "32"
+    },
+    {
+      "key": "block_signature_len",
+      "value": "64"
+    },
+    {
+      "key": "expected_block_cid_hex",
+      "value": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f"
+    },
+    {
+      "key": "expected_block_cid_len",
+      "value": "32"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "governance_dag_block",
+      "path": "governance-dag-block.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

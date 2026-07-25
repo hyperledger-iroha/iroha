@@ -92,7 +92,8 @@ unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kag
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 unset IROHA_TEST_SKIP_BUILD IROHA_TEST_ALLOW_REENTRANT_BUILD
-unset IROHA_TEST_TARGET_DIR IROHA_TEST_BUILD_PROFILE IROHA_TEST_BUILD_TIMEOUT_MS PROFILE
+unset IROHA_TEST_TARGET_DIR IROHA_RELEASE_PREBUILT_MANIFEST_SHA256
+unset IROHA_TEST_BUILD_PROFILE IROHA_TEST_BUILD_TIMEOUT_MS PROFILE
 unset TLAPM_BIN TLAPM_STDLIB TLA2TOOLS_JAR
 unset JAVA_BIN SUMERAGI_V2_TLC_PROFILE SUMERAGI_TLAPS_THREADS
 unset SUMERAGI_V2_FORMAL_EVIDENCE_DIR SUMERAGI_V2_CHAOS_EVIDENCE_DIR
@@ -115,6 +116,7 @@ unset CARGO_BUILD_RUSTFLAGS CARGO_BUILD_RUSTDOCFLAGS
 unset CARGO CARGO_HOME CARGO_NET_OFFLINE
 unset RUSTUP_TOOLCHAIN RUSTC_BOOTSTRAP RUST_TEST_NOCAPTURE CARGO_INCREMENTAL
 unset CLICOLOR CLICOLOR_FORCE
+export CARGO_INCREMENTAL=0
 export CARGO_TERM_COLOR=never
 export NO_COLOR=1
 while IFS='=' read -r inherited_name _; do
@@ -136,6 +138,55 @@ sha256_file() {
   else
     shasum -a 256 "$1" | awk '{print $1}'
   fi
+}
+
+wait_for_external_cargo() {
+  local active_compilers
+  while true; do
+    # This exact snapshot is a release requirement and is intentionally kept
+    # separate from the machine-readable filter below.
+    ps -axo pid,etime,command
+    active_compilers="$(
+      ps -axo pid=,command= | awk '
+        {
+          executable = $2
+          sub(/^.*\//, "", executable)
+          if (executable == "cargo" || executable == "rustc") {
+            print
+          }
+        }
+      '
+    )"
+    if [[ -z "$active_compilers" ]]; then
+      return
+    fi
+    printf '%s\n' \
+      "waiting for active Cargo/rustc processes before release command:" \
+      "$active_compilers" >&2
+    sleep 10
+  done
+}
+
+run_cargo() {
+  wait_for_external_cargo
+  command cargo "$@"
+}
+
+source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
+
+localnet_binary_attestation_valid() {
+  sumeragi_v2_localnet_binary_attestation_valid \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+}
+
+ensure_source_bound_localnet_binaries() {
+  sumeragi_v2_ensure_source_bound_localnet_binaries \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+}
+
+export_source_bound_localnet_binaries() {
+  sumeragi_v2_export_source_bound_localnet_binaries \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
 }
 
 canonical_executable() {
@@ -335,6 +386,7 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   }
   readonly release_rustup_bin release_cargo_bin release_rustc_bin release_node_bin
+  wait_for_external_cargo
   if [[ ! -x "$release_cargo_bin" \
     || "$("$release_cargo_bin" --version)" != "cargo 1.93.1 (083ac5135 2025-12-15)" \
     || ! -x "$release_rustc_bin" \
@@ -548,6 +600,7 @@ PY
     IROHA_RELEASE_NODE_BIN="$release_node_bin" \
     IROHA_RELEASE_BASH_BIN="$release_bash_bin" \
     IROHA_RELEASE_CARGO_HOME="$release_host_root/cargo-home" \
+    CARGO_INCREMENTAL=0 \
     TMPDIR="$release_host_root/tmp" \
     XDG_CACHE_HOME="$release_host_root/cache" \
     "$release_bash_bin" "$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release
@@ -746,10 +799,12 @@ export IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256="$candidate_source_manifes
 readonly release_source_bound_root="${repo_root}/target/sumeragi-v2-release/${release_source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$release_source_manifest_sha256"
 export CARGO_TARGET_DIR="${release_source_bound_root}/test-suite"
-export IROHA_TEST_TARGET_DIR="${release_source_bound_root}/programs"
-export IROHA_TEST_SKIP_BUILD=0
-export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
+export IROHA_TEST_SKIP_BUILD=1
+export IROHA_TEST_ALLOW_REENTRANT_BUILD=0
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
+export IROHA_TEST_BUILD_PROFILE=release
+export PROFILE=release
+export CARGO_NET_OFFLINE=true
 if [[ "$profile" == "--release" ]]; then
   for required_tool_path in \
     IROHA_RELEASE_TLAPM_BIN \
@@ -792,6 +847,12 @@ if [[ "$profile" == "--release" ]]; then
   done
 fi
 
+# Build every real-localnet executable before any Cargo test process starts.
+# Test processes are then permanently skip-build/reentrant-disabled, avoiding a
+# Cargo-under-Cargo lock cycle while retaining a source/lock/binary attestation.
+ensure_source_bound_localnet_binaries
+export_source_bound_localnet_binaries
+
 corridor_enabled=0
 corridor_completion_path=""
 corridor_leg_index=0
@@ -804,6 +865,7 @@ if [[ "$profile" == "--release" ]]; then
   corridor_logs_dir="${corridor_evidence_dir}/logs"
   corridor_summary="${corridor_evidence_dir}/summary.tsv"
   corridor_required_tests="${corridor_evidence_dir}/production-required-tests.tsv"
+  corridor_g_unit_inventory="${corridor_evidence_dir}/g-unit-required-tests.tsv"
   corridor_completion_path="${corridor_evidence_dir}/COMPLETED.tsv"
   mkdir -p -- "$corridor_logs_dir"
   printf '%s\n' $'leg_index\tleg_id\tkind\trequired_test_count\tobserved_test_count\tcommand_status\ttee_status\tlog_sha256\tlog\tcommand' \
@@ -833,7 +895,21 @@ import sys
 
 kind, raw_path = sys.argv[1:]
 lines = Path(raw_path).read_text(encoding="utf-8").splitlines()
-if kind.startswith("cargo-"):
+if kind == "cargo-focus":
+    running = [line for line in lines if line == "running 1 test"]
+    results = [
+        line
+        for line in lines
+        if re.fullmatch(
+            r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
+            r"0 measured; [0-9]+ filtered out; finished in .+",
+            line,
+        )
+    ]
+    if not running or len(running) != len(results):
+        raise SystemExit("ambiguous focused Cargo test transcript")
+    print(len(results))
+elif kind.startswith("cargo-"):
     running = [re.fullmatch(r"running ([0-9]+) tests?", line) for line in lines]
     running = [match for match in running if match]
     results = [
@@ -970,7 +1046,7 @@ required_production_liveness_tests=(
   kura::tests::replace_top_block_replay_metadata_preflight_fails_closed_without_mutation
   kura::lane_geometry::tests::first_release_retirement_classifies_recovery_sync_failure_as_retryable
   kura::lane_geometry::tests::first_release_retirement_discards_unpublished_temp_for_every_fixed_pair
-  kura::lane_geometry::tests::first_release_retirement_promotes_then_rejects_complete_autonomous_rewrite
+  kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   kura::lane_geometry::tests::first_release_retirement_recovers_complete_certified_rewrite_before_snapshot
   kura::lane_geometry::tests::first_release_retirement_recovery_rejects_temp_symlink_without_external_writes
   kura::lane_geometry::tests::first_release_retirement_rejects_directory_substitution_at_pair_refresh
@@ -1015,7 +1091,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::refinement::tests::applied_successor_kernel_rejects_foreign_same_height_authority_and_status_mutations
   sumeragi::v2_core::refinement::tests::recovered_successor_kernel_keeps_complete_tip_and_snapshot_authority_disjoint
   sumeragi::v2_core::refinement::tests::successor_startup_lifecycle_preserves_running_on_failure_and_separates_restart_sources
-  sumeragi::v2_core::refinement::tests::durable_intent_accepts_a_stale_event_only_as_an_empty_owner_stutter
+  sumeragi::v2_core::refinement::tests::durable_intent_accepts_only_empty_persistence_completion_stutters
   sumeragi::v2_core::refinement::tests::durable_timeout_boundary_preserves_record_and_successor_owner_rounds
   sumeragi::v2_core::refinement::tests::two_stage_relay_retry_kernel_rejects_source_rotation_eligibility_and_fifo_mutations
   sumeragi::v2_core::refinement::tests::historical_body_pipeline_kernel_rejects_request_subject_and_owner_substitution
@@ -1476,37 +1552,51 @@ if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
 fi
-production_unit_list="$(cargo test --locked --offline -p iroha_core --lib -- --list)"
+production_unit_list="$(run_cargo test --locked --offline -p iroha_core --lib -- --list)"
 production_ignored_unit_list="$(
-  cargo test --locked --offline -p iroha_core --lib -- --list --ignored
+  run_cargo test --locked --offline -p iroha_core --lib -- --list --ignored
 )"
 production_integration_unit_list="$(
-  cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list
+  run_cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list
 )"
 production_integration_ignored_unit_list="$(
-  cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list --ignored
+  run_cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated -- --list --ignored
 )"
-production_data_model_unit_list="$(cargo test --locked --offline -p iroha_data_model --lib -- --list)"
+production_data_model_unit_list="$(run_cargo test --locked --offline -p iroha_data_model --lib -- --list)"
 production_data_model_ignored_unit_list="$(
-  cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored
+  run_cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored
 )"
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
 # thirty-eight-module pre-network inventory.
-production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p --lib -- --list)"
+production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
-  cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
+  run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
 )"
 production_irohad_unit_list="$(
-  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list
+  run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list
 )"
 production_irohad_ignored_unit_list="$(
-  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list --ignored
+  run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control -- --list --ignored
 )"
-production_config_unit_list="$(cargo test --locked --offline -p iroha_config --lib -- --list)"
+production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config --lib -- --list)"
 production_config_ignored_unit_list="$(
-  cargo test --locked --offline -p iroha_config --lib -- --list --ignored
+  run_cargo test --locked --offline -p iroha_config --lib -- --list --ignored
+)"
+multilane_config_runtime_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config \
+    --test sumeragi_v2_merge_runtime_config -- --list
+)"
+multilane_config_runtime_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config \
+    --test sumeragi_v2_merge_runtime_config -- --list --ignored
+)"
+multilane_config_fixtures_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config --test fixtures -- --list
+)"
+multilane_config_fixtures_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config --test fixtures -- --list --ignored
 )"
 production_data_model_modules=(
   block::consensus_v2::finality::tests
@@ -1574,6 +1664,26 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_latest_index_startup_rejects_present_invalid_manifest_proof
   kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
   kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
+  kura::tests::autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage
+  kura::tests::autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging
+  kura::tests::autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation
+  kura::tests::autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_following_them
+  kura::tests::autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointers
+  kura::tests::autonomous_startup_rejects_a_view_removed_after_pointer_publication
+  kura::tests::autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace
+  kura::tests::autonomous_startup_rejects_an_unretired_same_height_orphan_successor
+  kura::tests::lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_history_scan
+  kura::tests::latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly
+  kura::tests::pending_queue_plan_admission_bytes_participate_in_exact_disk_accounting
+  kura::tests::pending_queue_plan_admission_startup_completes_hard_link_publication
+  kura::tests::pending_queue_plan_admission_startup_recovers_unpublished_temporary
+  kura::tests::pending_queue_plan_admission_startup_rejects_conflicting_publication_without_deletion
+  kura::tests::pending_queue_plan_admission_startup_rejects_oversized_artifact
+  kura::tests::pending_queue_plan_admission_store_is_exact_bounded_and_deterministic
+  kura::tests::pending_queue_plan_admission_store_rejects_empty_and_oversized_bytes
+  kura::tests::pending_queue_plan_admission_store_rejects_symlink_and_unexpected_artifacts
+  kura::tests::pending_queue_plan_admission_survives_retired_purge_and_process_reopen
+  kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
   sumeragi::v2_lane_work::tests::native_participant_recovery_marker_rejects_malformed_height_source_and_aba_shapes
   sumeragi::v2_lane_work::tests::native_participant_recovery_authority_rejects_missing_leaf_execution_and_finality_drift
@@ -1612,51 +1722,143 @@ required_multilane_core_focus_tests=(
   state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
   state::tests::autonomous_lane_diagnostic_same_identity_drift_is_conflict
   state::tests::autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall
+  state::tests::pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers
+  state::tests::queue_plan_only_carriers_require_exact_committed_active_lane_bindings
+  state::tests::queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed
+  state::tests::queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set
+  state::tests::same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution
+  smartcontracts::ivm::host::tests::state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker
+  sumeragi::v2_lane_work::tests::repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible
+  sumeragi::v2_runner::tests::deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat
   torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
-  torii_proxy::tests::torii_proxy_v3_envelope_roundtrips_exact_request
-  torii_proxy::tests::historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v3
-  torii_proxy::tests::legacy_v2_submit_bool_wire_cannot_be_accepted_as_v3
+  torii_proxy::tests::obsolete_transaction_admission_tags_fail_closed
+  torii_proxy::tests::native_admission_binds_participants_but_uses_only_coordinator_quorum
+  torii_proxy::tests::torii_proxy_v5_envelope_roundtrips_exact_request
+  torii_proxy::tests::historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v5
+  torii_proxy::tests::legacy_v2_submit_bool_wire_cannot_be_accepted_as_v5
+  torii_proxy::tests::torii_routing_plan_hint_enforces_native_amx_participant_limit
+  torii_proxy::tests::torii_routing_plan_hint_rejects_duplicate_participants_without_deduplication
+  torii_proxy::tests::torii_routing_plan_hint_rejects_out_of_order_participants_without_sorting
+  kura::tests::configured_pending_control_limits_fail_before_store_creation
+  kura::tests::configured_pending_control_count_limits_gate_live_admission
+  kura::tests::configured_pending_control_count_limit_rejects_oversized_startup_inventory
+  kura::tests::configured_pending_control_shared_bytes_reject_oversized_startup_inventory
+  kura::tests::pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round
+  kura::tests::pending_certified_merge_work_stops_before_later_malformed_entry
+  kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
+  kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
+  kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
+  sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
+  sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
+  sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
 )
 required_multilane_queue_journal_focus_tests=(
-  queue::journal::tests::v2_journal_replays_puts_and_exact_removes
-  queue::journal::tests::strict_put_success_is_live_and_healthy
-  queue::journal::tests::strict_put_preflights_cleanup_capacity_before_writing
-  queue::journal::tests::strict_put_prewrite_failure_is_definitely_not_live_and_healthy
-  queue::journal::tests::put_sync_failure_with_durable_cleanup_is_definitely_not_live
-  queue::journal::tests::put_parent_sync_failure_with_durable_cleanup_is_definitely_not_live
-  queue::journal::tests::partial_put_is_definitely_not_live_but_faults_until_repair
-  queue::journal::tests::cleanup_prewrite_failure_is_indeterminate_and_replays_put
-  queue::journal::tests::cleanup_partial_write_is_indeterminate_and_repairs_to_put
-  queue::journal::tests::cleanup_after_full_write_is_still_reported_indeterminate
-  queue::journal::tests::cleanup_sync_failure_is_indeterminate_even_when_replay_is_removed
-  queue::journal::tests::cleanup_parent_sync_failure_is_indeterminate_after_file_sync
+  queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
+  queue::journal::tests::v4_put_rejects_every_noncanonical_admission_context_before_append
+  queue::journal::tests::v4_journal_replays_puts_and_exact_removes
+  queue::journal::tests::exact_strict_tombstone_removes_once_and_is_idempotent
+  queue::journal::tests::exact_strict_tombstone_rejects_stale_plan_without_append
+  queue::journal::tests::exact_strict_tombstone_rejects_same_plan_aba_claim_after_compaction_and_restart
+  queue::journal::tests::strict_replace_success_shadows_same_key_and_stays_healthy
+  queue::journal::tests::strict_replace_forces_preflight_compaction_after_history_reaches_file_limit
+  queue::journal::tests::strict_replace_prewrite_failure_is_definitely_not_live_and_healthy
+  queue::journal::tests::strict_replace_sync_failure_is_indeterminate_and_replays_new_owner
+  queue::journal::tests::strict_replace_parent_sync_failure_is_indeterminate_and_replays_new_owner
+  queue::journal::tests::strict_replace_partial_write_is_indeterminate_and_repairs_to_prior_owner
+  queue::journal::tests::failed_preflight_compaction_is_definitely_not_live_and_faults_the_journal
+  queue::journal::tests::staged_uncommitted_replace_faults_repair_to_prior_owner
+  queue::journal::tests::failed_post_durability_compaction_is_indeterminate_and_retains_replacement
+  queue::journal::tests::strict_replace_complete_write_ambiguity_replays_new_owner_after_restart
+  queue::journal::tests::startup_adopts_and_resynchronizes_complete_presync_remove_before_second_restart
   queue::journal::tests::general_parent_sync_failure_poisoned_until_restart_recovery
-  queue::journal::tests::every_recognizable_terminal_v2_prefix_is_repaired_before_append
+  queue::journal::tests::every_recognizable_terminal_v4_prefix_is_repaired_after_valid_frame
   queue::journal::tests::truncate_file_sync_then_parent_failure_is_restart_idempotent
   queue::journal::tests::nonempty_legacy_v1_layout_fails_closed_without_rewrite
   queue::journal::tests::complete_corruption_and_unsupported_versions_fail_without_truncation
   queue::journal::tests::oversized_declared_frame_and_file_fail_before_allocation
-  queue::journal::tests::replay_enforces_live_record_bound
-  queue::journal::tests::replay_applies_live_bound_to_final_set_not_transient_put_prefix
-  queue::journal::tests::compaction_preserves_live_fifo_order_and_uses_v2_frames
-  queue::journal::tests::compaction_failure_after_temp_creation_poisoned_and_restart_rejects_temp
+  queue::journal::tests::decode_budget_covers_maximum_allocation_dense_instruction_vector
+  queue::journal::tests::compressed_frame_is_rejected_before_owned_decompression
+  queue::journal::tests::replay_rejects_exactly_one_distinct_identity_above_live_bound
+  queue::journal::tests::replay_rejects_transient_distinct_identity_amplification_even_if_final_set_is_small
+  queue::journal::tests::compaction_preserves_live_fifo_order_and_uses_v4_frames
+  queue::journal::tests::compaction_failure_after_temp_creation_is_reconciled_on_restart
   queue::journal::tests::compaction_rename_then_parent_failure_recovers_replacement_on_restart
-  queue::journal::tests::symlinked_journal_and_stale_compaction_temp_are_rejected
+  queue::journal::tests::symlinked_or_hardlinked_journal_and_untrusted_compaction_temp_are_rejected
+  queue::reservation_journal::tests::complete_v4_bootstrap_is_rejected_without_repair_or_rewrite
+  queue::reservation_journal::tests::v5_envelope_rejects_unsupported_record_versions_without_rewrite
+  queue::reservation_journal::tests::v5_release_batch_replay_is_atomic_idempotent_and_exact
+  queue::tests::queue_plan_admission_context_binds_legacy_topology_and_contiguous_generation
   queue::tests::queue_plan_journal_replays_matching_plan_after_restart
+  queue::tests::strict_durable_claim_rejects_stale_context_before_ownership_and_binds_exact_record
+  queue::tests::strict_durable_claim_retry_survives_height_advance_before_and_after_restart_replay
+  queue::tests::strict_durable_claim_rolls_over_to_exact_current_height_and_overlapping_roster
+  queue::tests::strict_durable_claim_rollover_recovers_every_replacement_fault_boundary
+  queue::tests::strict_durable_claim_retry_does_not_resurrect_removed_queue_ownership
+  queue::tests::v4_replay_rejects_same_lane_id_after_incarnation_recreation
+  queue::tests::v4_replay_revalidates_original_generation_across_height_advance
+  queue::tests::v4_replay_preserves_immutable_admitted_plan_across_router_policy_drift
   queue::tests::strict_queue_plan_journal_admission_replays_exact_transaction_after_restart
   queue::tests::strict_queue_plan_journal_rejects_when_uninstalled_or_explicitly_disabled
   queue::tests::journal_enabled_optional_admission_faults_never_acknowledge_and_recover_zero_or_one_owner
-  queue::tests::strict_queue_plan_journal_write_failure_rejects_without_live_record
-  queue::tests::strict_queue_plan_journal_sync_failure_rejects_and_tombstones_put
-  queue::tests::strict_queue_plan_journal_cleanup_prewrite_failure_is_unknown_and_replays_exact_put
-  queue::tests::strict_queue_plan_journal_rollback_sync_failure_is_indeterminate_and_faults_queue
-  queue::tests::queue_plan_journal_replay_tombstones_malformed_committed_expired_and_rejected_records
+  queue::tests::strict_queue_plan_journal_partial_write_is_indeterminate_and_repairs_without_live_record
+  queue::tests::strict_queue_plan_journal_sync_failure_is_indeterminate_and_replays_exact_put
+  queue::tests::strict_queue_plan_journal_full_write_ambiguity_replays_exact_put
+  queue::tests::strict_queue_plan_journal_parent_sync_failure_is_indeterminate_and_faults_queue
+  queue::tests::queue_plan_journal_replay_tombstones_only_committed_and_expired_records
+  queue::tests::exact_queue_plan_rejection_leaves_same_plan_aba_successor_untouched
+  queue::tests::globally_bound_guard_drop_restores_exact_fifo_with_absent_registry
+  queue::tests::globally_bound_guard_drop_restores_exact_fifo_with_exact_registry
+  queue::tests::globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection
+  queue::tests::globally_bound_guard_drop_is_terminally_idempotent_across_remove_and_clear_orderings
+  queue::tests::globally_bound_guard_drop_restores_during_unwind
+  queue::tests::globally_bound_guard_drop_restore_failure_retains_evidence_and_latches_fault
+  queue::tests::globally_bound_guard_drop_routing_drift_retains_evidence_and_latches_fault
+  queue::tests::queue_plan_journal_install_is_startup_only_and_rejection_does_not_touch_disk
+  queue::tests::queue_plan_journal_replay_retains_current_admission_rejection_and_fails_startup
+  queue::tests::queue_plan_journal_replay_retains_entrypoint_that_fails_stateless_revalidation
+  queue::tests::queue_plan_journal_retains_unverifiable_plan_and_fails_startup
+  queue::tests::queue_plan_journal_retains_admitted_plan_when_current_policy_route_lacks_authority
+  queue::tests::queue_plan_journal_retains_dataspace_rebind_without_current_authority
+  queue::tests::queue_plan_journal_retains_retired_elastic_plan_without_rebinding
+  queue::tests::queue_plan_journal_retains_inactive_future_autoscale_plan_fail_closed
+  queue::tests::queue_plan_journal_retains_inactive_native_amx_participant_without_rebinding
+  queue::tests::global_candidate_lease_excludes_autonomous_reservation_until_exact_drop
+  queue::tests::stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan
   queue::tests::lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff
   queue::tests::lane_pending_work_rechecks_durability_fault_after_queue_lock_handoff
+  queue::tests::ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain
+  queue::tests::ambiguous_reservation_compaction_fails_closed_after_terminal_application
+  queue::tests::install_replay_reconciliation_fault_publishes_backpressure_after_unlock
+  queue::tests::reservation_journal_install_rejects_selection_publication_window
+  queue::tests::second_reservation_journal_installer_cannot_touch_its_losing_path
+  queue::tests::concurrent_reservation_journal_installers_publish_one_untouched_winner
+  queue::tests::missing_replayed_reservation_owns_capacity_until_exact_payload_replay
+  queue::tests::missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay
+  queue::reservation_journal::tests::configured_frame_limit_rejects_valid_oversized_payload_before_replay
+  queue::reservation_journal::tests::configured_file_limit_rejects_oversized_startup_journal_before_scan
+  queue::reservation_journal::tests::replay_rejects_more_distinct_owners_than_configured_queue_capacity
+  queue::reservation_journal::tests::invalid_runtime_limits_fail_before_creating_a_journal
+  queue::reservation_journal::tests::every_execution_group_rejects_4097_members_before_mutating_replay_state
+  queue::reservation_journal::tests::every_snapshot_top_level_vector_obeys_configured_owner_capacity
+  queue::reservation_journal::tests::runtime_owner_limit_rejects_before_write_and_remains_reopenable
+  queue::reservation_journal::tests::stale_forget_release_does_not_undercount_completed_ownership
+  queue::reservation_journal::tests::replay_rejects_same_length_valid_content_mutation_on_retained_append_handle
+  queue::reservation_journal::tests::ownership_limit_is_checked_before_applying_the_exceeding_prefix
+  queue::reservation_journal::tests::ownership_union_counts_tombstones_and_completed_releases_exactly_once
+  queue::reservation_journal::tests::deterministic_file_budget_exhaustion_does_not_poison_or_extend_journal
+  queue::reservation_journal::tests::decoder_allocation_ceiling_tracks_configured_frame_budget
+  queue::reservation_journal::tests::compaction_preserves_valid_owner_state_larger_than_one_execution_group
+  queue::reservation_journal::tests::journal_exclusive_owner_lock_blocks_a_second_runtime
+  queue::reservation_journal::tests::cached_revision_rejects_an_unlocked_same_length_external_rewrite
+  queue::reservation_journal::tests::indexed_replay_matches_reference_vector_transitions_and_ordering
+  queue::reservation_journal::tests::indexed_transition_rejections_are_atomic_and_match_reference_replay
+  queue::reservation_journal::tests::runtime_semantic_preflight_rejects_invalid_frames_before_durable_append
+  queue::reservation_journal::tests::production_replay_handles_many_singleton_frames_with_exact_order
 )
 required_multilane_data_model_focus_tests=(
   block::consensus::tests::native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift
   block::consensus::tests::native_amx_mixed_role_marker_defers_only_separate_participant_anchor
+  block::consensus::tests::native_amx_receipt_negative_corpus_fails_closed
   block::consensus::tests::native_amx_application_evidence_negative_corpus_fails_closed
   block::consensus::tests::native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups
   block::consensus::tests::autonomous_lane_execution_diagnostics_roundtrip_order_and_bound
@@ -1664,12 +1866,11 @@ required_multilane_data_model_focus_tests=(
   block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
 )
 required_multilane_torii_focus_tests=(
-  tests_runtime_handlers::torii_proxy_v3_roundtrip_and_forwarding_preserve_transaction_admission
+  tests_runtime_handlers::torii_proxy_v5_roundtrip_and_forwarding_preserve_transaction_admission_binding
   tests_runtime_handlers::queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity
-  tests_runtime_handlers::incoming_submit_deferred_reaches_ordinary_queue_without_plan_journal
   tests_runtime_handlers::incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable
   tests_runtime_handlers::incoming_submit_queue_plan_synced_succeeds_with_installed_journal
-  tests_runtime_handlers::incoming_torii_proxy_rejects_v2_schema_before_dispatch
+  tests_runtime_handlers::incoming_torii_proxy_rejects_every_non_v5_schema_before_dispatch
   tests_runtime_handlers::queue_plan_outcome_unknown_survives_both_retryable_completion_orders
   tests_runtime_handlers::queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_completion_orders
   tests_runtime_handlers::queue_plan_outcome_unknown_rejects_forged_reconciliation_hash
@@ -1677,18 +1878,62 @@ required_multilane_torii_focus_tests=(
   tests_runtime_handlers::queue_plan_synced_p2p_missing_network_is_pre_dispatch
   tests_runtime_handlers::queue_plan_synced_p2p_post_dispatch_channel_loss_is_indeterminate
   tests_runtime_handlers::queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_post_dispatch
+  tests_runtime_handlers::queue_plan_synced_http_redirect_to_connect_loss_is_not_followed
   tests_runtime_handlers::queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable
+  tests_runtime_handlers::queue_plan_synced_accepts_only_exact_durable_acceptance_evidence
+  tests_runtime_handlers::incoming_submit_queue_plan_synced_fails_closed_when_local_peer_and_signer_diverge
+  tests_runtime_handlers::queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritative_peer
+  tests_runtime_handlers::proxied_transaction_submission_preserves_public_accept_and_prefer_contracts
+  tests_runtime_handlers::queue_plan_synced_post_admission_or_malformed_500_is_indeterminate
+  tests_runtime_handlers::torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts
+  tests_runtime_handlers::queue_plan_synced_certificate_requires_canonical_distinct_authority_quorum
+  tests_runtime_handlers::queue_plan_synced_first_quorum_never_waits_for_pending_equivocation_evidence
+  tests_runtime_handlers::queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quorum
+  tests_runtime_handlers::queue_plan_synced_real_local_journal_receipt_combines_with_remote_quorum_receipt
+  tests_runtime_handlers::queue_plan_synced_admission_context_rejects_height_plan_leg_incarnation_roster_and_threshold_drift
+  tests_runtime_handlers::queue_plan_synced_response_bounds_reject_headers_body_encoding_and_decode_amplification
+  tests_runtime_handlers::incoming_torii_proxy_rejects_malformed_v4_hop_chain_before_dispatch
+  tests_runtime_handlers::queue_plan_synced_certificate_binds_exact_durable_journal_claim
+  tests_runtime_handlers::completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned
+  tests_runtime_handlers::queue_plan_synced_registry_timeout_never_returns_accepted
+  tests_runtime_handlers::incoming_queue_plan_synced_exact_retry_survives_height_and_roster_advance
+  tests_runtime_handlers::incoming_queue_plan_synced_historical_context_without_owned_claim_fails_closed
+  operator_signatures::tests::torii_proxy_signatures_accept_unlisted_peer_keys_without_operator_privileges
+  operator_signatures::tests::torii_proxy_signatures_reject_wrong_or_tampered_target
+  operator_signatures::tests::torii_proxy_signatures_bind_canonical_request_freshness_and_reject_replay
+  operator_signatures::tests::operator_identity_bound_and_torii_proxy_replay_caches_are_partitioned
+  operator_signatures::tests::torii_proxy_middleware_exposes_authenticated_unlisted_peer_identity
+  router::builder::tests::torii_proxy_peer_witness_is_sealed_as_identity_bound_authentication
   tests_queue_metadata::queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash
+)
+required_multilane_torii_shared_focus_tests=(
+  route_catalog::tests::internal_torii_proxy_is_the_only_identity_bound_operator_route
 )
 required_multilane_integration_lib_focus_tests=(
   sandbox::tests::sandboxed_network_start_helper_preserves_optional_developer_skip
   sandbox::tests::sandboxed_network_start_helper_fails_required_release_scenario
 )
-readonly expected_multilane_focus_test_count=113
+required_multilane_config_lib_focus_tests=(
+  parameters::actual::tests::sumeragi_v2_shared_config_defaults_are_finite_and_deterministic
+  parameters::actual::tests::sumeragi_v2_shared_fingerprint_binds_every_runtime_category
+  parameters::actual::tests::sumeragi_v2_config_rejects_merge_runtime_limit_boundaries
+)
+required_multilane_config_runtime_focus_tests=(
+  every_merge_runtime_override_reaches_the_actual_config
+  tight_valid_merge_runtime_geometry_is_admitted
+)
+required_multilane_config_fixtures_focus_tests=(
+  minimal_config_snapshot
+)
+readonly expected_multilane_focus_test_count=256
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
+    + ${#required_multilane_config_lib_focus_tests[@]}
+    + ${#required_multilane_config_runtime_focus_tests[@]}
+    + ${#required_multilane_config_fixtures_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
     + ${#required_multilane_torii_focus_tests[@]}
+    + ${#required_multilane_torii_shared_focus_tests[@]}
     + ${#required_multilane_integration_lib_focus_tests[@]}
     != expected_multilane_focus_test_count )); then
   echo "expected exactly ${expected_multilane_focus_test_count} multilane focus tests" >&2
@@ -1714,6 +1959,38 @@ for required_test in "${required_multilane_queue_journal_focus_tests[@]}"; do
     exit 1
   fi
 done
+for required_test in "${required_multilane_config_lib_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_config_unit_list"; then
+    echo "missing required multilane iroha_config library focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_config_ignored_unit_list"; then
+    echo "required multilane iroha_config library focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_config_runtime_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_config_runtime_unit_list"; then
+    echo "missing required multilane iroha_config runtime focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_config_runtime_ignored_unit_list"; then
+    echo "required multilane iroha_config runtime focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_config_fixtures_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_config_fixtures_unit_list"; then
+    echo "missing required multilane iroha_config fixture focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_config_fixtures_ignored_unit_list"; then
+    echo "required multilane iroha_config fixture focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
 for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$production_data_model_unit_list"; then
     echo "missing required multilane iroha_data_model focus test: ${required_test}" >&2
@@ -1725,10 +2002,10 @@ for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
   fi
 done
 multilane_torii_unit_list="$(
-  cargo test --locked --offline -p iroha_torii --lib -- --list
+  run_cargo test --locked --offline -p iroha_torii --lib -- --list
 )"
 multilane_torii_ignored_unit_list="$(
-  cargo test --locked --offline -p iroha_torii --lib -- --list --ignored
+  run_cargo test --locked --offline -p iroha_torii --lib -- --list --ignored
 )"
 for required_test in "${required_multilane_torii_focus_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_torii_unit_list"; then
@@ -1740,11 +2017,28 @@ for required_test in "${required_multilane_torii_focus_tests[@]}"; do
     exit 1
   fi
 done
+multilane_torii_shared_unit_list="$(
+  run_cargo test --locked --offline -p iroha_torii_shared --lib -- --list
+)"
+multilane_torii_shared_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_torii_shared --lib -- --list --ignored
+)"
+for required_test in "${required_multilane_torii_shared_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_torii_shared_unit_list"; then
+    echo "missing required multilane iroha_torii_shared focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_torii_shared_ignored_unit_list"; then
+    echo "required multilane iroha_torii_shared focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
 multilane_integration_lib_unit_list="$(
-  cargo test --locked --offline -p integration_tests --lib -- --list
+  run_cargo test --locked --offline -p integration_tests --lib -- --list
 )"
 multilane_integration_lib_ignored_unit_list="$(
-  cargo test --locked --offline -p integration_tests --lib -- --list --ignored
+  run_cargo test --locked --offline -p integration_tests --lib -- --list --ignored
 )"
 for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_integration_lib_unit_list"; then
@@ -1758,25 +2052,192 @@ for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
   fi
 done
 
-# These are the two real-network four-peer acceptance gates. Keep their exact
+run_multilane_focus_crate_tests() {
+  local package="$1"
+  shift
+  local focus_test
+  for focus_test in "$@"; do
+    run_cargo test --locked --offline -p "$package" --lib \
+      "$focus_test" -- --exact --test-threads=1 || return
+  done
+}
+
+run_multilane_focus_test_target() {
+  local package="$1"
+  local test_target="$2"
+  shift 2
+  local focus_test
+  for focus_test in "$@"; do
+    run_cargo test --locked --offline -p "$package" --test "$test_target" \
+      "$focus_test" -- --exact --test-threads=1 || return
+  done
+}
+
+append_g_unit_inventory() {
+  local leg_id="$1"
+  local package="$2"
+  shift 2
+  local focus_test
+  for focus_test in "$@"; do
+    printf '%s\t%s\t%s\n' "$leg_id" "$package" "$focus_test" \
+      >>"$corridor_g_unit_inventory"
+  done
+}
+
+require_g_unit_log_results() {
+  local focus_test
+  for focus_test in "$@"; do
+    if [[ "$(grep -Fxc -- "test ${focus_test} ... ok" "$corridor_last_log" || true)" != 1 ]]; then
+      echo "G-UNIT corridor log does not contain one passing result for ${focus_test}" >&2
+      return 1
+    fi
+  done
+}
+
+# G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
+# leg invokes every exact non-ignored focus test above and archives one
+# unambiguous one-test Cargo transcript per entry. The canonical 256-row TSV is
+# hashed into the corridor completion and independently revalidated by the
+# aggregate receipt writer.
+if ((corridor_enabled)); then
+  printf '%s\n' $'leg_id\tcrate\ttest' >"$corridor_g_unit_inventory"
+
+  append_g_unit_inventory \
+    g-unit-iroha-core iroha_core "${required_multilane_core_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-core cargo-focus "${#required_multilane_core_focus_tests[@]}" \
+    'for test in required_multilane_core_focus_tests; do cargo test --locked --offline -p iroha_core --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_core "${required_multilane_core_focus_tests[@]}"
+  require_g_unit_log_results "${required_multilane_core_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-core-queue-journal iroha_core \
+    "${required_multilane_queue_journal_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-core-queue-journal cargo-focus \
+    "${#required_multilane_queue_journal_focus_tests[@]}" \
+    'for test in required_multilane_queue_journal_focus_tests; do cargo test --locked --offline -p iroha_core --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_core "${required_multilane_queue_journal_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_queue_journal_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-lib iroha_config \
+    "${required_multilane_config_lib_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-lib cargo-focus \
+    "${#required_multilane_config_lib_focus_tests[@]}" \
+    'for test in required_multilane_config_lib_focus_tests; do cargo test --locked --offline -p iroha_config --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_config "${required_multilane_config_lib_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_lib_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-runtime iroha_config \
+    "${required_multilane_config_runtime_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-runtime cargo-focus \
+    "${#required_multilane_config_runtime_focus_tests[@]}" \
+    'for test in required_multilane_config_runtime_focus_tests; do cargo test --locked --offline -p iroha_config --test sumeragi_v2_merge_runtime_config "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_test_target \
+      iroha_config sumeragi_v2_merge_runtime_config \
+      "${required_multilane_config_runtime_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_runtime_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-fixtures iroha_config \
+    "${required_multilane_config_fixtures_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-fixtures cargo-focus \
+    "${#required_multilane_config_fixtures_focus_tests[@]}" \
+    'for test in required_multilane_config_fixtures_focus_tests; do cargo test --locked --offline -p iroha_config --test fixtures "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_test_target \
+      iroha_config fixtures "${required_multilane_config_fixtures_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_fixtures_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-data-model iroha_data_model \
+    "${required_multilane_data_model_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-data-model cargo-focus \
+    "${#required_multilane_data_model_focus_tests[@]}" \
+    'for test in required_multilane_data_model_focus_tests; do cargo test --locked --offline -p iroha_data_model --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_data_model "${required_multilane_data_model_focus_tests[@]}"
+  require_g_unit_log_results "${required_multilane_data_model_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-torii iroha_torii "${required_multilane_torii_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-torii cargo-focus "${#required_multilane_torii_focus_tests[@]}" \
+    'for test in required_multilane_torii_focus_tests; do cargo test --locked --offline -p iroha_torii --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_torii "${required_multilane_torii_focus_tests[@]}"
+  require_g_unit_log_results "${required_multilane_torii_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-torii-shared iroha_torii_shared \
+    "${required_multilane_torii_shared_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-torii-shared cargo-focus \
+    "${#required_multilane_torii_shared_focus_tests[@]}" \
+    'for test in required_multilane_torii_shared_focus_tests; do cargo test --locked --offline -p iroha_torii_shared --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_torii_shared "${required_multilane_torii_shared_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_torii_shared_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-integration-tests integration_tests \
+    "${required_multilane_integration_lib_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-integration-tests cargo-focus \
+    "${#required_multilane_integration_lib_focus_tests[@]}" \
+    'for test in required_multilane_integration_lib_focus_tests; do cargo test --locked --offline -p integration_tests --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      integration_tests "${required_multilane_integration_lib_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_integration_lib_focus_tests[@]}"
+
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 255 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 256 focused tests" >&2
+    exit 1
+  fi
+fi
+
+# These are the real-network four-peer acceptance gates. Keep their exact
 # harness/name inventory source-bound and non-ignored even though ordinary
 # developer runs may opt out inside the test body.
 readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly multilane_native_amx_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
+if [[ "$(grep -Fxc -- "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${multilane_native_amx_grouped_pruning_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
+  echo "mandatory four-peer launcher is not source-bound to grouped Native AMX pruning evidence" >&2
+  exit 1
+fi
 multilane_nexus_release_test_list="$(
-  cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list
+  run_cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list
 )"
 multilane_nexus_release_ignored_test_list="$(
-  cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list --ignored
+  run_cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list --ignored
 )"
 multilane_native_release_test_list="$(
-  cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list
+  run_cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list
 )"
 multilane_native_release_ignored_test_list="$(
-  cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list --ignored
+  run_cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list --ignored
 )"
 for required_test_spec in \
   "nexus_and_streaming|${multilane_autoscale_four_peer_release_test}" \
+  "nexus_and_streaming|${multilane_autoscale_restart_release_test}" \
+  "nexus_and_streaming|${multilane_autoscale_drain_release_test}" \
   "native_amx_routing|${multilane_native_amx_rotating_release_test}"; do
   IFS='|' read -r required_target required_test <<<"$required_test_spec"
   if [[ "$required_target" == "nexus_and_streaming" ]]; then
@@ -1799,7 +2260,7 @@ done
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
-readonly expected_multilane_formal_mutation_count=27
+readonly expected_multilane_formal_mutation_count=37
 observed_multilane_formal_mutation_count="$(
   grep -Ec '^run_mutant [a-z0-9-]+ ' \
     scripts/formal/run_sumeragi_v2_multilane_mutations.sh
@@ -1810,9 +2271,9 @@ if ((observed_multilane_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] all 27 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  'echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
-  echo "multilane mutation runner lacks the exact 27-mutation completion contract" >&2
+  echo "multilane mutation runner lacks the exact 37-mutation completion contract" >&2
   exit 1
 fi
 
@@ -1924,7 +2385,7 @@ for module_index in "${!production_liveness_modules[@]}"; do
     module_command="cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::prepare_qc_split_tests -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated \
+      run_cargo test --locked --offline -p integration_tests --test sumeragi_v2_runner_isolated \
         sumeragi_v2_runner::prepare_qc_split_tests -- --test-threads=1
   elif [[ "$module" == peer::run::tests \
     || "$module" == peer::shared_byte_budget_tests \
@@ -1934,7 +2395,7 @@ for module_index in "${!production_liveness_modules[@]}"; do
     module_command="cargo test --locked --offline -p iroha_p2p --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1
+      run_cargo test --locked --offline -p iroha_p2p --lib "$module" -- --test-threads=1
   elif [[ "$module" == consensus_message_control::tests \
     || "$module" == network_relay_tests \
     || "$module" == tests::relay_fairness \
@@ -1942,23 +2403,23 @@ for module_index in "${!production_liveness_modules[@]}"; do
     module_command="cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control \
+      run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control \
         "$module" -- --test-threads=1
   elif [[ "$module" == parameters::* ]]; then
     module_command="cargo test --locked --offline -p iroha_config --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p iroha_config --lib "$module" -- --test-threads=1
+      run_cargo test --locked --offline -p iroha_config --lib "$module" -- --test-threads=1
   elif is_production_data_model_module "$module"; then
     module_command="cargo test --locked --offline -p iroha_data_model --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p iroha_data_model --lib "$module" -- --test-threads=1
+      run_cargo test --locked --offline -p iroha_data_model --lib "$module" -- --test-threads=1
   else
     module_command="cargo test --locked --offline -p iroha_core --lib ${module} -- --test-threads=1"
     run_corridor_leg \
       "$module_leg_id" cargo-module "$module_required_count" "$module_command" \
-      cargo test --locked --offline -p iroha_core --lib "$module" -- --test-threads=1
+      run_cargo test --locked --offline -p iroha_core --lib "$module" -- --test-threads=1
   fi
   if ((corridor_enabled)); then
     for required_test in "${required_production_liveness_tests[@]}"; do
@@ -1994,37 +2455,40 @@ fi
 run_corridor_leg \
   status-rust cargo-exact 1 \
   "cargo test --locked --offline -p iroha_data_model --lib ${required_data_model_status_test} -- --test-threads=1" \
-  cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_status_test" -- --test-threads=1
+  run_cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_status_test" -- --test-threads=1
 run_corridor_leg \
   lane-certificate-rust cargo-exact 1 \
   "cargo test --locked --offline -p iroha_data_model --lib ${required_data_model_lane_certificate_test} -- --exact --test-threads=1" \
-  cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_lane_certificate_test" -- --exact --test-threads=1
-verify_release_identity "before source-sealed full workspace verification"
-run_corridor_leg \
-  source-sealed-workspace-format command 0 \
-  "cargo fmt --all -- --check" \
-  cargo fmt --all -- --check
-run_corridor_leg \
-  source-sealed-legacy-codec-guard command 0 \
-  "bash scripts/check_no_legacy_codec.sh" \
-  bash scripts/check_no_legacy_codec.sh
-run_corridor_leg \
-  source-sealed-workspace-build command 0 \
-  "cargo build --locked --offline --workspace" \
-  cargo build --locked --offline --workspace
-run_corridor_leg \
-  source-sealed-workspace-clippy command 0 \
-  "cargo clippy --locked --offline --workspace --all-targets -- -D warnings" \
-  cargo clippy --locked --offline --workspace --all-targets -- -D warnings
-run_corridor_leg \
-  source-sealed-workspace-tests command 0 \
-  "cargo test --locked --offline --workspace" \
-  cargo test --locked --offline --workspace
-run_corridor_leg \
-  source-sealed-irohad-tests command 0 \
-  "cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control" \
-  cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
-verify_release_identity "after source-sealed full workspace verification"
+  run_cargo test --locked --offline -p iroha_data_model --lib "$required_data_model_lane_certificate_test" -- --exact --test-threads=1
+
+run_final_workspace_verification() {
+  verify_release_identity "before final source-sealed full workspace verification"
+  run_corridor_leg \
+    source-sealed-workspace-format command 0 \
+    "cargo fmt --all -- --check" \
+    run_cargo fmt --all -- --check
+  run_corridor_leg \
+    source-sealed-legacy-codec-guard command 0 \
+    "bash scripts/check_no_legacy_codec.sh" \
+    bash scripts/check_no_legacy_codec.sh
+  run_corridor_leg \
+    source-sealed-workspace-build command 0 \
+    "cargo build --locked --offline --workspace" \
+    run_cargo build --locked --offline --workspace
+  run_corridor_leg \
+    source-sealed-workspace-clippy command 0 \
+    "cargo clippy --locked --offline --workspace --all-targets -- -D warnings" \
+    run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings
+  run_corridor_leg \
+    source-sealed-workspace-tests command 0 \
+    "cargo test --locked --offline --workspace" \
+    run_cargo test --locked --offline --workspace
+  run_corridor_leg \
+    source-sealed-irohad-tests command 0 \
+    "cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control" \
+    run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
+  verify_release_identity "after final source-sealed full workspace verification"
+}
 
 # Pin the production-soak execution profile and its serialized evidence schema
 # before any real network is started. Cargo's filter succeeds on zero tests, so
@@ -2038,10 +2502,10 @@ required_taira_release_contract_tests=(
 )
 taira_release_contract_target="consensus_and_da"
 taira_release_contract_list="$(
-  cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list
+  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list
 )"
 taira_release_ignored_contract_list="$(
-  cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
+  run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" -- --list --ignored
 )"
 for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
   required_test="${required_taira_release_contract_tests[$taira_contract_index]}"
@@ -2056,7 +2520,7 @@ for taira_contract_index in "${!required_taira_release_contract_tests[@]}"; do
   run_corridor_leg \
     "taira-contract-${taira_contract_index}" cargo-exact 1 \
     "cargo test --locked --offline -p integration_tests --test ${taira_release_contract_target} ${required_test} -- --exact --test-threads=1" \
-    cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" \
+    run_cargo test --locked --offline -p integration_tests --test "$taira_release_contract_target" \
       "$required_test" -- --exact --test-threads=1
 done
 
@@ -2070,10 +2534,10 @@ required_cross_sdk_fixture_tests=(
 )
 cross_sdk_fixture_target="iroha_data_model_group_02"
 cross_sdk_fixture_list="$(
-  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list
+  run_cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list
 )"
 cross_sdk_ignored_fixture_list="$(
-  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list --ignored
+  run_cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" -- --list --ignored
 )"
 for required_test in "${required_cross_sdk_fixture_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$cross_sdk_fixture_list"; then
@@ -2088,8 +2552,16 @@ done
 run_corridor_leg \
   cross-sdk-rust cargo-exact 2 \
   "cargo test --locked --offline -p iroha_data_model --test ${cross_sdk_fixture_target} sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1" \
-  cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" \
+  run_cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" \
     sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1
+
+# The checked-in grouped golden and negative-control corpus must be byte-for-
+# byte reproducible by its Rust owner before any downstream SDK consumes it.
+run_corridor_leg \
+  native-amx-rust-fixture-check command 0 \
+  "cargo run --locked --offline -p iroha_data_model --bin sumeragi_v2_wire_fixtures -- --check" \
+  run_cargo run --locked --offline -p iroha_data_model \
+    --bin sumeragi_v2_wire_fixtures -- --check
 
 # Execute every maintained consumer of the Rust-owned grouped Native AMX V2
 # golden and negative corpus in the source-sealed production corridor. Each
@@ -2119,10 +2591,10 @@ if [[ "$profile" == "--release" ]]; then
     java
   )
   native_amx_grouped_parity_test_counts=(
-    4
-    35
-    37
-    2
+    7
+    56
+    54
+    3
     6
     5
   )
@@ -2215,6 +2687,9 @@ seed_launcher_contract_tests=(
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_ambiguous_test_summary
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_preserves_cargo_failure_through_tee
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_bundle_tampering_before_completion
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_marker_durability_failure_is_not_terminal
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_parent_source_manifest_mismatch
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_source_drift_before_completion
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering
@@ -2228,15 +2703,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 seed_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 seed_launcher_pass_summary="$(
-  grep -Ec '^11 passed in [0-9]+([.][0-9]+)?s$' "$seed_launcher_contract_log" || true
+  grep -Ec '^14 passed in [0-9]+([.][0-9]+)?s$' "$seed_launcher_contract_log" || true
 )"
 if ((seed_launcher_pipeline_status[0] != 0 || seed_launcher_pipeline_status[1] != 0)) \
   || [[ "$seed_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 seed-launcher contract preflight did not run exactly 11 passing tests (pytest=${seed_launcher_pipeline_status[0]}, tee=${seed_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 seed-launcher contract preflight did not run exactly 14 passing tests (pytest=${seed_launcher_pipeline_status[0]}, tee=${seed_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-seed-launcher pytest 11 \
+  preflight-seed-launcher pytest 14 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${seed_launcher_contract_tests[*]}" \
   "$seed_launcher_contract_log" \
   "${seed_launcher_pipeline_status[0]}" "${seed_launcher_pipeline_status[1]}"
@@ -2356,6 +2831,8 @@ fi
 # evidence changes before the corridor relies on the final release receipt.
 release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
+  pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
+  pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
 )
 release_receipt_contract_log="$(corridor_contract_log_path preflight-release-receipt)"
 set +e
@@ -2364,16 +2841,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^221 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^316 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 221 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 316 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 221 \
+  preflight-release-receipt pytest 316 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -2467,10 +2944,18 @@ record_corridor_log \
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
 # Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 39-pass summary rejects missing, added, skipped, or xfailed
+# preflight. The 42-pass summary rejects missing, added, skipped, or xfailed
 # cases before the release corridor can trust the 24-hour evidence path.
 taira_soak_contract_files=(
-  pytests/scripts/taira_v2_soak_test.py
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_inventory
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_execution_output
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_bundle_tampering_before_completion
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_symlinked_marker_temp_without_completion
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_marker_durability_failure_is_not_terminal
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_profile_override_arguments_before_cargo
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_a_concurrent_source_bound_soak
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_does_not_promote_provisional_evidence_when_validation_fails
   pytests/scripts/taira_v2_soak_evidence_test.py
 )
 taira_soak_contract_log="$(corridor_contract_log_path preflight-taira-soak)"
@@ -2480,27 +2965,35 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 taira_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 taira_soak_pass_summary="$(
-  grep -Ec '^39 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
+  grep -Ec '^42 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
 )"
 if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
   || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 39 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
+  echo "Taira v2 soak launcher/evidence preflight did not run exactly 42 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-taira-soak pytest 39 \
+  preflight-taira-soak pytest 42 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
   "$taira_soak_contract_log" \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
-if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=71
+publish_corridor_completion() {
+  if ((!corridor_enabled)); then
+    return
+  fi
+  if ! localnet_binary_attestation_valid; then
+    echo "source-bound localnet binary bundle changed before corridor completion" >&2
+    return 1
+  fi
+  readonly expected_corridor_leg_count=81
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
   fi
   corridor_summary_sha256="$(sha256_file "$corridor_summary")"
   corridor_required_tests_sha256="$(sha256_file "$corridor_required_tests")"
+  corridor_g_unit_inventory_sha256="$(sha256_file "$corridor_g_unit_inventory")"
   corridor_java_path="$(python3 -I -S -c \
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
     "$JAVA_BIN")"
@@ -2515,6 +3008,8 @@ if ((corridor_enabled)); then
   corridor_bash_path="$(canonical_executable bash)"
   corridor_git_path="$(canonical_executable git)"
   corridor_cargo_home="$(canonical_path "$CARGO_HOME")"
+  wait_for_external_cargo
+  corridor_cargo_version="$("$corridor_cargo_path" --version)"
   corridor_completion_tmp="${corridor_evidence_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
     schema_version 1 \
@@ -2522,15 +3017,21 @@ if ((corridor_enabled)); then
     head_tree "$release_head_tree" \
     source_manifest_sha256 "$release_source_manifest_sha256" \
     cargo_lock_sha256 "$release_cargo_lock_sha256" \
+    prebuilt_manifest_path \
+      "${IROHA_TEST_TARGET_DIR}/.sumeragi-v2-prebuilt-binaries.tsv" \
+    prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
     leg_count "$corridor_leg_index" \
     production_required_test_count "$expected_production_liveness_test_count" \
+    g_unit_expected_test_count "$expected_multilane_focus_test_count" \
+    g_unit_passed_test_count "$expected_multilane_focus_test_count" \
     summary_sha256 "$corridor_summary_sha256" \
     production_required_tests_sha256 "$corridor_required_tests_sha256" \
+    g_unit_inventory_sha256 "$corridor_g_unit_inventory_sha256" \
     java_path "$corridor_java_path" \
     java_sha256 "$corridor_java_sha256" \
     cargo_path "$corridor_cargo_path" \
     cargo_sha256 "$(sha256_file "$corridor_cargo_path")" \
-    cargo_version "$("$corridor_cargo_path" --version)" \
+    cargo_version "$corridor_cargo_version" \
     rustc_path "$corridor_rustc_path" \
     rustc_sha256 "$(sha256_file "$corridor_rustc_path")" \
     rustc_version "$("$corridor_rustc_path" --version)" \
@@ -2550,15 +3051,15 @@ if ((corridor_enabled)); then
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 34 \
+    native_amx_grouped_negative_control_count 50 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
   mv -- "$corridor_completion_tmp" "$corridor_completion_path"
-fi
+}
 verify_release_identity "after release contract preflights"
 
-if [[ "$profile" == "--release" ]]; then
+run_release_scaling_and_formal_gates() {
   scaling_preflight_report="${IROHA_RELEASE_HOST_ROOT}/scaling-validation-preflight.json"
   rm -f -- "$scaling_preflight_report"
   "$IROHA_RELEASE_PYTHON_BIN" -I -S \
@@ -2586,8 +3087,8 @@ if [[ "$profile" == "--release" ]]; then
   rm -f -- "$scaling_preflight_report"
   verify_release_identity "after source-bound G-SCALE validation"
 
-  # Fail before 160 real-network runs when the strict deductive ledger or its
-  # source-bound backend evidence is not release-complete.
+  # Bind the strict deductive ledger and its backend evidence only after the
+  # mandatory fresh-network and fault-soak corridors have completed.
   formal_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/formal-completion-path"
   rm -f -- "$formal_completion_path_file"
   IROHA_FORMAL_COMPLETION_PATH_FILE="$formal_completion_path_file" \
@@ -2597,7 +3098,7 @@ if [[ "$profile" == "--release" ]]; then
     exit 1
   fi
   verify_release_identity "after strict formal corridor"
-fi
+}
 
 seed_completion_path_file=""
 if [[ "$profile" == "--release" ]]; then
@@ -2619,8 +3120,8 @@ if [[ "$profile" == "--release" ]]; then
     bash scripts/run_nexus_cross_dataspace_atomic_swap.sh \
       --release \
       --capture \
-      --no-skip-build \
       --test-threads 1 \
+      --env IROHA_TEST_ALLOW_REENTRANT_BUILD=0 \
       --multilane-four-peer-release
   if [[ ! -s "$multilane_four_peer_completion_path_file" ]]; then
     echo "mandatory four-peer multilane release gates did not publish a completion path" >&2
@@ -2634,10 +3135,11 @@ if [[ "$profile" == "--release" ]]; then
   fi
   for required_line in \
     $'mode\tmandatory-four-peer-multilane-release' \
-    $'expected_runs\t2' \
-    $'passed_runs\t2' \
+    $'expected_runs\t4' \
+    $'passed_runs\t4' \
     $'failed_runs\t0' \
-    $'skipped_runs\t0'; do
+    $'skipped_runs\t0' \
+    $'native_grouped_pruning_evidence\tpassed'; do
     if ! grep -Fqx -- "$required_line" "$multilane_four_peer_completion_path"; then
       echo "four-peer multilane completion is missing exact accounting: ${required_line}" >&2
       exit 1
@@ -2652,7 +3154,13 @@ fi
 # scheduled/passing test before publishing completion accounting.
 nexus_cross_completion_path_file="${IROHA_RELEASE_HOST_ROOT:-${repo_root}/target}/nexus-cross-dataspace-completion-path"
 rm -f -- "$nexus_cross_completion_path_file"
-nexus_cross_args=(--capture --no-skip-build --test-threads 1)
+nexus_cross_args=(
+  --capture
+  --test-threads
+  1
+  --env
+  IROHA_TEST_ALLOW_REENTRANT_BUILD=0
+)
 if [[ "$profile" == "--release" ]]; then
   nexus_cross_args+=(--release)
 fi
@@ -2687,8 +3195,8 @@ if [[ "$profile" == "--release" ]]; then
     bash scripts/run_nexus_cross_dataspace_atomic_swap.sh \
       --release \
       --capture \
-      --no-skip-build \
       --test-threads 1 \
+      --env IROHA_TEST_ALLOW_REENTRANT_BUILD=0 \
       --cross-dataspace-fault-soak \
       --cross-dataspace-seed nexus-cross-dataspace-v1-seed-00 \
       --cross-dataspace-soak-duration-secs 7200
@@ -2715,6 +3223,7 @@ if [[ "$profile" == "--release" ]]; then
     fi
   done
   verify_release_identity "after G-12P two-hour rotating-validator fault soak"
+  run_release_scaling_and_formal_gates
 fi
 
 if [[ "$profile" == "--pr" ]]; then
@@ -2722,6 +3231,7 @@ if [[ "$profile" == "--pr" ]]; then
   bash scripts/formal/run_sumeragi_v2_harness.sh --unit
   bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
   bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
+  run_final_workspace_verification
   final_pr_source_manifest_sha256="$(
     python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
   )"
@@ -2807,6 +3317,10 @@ python3 -I -S scripts/formal/check_sumeragi_v2_proof_ledger.py \
   "${final_proof_evidence_args[@]}"
 verify_release_identity "after final proof-evidence validation"
 
+run_final_workspace_verification
+publish_corridor_completion
+verify_release_identity "after final corridor completion publication"
+
 seed_completion_path="$(<"$seed_completion_path_file")"
 formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
@@ -2843,6 +3357,7 @@ verify_release_identity "before aggregate release receipt publication"
   --seed-completion "$seed_completion_path" \
   --chaos-completion "$chaos_completion_path" \
   --taira-completion "$taira_completion_path" \
+  --g4p-completion "$multilane_four_peer_completion_path" \
   --g12-seed-completion "$nexus_cross_completion_path" \
   --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
   --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
@@ -2855,4 +3370,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-echo "Sumeragi v2 production release gates passed, including strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 256/256 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

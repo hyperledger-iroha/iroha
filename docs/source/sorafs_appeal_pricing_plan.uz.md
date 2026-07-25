@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d6a71083998d5c4859d95c20e16d35f51dda7d09131595341b8c693f5554931e
+source_hash: d80a11be86b8691a744d50849e16a1b7e01b47c0d38e0874e6bb99a6bf17fea3
 source_last_modified: 2026-07-04T23:34:52.288080+00:00
 translation_last_reviewed: 2026-07-05
 source_mtime: 2026-07-04T23:34:52.288080+00:00
@@ -28,9 +28,11 @@ configured,
 plus stateless settlement and disbursement plan APIs backed by the same baseline
 helpers, and `sorafs_node` can publish typed
 `SoraFsAppealFinanceReportV1` records into the local Governance DAG filesystem
-sink and optional signed runtime DAG. Deposit-backed local moderation tallies now
-derive and publish those finance reports automatically from the confirmed
-asset-lock metadata captured at ballot intake. `sorafs_manifest` can also
+sink and optional signed runtime DAG. Finalized moderation outcomes now produce
+typed payload-free terminal settlement handoffs through a durable idempotent
+runtime boundary; process-local ballot state is not an appeal-finance input.
+The deployed boundary remains responsible for reconciling the confirmed
+asset-lock metadata and publishing finance reports. `sorafs_manifest` can also
 aggregate validated finance reports into deterministic
 `SoraFsAppealFinanceWeeklyRollupV1` records for transparency dashboards and
 treasury review, and `sorafs_node` can publish those rollups through the same
@@ -104,21 +106,13 @@ requires `torii.sorafs.appeal_finance_settlement.submitter_private_keys` and
 only queues the next pending step whose required authority has a configured
 private key. If `sorafs_node` has a local Governance DAG publisher, each queued
 server-side step is also recorded as a typed settlement receipt for audit and
-dashboard ingestion. Torii's local moderation ballot announcement API now
-performs the deposit confirmation gate before admitting a ballot and stores the
-confirmed deposit fingerprint, including evidence hashes, with the local
-moderation record. When Torii starts with configured settlement submitter keys,
-its moderation settlement worker replays and subscribes to local tallied ballot
-events, reconstructs the confirmed deposit from that captured fingerprint, and
-queues pending native settlement steps through the same submitter and receipt
-path. The worker also periodically rescans tallied local ballots at
-`torii.sorafs.appeal_finance_settlement.worker_scan_interval_ms` so changed
-runtime reconciliation state can advance to the next pending settlement step.
-It persists each worker-submitted step with transaction hash, status, attempts,
-and last error under the SoraFS storage data directory, refreshes queued
-transaction status from Torii's local pipeline cache, and retries rejected or
-expired worker submissions up to
-`torii.sorafs.appeal_finance_settlement.worker_max_retry_attempts`.
+dashboard ingestion. Moderation intake and outcomes come only from committed
+native moderation state. The finalized-chain orchestrator supplies stable
+terminal settlement handoffs to the runtime-injected durable boundary; that
+boundary is the only supported bridge into retry-safe finance settlement and
+report publication. It must reconcile committed custody and retain its own
+durable cursor/outbox state instead of reconstructing authority from a local
+moderation database.
 Treat this page as the production-readiness ledger for the
 implemented helpers and the remaining service gates.
 
@@ -213,26 +207,17 @@ implemented helpers and the remaining service gates.
   expectation, selects the next pending native settlement step, signs it with a
   configured submitter key whose canonical `AccountId` matches the step's
   required authority, and queues the transaction through Torii. Without
-  configured signer coverage it returns `submitter_not_configured` or
-  `missing_required_signer` alongside reconciliation evidence. The internal
-  signing, queueing, reconciliation, and settlement-receipt publication path is
-  factored out of the HTTP handler and is also used by the always-on
-  moderation-derived worker.
-- The moderation-derived settlement worker starts with Torii when SoraFS storage
-  and `torii.sorafs.appeal_finance_settlement.submitter_private_keys` are
-  configured. It replays the local moderation event backlog, subscribes to live
-  `BallotTallied` events, reconstructs the deposit confirmation from the
-  moderation-captured native lock fingerprint including evidence hashes, checks
-  the runtime ledger for static deposit mismatches, maps the tally decision to
-  the appeal settlement outcome, and queues the same next pending native
-  settlement step plus settlement receipt as the authenticated submit endpoint.
-  It also rescans tallied local ballots on `worker_scan_interval_ms` and
-  persists already-queued worker submissions under the SoraFS storage data
-  directory with transaction hash, pipeline status, attempt count, and last
-  error. Follow-up scans and process restarts can submit a new step after ledger
-  state advances without resubmitting the unchanged state, and rejected or
-  expired worker transactions are retried until `worker_max_retry_attempts` is
-  reached.
+configured signer coverage it returns `submitter_not_configured` or
+`missing_required_signer` alongside reconciliation evidence. The internal
+signing, queueing, reconciliation, and settlement-receipt publication path is
+factored out of the HTTP handler.
+- The finalized-chain moderation orchestrator reads one internally consistent
+  committed snapshot, emits a typed terminal settlement handoff only after the
+  case outcome is final, and retries its stable handoff identity through a
+  runtime-injected durable boundary. The boundary must atomically retain the
+  handoff id, canonical-byte digest, and downstream outbox effect; byte-changing
+  replays fail permanently. Torii fails startup when the orchestrator is enabled
+  without that boundary.
 - `POST /v1/sorafs/appeals/finance/deposits/reconcile` requires canonical
   `X-Iroha-*` request authentication, recomputes the same baseline settlement
   expectation, reads the current native asset-lock ledger record, and reports
@@ -241,15 +226,14 @@ implemented helpers and the remaining service gates.
   `reconciliation_digest_hex`, a BLAKE3 digest over the config version,
   requested settlement inputs, expected result, observed ledger state, and
   ordered mismatch list.
-- `POST /v1/sorafs/moderation/ballots` requires a matching
-  `deposit_confirmation` object and rejects the announcement unless Torii can
-  confirm runtime ledger custody for the same case, round, and evidence bundle
-  before the local ballot is admitted.
-- Deposit-backed local moderation ballot tallies now derive a deterministic
-  `SoraFsAppealFinanceReportV1` from the final decision, confirmed deposit
-  snapshot, evidence-hash fingerprint, panel roster, revealed jurors, and
-  no-show jurors, then publish it through the same local Governance DAG report
-  pipeline used by operator submissions.
+- Appeal intake is an exact caller-signed
+  `SubmitSorafsModerationAppeal` transaction whose handoff-bound deposit
+  evidence is validated against committed custody; no local announcement API
+  or independently authoritative finance copy is retained.
+- Finalized outcomes expose the deterministic case/round/outcome digest,
+  finalized cursor, and stable handoff id needed by the durable settlement
+  boundary. Finance report derivation and Governance DAG publication must
+  reconcile that handoff with committed custody and remain exactly-once.
 - `SorafsReconciliationReportV1` can embed an appeal-finance reconciliation
   summary derived from local weekly rollup publish-index entries and JSON
   sidecars, including source report count, case count, treasury-bound XOR, and
@@ -455,9 +439,10 @@ replay the exact parameters used for the quote or payout.
 
 Use the rollout gate after the deployed pricing/config routes, quote/settle/
 disburse routes, native deposit lifecycle routes, settlement execution,
-configured-signer submitter, moderation-derived worker, Governance DAG
-publication path, hosted public dashboard, multi-peer ledger reconciliation, and
-governance packet have produced reviewed, payload-free JSON evidence:
+configured-signer submitter, finalized-moderation durable handoff consumer,
+Governance DAG publication path, hosted public dashboard, multi-peer ledger
+reconciliation, and governance packet have produced reviewed, payload-free JSON
+evidence:
 
 ```sh
 python3 scripts/check_sorafs_appeal_finance_rollout_evidence.py \

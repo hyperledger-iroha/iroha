@@ -173,4 +173,41 @@ run_mutant autonomous-volatile-stage-diagnostics "$AUTONOMOUS_MODULE" \
   multilane_autonomous_volatile_stage_diagnostics_bug.cfg \
   MLStageEvidenceMonotonic
 
-echo "[tlc] all 27 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+readonly QUEUE_PLAN_ADMISSION_MODULE="SumeragiV2QueuePlanAdmissionRegistry.tla"
+run_mutant queue-plan-split-route-public-acceptance \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_split_route_public_acceptance_bug.cfg \
+  MLPublic202Exact
+run_mutant queue-plan-execution-before-global-cas \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_execution_before_global_cas_bug.cfg \
+  MLQueueEligibilityExact
+run_mutant queue-plan-conflicting-cas "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_conflicting_cas_bug.cfg \
+  MLAdmissionCasUnique
+run_mutant queue-plan-restart-aba "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_restart_aba_bug.cfg \
+  MLQueueEligibilityExact
+run_mutant queue-plan-local-expiry-clears-tombstone \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_local_expiry_clears_tombstone_bug.cfg \
+  MLImmutableAdmissionTombstone
+run_mutant queue-plan-deferred-bypass "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_deferred_bypass_bug.cfg \
+  MLPublic202Exact
+run_mutant queue-plan-cancellation-bypass "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_cancellation_bypass_bug.cfg \
+  MLCancellationStopsExecution
+run_mutant queue-plan-guard-drop-deletes-durable-owner \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg \
+  MLCertificateDurable
+run_mutant queue-plan-execution-without-exact-binding \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_execution_without_exact_binding_bug.cfg \
+  MLExecutionRequiresExactBinding
+run_mutant queue-plan-duplicate-execution "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_duplicate_execution_bug.cfg \
+  MLAdmissionAtMostOnceExecution
+
+echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

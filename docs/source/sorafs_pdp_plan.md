@@ -21,15 +21,17 @@ and returns one terminal row with complete commit provenance. Persisted storage
 retains canonical PDP trees and produces witnesses through verified no-follow
 chunk reads.
 
-This protocol is not production-ready while rejected or expired challenges
-still converge on the process-local repair coordinator. The native repair
-ledger exists, but PDP terminal handoff, retry reconciliation, and readback
-must use its finalized committed task/event projection before SF-13 can be
-promoted. The provider protocol's canonical terminal archive also needs an
-authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder and
-committed-state reconciliation; the finalized proof-stream query does not
-populate that state. Genuine multi-provider transport, restart, key-rotation,
-metrics, archive, and repair evidence also remains external rollout work.
+Rejected or expired challenges now use the fail-closed exact-chain durable
+native repair-transaction handoff, and storage execution is gated by the exact
+finalized task cursor, revision, lease owner, generation, and expiry. Canonical
+terminal archives also use the authorized retry-safe
+`SubmitSorafsProofOutcome` transaction forwarder and reconcile the committed
+record. The former public `RepairManager` and filesystem repair authority have
+been deleted, and GC/reconciliation now consume one complete bounded native
+task projection from a single immutable finalized view. SF-13 remains open
+because cross-peer exactly-once repair has not yet been proved and genuine
+multi-provider transport, restart, key-rotation, metrics, archive, and repair
+evidence remains external rollout work.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
 SF-13 rollout evidence gate for deployed PDP promotion, and
 `scripts/run_sorafs_pdp_rollout_evidence.py` provides the matching
@@ -268,11 +270,11 @@ The local V1 protocol gates are shipped:
 7. An exact finalized proof-outcome query and OpenAPI coverage for the five
    provider routes and challenge-bound proof streaming.
 
-The remaining authority work is to drive the sixth item through the finalized
-native repair ledger rather than `FileRepairStore` or another process-local
-scheduler, and to forward each canonical terminal archive through
-`SubmitSorafsProofOutcome` with durable retry and committed-state
-reconciliation.
+The sixth item and terminal archive now use durable signed native transaction
+forwarders with exact finalized reconciliation. The competing local repair
+manager/checkpoint path is removed. Remaining rollout work is to prove that
+duplicate submissions through different peers still produce one live lease and
+one terminal outcome.
 
 ## CLI And SDK Surface
 
@@ -334,12 +336,9 @@ Implemented:
 
 Required before production enablement:
 
-- Connect provider terminal archives to an authorized, retry-safe
-  `SubmitSorafsProofOutcome` transaction forwarder and reconcile the exact
-  finalized record after submission.
-- Replace the local repair coordinator target with finalized native repair
-  transactions, committed task/event queries, durable retry reconciliation,
-  and cross-peer exactly-once tests.
+- Prove restart and cross-peer exactly-once behavior for the existing durable
+  proof-outcome and repair transaction forwarders, including one live lease and
+  one terminal outcome.
 - SDK parity tests that verify the same PDP fixture bundle across Rust,
   JavaScript/TypeScript, Python, Swift, Kotlin/JVM, Java Android, and C#.
 
@@ -387,11 +386,12 @@ Completed local foundations:
 
 Remaining production gates:
 
-- Forward and reconcile every canonical provider terminal archive through the
-  native proof-outcome ledger; do not treat the provider protocol's local
-  status/export store as authoritative.
-- Cut PDP terminal repair handoff over to the finalized native repair ledger
-  and delete the local-authority path.
+- Keep every canonical provider terminal archive reconciled against the native
+  proof-outcome ledger; the provider protocol's local status/export store is a
+  rebuildable projection only.
+- Prove the finalized native handoff across peer and process restarts. The
+  deleted local manager/checkpoint format has no production compatibility
+  branch.
 - Exercise admission-bound provider signatures, archive publication, restart,
   retry, revocation, and exactly-once repair across multiple providers and
   validators.

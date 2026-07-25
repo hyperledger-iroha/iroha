@@ -59,7 +59,10 @@ Important outputs:
 
 - `payload.manifest` – Norito-encoded manifest bytes.
 - `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
+  the embedded `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and
+  alias metadata. The embedded array is not a standalone plan; use the
+  separately emitted strict `sorafs.chunk_fetch_plan.v1` object for
+  interchange.
 - `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
   digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
 

@@ -33,6 +33,8 @@ pub use compliance::{
     MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1, MAX_GATEWAY_COMPLIANCE_ENTRIES_V1,
     MAX_GATEWAY_COMPLIANCE_HISTORY_V1, MAX_GATEWAY_COMPLIANCE_SIGNERS_V1,
 };
+#[cfg(test)]
+pub(crate) use compliance::allow_all_gateway_compliance_controller_for_tests;
 pub use controller::TlsAutomationHandle;
 pub use denylist::{
     DenylistEntry, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicy,

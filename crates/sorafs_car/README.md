@@ -60,8 +60,8 @@ Right now it exposes:
   its conservative aggregate heap estimate exceeds the store limit.
 - Production fetch paths use `CarBuildPlan::try_chunk_fetch_specs`; malformed
   plans or allocation failures remain errors rather than masquerading as an
-  empty fetch plan. The compatibility `chunk_fetch_specs` helper is reserved for
-  already validated, trusted in-memory plans.
+  empty fetch plan. Raw spec arrays are only emitted as typed fields inside a
+  recognized versioned report; they are never accepted as standalone plans.
 
 The companion CLI `sorafs_manifest_chunk_store` ingests payloads with the deterministic
 chunker, emits a CAR plan report, and supports `--list-profiles` along with
@@ -96,8 +96,11 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
 # stable if registry IDs change.
 ```
 
-- Pass `--chunk-fetch-plan-out=path` to persist the canonical `chunk_fetch_specs` JSON so
-  other tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest builder.
+- Pass `--chunk-fetch-plan-out=path` to persist the canonical
+  `sorafs.chunk_fetch_plan.v1` envelope. It binds the ordered chunk
+  specifications to the non-zero BLAKE3 digest of the complete payload so other
+  tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest
+  builder.
 - Pass `--chunk-dir-out=dir` to persist deterministic `chunk_00000.bin` payload
   files through the same disk-backed chunk sink used by `ChunkStore`; the target
   directory must be absent, and the JSON report includes a
@@ -111,12 +114,14 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 ```
 
 Reassemble a payload from multiple local providers using the multi-source fetch
-orchestrator (`chunk_fetch_specs.json` can be the array emitted by
-`sorafs_manifest_builder --chunk-fetch-plan-out`):
+orchestrator. The standalone plan must be the strict
+`sorafs.chunk_fetch_plan.v1` object emitted by
+`sorafs_manifest_builder --chunk-fetch-plan-out`; retired bare arrays are
+rejected:
 
 ```
 cargo run -p sorafs_car --bin sorafs_fetch -- \
-  --plan=chunk_fetch_specs.json \
+  --plan=chunk_fetch_plan.json \
   --provider=alpha=/srv/providers/alpha/payload.bin \
   --provider=beta=/srv/providers/beta/payload.bin#4@3 \
   --output=assembled.bin \

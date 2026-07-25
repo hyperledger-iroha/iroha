@@ -7,51 +7,25 @@ summary: SFM-4b implementation status for appeal finance, policy-jury data found
 
 ## Current Status
 
-SFM-4b is partially implemented. The repository contains appeal finance helpers,
-moderation reproducibility tooling, honey-audit gateway probes, and reusable
-policy-jury sortition / commit-reveal data structures, SoraFS-specific
-moderation ballot wrappers, an authoritative on-chain moderation ledger, and a
-local `sorafs_node` ballot lifecycle runtime exposed through Torii JSON
-endpoints and the local Governance DAG publisher.
-The local ballot list readback now keeps the full local total visible while
-bounding the returned `ballots` array through a `limit` query parameter
-(default 50, max 500), matching the production dashboard-readiness pattern used
-by adjacent SoraFS event/readback APIs.
-`scripts/check_sorafs_moderation_panel_rollout_evidence.py` now provides the
-fail-closed SFM-4b rollout evidence gate for deployed moderation-panel
-promotion packets, and
-`scripts/run_sorafs_moderation_panel_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner. The checker exports its
-required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
-dry-run emits the checker-backed `evidence_contract` map listing each selected
-evidence kind's schema and required payload fields.
-Every recognized rollout artifact must also carry reviewed `deployment_id` and
-`environment` context, so staging or production evidence cannot be satisfied by
-local, mock, dev, or otherwise unreviewed deployment packets. The gate also
-blocks mixed reviewed deployment contexts across the same rollout bundle.
-The gate also rejects mixed promotion packets: sortition, viewer, operator,
-notification, voting, publication, settlement, transparency/reputation,
-metrics, end-to-end, and governance artifacts must bind back to the appeal
-intake `case_digest_hex`; viewer/operator/notification/voting and downstream
-artifacts must bind back to a case-bound sortition `roster_hash_hex`; and
-publication, settlement, transparency/reputation, metrics, end-to-end, and
-governance artifacts must bind back to a roster-bound commit/reveal
-`tally_digest_hex`.
-The aggregate production-readiness gate preserves the same chain by requiring
-`valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and
-`valid_evidence_viewer_digest_sets` to remain backed by the case, roster, and
-tally metadata emitted by the lane checker.
-End-to-end panel artifacts also publish `policy_digest_hex`; governance
-approval artifacts must bind `policy_digest_hex` to that valid end-to-end
-policy digest, and the checker emits those valid panel policy digests as
-`valid_policy_digests`. The moderation-panel gate fail-closes when more than
-one valid case, roster, tally, or policy anchor appears, and clears the mixed
-`valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, or
-`valid_policy_digests` set before aggregate promotion can report ready.
-The consensus path now ships authoritative appeal intake and deterministic
-PoP-gated panel formation. It does not yet ship the deployed moderation service
-facade, production panel orchestrator, secure evidence viewer, juror portal
-workflow, or reviewed deployment evidence described in the original plan.
+SFM-4b includes appeal-finance helpers, moderation reproducibility tooling,
+honey-audit probes, reusable policy-jury data structures, SoraFS ballot
+envelopes, and an authoritative native moderation ledger. Appellant-bound
+intake, PoP-gated eligibility, deterministic primary/waitlist sortition,
+assignment acceptance and failover, commit/reveal, challenges, terminal
+outcomes, and classified no-shows are consensus-owned transitions.
+
+The process-local sorafs_node ballot runtime, checkpoint, event stream, and
+caller-fed projection have been deleted. Torii transports exact signed native
+instructions and serves only reconciled finalized-chain projections. The
+durable orchestrator is a transaction submitter and committed-state consumer,
+not a competing authority.
+
+The fail-closed SFM-4b evidence checker and collection runner bind every
+recognized artifact to one reviewed deployment, case, roster, tally, and active
+policy context. The repository still lacks reviewed reference-deployment
+evidence for the complete moderation service, evidence viewer, juror
+notification/portal workflow, downstream settlement/publication, and
+four-validator recovery scenarios.
 
 ## Shipped Foundations
 
@@ -111,27 +85,22 @@ workflow, or reviewed deployment evidence described in the original plan.
   advances; missing, mutated, or non-ancestral pinned state still fails closed. Raw
   credential, witness, nonce, and proof payloads are never persisted in the
   moderation ledger.
-- `sorafs_node::ModerationBallotRuntime` is wired through `NodeHandle` as a
-  deterministic local lifecycle store for ballot announcement, eligible-juror
-  commit acceptance, challenge-buffered reveal acceptance, quorum tallying,
-  contested tie detection, and replayable/broadcast local events.
-- Torii exposes local moderation ballot announcement, list/get, no-show plan
-  readback, commit, challenge submission/resolution, reveal, tally, and event
-  backlog endpoints under `/v1/sorafs/moderation/ballots*`. The list endpoint
-  reports full local
-  ballot totals while bounding returned ballot records with `limit` (default
-  50, max 500). Mutating requests require canonical app authentication, and
-  commit/reveal requests bind the signer to the canonical juror id.
-  Deposit-backed announcements persist the confirmed native asset-lock
-  fingerprint, including the evidence hashes used to derive the escrow id, and
-  Torii's configured-signer moderation settlement worker replays and subscribes
-  to tallied local ballot events to queue retry-aware native settlement steps
-  from that fingerprint.
-- `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
-  `sorafs_node::FilesystemGovernancePublisher` publish local moderation ballot
-  announcement, commit-accepted, reveal-accepted, and tally evidence into the
-  local Governance DAG `publish-index.json`, CAR queue, and optional signed
-  runtime DAG.
+- sorafs_node no longer owns a moderation ballot, appeal, scheduler,
+  checkpoint, or event-stream authority. The only authoritative lifecycle is
+  the native moderation ledger; node-side screening, quarantine, evidence
+  viewing, and orchestration are non-authoritative consumers.
+- Torii's version-one moderation routes accept exact signed native ISIs for
+  intake, eligibility, sortition, assignment acceptance, activation, commit,
+  challenge, reveal, and finalization. List, detail, no-show, and event
+  responses come from a reconciled finalized-chain snapshot with bounded
+  arrays and cursors; there is no local ballot fallback.
+- The durable orchestrator submits transactions and reconciles committed state.
+  Settlement and notification workers consume finalized outcomes rather than
+  subscribing to a process-local tally stream.
+- sorafs_manifest::SoraFsModerationBallotGovernanceEventV1 and
+  sorafs_node::FilesystemGovernancePublisher retain the canonical payload-free
+  publication format, but production producers must derive it from committed
+  native events.
 - `docs/examples/ministry/policy_jury_roster_example.json` and
   `docs/examples/ministry/policy_jury_sortition_example.json` provide example
   inputs for the reusable policy-jury data path.
@@ -172,12 +141,12 @@ runtime binding. Together with the ballot wrappers it binds:
 - settlement manifest version;
 - moderation vote choices;
 
-The authoritative ledger plus local runtime and Torii API now bind
+The authoritative ledger and finalized-chain Torii projection bind
 panel-size/quorum policy, intake/deposit digests, exact active PoP snapshots,
 proof-nullifier replay protection, deterministic primary/waitlist selection,
-assignment failover, commit/reveal windows, eligible jurors, and the
-payload-free no-show penalty plan readback route. The production service still
-needs deployed integrations that bind:
+assignment failover, commit/reveal windows, eligible jurors, and payload-free
+no-show readback. The production service still needs deployed integrations that
+bind:
 
 - evidence access attestation;
 - decision publication and appeal cache updates.
@@ -198,8 +167,8 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
   `docs/source/sorafs_commit_reveal_plan.md`.
 - Connect panel outcomes to gateway compliance caches, transparency
   publication, settlement reconciliation, and reputation scoring.
-- Promote local Governance DAG moderation event publication into the durable
-  contract-backed and public IPFS/IPNS decision trail.
+- Connect committed native moderation events to the durable Governance DAG and
+  public IPFS/IPNS decision trail.
 - Add reviewed four-peer deployed end-to-end tests for appeal submission,
   private juror enrollment, evidence access, commit/reveal voting, decision
   publication, restart reconciliation, and settlement. Native unit/integration

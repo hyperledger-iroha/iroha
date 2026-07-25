@@ -1,40 +1,18 @@
+<!-- Auto-generated stub for Bashkir (ba) translation. Replace this content with the full translation. -->
+
 ---
 lang: ba
 direction: ltr
 source: docs/portal/docs/sorafs/repair-plan.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 302b74b4022656e57c2b876a8f15bf5301a593030a18ad1b93780061e5d783ef
-source_last_modified: "2026-01-21T19:17:13.232211+00:00"
-translation_last_reviewed: 2026-02-07
-id: repair-plan
-title: SoraFS Repair Automation & Auditor API
-sidebar_label: Repair Automation
-description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
-translator: machine-google-reviewed
+source_hash: 3b3148617cf0935fe010a37343fc7398400d9c33572b8c41329f6334f3b03496
+source_last_modified: "2026-07-25T00:40:34.079232+00:00"
+translation_last_reviewed: null
 ---
 
-:::иҫкәртергә канонлы сығанаҡ
-Көҙгөләр `docs/source/sorafs_repair_plan.md`. Ике версияны ла синхронлаштырыуға тиклем Сфинкс комплекты пенсияға сыҡҡансы һаҡлағыҙ.
-::: 1990 й.
+# Translation In Progress
 
-## Идара итеү ҡарары йәшәү циклы
-1. Киҫелешле ремонт үткәреү тәҡдим проектын ҡырҡып, бәхәс тәҙрәһен аса.
-.
-3. `escalated_at_unix + dispute_window_secs` ҡарары детерминистик рәүештә иҫәпләнә: минималь һайлаусылар, раҫлауҙар кире ҡағыуҙан артып китә, ​​ә раҫлау нисбәте кворум сигенә яуап бирә.
-4. Раҫланған ҡарарҙар апелляция тәҙрәһен аса; апелляциялар теркәлгән I18NI000000002X тиклем ҡарар ҡабул итеү, тип апелляция.
-5. Штраф ҡапҡастары бөтә тәҡдимдәргә лә ҡағыла; ҡапҡас өҫтөндәге тапшырыуҙар кире ҡағыла.
+This file is a placeholder for the Bashkir translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
 
-## идара итеүҙең эскалация сәйәсәте
-Эскалация сәйәсәте `governance.sorafs_repair_escalation` I18NI000000004X-тағы сығанаҡтарҙан алынған һәм һәр ремонт үткәреү тәҡдиме өсөн үтәлә.
-
-| Ҡуйыу | Ғәҙәттәгесә | Мәғәнәһе |
-|--------|---------|----------|
-| `quorum_bps` | 6667 | Минималь раҫлау нисбәте (нигеҙендә) иҫәпләнгән тауыштар араһында. |
-| `minimum_voters` | 3 | Минималь һаны айырым һайлаусыларҙы хәл итеү өсөн талап ителә. |
-| I18NI0000007X | 86400 | Тауыштар алдынан эскалациянан һуң ваҡыт аныҡлана (икенсе). |
-| `appeal_window_secs` | 604800 | Раҫлауҙан һуң был мөрәжәғәттәр ҡабул ителә (секундтар). |
-| `max_penalty` | 1000 000 000 | Максималь слэш штраф ремонтлау өсөн мөмкинлек бирә эскалациялар (нано-XOR). |
-
-- График генерацияланған тәҡдимдәр I18NI000000010X-та ябылған; аудитор тапшырыуҙар өҫтөндә ҡапҡас кире ҡағыла.
-- Тауыш яҙмалары `repair_state.to`-та детерминистик заказ менән һаҡлана (I18NI000000012X сорттарға бүлергә) шулай итеп, бөтә төйөндәр ҙә шул уҡ ҡарар ҡабул итеү ваҡытын һәм һөҙөмтәне ала.
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

@@ -5583,7 +5583,8 @@ fn pin_fixture_default_manifest()
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(descriptor.id)
         .chunk_digest_sha3_256(pin_fixture_default_chunk_digest())
-        .content_length(1_048_576)
+        .por_root(pin_fixture_default_por_root())
+        .content_length(pin_fixture_default_content_length())
         .car_digest([0xB6; 32])
         .car_size(1_048_832)
         .pin_policy(sorafs_manifest::PinPolicy {
@@ -5600,6 +5601,14 @@ fn pin_fixture_default_manifest()
 
 fn pin_fixture_default_chunk_digest() -> [u8; 32] {
     [0xCD; 32]
+}
+
+fn pin_fixture_default_por_root() -> [u8; 32] {
+    [0xCE; 32]
+}
+
+fn pin_fixture_default_content_length() -> u64 {
+    1_048_576
 }
 
 fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
@@ -7931,6 +7940,8 @@ mod tests {
             manifest_root_cid,
             pin_fixture_default_chunker(),
             pin_fixture_default_chunk_digest(),
+            pin_fixture_default_por_root(),
+            pin_fixture_default_content_length(),
             pin_fixture_default_policy(),
             pin_fixture_alice(),
             12,
@@ -7977,6 +7988,8 @@ mod tests {
             manifest_root_cid,
             pin_fixture_default_chunker(),
             pin_fixture_default_chunk_digest(),
+            pin_fixture_default_por_root(),
+            pin_fixture_default_content_length(),
             pin_fixture_default_policy(),
             pin_fixture_alice(),
             12,

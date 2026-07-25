@@ -6,30 +6,31 @@ use std::{
 };
 
 use crate::moderation::ModerationEvidenceViewerAuditReport;
-use crate::reserve::{
-    ReserveAppealRecord, ReserveAppealStatus, ReserveLifecycleEvent, ReserveLifecyclePolicyRecord,
-    ReserveMovementCustodyStatus, ReserveMovementKind, ReserveMovementRecord,
-};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_crypto::sorafs::proof_token::{
     ModerationAction as ProofTokenModerationAction, ProofToken,
 };
-use iroha_data_model::sorafs::{
-    gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
-    reserve::ReserveLifecycleStage,
-    transparency::{
-        MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
-        ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
-        ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1, ModerationPrivacyModeV1,
-        ModerationPrivacyParametersV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+use iroha_data_model::{
+    events::data::sorafs::SorafsReserveLedgerEventKind,
+    sorafs::{
+        gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
+        reserve::{ReserveFinalizedEventV1, ReserveLifecycleStage},
+        transparency::{
+            MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
+            ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+            ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
+            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+            PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+        },
     },
 };
 use norito::codec::Encode as NoritoEncode;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
     MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_PRIVACY_MAX_METRICS_V1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
-    SoraFsModerationBallotGovernanceEventV1,
+    MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationPrivacyNoiseSourceV1,
+    ModerationPrivacyThresholdPrfCommitmentV1, SoraFsAppealFinanceReportV1,
+    SoraFsAppealFinanceSettlementReceiptV1, SoraFsModerationBallotGovernanceEventV1,
 };
 use thiserror::Error;
 
@@ -37,24 +38,37 @@ const SOURCE_ENTRY_SUBJECT_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.source_entry.subject.v1";
 const SOURCE_ENTRY_SUMMARY_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.source_entry.summary.v1";
-const SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.node.transparency.privacy_aggregate.source_payload.v1";
-const POPULATION_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.node.transparency.privacy_aggregate.population.v1";
 const DISCRETE_LAPLACE_NOISE_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.discrete_laplace.v1";
 const NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.randomness_commitment.v1";
 const PRIVACY_BUDGET_ENTRY_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_budget.entry.v1";
-const NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1: &str = "cycle_randomness_commitment_blake3";
 const PRIVACY_BUDGET_LEDGER_VERSION_V1: u8 = 1;
 const PRIVACY_BUDGET_MAX_POLICIES_V1: usize = 64;
 const PRIVACY_BUDGET_MAX_CHARGES_V1: usize = 4_096;
-const MAX_DISCRETE_LAPLACE_MEAN_SUCCESSES_V1: u128 = 4_096;
-const MAX_DISCRETE_LAPLACE_RANDOM_DRAWS_V1: u64 = 1_048_576;
+const PRIVACY_RELEASE_LEDGER_VERSION_V1: u8 = 1;
+const PRIVACY_RELEASE_MAX_RECORDS_V1: usize = 4_096;
+const PRIVACY_RELEASE_RECORD_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_release.record.v1";
+const PRIVACY_RELEASE_ANCHOR_GENESIS_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_release.anchor_genesis.v1";
+const MAX_DISCRETE_LAPLACE_EXPECTED_CONTINUATIONS_V1: u128 = 4_096;
+const MAX_DISCRETE_LAPLACE_RELEASE_EXPECTED_DRAWS_V1: u128 = 262_144;
+/// Maximum source events accepted by one V1 privacy aggregation call.
+pub const PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1: usize = 4_096;
+/// Maximum governed population buckets in one V1 privacy query.
+pub const PRIVACY_AGGREGATE_MAX_POPULATIONS_V1: usize = 256;
 const CYCLE_ID_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_aggregate.cycle_id.v1";
 const CYCLE_PRF_REQUEST_BINDING_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.cycle_prf_request.v1";
+const POPULATION_INVENTORY_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.population_inventory.v1";
+const METRIC_SCHEMA_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.metric_schema.v1";
+const PRIVATE_SOURCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.private_source.v1";
+const SOURCE_EVENT_RECEIPT_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.source_event_receipt.v1";
 const TRANSPARENCY_LEDGER_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.ledger.source_entry_id.v1";
 const RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
@@ -169,27 +183,9 @@ pub enum TransparencySourceEntryAdapterError {
         /// Validation detail.
         message: String,
     },
-    /// Reserve lifecycle event source data is malformed.
-    #[error("invalid reserve lifecycle event source: {message}")]
-    InvalidReserveLifecycleEvent {
-        /// Validation detail.
-        message: String,
-    },
-    /// Reserve movement source data is malformed.
-    #[error("invalid reserve movement source: {message}")]
-    InvalidReserveMovement {
-        /// Validation detail.
-        message: String,
-    },
-    /// Reserve appeal source data is malformed.
-    #[error("invalid reserve appeal source: {message}")]
-    InvalidReserveAppeal {
-        /// Validation detail.
-        message: String,
-    },
-    /// Reserve lifecycle policy source data is malformed.
-    #[error("invalid reserve lifecycle policy source: {message}")]
-    InvalidReserveLifecyclePolicy {
+    /// A typed committed reserve-ledger event is malformed.
+    #[error("invalid finalized reserve-ledger event source: {message}")]
+    InvalidReserveFinalizedEvent {
         /// Validation detail.
         message: String,
     },
@@ -598,435 +594,180 @@ pub fn moderation_evidence_viewer_audit_report_source_entry(
     validate_adapter_source_entry(entry)
 }
 
-/// Derive a transparency source entry from a local reserve lifecycle event.
+/// Derive a transparency source entry from one typed committed reserve-ledger event.
+///
+/// The finalized event cursor, rather than a process-local sequence or wall
+/// clock, is the source identity. This makes duplicate suppression
+/// byte-identical across replicas and prevents a stale-fork event from
+/// masquerading as the committed transition with the same journal sequence.
 ///
 /// # Errors
 ///
-/// Returns [`TransparencySourceEntryAdapterError`] when the local event is not
-/// suitable for the public governance log or the derived source entry is
-/// invalid.
-pub fn reserve_lifecycle_event_source_entry(
-    event: &ReserveLifecycleEvent,
+/// Returns [`TransparencySourceEntryAdapterError`] when the event/cursor
+/// invariants emitted by the native reserve ledger are malformed or the
+/// derived public entry is invalid.
+pub fn reserve_finalized_event_source_entry(
+    record: &ReserveFinalizedEventV1,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
-    validate_reserve_source_id(
-        "provider_id",
-        &event.provider_id,
-        reserve_lifecycle_source_error,
-    )?;
-    if event.observed_at_unix == 0 {
-        return Err(reserve_lifecycle_source_error(
-            "observed_at_unix must be non-zero",
+    if record.sequence == 0 {
+        return Err(reserve_finalized_event_source_error(
+            "sequence must be non-zero",
         ));
     }
-    let current_stage = reserve_lifecycle_stage_label(event.current_stage);
-    let previous_stage = event.previous_stage.map(reserve_lifecycle_stage_label);
-    let provider_id_hex = hex::encode(event.provider_id);
-    let mut metadata = BTreeMap::new();
-    metadata.insert("event_family".to_string(), "reserve_lifecycle".to_string());
-    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
-    metadata.insert("sequence".to_string(), event.sequence.to_string());
-    metadata.insert("current_stage".to_string(), current_stage.to_string());
-    if let Some(previous_stage) = previous_stage {
-        metadata.insert("previous_stage".to_string(), previous_stage.to_string());
+    if record.block_height == 0 {
+        return Err(reserve_finalized_event_source_error(
+            "block_height must be non-zero",
+        ));
     }
-    metadata.insert("rent_due".to_string(), event.ledger.rent_due.to_string());
-    metadata.insert(
-        "reserve_shortfall".to_string(),
-        event.ledger.reserve_shortfall.to_string(),
-    );
-    metadata.insert(
-        "top_up_shortfall".to_string(),
-        event.ledger.top_up_shortfall.to_string(),
-    );
-    metadata.insert(
-        "grace_period_days".to_string(),
-        event.grace_period_days.to_string(),
-    );
-    metadata.insert(
-        "default_after_days".to_string(),
-        event.default_after_days.to_string(),
-    );
-    if let Some(policy_id) = event.applied_policy_id {
-        metadata.insert("applied_policy_id_hex".to_string(), hex::encode(policy_id));
-    }
-    if let Some(appeal_id) = event.applied_appeal_id {
-        metadata.insert("applied_appeal_id_hex".to_string(), hex::encode(appeal_id));
-    }
-    metadata.insert(
-        "credit_draw".to_string(),
-        event.lifecycle.credit_draw.to_string(),
-    );
-    if let Some(available) = &event.lifecycle.credit_available_after_draw {
-        metadata.insert(
-            "credit_available_after_draw".to_string(),
-            available.to_string(),
-        );
-    }
-    metadata.insert(
-        "credit_shortfall".to_string(),
-        event.lifecycle.credit_shortfall.to_string(),
-    );
-    metadata.insert(
-        "accrued_interest".to_string(),
-        event.lifecycle.accrued_interest.to_string(),
-    );
-    metadata.insert(
-        "total_due_after_credit".to_string(),
-        event.lifecycle.total_due_after_credit.to_string(),
-    );
-    metadata.insert(
-        "requires_governance_notification".to_string(),
-        event.lifecycle.requires_governance_notification.to_string(),
-    );
-    metadata.insert(
-        "requires_manual_credit_approval".to_string(),
-        event.lifecycle.requires_manual_credit_approval.to_string(),
-    );
-    let metadata = metadata_vec(metadata);
-    let encoded_event = event.encode();
-    let payload_digest = reserve_source_payload_digest(
-        "reserve_lifecycle_event",
-        &[("canonical_event", encoded_event.as_slice())],
-    );
-    let entry = TransparencyLedgerSourceEntry {
-        event_id: format!("reserve-lifecycle:{}:{provider_id_hex}", event.sequence),
-        occurred_at_unix: event.observed_at_unix,
-        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle".to_string()),
-        subject: format!("reserve-provider:{provider_id_hex}"),
-        subject_digest: source_subject_digest(
-            "reserve_lifecycle_event",
-            &provider_id_hex,
-            &payload_digest,
-        ),
-        payload_digest,
-        summary_digest: source_summary_digest("reserve_lifecycle_event", &metadata),
-        policy_digest: None,
-        evidence_uris: Vec::new(),
-        metadata,
-    };
-    validate_adapter_source_entry(entry)
-}
+    validate_reserve_source_id(
+        "block_hash",
+        &record.block_hash,
+        reserve_finalized_event_source_error,
+    )?;
+    validate_reserve_source_id(
+        "policy_digest",
+        &record.event.policy_digest,
+        reserve_finalized_event_source_error,
+    )?;
+    let occurred_at_unix = unix_ms_to_secs(record.event.occurred_at_unix_ms)
+        .map_err(reserve_finalized_event_source_error)?;
 
-/// Derive a transparency source entry from a local reserve movement record.
-///
-/// # Errors
-///
-/// Returns [`TransparencySourceEntryAdapterError`] when the local movement is
-/// not suitable for the public governance log or the derived source entry is
-/// invalid.
-pub fn reserve_movement_source_entry(
-    record: &ReserveMovementRecord,
-) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
-    validate_reserve_source_id(
-        "movement_id",
-        &record.movement_id,
-        reserve_movement_source_error,
-    )?;
-    validate_reserve_source_id(
-        "provider_id",
-        &record.provider_id,
-        reserve_movement_source_error,
-    )?;
-    if record.observed_at_unix == 0 {
-        return Err(reserve_movement_source_error(
-            "observed_at_unix must be non-zero",
-        ));
+    let operation_required = matches!(
+        record.event.kind,
+        SorafsReserveLedgerEventKind::MovementRequested
+            | SorafsReserveLedgerEventKind::MovementApproved
+            | SorafsReserveLedgerEventKind::MovementRejected
+            | SorafsReserveLedgerEventKind::AppealSubmitted
+            | SorafsReserveLedgerEventKind::AppealAccepted
+            | SorafsReserveLedgerEventKind::AppealRejected
+    );
+    match record.event.kind {
+        SorafsReserveLedgerEventKind::PolicyActivated => {
+            if record.event.provider_id.is_some()
+                || record.event.operation_id.is_some()
+                || record.event.provider_revision != 0
+                || record.event.resulting_lifecycle_stage.is_some()
+            {
+                return Err(reserve_finalized_event_source_error(
+                    "policy activation must not carry provider state",
+                ));
+            }
+        }
+        _ => {
+            let provider_id = record.event.provider_id.ok_or_else(|| {
+                reserve_finalized_event_source_error("provider transition must carry provider_id")
+            })?;
+            validate_reserve_source_id(
+                "provider_id",
+                provider_id.as_bytes(),
+                reserve_finalized_event_source_error,
+            )?;
+            if record.event.provider_revision == 0 {
+                return Err(reserve_finalized_event_source_error(
+                    "provider_revision must be non-zero",
+                ));
+            }
+            if record.event.resulting_lifecycle_stage.is_none() {
+                return Err(reserve_finalized_event_source_error(
+                    "provider transition must carry resulting_lifecycle_stage",
+                ));
+            }
+            if operation_required != record.event.operation_id.is_some() {
+                return Err(reserve_finalized_event_source_error(
+                    "operation_id presence does not match reserve transition kind",
+                ));
+            }
+            if let Some(operation_id) = record.event.operation_id {
+                validate_reserve_source_id(
+                    "operation_id",
+                    &operation_id,
+                    reserve_finalized_event_source_error,
+                )?;
+            }
+        }
     }
-    let movement_id_hex = hex::encode(record.movement_id);
-    let provider_id_hex = hex::encode(record.provider_id);
-    let kind = reserve_movement_kind_label(record.kind);
-    let custody_status = reserve_movement_custody_status_label(record.custody_status);
-    let custody_observed_at = record
-        .custody_updated_at_unix
-        .unwrap_or(record.observed_at_unix);
+
+    let event_kind = reserve_ledger_event_kind_label(record.event.kind);
+    let block_hash_hex = hex::encode(record.block_hash);
+    let policy_digest_hex = hex::encode(record.event.policy_digest);
+    let provider_id_hex = record
+        .event
+        .provider_id
+        .map(|provider_id| hex::encode(provider_id.as_bytes()));
+    let subject_key = provider_id_hex
+        .as_deref()
+        .unwrap_or(policy_digest_hex.as_str());
+    let subject = provider_id_hex.as_ref().map_or_else(
+        || format!("reserve-policy:{policy_digest_hex}"),
+        |provider_id| format!("reserve-provider:{provider_id}"),
+    );
+
     let mut metadata = BTreeMap::new();
-    metadata.insert("event_family".to_string(), "reserve_movement".to_string());
-    metadata.insert("movement_id_hex".to_string(), movement_id_hex.clone());
-    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    metadata.insert("block_hash_hex".to_string(), block_hash_hex.clone());
+    metadata.insert("block_height".to_string(), record.block_height.to_string());
+    metadata.insert(
+        "event_family".to_string(),
+        "reserve_finalized_ledger".to_string(),
+    );
+    metadata.insert("event_index".to_string(), record.event_index.to_string());
+    metadata.insert("event_kind".to_string(), event_kind.to_string());
+    metadata.insert(
+        "occurred_at_unix_ms".to_string(),
+        record.event.occurred_at_unix_ms.to_string(),
+    );
+    metadata.insert("policy_digest_hex".to_string(), policy_digest_hex.clone());
+    metadata.insert(
+        "provider_revision".to_string(),
+        record.event.provider_revision.to_string(),
+    );
     metadata.insert("sequence".to_string(), record.sequence.to_string());
-    metadata.insert("movement_kind".to_string(), kind.to_string());
-    metadata.insert("amount".to_string(), record.amount.to_string());
     metadata.insert(
-        "balance_after".to_string(),
-        record.balance_after.to_string(),
+        "authority_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex(
+            "authority_account",
+            record.event.authority.to_string().as_bytes(),
+        ),
     );
-    metadata.insert(
-        "confirmed_balance_after".to_string(),
-        record.confirmed_balance_after.to_string(),
-    );
-    metadata.insert("custody_status".to_string(), custody_status.to_string());
-    metadata.insert(
-        "provider_account_digest_hex".to_string(),
-        reserve_private_field_digest_hex("provider_account", &record.provider_account),
-    );
-    metadata.insert(
-        "reserve_account_digest_hex".to_string(),
-        reserve_private_field_digest_hex("reserve_account", &record.reserve_account),
-    );
-    metadata.insert(
-        "asset_definition_digest_hex".to_string(),
-        reserve_private_field_digest_hex("asset_definition_id", &record.asset_definition_id),
-    );
-    metadata.insert(
-        "idempotency_key_digest_hex".to_string(),
-        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
-    );
-    if let Some(tx_hash_hex) = &record.custody_tx_hash_hex {
-        metadata.insert("custody_tx_hash_hex".to_string(), tx_hash_hex.clone());
+    if let Some(provider_id_hex) = &provider_id_hex {
+        metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    }
+    if let Some(operation_id) = record.event.operation_id {
+        metadata.insert("operation_id_hex".to_string(), hex::encode(operation_id));
+    }
+    if let Some(stage) = record.event.resulting_lifecycle_stage {
+        metadata.insert(
+            "resulting_lifecycle_stage".to_string(),
+            reserve_lifecycle_stage_label(stage).to_string(),
+        );
     }
     let metadata = metadata_vec(metadata);
     let encoded_record = record.encode();
     let payload_digest = reserve_source_payload_digest(
-        "reserve_movement",
-        &[("canonical_record", encoded_record.as_slice())],
+        "reserve_finalized_event",
+        &[("canonical_event", encoded_record.as_slice())],
     );
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!(
-            "reserve-movement:{movement_id_hex}:{custody_status}:{custody_observed_at}"
+            "reserve-ledger:{}:{}:{}:{}",
+            record.sequence, record.block_height, block_hash_hex, record.event_index
         ),
-        occurred_at_unix: custody_observed_at,
-        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement".to_string()),
-        subject: format!("reserve-provider:{provider_id_hex}"),
-        subject_digest: source_subject_digest(
-            "reserve_movement",
-            &provider_id_hex,
-            &payload_digest,
-        ),
-        payload_digest,
-        summary_digest: source_summary_digest("reserve_movement", &metadata),
-        policy_digest: None,
-        evidence_uris: Vec::new(),
-        metadata,
-    };
-    validate_adapter_source_entry(entry)
-}
-
-/// Derive a transparency source entry from a local reserve appeal record.
-///
-/// # Errors
-///
-/// Returns [`TransparencySourceEntryAdapterError`] when the local appeal is not
-/// suitable for the public governance log or the derived source entry is
-/// invalid.
-pub fn reserve_appeal_source_entry(
-    record: &ReserveAppealRecord,
-) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
-    validate_reserve_source_id("appeal_id", &record.appeal_id, reserve_appeal_source_error)?;
-    validate_reserve_source_id(
-        "provider_id",
-        &record.provider_id,
-        reserve_appeal_source_error,
-    )?;
-    if record.opened_at_unix == 0 {
-        return Err(reserve_appeal_source_error(
-            "opened_at_unix must be non-zero",
-        ));
-    }
-    if record.reason.trim().is_empty() {
-        return Err(reserve_appeal_source_error("reason must not be empty"));
-    }
-    let appeal_id_hex = hex::encode(record.appeal_id);
-    let provider_id_hex = hex::encode(record.provider_id);
-    let status = reserve_appeal_status_label(record.status);
-    let occurred_at_unix = record.decided_at_unix.unwrap_or(record.opened_at_unix);
-    let mut metadata = BTreeMap::new();
-    metadata.insert("event_family".to_string(), "reserve_appeal".to_string());
-    metadata.insert("appeal_id_hex".to_string(), appeal_id_hex.clone());
-    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
-    metadata.insert("sequence".to_string(), record.sequence.to_string());
-    metadata.insert("status".to_string(), status.to_string());
-    if let Some(stage) = record.requested_stage {
-        metadata.insert(
-            "requested_stage".to_string(),
-            reserve_lifecycle_stage_label(stage).to_string(),
-        );
-    }
-    metadata.insert(
-        "provider_account_digest_hex".to_string(),
-        reserve_private_field_digest_hex("provider_account", &record.provider_account),
-    );
-    metadata.insert(
-        "reason_digest_hex".to_string(),
-        reserve_private_field_digest_hex("reason", record.reason.as_bytes()),
-    );
-    metadata.insert(
-        "idempotency_key_digest_hex".to_string(),
-        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
-    );
-    if let Some(evidence_digest_hex) = &record.evidence_digest_hex {
-        metadata.insert(
-            "evidence_digest_hex".to_string(),
-            evidence_digest_hex.clone(),
-        );
-    }
-    if let Some(decision_account) = &record.decision_account {
-        metadata.insert(
-            "decision_account_digest_hex".to_string(),
-            reserve_private_field_digest_hex("decision_account", decision_account),
-        );
-    }
-    if let Some(decision_rationale) = &record.decision_rationale {
-        metadata.insert(
-            "decision_rationale_digest_hex".to_string(),
-            reserve_private_field_digest_hex("decision_rationale", decision_rationale.as_bytes()),
-        );
-    }
-    let metadata = metadata_vec(metadata);
-    let payload_digest = reserve_source_payload_digest(
-        "reserve_appeal",
-        &[
-            ("sequence", record.sequence.to_le_bytes().as_ref()),
-            ("appeal_id", record.appeal_id.as_ref()),
-            ("provider_id", record.provider_id.as_ref()),
-            ("provider_account", record.provider_account.as_ref()),
-            (
-                "requested_stage",
-                record
-                    .requested_stage
-                    .map(reserve_lifecycle_stage_label)
-                    .unwrap_or("")
-                    .as_bytes(),
-            ),
-            ("reason", record.reason.as_bytes()),
-            (
-                "evidence_digest_hex",
-                record
-                    .evidence_digest_hex
-                    .as_deref()
-                    .unwrap_or("")
-                    .as_bytes(),
-            ),
-            ("idempotency_key", record.idempotency_key.as_bytes()),
-            ("status", status.as_bytes()),
-            (
-                "decision_account",
-                record.decision_account.as_deref().unwrap_or(&[]),
-            ),
-            (
-                "decision_rationale",
-                record
-                    .decision_rationale
-                    .as_deref()
-                    .unwrap_or("")
-                    .as_bytes(),
-            ),
-        ],
-    );
-    let entry = TransparencyLedgerSourceEntry {
-        event_id: format!("reserve-appeal:{appeal_id_hex}:{status}:{occurred_at_unix}"),
         occurred_at_unix,
-        kind: if record.status == ReserveAppealStatus::Open {
-            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_appeal".to_string())
-        } else {
-            ModerationLedgerEntryKindV1::AppealOutcome
+        kind: match record.event.kind {
+            SorafsReserveLedgerEventKind::AppealAccepted
+            | SorafsReserveLedgerEventKind::AppealRejected => {
+                ModerationLedgerEntryKindV1::AppealOutcome
+            }
+            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind}")),
         },
-        subject: format!("reserve-provider:{provider_id_hex}"),
-        subject_digest: source_subject_digest("reserve_appeal", &provider_id_hex, &payload_digest),
-        payload_digest,
-        summary_digest: source_summary_digest("reserve_appeal", &metadata),
-        policy_digest: None,
-        evidence_uris: Vec::new(),
-        metadata,
-    };
-    validate_adapter_source_entry(entry)
-}
-
-/// Derive a transparency source entry from a local reserve lifecycle-policy record.
-///
-/// # Errors
-///
-/// Returns [`TransparencySourceEntryAdapterError`] when the local policy record
-/// is not suitable for the public governance log or the derived source entry is
-/// invalid.
-pub fn reserve_lifecycle_policy_source_entry(
-    record: &ReserveLifecyclePolicyRecord,
-) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
-    validate_reserve_source_id(
-        "policy_id",
-        &record.policy_id,
-        reserve_lifecycle_policy_source_error,
-    )?;
-    if record.observed_at_unix == 0 {
-        return Err(reserve_lifecycle_policy_source_error(
-            "observed_at_unix must be non-zero",
-        ));
-    }
-    if record.grace_period_days >= record.default_after_days {
-        return Err(reserve_lifecycle_policy_source_error(
-            "grace_period_days must be lower than default_after_days",
-        ));
-    }
-    let policy_id_hex = hex::encode(record.policy_id);
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        "event_family".to_string(),
-        "reserve_lifecycle_policy".to_string(),
-    );
-    metadata.insert("policy_id_hex".to_string(), policy_id_hex.clone());
-    metadata.insert("sequence".to_string(), record.sequence.to_string());
-    metadata.insert(
-        "authority_account_digest_hex".to_string(),
-        reserve_private_field_digest_hex("authority_account", &record.authority_account),
-    );
-    metadata.insert(
-        "grace_period_days".to_string(),
-        record.grace_period_days.to_string(),
-    );
-    metadata.insert(
-        "default_after_days".to_string(),
-        record.default_after_days.to_string(),
-    );
-    metadata.insert(
-        "effective_at_unix".to_string(),
-        record.effective_at_unix.to_string(),
-    );
-    metadata.insert(
-        "reason_digest_hex".to_string(),
-        reserve_private_field_digest_hex("reason", record.reason.as_bytes()),
-    );
-    metadata.insert(
-        "idempotency_key_digest_hex".to_string(),
-        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
-    );
-    let metadata = metadata_vec(metadata);
-    let payload_digest = reserve_source_payload_digest(
-        "reserve_lifecycle_policy",
-        &[
-            ("sequence", record.sequence.to_le_bytes().as_ref()),
-            ("policy_id", record.policy_id.as_ref()),
-            ("authority_account", record.authority_account.as_ref()),
-            (
-                "grace_period_days",
-                record.grace_period_days.to_le_bytes().as_ref(),
-            ),
-            (
-                "default_after_days",
-                record.default_after_days.to_le_bytes().as_ref(),
-            ),
-            (
-                "effective_at_unix",
-                record.effective_at_unix.to_le_bytes().as_ref(),
-            ),
-            ("reason", record.reason.as_bytes()),
-            ("idempotency_key", record.idempotency_key.as_bytes()),
-        ],
-    );
-    let entry = TransparencyLedgerSourceEntry {
-        event_id: format!(
-            "reserve-lifecycle-policy:{policy_id_hex}:{}",
-            record.sequence
-        ),
-        occurred_at_unix: record.observed_at_unix,
-        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle_policy".to_string()),
-        subject: format!("reserve-policy:{policy_id_hex}"),
+        subject,
         subject_digest: source_subject_digest(
-            "reserve_lifecycle_policy",
-            &policy_id_hex,
+            "reserve_finalized_event",
+            subject_key,
             &payload_digest,
         ),
         payload_digest,
-        summary_digest: source_summary_digest("reserve_lifecycle_policy", &metadata),
-        policy_digest: Some(record.policy_id),
+        summary_digest: source_summary_digest("reserve_finalized_event", &metadata),
+        policy_digest: Some(record.event.policy_digest),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -1034,7 +775,7 @@ pub fn reserve_lifecycle_policy_source_entry(
 }
 
 /// One source metric observed for a privacy aggregate event.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceMetric {
     /// Stable metric key.
     pub key: String,
@@ -1044,8 +785,14 @@ pub struct PrivacyAggregateSourceMetric {
     pub unit: String,
 }
 
+impl std::fmt::Debug for PrivacyAggregateSourceMetric {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacyAggregateSourceMetric(<redacted>)")
+    }
+}
+
 /// One source event admitted into the local SFM-4c aggregate worker.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceEvent {
     /// Stable event id used for duplicate suppression.
     pub event_id: String,
@@ -1053,14 +800,20 @@ pub struct PrivacyAggregateSourceEvent {
     pub occurred_at_unix: u64,
     /// Public population label for the aggregate bucket.
     pub population_label: String,
-    /// Optional private selector digest; when absent the label is hashed.
-    pub population_digest: Option<[u8; 32]>,
+    /// Governed population selector digest.
+    pub population_digest: [u8; 32],
     /// Digest of the canonical private subject identifier used for clipping.
     pub subject_digest: [u8; 32],
     /// Raw source metrics for this event, sorted by key.
     pub metrics: Vec<PrivacyAggregateSourceMetric>,
-    /// Optional policy digest associated with this event.
-    pub policy_digest: Option<[u8; 32]>,
+    /// Governed policy digest associated with this event.
+    pub policy_digest: [u8; 32],
+}
+
+impl std::fmt::Debug for PrivacyAggregateSourceEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacyAggregateSourceEvent(<redacted>)")
+    }
 }
 
 impl PrivacyAggregateSourceEvent {
@@ -1072,26 +825,91 @@ impl PrivacyAggregateSourceEvent {
             });
         }
         require_public_text("population_label", &self.population_label)?;
-        if let Some(digest) = &self.population_digest {
-            require_nonzero32("population_digest", digest)?;
-        }
+        require_nonzero32("population_digest", &self.population_digest)?;
         require_nonzero32("subject_digest", &self.subject_digest)?;
-        if let Some(digest) = &self.policy_digest {
-            require_nonzero32("policy_digest", digest)?;
-        }
+        require_nonzero32("policy_digest", &self.policy_digest)?;
         validate_source_metrics(&self.metrics)
     }
+
+    pub(crate) fn canonical_digest(&self) -> Result<[u8; 32], PrivacyAggregateWorkerError> {
+        self.validate()?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(SOURCE_EVENT_RECEIPT_DIGEST_DOMAIN_V1);
+        hash_text(&mut hasher, &self.event_id);
+        hasher.update(&self.occurred_at_unix.to_le_bytes());
+        hash_text(&mut hasher, &self.population_label);
+        hasher.update(&self.population_digest);
+        hasher.update(&self.subject_digest);
+        hasher.update(&self.policy_digest);
+        hasher.update(&(self.metrics.len() as u64).to_le_bytes());
+        for metric in &self.metrics {
+            hash_text(&mut hasher, &metric.key);
+            hash_text(&mut hasher, &metric.unit);
+            hasher.update(&metric.value.to_le_bytes());
+        }
+        Ok(*hasher.finalize().as_bytes())
+    }
+}
+
+/// Durable canonical identity retained for every admitted source event.
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct PrivacySourceEventReceiptV1 {
+    pub(crate) event_id: String,
+    pub(crate) canonical_digest: [u8; 32],
+}
+
+impl std::fmt::Debug for PrivacySourceEventReceiptV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacySourceEventReceiptV1(<redacted>)")
+    }
+}
+
+/// Idempotent outcome of recording one privacy source event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacySourceEventRecordOutcomeV1 {
+    /// The canonical event was durably admitted and queued.
+    Recorded,
+    /// The exact canonical event was already admitted or processed.
+    AlreadyRecorded,
+}
+
+/// One governed public population bucket in a fixed privacy query.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PrivacyAggregatePopulationV1 {
+    /// Stable public population label.
+    pub label: String,
+    /// Nonzero digest of the exact governed population selector.
+    pub digest: [u8; 32],
+}
+
+/// One governed public metric coordinate in a fixed privacy query.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PrivacyAggregateMetricSchemaV1 {
+    /// Stable public metric key.
+    pub key: String,
+    /// Stable public unit label.
+    pub unit: String,
 }
 
 /// Configuration used to build one aggregate publication cycle from source events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAggregateCycleConfig {
+    /// Stable governed query identity, unchanged across policy rotations.
+    pub query_id: [u8; 32],
+    /// Governed inclusive start of the first releasable cycle.
+    pub first_cycle_start_unix: u64,
+    /// Governed immutable cycle width for this query lineage.
+    pub cycle_seconds: u64,
     /// Prefix used when deriving public aggregate identifiers.
     pub aggregate_id_prefix: String,
+    /// Fixed public population universe, sorted by `(label, digest)`.
+    pub populations: Vec<PrivacyAggregatePopulationV1>,
+    /// Fixed public metric universe, sorted by key.
+    pub metrics: Vec<PrivacyAggregateMetricSchemaV1>,
     /// Explicit privacy parameters applied to every generated aggregate.
     pub privacy: ModerationPrivacyParametersV1,
-    /// Optional aggregate policy/configuration digest.
-    pub policy_digest: Option<[u8; 32]>,
+    /// Aggregate policy/configuration digest.
+    pub policy_digest: [u8; 32],
     /// Public metadata copied into every generated aggregate.
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
@@ -1169,6 +987,413 @@ pub struct PrivacyCompositionBudgetLedgerV1 {
     pub version: u8,
     /// Policy lineages sorted by budget id.
     pub chains: Vec<PrivacyCompositionBudgetChainV1>,
+}
+
+/// Finalized external head of one stable privacy-query release chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivacyReleaseAnchorHeadV1 {
+    query_id: [u8; 32],
+    sequence: u64,
+    release_id: [u8; 16],
+    record_digest: [u8; 32],
+    latest_publication_block_hash: Option<[u8; 32]>,
+}
+
+impl PrivacyReleaseAnchorHeadV1 {
+    /// Construct the mandatory nonzero genesis head for a governed query.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `query_id` is all zeroes. Configuration validation rejects
+    /// that state before runtime dependency construction.
+    #[must_use]
+    pub fn genesis(query_id: [u8; 32]) -> Self {
+        assert_ne!(query_id, [0; 32], "privacy query id must be nonzero");
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_RELEASE_ANCHOR_GENESIS_DOMAIN_V1);
+        hasher.update(&query_id);
+        Self {
+            query_id,
+            sequence: 0,
+            release_id: [0; 16],
+            record_digest: *hasher.finalize().as_bytes(),
+            latest_publication_block_hash: None,
+        }
+    }
+
+    /// Reconstruct a checked finalized head returned by an external anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyReleaseAnchorErrorV1::InvalidState`] when the fields
+    /// do not encode either the query-specific genesis head or a nonzero
+    /// finalized release.
+    pub fn try_from_parts(
+        query_id: [u8; 32],
+        sequence: u64,
+        release_id: [u8; 16],
+        record_digest: [u8; 32],
+        latest_publication_block_hash: Option<[u8; 32]>,
+    ) -> Result<Self, PrivacyReleaseAnchorErrorV1> {
+        let candidate = Self {
+            query_id,
+            sequence,
+            release_id,
+            record_digest,
+            latest_publication_block_hash,
+        };
+        if candidate.validate() {
+            Ok(candidate)
+        } else {
+            Err(PrivacyReleaseAnchorErrorV1::InvalidState)
+        }
+    }
+
+    pub(crate) fn from_record(record: &PrivacyReleaseRecordV1) -> Self {
+        Self {
+            query_id: record.query_id,
+            sequence: record.sequence,
+            release_id: record.release_id,
+            record_digest: record.record_digest,
+            latest_publication_block_hash: record
+                .publication_block_hash
+                .or(record.previous_publication_block_hash),
+        }
+    }
+
+    /// Return the governed stable query identity.
+    #[must_use]
+    pub const fn query_id(&self) -> [u8; 32] {
+        self.query_id
+    }
+
+    /// Return the monotonic release sequence, or zero for genesis.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the stable release id, or zero for genesis.
+    #[must_use]
+    pub const fn release_id(&self) -> [u8; 16] {
+        self.release_id
+    }
+
+    /// Return the exact release-record digest, or the query-specific genesis digest.
+    #[must_use]
+    pub const fn record_digest(&self) -> [u8; 32] {
+        self.record_digest
+    }
+
+    /// Return the latest finalized public transparency block hash, if any.
+    #[must_use]
+    pub const fn latest_publication_block_hash(&self) -> Option<[u8; 32]> {
+        self.latest_publication_block_hash
+    }
+
+    pub(crate) fn validate(&self) -> bool {
+        self.query_id != [0; 32]
+            && self
+                .latest_publication_block_hash
+                .is_none_or(|digest| digest != [0; 32])
+            && if self.sequence == 0 {
+                *self == Self::genesis(self.query_id)
+            } else {
+                self.release_id != [0; 16] && self.record_digest != [0; 32]
+            }
+    }
+}
+
+/// Durable terminal state of one stable privacy query window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) enum PrivacyReleaseStatusV1 {
+    /// A canonical aggregate publication was atomically queued.
+    Published,
+    /// Suppression-only policy omitted every governed population.
+    Suppressed,
+}
+
+/// Internal append-only record binding one privacy release to its private input.
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct PrivacyReleaseRecordV1 {
+    pub(crate) sequence: u64,
+    pub(crate) release_id: [u8; 16],
+    pub(crate) query_id: [u8; 32],
+    pub(crate) first_cycle_start_unix: u64,
+    pub(crate) cycle_seconds: u64,
+    pub(crate) publish_delay_seconds: u64,
+    pub(crate) cycle_start_unix: u64,
+    pub(crate) cycle_end_unix: u64,
+    pub(crate) due_at_unix: u64,
+    pub(crate) private_source_digest: [u8; 32],
+    pub(crate) policy_digest: [u8; 32],
+    pub(crate) population_inventory_digest: [u8; 32],
+    pub(crate) metric_schema_digest: [u8; 32],
+    pub(crate) privacy: ModerationPrivacyParametersV1,
+    pub(crate) prf_request_binding: Option<[u8; 32]>,
+    pub(crate) prf_commitment: Option<[u8; 32]>,
+    pub(crate) budget_charge_digest: Option<[u8; 32]>,
+    pub(crate) publication_payload_digest: Option<[u8; 32]>,
+    pub(crate) published_aggregate_inventory_digest: Option<[u8; 32]>,
+    pub(crate) previous_publication_block_hash: Option<[u8; 32]>,
+    pub(crate) publication_block_hash: Option<[u8; 32]>,
+    pub(crate) status: PrivacyReleaseStatusV1,
+    pub(crate) previous_record_digest: Option<[u8; 32]>,
+    pub(crate) record_digest: [u8; 32],
+}
+
+impl std::fmt::Debug for PrivacyReleaseRecordV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrivacyReleaseRecordV1")
+            .field("sequence", &self.sequence)
+            .field("release_id", &self.release_id)
+            .field("query_id", &self.query_id)
+            .field("first_cycle_start_unix", &self.first_cycle_start_unix)
+            .field("cycle_seconds", &self.cycle_seconds)
+            .field("publish_delay_seconds", &self.publish_delay_seconds)
+            .field("cycle_start_unix", &self.cycle_start_unix)
+            .field("cycle_end_unix", &self.cycle_end_unix)
+            .field("due_at_unix", &self.due_at_unix)
+            .field("private_source_digest", &"<redacted>")
+            .field("policy_digest", &self.policy_digest)
+            .field(
+                "population_inventory_digest",
+                &self.population_inventory_digest,
+            )
+            .field("metric_schema_digest", &self.metric_schema_digest)
+            .field("privacy", &self.privacy)
+            .field("prf_request_binding", &self.prf_request_binding)
+            .field("prf_commitment", &self.prf_commitment)
+            .field("budget_charge_digest", &self.budget_charge_digest)
+            .field(
+                "publication_payload_digest",
+                &self.publication_payload_digest,
+            )
+            .field(
+                "published_aggregate_inventory_digest",
+                &self.published_aggregate_inventory_digest,
+            )
+            .field(
+                "previous_publication_block_hash",
+                &self.previous_publication_block_hash,
+            )
+            .field("publication_block_hash", &self.publication_block_hash)
+            .field("status", &self.status)
+            .field("previous_record_digest", &self.previous_record_digest)
+            .field("record_digest", &self.record_digest)
+            .finish()
+    }
+}
+
+/// Internal hash-chained privacy release ledger persisted with the outbox.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub(crate) struct PrivacyReleaseLedgerV1 {
+    pub(crate) version: u8,
+    pub(crate) records: Vec<PrivacyReleaseRecordV1>,
+}
+
+impl Default for PrivacyReleaseLedgerV1 {
+    fn default() -> Self {
+        Self {
+            version: PRIVACY_RELEASE_LEDGER_VERSION_V1,
+            records: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub(crate) enum PrivacyReleaseLedgerErrorV1 {
+    #[error("privacy release ledger version is unsupported")]
+    UnsupportedVersion,
+    #[error("privacy release ledger exceeds the V1 record bound")]
+    CollectionTooLarge,
+    #[error("privacy release id is duplicated")]
+    DuplicateRelease,
+    #[error("privacy release record is invalid")]
+    InvalidRecord,
+}
+
+impl PrivacyReleaseLedgerV1 {
+    pub(crate) fn validate(&self) -> Result<(), PrivacyReleaseLedgerErrorV1> {
+        if self.version != PRIVACY_RELEASE_LEDGER_VERSION_V1 {
+            return Err(PrivacyReleaseLedgerErrorV1::UnsupportedVersion);
+        }
+        if self.records.len() > PRIVACY_RELEASE_MAX_RECORDS_V1 {
+            return Err(PrivacyReleaseLedgerErrorV1::CollectionTooLarge);
+        }
+        let mut previous_digest = None;
+        let mut previous_record: Option<&PrivacyReleaseRecordV1> = None;
+        let mut latest_publication_block_hash = None;
+        let mut release_ids = BTreeSet::new();
+        for (index, record) in self.records.iter().enumerate() {
+            let expected_sequence = u64::try_from(index)
+                .map_err(|_| PrivacyReleaseLedgerErrorV1::CollectionTooLarge)?
+                .checked_add(1)
+                .ok_or(PrivacyReleaseLedgerErrorV1::CollectionTooLarge)?;
+            if record.sequence != expected_sequence
+                || !release_ids.insert(record.release_id)
+                || record.release_id == [0; 16]
+                || record.query_id == [0; 32]
+                || record.first_cycle_start_unix == 0
+                || record.cycle_seconds == 0
+                || record.first_cycle_start_unix % record.cycle_seconds != 0
+                || record.cycle_end_unix.checked_sub(record.cycle_start_unix)
+                    != Some(record.cycle_seconds)
+                || record
+                    .cycle_end_unix
+                    .checked_add(record.publish_delay_seconds)
+                    != Some(record.due_at_unix)
+                || previous_record.map_or(
+                    record.cycle_start_unix != record.first_cycle_start_unix,
+                    |previous| {
+                        record.query_id != previous.query_id
+                            || record.first_cycle_start_unix != previous.first_cycle_start_unix
+                            || record.cycle_seconds != previous.cycle_seconds
+                            || record.publish_delay_seconds != previous.publish_delay_seconds
+                            || record.cycle_start_unix != previous.cycle_end_unix
+                    },
+                )
+                || record.release_id
+                    != privacy_aggregate_cycle_id(
+                        record.query_id,
+                        record.cycle_start_unix,
+                        record.cycle_end_unix,
+                    )
+                || record.private_source_digest == [0; 32]
+                || record.policy_digest == [0; 32]
+                || record.population_inventory_digest == [0; 32]
+                || record.metric_schema_digest == [0; 32]
+                || record.previous_record_digest != previous_digest
+                || record.previous_publication_block_hash != latest_publication_block_hash
+                || privacy_release_record_digest(record) != record.record_digest
+            {
+                return Err(PrivacyReleaseLedgerErrorV1::InvalidRecord);
+            }
+            record
+                .privacy
+                .validate()
+                .map_err(|_| PrivacyReleaseLedgerErrorV1::InvalidRecord)?;
+            let uses_dp = record.privacy.per_subject_metric_cap.is_some();
+            match (record.status, uses_dp) {
+                (PrivacyReleaseStatusV1::Published, true)
+                    if record.prf_request_binding.is_some()
+                        && record.prf_commitment.is_some()
+                        && record.budget_charge_digest.is_some()
+                        && record.publication_payload_digest.is_some()
+                        && record.published_aggregate_inventory_digest.is_some()
+                        && record.publication_block_hash.is_some() => {}
+                (PrivacyReleaseStatusV1::Published, false)
+                    if record.prf_request_binding.is_none()
+                        && record.prf_commitment.is_none()
+                        && record.budget_charge_digest.is_none()
+                        && record.publication_payload_digest.is_some()
+                        && record.published_aggregate_inventory_digest.is_some()
+                        && record.publication_block_hash.is_some() => {}
+                (PrivacyReleaseStatusV1::Suppressed, false)
+                    if record.prf_request_binding.is_none()
+                        && record.prf_commitment.is_none()
+                        && record.budget_charge_digest.is_none()
+                        && record.publication_payload_digest.is_none()
+                        && record.published_aggregate_inventory_digest.is_none()
+                        && record.publication_block_hash.is_none() => {}
+                _ => return Err(PrivacyReleaseLedgerErrorV1::InvalidRecord),
+            }
+            if record
+                .prf_request_binding
+                .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .prf_commitment
+                    .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .budget_charge_digest
+                    .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .publication_payload_digest
+                    .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .published_aggregate_inventory_digest
+                    .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .previous_publication_block_hash
+                    .is_some_and(|digest| digest == [0; 32])
+                || record
+                    .publication_block_hash
+                    .is_some_and(|digest| digest == [0; 32])
+            {
+                return Err(PrivacyReleaseLedgerErrorV1::InvalidRecord);
+            }
+            if uses_dp {
+                let request = PrivacyCyclePrfRequestV1::new(
+                    record.query_id,
+                    record.policy_digest,
+                    record.population_inventory_digest,
+                    record.metric_schema_digest,
+                    PrivacyAggregateCycleWindow {
+                        cycle_start_unix: record.cycle_start_unix,
+                        cycle_end_unix: record.cycle_end_unix,
+                        due_at_unix: record.cycle_end_unix,
+                    },
+                )
+                .map_err(|_| PrivacyReleaseLedgerErrorV1::InvalidRecord)?;
+                if record.prf_request_binding != Some(request.binding_digest()) {
+                    return Err(PrivacyReleaseLedgerErrorV1::InvalidRecord);
+                }
+            }
+            if let Some(block_hash) = record.publication_block_hash {
+                latest_publication_block_hash = Some(block_hash);
+            }
+            previous_digest = Some(record.record_digest);
+            previous_record = Some(record);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn append(
+        &mut self,
+        mut record: PrivacyReleaseRecordV1,
+    ) -> Result<PrivacyReleaseRecordV1, PrivacyReleaseLedgerErrorV1> {
+        self.validate()?;
+        if self.records.len() >= PRIVACY_RELEASE_MAX_RECORDS_V1 {
+            return Err(PrivacyReleaseLedgerErrorV1::CollectionTooLarge);
+        }
+        if self
+            .records
+            .iter()
+            .any(|existing| existing.release_id == record.release_id)
+        {
+            return Err(PrivacyReleaseLedgerErrorV1::DuplicateRelease);
+        }
+        record.sequence = u64::try_from(self.records.len())
+            .map_err(|_| PrivacyReleaseLedgerErrorV1::CollectionTooLarge)?
+            .checked_add(1)
+            .ok_or(PrivacyReleaseLedgerErrorV1::CollectionTooLarge)?;
+        record.previous_record_digest = self.records.last().map(|item| item.record_digest);
+        record.record_digest = privacy_release_record_digest(&record);
+        let mut candidate = self.clone();
+        candidate.records.push(record.clone());
+        candidate.validate()?;
+        *self = candidate;
+        Ok(record)
+    }
+
+    pub(crate) fn head(
+        &self,
+        query_id: [u8; 32],
+    ) -> Result<PrivacyReleaseAnchorHeadV1, PrivacyReleaseLedgerErrorV1> {
+        self.validate()?;
+        if self
+            .records
+            .iter()
+            .any(|record| record.query_id != query_id)
+        {
+            return Err(PrivacyReleaseLedgerErrorV1::InvalidRecord);
+        }
+        Ok(self.records.last().map_or_else(
+            || PrivacyReleaseAnchorHeadV1::genesis(query_id),
+            PrivacyReleaseAnchorHeadV1::from_record,
+        ))
+    }
 }
 
 impl Default for PrivacyCompositionBudgetLedgerV1 {
@@ -1465,6 +1690,50 @@ fn budget_charge_digest(
     *hasher.finalize().as_bytes()
 }
 
+fn privacy_release_record_digest(record: &PrivacyReleaseRecordV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PRIVACY_RELEASE_RECORD_DOMAIN_V1);
+    hasher.update(&record.sequence.to_le_bytes());
+    hasher.update(&record.release_id);
+    hasher.update(&record.query_id);
+    hasher.update(&record.first_cycle_start_unix.to_le_bytes());
+    hasher.update(&record.cycle_seconds.to_le_bytes());
+    hasher.update(&record.publish_delay_seconds.to_le_bytes());
+    hasher.update(&record.cycle_start_unix.to_le_bytes());
+    hasher.update(&record.cycle_end_unix.to_le_bytes());
+    hasher.update(&record.due_at_unix.to_le_bytes());
+    hasher.update(&record.private_source_digest);
+    hasher.update(&record.policy_digest);
+    hasher.update(&record.population_inventory_digest);
+    hasher.update(&record.metric_schema_digest);
+    hash_privacy_parameters(&mut hasher, record.privacy);
+    hash_option_digest(&mut hasher, record.prf_request_binding);
+    hash_option_digest(&mut hasher, record.prf_commitment);
+    hash_option_digest(&mut hasher, record.budget_charge_digest);
+    hash_option_digest(&mut hasher, record.publication_payload_digest);
+    hash_option_digest(&mut hasher, record.published_aggregate_inventory_digest);
+    hash_option_digest(&mut hasher, record.previous_publication_block_hash);
+    hash_option_digest(&mut hasher, record.publication_block_hash);
+    hasher.update(&[match record.status {
+        PrivacyReleaseStatusV1::Published => 1,
+        PrivacyReleaseStatusV1::Suppressed => 2,
+    }]);
+    hash_option_digest(&mut hasher, record.previous_record_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn hash_option_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
+    match value {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
 fn require_reduced_positive_rational(numerator: u64, denominator: u64) -> Result<(), ()> {
     if numerator == 0 || denominator == 0 || gcd_u64(numerator, denominator) != 1 {
         return Err(());
@@ -1540,37 +1809,216 @@ const fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
 
 impl PrivacyAggregateCycleConfig {
     pub(crate) fn validate(&self) -> Result<(), PrivacyAggregateWorkerError> {
+        require_nonzero32("query_id", &self.query_id)?;
+        if self.first_cycle_start_unix == 0 {
+            return Err(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "first_cycle_start_unix",
+            });
+        }
+        if self.cycle_seconds == 0
+            || self.first_cycle_start_unix % self.cycle_seconds != 0
+            || self
+                .first_cycle_start_unix
+                .checked_add(self.cycle_seconds)
+                .is_none()
+        {
+            return Err(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            });
+        }
         require_public_text("aggregate_id_prefix", &self.aggregate_id_prefix)?;
-        let mut privacy = self.privacy;
-        privacy.suppressed_count = 0;
-        privacy.validate().map_err(|err| {
+        validate_population_inventory(&self.populations)?;
+        validate_metric_schema(&self.metrics)?;
+        self.privacy.validate().map_err(|err| {
             PrivacyAggregateWorkerError::InvalidPrivacyParameters {
                 message: err.to_string(),
             }
         })?;
-        if privacy.per_subject_metric_cap.is_some() {
-            validate_discrete_laplace_resource_policy(privacy)?;
+        if let Some(sensitivity) = privacy_vector_sensitivity(self)? {
+            let epsilon_numerator = self.privacy.epsilon_numerator.ok_or(
+                PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                    message: "epsilon_numerator is required for exact discrete-Laplace noise"
+                        .to_string(),
+                },
+            )?;
+            let epsilon_denominator = self.privacy.epsilon_denominator.ok_or(
+                PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                    message: "epsilon_denominator is required for exact discrete-Laplace noise"
+                        .to_string(),
+                },
+            )?;
+            validate_discrete_laplace_parameters(
+                epsilon_numerator,
+                epsilon_denominator,
+                sensitivity,
+            )?;
+            validate_release_noise_complexity(
+                self.populations.len(),
+                self.metrics.len(),
+                epsilon_numerator,
+                epsilon_denominator,
+                sensitivity,
+            )?;
         }
-        if let Some(digest) = &self.policy_digest {
-            require_nonzero32("policy_digest", digest)?;
-        }
+        require_nonzero32("policy_digest", &self.policy_digest)?;
         validate_metadata(&self.metadata)?;
         if self
             .metadata
             .iter()
-            .any(|item| item.key == NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
+            .any(|item| item.key == MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
         {
             return Err(PrivacyAggregateWorkerError::ReservedMetadataKey {
-                key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+                key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
             });
+        }
+        Ok(())
+    }
+
+    /// Validate one event against this already-validated governed query.
+    pub(crate) fn validate_source_event(
+        &self,
+        event: &PrivacyAggregateSourceEvent,
+    ) -> Result<(), PrivacyAggregateWorkerError> {
+        event.validate()?;
+        if !self.populations.iter().any(|population| {
+            population.label == event.population_label
+                && population.digest == event.population_digest
+        }) {
+            return Err(PrivacyAggregateWorkerError::PopulationOutsideInventory);
+        }
+        if event.policy_digest != self.policy_digest {
+            return Err(PrivacyAggregateWorkerError::PolicyDigestMismatch);
+        }
+        if !event_metrics_match_schema(&event.metrics, &self.metrics) {
+            return Err(PrivacyAggregateWorkerError::MetricSchemaMismatch);
         }
         Ok(())
     }
 }
 
+fn validate_population_inventory(
+    populations: &[PrivacyAggregatePopulationV1],
+) -> Result<(), PrivacyAggregateWorkerError> {
+    if populations.is_empty() {
+        return Err(PrivacyAggregateWorkerError::PopulationInventoryMissing);
+    }
+    if populations.len() > PRIVACY_AGGREGATE_MAX_POPULATIONS_V1 {
+        return Err(PrivacyAggregateWorkerError::TooManyPopulations {
+            count: populations.len(),
+            max: PRIVACY_AGGREGATE_MAX_POPULATIONS_V1,
+        });
+    }
+    let mut last: Option<(&str, [u8; 32])> = None;
+    let mut labels = BTreeSet::new();
+    let mut digests = BTreeSet::new();
+    for population in populations {
+        require_public_text("populations.label", &population.label)?;
+        require_nonzero32("populations.digest", &population.digest)?;
+        if last.is_some_and(|previous| previous >= (population.label.as_str(), population.digest)) {
+            return Err(PrivacyAggregateWorkerError::PopulationInventoryOrder);
+        }
+        if !labels.insert(population.label.as_str()) || !digests.insert(population.digest) {
+            return Err(PrivacyAggregateWorkerError::DuplicatePopulation);
+        }
+        last = Some((population.label.as_str(), population.digest));
+    }
+    Ok(())
+}
+
+fn validate_metric_schema(
+    metrics: &[PrivacyAggregateMetricSchemaV1],
+) -> Result<(), PrivacyAggregateWorkerError> {
+    if metrics.is_empty() {
+        return Err(PrivacyAggregateWorkerError::MetricSchemaMissing);
+    }
+    if metrics.len() > MODERATION_PRIVACY_MAX_METRICS_V1 {
+        return Err(PrivacyAggregateWorkerError::TooManySourceMetrics {
+            count: metrics.len(),
+            max: MODERATION_PRIVACY_MAX_METRICS_V1,
+        });
+    }
+    let mut last_key = None;
+    for metric in metrics {
+        require_public_text("metric_schema.key", &metric.key)?;
+        require_public_text("metric_schema.unit", &metric.unit)?;
+        if last_key.is_some_and(|last| last >= metric.key.as_str()) {
+            return Err(PrivacyAggregateWorkerError::MetricSchemaOrder);
+        }
+        last_key = Some(metric.key.as_str());
+    }
+    Ok(())
+}
+
+fn privacy_vector_sensitivity(
+    config: &PrivacyAggregateCycleConfig,
+) -> Result<Option<u64>, PrivacyAggregateWorkerError> {
+    let Some(cap) = config.privacy.per_subject_metric_cap else {
+        return Ok(None);
+    };
+    let threshold_multiplier = match config.privacy.mode {
+        ModerationPrivacyModeV1::DifferentialPrivacy => 1,
+        // DP+k uses the deterministic preprocessing f(D)=0 for populations
+        // with fewer than k subjects and the clipped sum otherwise. Under
+        // add/remove-one-subject adjacency, the boundary transition from
+        // k-1 to k can expose at most k clipped contributions per metric.
+        // Every other transition changes at most one clipped contribution.
+        // Therefore k * cap * published_metric_count is a conservative joint
+        // L1 sensitivity for the complete, fixed-schema release vector.
+        ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression => config
+            .privacy
+            .suppression_threshold
+            .ok_or(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                message: "suppression_threshold is required for DP+k suppression".to_string(),
+            })?,
+        ModerationPrivacyModeV1::Suppression => {
+            return Err(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                message: "suppression-only mode must not configure a contribution cap".to_string(),
+            });
+        }
+    };
+    cap.checked_mul(threshold_multiplier)
+        .and_then(|per_metric| {
+            u64::try_from(config.metrics.len())
+                .ok()
+                .and_then(|metric_count| per_metric.checked_mul(metric_count))
+        })
+        .map(Some)
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+}
+
+/// Digest the exact fixed public population universe for PRF/release binding.
+#[must_use]
+pub fn privacy_population_inventory_digest(
+    populations: &[PrivacyAggregatePopulationV1],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(POPULATION_INVENTORY_DIGEST_DOMAIN_V1);
+    hasher.update(&(populations.len() as u64).to_le_bytes());
+    for population in populations {
+        hash_text(&mut hasher, &population.label);
+        hasher.update(&population.digest);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Digest the exact fixed public metric universe for PRF/release binding.
+#[must_use]
+pub fn privacy_metric_schema_digest(metrics: &[PrivacyAggregateMetricSchemaV1]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(METRIC_SCHEMA_DIGEST_DOMAIN_V1);
+    hasher.update(&(metrics.len() as u64).to_le_bytes());
+    for metric in metrics {
+        hash_text(&mut hasher, &metric.key);
+        hash_text(&mut hasher, &metric.unit);
+    }
+    *hasher.finalize().as_bytes()
+}
+
 /// Schedule used by the local aggregate worker to choose due publication windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivacyAggregateScheduleConfig {
+    /// Governed inclusive start of the first releasable cycle.
+    pub first_cycle_start_unix: u64,
     /// Width of each aggregation window, in seconds.
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before it becomes eligible for publication.
@@ -1579,9 +2027,30 @@ pub struct PrivacyAggregateScheduleConfig {
 
 impl PrivacyAggregateScheduleConfig {
     pub(crate) fn validate(&self) -> Result<(), PrivacyAggregateWorkerError> {
-        if self.cycle_seconds == 0 {
+        if self.first_cycle_start_unix == 0 {
+            return Err(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "first_cycle_start_unix",
+            });
+        }
+        if self.cycle_seconds == 0
+            || self.first_cycle_start_unix % self.cycle_seconds != 0
+            || self
+                .first_cycle_start_unix
+                .checked_add(self.cycle_seconds)
+                .is_none()
+        {
             return Err(PrivacyAggregateWorkerError::InvalidSchedule {
                 field: "cycle_seconds",
+            });
+        }
+        if self
+            .first_cycle_start_unix
+            .checked_add(self.cycle_seconds)
+            .and_then(|end| end.checked_add(self.publish_delay_seconds))
+            .is_none()
+        {
+            return Err(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "publish_delay_seconds",
             });
         }
         Ok(())
@@ -1592,37 +2061,73 @@ impl PrivacyAggregateScheduleConfig {
         now_unix: u64,
     ) -> Result<Option<PrivacyAggregateCycleWindow>, PrivacyAggregateWorkerError> {
         self.validate()?;
-        if now_unix <= self.publish_delay_seconds {
+        let adjusted = match now_unix.checked_sub(self.publish_delay_seconds) {
+            Some(adjusted) => adjusted,
+            None => return Ok(None),
+        };
+        let elapsed = match adjusted.checked_sub(self.first_cycle_start_unix) {
+            Some(elapsed) => elapsed,
+            None => return Ok(None),
+        };
+        let completed_cycles = elapsed / self.cycle_seconds;
+        if completed_cycles == 0 {
             return Ok(None);
         }
-        let adjusted = now_unix.saturating_sub(self.publish_delay_seconds);
-        let cycle_end_unix = (adjusted / self.cycle_seconds) * self.cycle_seconds;
-        if cycle_end_unix == 0 {
-            return Ok(None);
-        }
-        let cycle_start_unix = cycle_end_unix.saturating_sub(self.cycle_seconds);
+        let completed_width = completed_cycles.checked_mul(self.cycle_seconds).ok_or(
+            PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            },
+        )?;
+        let cycle_end_unix = self
+            .first_cycle_start_unix
+            .checked_add(completed_width)
+            .ok_or(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            })?;
+        let cycle_start_unix = cycle_end_unix - self.cycle_seconds;
         Ok(Some(PrivacyAggregateCycleWindow {
             cycle_start_unix,
             cycle_end_unix,
-            due_at_unix: cycle_end_unix.saturating_add(self.publish_delay_seconds),
+            due_at_unix: cycle_end_unix
+                .checked_add(self.publish_delay_seconds)
+                .ok_or(PrivacyAggregateWorkerError::InvalidSchedule {
+                    field: "publish_delay_seconds",
+                })?,
         }))
     }
 
     pub(crate) fn event_window(
         &self,
         occurred_at_unix: u64,
-    ) -> Result<Option<PrivacyAggregateCycleWindow>, PrivacyAggregateWorkerError> {
+    ) -> Result<PrivacyAggregateCycleWindow, PrivacyAggregateWorkerError> {
         self.validate()?;
-        let cycle_start_unix = (occurred_at_unix / self.cycle_seconds) * self.cycle_seconds;
-        if cycle_start_unix == 0 {
-            return Ok(None);
-        }
-        let cycle_end_unix = cycle_start_unix.saturating_add(self.cycle_seconds);
-        Ok(Some(PrivacyAggregateCycleWindow {
+        let elapsed = occurred_at_unix
+            .checked_sub(self.first_cycle_start_unix)
+            .ok_or(PrivacyAggregateWorkerError::EventBeforeScheduleActivation)?;
+        let offset = (elapsed / self.cycle_seconds)
+            .checked_mul(self.cycle_seconds)
+            .ok_or(PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            })?;
+        let cycle_start_unix = self.first_cycle_start_unix.checked_add(offset).ok_or(
+            PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            },
+        )?;
+        let cycle_end_unix = cycle_start_unix.checked_add(self.cycle_seconds).ok_or(
+            PrivacyAggregateWorkerError::InvalidSchedule {
+                field: "cycle_seconds",
+            },
+        )?;
+        Ok(PrivacyAggregateCycleWindow {
             cycle_start_unix,
             cycle_end_unix,
-            due_at_unix: cycle_end_unix.saturating_add(self.publish_delay_seconds),
-        }))
+            due_at_unix: cycle_end_unix
+                .checked_add(self.publish_delay_seconds)
+                .ok_or(PrivacyAggregateWorkerError::InvalidSchedule {
+                    field: "publish_delay_seconds",
+                })?,
+        })
     }
 }
 
@@ -1647,11 +2152,13 @@ pub const PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivacyCyclePrfRequestV1 {
     version: u16,
+    query_id: [u8; 32],
     policy_digest: [u8; 32],
+    population_inventory_digest: [u8; 32],
+    metric_schema_digest: [u8; 32],
     cycle_id: [u8; 16],
     cycle_start_unix: u64,
     cycle_end_unix: u64,
-    due_at_unix: u64,
     binding_digest: [u8; 32],
 }
 
@@ -1663,11 +2170,23 @@ impl PrivacyCyclePrfRequestV1 {
     /// Returns an error when the policy digest is zero or the cycle window is
     /// not a canonical non-empty due window.
     pub fn new(
+        query_id: [u8; 32],
         policy_digest: [u8; 32],
+        population_inventory_digest: [u8; 32],
+        metric_schema_digest: [u8; 32],
         window: PrivacyAggregateCycleWindow,
     ) -> Result<Self, PrivacyCyclePrfRequestErrorV1> {
+        if query_id == [0; 32] {
+            return Err(PrivacyCyclePrfRequestErrorV1::MissingQueryId);
+        }
         if policy_digest == [0; 32] {
             return Err(PrivacyCyclePrfRequestErrorV1::MissingPolicyDigest);
+        }
+        if population_inventory_digest == [0; 32] {
+            return Err(PrivacyCyclePrfRequestErrorV1::MissingPopulationInventoryDigest);
+        }
+        if metric_schema_digest == [0; 32] {
+            return Err(PrivacyCyclePrfRequestErrorV1::MissingMetricSchemaDigest);
         }
         if window.cycle_start_unix == 0
             || window.cycle_end_unix <= window.cycle_start_unix
@@ -1675,22 +2194,27 @@ impl PrivacyCyclePrfRequestV1 {
         {
             return Err(PrivacyCyclePrfRequestErrorV1::InvalidWindow);
         }
-        let cycle_id = privacy_aggregate_cycle_id(window);
+        let cycle_id =
+            privacy_aggregate_cycle_id(query_id, window.cycle_start_unix, window.cycle_end_unix);
         let mut hasher = blake3::Hasher::new();
         hasher.update(CYCLE_PRF_REQUEST_BINDING_DOMAIN_V1);
         hasher.update(&PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1.to_le_bytes());
+        hasher.update(&query_id);
         hasher.update(&policy_digest);
+        hasher.update(&population_inventory_digest);
+        hasher.update(&metric_schema_digest);
         hasher.update(&cycle_id);
         hasher.update(&window.cycle_start_unix.to_le_bytes());
         hasher.update(&window.cycle_end_unix.to_le_bytes());
-        hasher.update(&window.due_at_unix.to_le_bytes());
         Ok(Self {
             version: PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1,
+            query_id,
             policy_digest,
+            population_inventory_digest,
+            metric_schema_digest,
             cycle_id,
             cycle_start_unix: window.cycle_start_unix,
             cycle_end_unix: window.cycle_end_unix,
-            due_at_unix: window.due_at_unix,
             binding_digest: *hasher.finalize().as_bytes(),
         })
     }
@@ -1701,10 +2225,28 @@ impl PrivacyCyclePrfRequestV1 {
         self.version
     }
 
+    /// Return the stable governed query identity.
+    #[must_use]
+    pub const fn query_id(&self) -> [u8; 32] {
+        self.query_id
+    }
+
     /// Return the governed privacy-policy digest.
     #[must_use]
     pub const fn policy_digest(&self) -> [u8; 32] {
         self.policy_digest
+    }
+
+    /// Return the bound fixed-population inventory digest.
+    #[must_use]
+    pub const fn population_inventory_digest(&self) -> [u8; 32] {
+        self.population_inventory_digest
+    }
+
+    /// Return the bound fixed-metric schema digest.
+    #[must_use]
+    pub const fn metric_schema_digest(&self) -> [u8; 32] {
+        self.metric_schema_digest
     }
 
     /// Return the deterministic cycle identifier.
@@ -1725,12 +2267,6 @@ impl PrivacyCyclePrfRequestV1 {
         self.cycle_end_unix
     }
 
-    /// Return the timestamp at which this exact cycle became due.
-    #[must_use]
-    pub const fn due_at_unix(&self) -> u64 {
-        self.due_at_unix
-    }
-
     /// Return the canonical domain-separated request binding.
     #[must_use]
     pub const fn binding_digest(&self) -> [u8; 32] {
@@ -1741,9 +2277,18 @@ impl PrivacyCyclePrfRequestV1 {
 /// Errors constructing a canonical threshold-PRF request.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum PrivacyCyclePrfRequestErrorV1 {
+    /// The governed stable query identity was all zeroes.
+    #[error("privacy cycle PRF request requires a non-zero query id")]
+    MissingQueryId,
     /// The governed privacy-policy digest was all zeroes.
     #[error("privacy cycle PRF request requires a non-zero policy digest")]
     MissingPolicyDigest,
+    /// The governed population inventory digest was all zeroes.
+    #[error("privacy cycle PRF request requires a non-zero population inventory digest")]
+    MissingPopulationInventoryDigest,
+    /// The governed metric schema digest was all zeroes.
+    #[error("privacy cycle PRF request requires a non-zero metric schema digest")]
+    MissingMetricSchemaDigest,
     /// The supplied cycle window was empty, zero-based, or due before it ended.
     #[error("privacy cycle PRF request window is invalid")]
     InvalidWindow,
@@ -1769,6 +2314,81 @@ pub enum PrivacyCyclePrfProviderErrorV1 {
     Internal,
 }
 
+/// Stable, payload-free failures returned by the external finalized release anchor.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum PrivacyReleaseAnchorErrorV1 {
+    /// The finalized head service or its quorum is unavailable.
+    #[error("privacy release anchor unavailable")]
+    Unavailable,
+    /// Runtime authentication or authorization failed.
+    #[error("privacy release anchor authentication failed")]
+    AuthenticationFailed,
+    /// Compare-and-set observed a conflicting finalized predecessor or head.
+    #[error("privacy release anchor compare-and-set conflict")]
+    Conflict,
+    /// The service returned a malformed or equivocating finalized head.
+    #[error("privacy release anchor returned invalid state")]
+    InvalidState,
+    /// The anchor could not complete the request.
+    #[error("privacy release anchor internal failure")]
+    Internal,
+}
+
+/// Runtime-only finalized-head service for the privacy release hash chain.
+///
+/// Production implementations are expected to read and advance a
+/// quorum-finalized Governance DAG projection. The interface is deliberately
+/// compare-and-set: two workers may race, but neither can replace or fork an
+/// already finalized head.
+pub trait PrivacyReleaseAnchorV1: Send + Sync {
+    /// Read the exact finalized head for `query_id`.
+    fn finalized_head(
+        &self,
+        query_id: [u8; 32],
+    ) -> Result<PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorErrorV1>;
+
+    /// Atomically advance `expected` to its direct successor `next`.
+    fn compare_and_set_finalized_head(
+        &self,
+        expected: PrivacyReleaseAnchorHeadV1,
+        next: PrivacyReleaseAnchorHeadV1,
+    ) -> Result<(), PrivacyReleaseAnchorErrorV1>;
+}
+
+/// Non-copying, redacted runtime wrapper for one hidden threshold-PRF output.
+pub struct PrivacyCyclePrfOutputV1([u8; 32]);
+
+impl PrivacyCyclePrfOutputV1 {
+    /// Wrap a provider output after rejecting the forbidden all-zero value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `output` is all zeroes.
+    pub fn new(output: [u8; 32]) -> Result<Self, PrivacyCyclePrfInputErrorV1> {
+        if output == [0; 32] {
+            return Err(PrivacyCyclePrfInputErrorV1::ZeroOutput);
+        }
+        Ok(Self(output))
+    }
+
+    fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PrivacyCyclePrfOutputV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacyCyclePrfOutputV1(<redacted>)")
+    }
+}
+
+impl Drop for PrivacyCyclePrfOutputV1 {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+
 /// Runtime-only provider for hidden threshold-PRF cycle outputs.
 ///
 /// Implementations must bind evaluation to [`PrivacyCyclePrfRequestV1`] and
@@ -1779,15 +2399,108 @@ pub trait PrivacyCyclePrfProviderV1: Send + Sync {
     fn derive_cycle_output(
         &self,
         request: &PrivacyCyclePrfRequestV1,
-    ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1>;
+    ) -> Result<PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1>;
 }
 
-pub(crate) fn privacy_aggregate_cycle_id(window: PrivacyAggregateCycleWindow) -> [u8; 16] {
+/// Runtime-only, request-bound threshold-PRF material for one DP cycle.
+///
+/// The hidden output is deliberately not serializable and its `Debug`
+/// implementation is redacted. Only [`Self::commitment`] may enter a public
+/// aggregate.
+pub struct PrivacyCyclePrfInputV1 {
+    request: PrivacyCyclePrfRequestV1,
+    output: PrivacyCyclePrfOutputV1,
+    commitment: ModerationPrivacyThresholdPrfCommitmentV1,
+}
+
+impl PrivacyCyclePrfInputV1 {
+    /// Bind a hidden threshold-PRF output to the exact authenticated request.
+    ///
+    pub fn new(request: PrivacyCyclePrfRequestV1, output: PrivacyCyclePrfOutputV1) -> Self {
+        let commitment = ModerationPrivacyThresholdPrfCommitmentV1 {
+            commitment: noise_randomness_commitment(request.binding_digest(), output.expose()),
+        };
+        Self {
+            request,
+            output,
+            commitment,
+        }
+    }
+
+    /// Return the opaque public commitment to this hidden cycle output.
+    ///
+    /// V1 treats this nonzero value as external threshold-attestation
+    /// evidence. It deliberately does not expose enough material for local
+    /// verification or recovery of the hidden PRF output.
+    #[must_use]
+    pub const fn commitment(&self) -> ModerationPrivacyThresholdPrfCommitmentV1 {
+        self.commitment
+    }
+
+    pub(crate) const fn request(&self) -> PrivacyCyclePrfRequestV1 {
+        self.request
+    }
+
+    fn validate_for_release(
+        &self,
+        config: &PrivacyAggregateCycleConfig,
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+    ) -> Result<(), PrivacyAggregateWorkerError> {
+        if self.request.query_id() != config.query_id
+            || self.request.policy_digest() != config.policy_digest
+            || self.request.population_inventory_digest()
+                != privacy_population_inventory_digest(&config.populations)
+            || self.request.metric_schema_digest() != privacy_metric_schema_digest(&config.metrics)
+            || self.request.cycle_start_unix() != cycle_start_unix
+            || self.request.cycle_end_unix() != cycle_end_unix
+        {
+            return Err(PrivacyAggregateWorkerError::CyclePrfBindingMismatch);
+        }
+        let expected =
+            noise_randomness_commitment(self.request.binding_digest(), self.output.expose());
+        if self.commitment.commitment != expected {
+            return Err(PrivacyAggregateWorkerError::CyclePrfCommitmentMismatch);
+        }
+        Ok(())
+    }
+
+    fn output(&self) -> &[u8; 32] {
+        self.output.expose()
+    }
+}
+
+impl std::fmt::Debug for PrivacyCyclePrfInputV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrivacyCyclePrfInputV1")
+            .field("request", &self.request)
+            .field("output", &"<redacted>")
+            .field("commitment", &self.commitment)
+            .finish()
+    }
+}
+
+/// Errors constructing runtime-only threshold-PRF cycle input.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum PrivacyCyclePrfInputErrorV1 {
+    /// The provider returned the forbidden all-zero output.
+    #[error("threshold PRF provider returned an invalid output")]
+    ZeroOutput,
+}
+
+/// Derive the canonical deterministic identity for one governed query window.
+#[must_use]
+pub fn privacy_aggregate_cycle_id(
+    query_id: [u8; 32],
+    cycle_start_unix: u64,
+    cycle_end_unix: u64,
+) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CYCLE_ID_DOMAIN_V1);
-    hasher.update(&window.cycle_start_unix.to_le_bytes());
-    hasher.update(&window.cycle_end_unix.to_le_bytes());
-    hasher.update(&window.due_at_unix.to_le_bytes());
+    hasher.update(&query_id);
+    hasher.update(&cycle_start_unix.to_le_bytes());
+    hasher.update(&cycle_end_unix.to_le_bytes());
     let digest = hasher.finalize();
     let mut cycle_id = [0u8; 16];
     cycle_id.copy_from_slice(&digest.as_bytes()[..16]);
@@ -2099,6 +2812,29 @@ pub enum PrivacyAggregateWorkerError {
         /// Maximum accepted metric count.
         max: usize,
     },
+    /// Governed population inventory is empty.
+    #[error("privacy aggregate governed population inventory must not be empty")]
+    PopulationInventoryMissing,
+    /// Governed population inventory exceeds the V1 bound.
+    #[error("privacy aggregate has {count} governed populations; maximum is {max}")]
+    TooManyPopulations {
+        /// Configured population count.
+        count: usize,
+        /// Maximum accepted population count.
+        max: usize,
+    },
+    /// Governed populations are not in strict canonical order.
+    #[error("privacy aggregate governed populations must be unique and sorted")]
+    PopulationInventoryOrder,
+    /// A governed population label or digest appears more than once.
+    #[error("privacy aggregate governed population labels and digests must be unique")]
+    DuplicatePopulation,
+    /// Governed metric schema is empty.
+    #[error("privacy aggregate governed metric schema must not be empty")]
+    MetricSchemaMissing,
+    /// Governed metric coordinates are not in strict canonical order.
+    #[error("privacy aggregate governed metric schema must be unique and sorted")]
+    MetricSchemaOrder,
     /// Metric accumulation exceeded the exact V1 integer representation.
     #[error("privacy aggregate metric arithmetic overflow")]
     MetricArithmeticOverflow,
@@ -2106,20 +2842,14 @@ pub enum PrivacyAggregateWorkerError {
     #[error("privacy aggregate source metric keys must be sorted")]
     SourceMetricKeysUnsorted,
     /// Source metric key appears more than once.
-    #[error("duplicate privacy aggregate source metric key `{key}`")]
-    DuplicateSourceMetricKey {
-        /// Duplicate key.
-        key: String,
-    },
+    #[error("privacy aggregate source metric key is duplicated")]
+    DuplicateSourceMetricKey,
     /// Metadata keys are not sorted.
     #[error("privacy aggregate metadata keys must be sorted")]
     MetadataKeysUnsorted,
     /// Metadata key appears more than once.
-    #[error("duplicate privacy aggregate metadata key `{key}`")]
-    DuplicateMetadataKey {
-        /// Duplicate key.
-        key: String,
-    },
+    #[error("privacy aggregate metadata key is duplicated")]
+    DuplicateMetadataKey,
     /// Privacy parameters are structurally invalid.
     #[error("invalid privacy aggregate parameters: {message}")]
     InvalidPrivacyParameters {
@@ -2129,26 +2859,39 @@ pub enum PrivacyAggregateWorkerError {
     /// Differential privacy was configured without hidden cycle PRF output.
     #[error("privacy aggregate differential privacy requires hidden cycle PRF output")]
     MissingCyclePrfOutput,
+    /// Runtime PRF material was derived for another policy or cycle window.
+    #[error("privacy aggregate cycle PRF input does not match the governed release")]
+    CyclePrfBindingMismatch,
+    /// Runtime PRF material carries a commitment that does not match its hidden output.
+    #[error("privacy aggregate cycle PRF commitment verification failed")]
+    CyclePrfCommitmentMismatch,
     /// Hidden PRF output was supplied for a policy that does not use DP.
     #[error(
         "privacy aggregate cycle PRF output is forbidden when differential privacy is disabled"
     )]
     UnexpectedCyclePrfOutput,
-    /// The governed epsilon/cap parameters would exceed the bounded exact sampler policy.
+    /// The governed epsilon/cap parameters would exceed the exact sampler expected-work policy.
     #[error(
-        "privacy aggregate exact sampler parameters exceed the bounded resource policy: epsilon={epsilon_numerator}/{epsilon_denominator}, sensitivity={sensitivity}"
+        "privacy aggregate exact sampler parameters exceed the expected-work resource policy: epsilon={epsilon_numerator}/{epsilon_denominator}, sensitivity={sensitivity}"
     )]
     NoiseParametersExceedResourceLimit {
         /// Governed reduced epsilon numerator.
         epsilon_numerator: u64,
         /// Governed reduced epsilon denominator.
         epsilon_denominator: u64,
-        /// Integer sensitivity equal to the per-subject metric cap.
+        /// Integer L1 sensitivity for the complete released metric vector.
         sensitivity: u64,
     },
-    /// The exact sampler exhausted its fail-closed random-draw budget.
-    #[error("privacy aggregate exact discrete-Laplace sampler exhausted its random-draw budget")]
-    NoiseSamplingLimitExceeded,
+    /// Governed release dimensions exceed the deterministic whole-cycle work budget.
+    #[error(
+        "privacy aggregate release expected XOF work {estimated_draws} exceeds limit {max_draws}"
+    )]
+    NoiseReleaseComplexityExceedsResourceLimit {
+        /// Conservative expected 128-bit XOF draws for the complete release.
+        estimated_draws: u128,
+        /// Maximum accepted expected 128-bit XOF draws.
+        max_draws: u128,
+    },
     /// A worker-owned public metadata key was supplied by a caller.
     #[error("privacy aggregate metadata key `{key}` is reserved for the worker")]
     ReservedMetadataKey {
@@ -2161,118 +2904,144 @@ pub enum PrivacyAggregateWorkerError {
         /// Field name.
         field: &'static str,
     },
+    /// A source event predates the governed first cycle.
+    #[error("privacy aggregate source event predates schedule activation")]
+    EventBeforeScheduleActivation,
     /// No source events matched the requested cycle window.
     #[error("privacy aggregate cycle has no source events in the requested window")]
     NoSourceEvents,
+    /// Source-event input exceeds the bounded V1 collection limit.
+    #[error("privacy aggregate cycle has {count} source events; maximum is {max}")]
+    TooManySourceEvents {
+        /// Submitted event count.
+        count: usize,
+        /// Maximum accepted event count.
+        max: usize,
+    },
     /// A source event timestamp is outside the requested cycle window.
-    #[error("privacy aggregate source event `{event_id}` is outside the requested cycle window")]
-    EventOutsideCycle {
-        /// Event id.
-        event_id: String,
-    },
+    #[error("privacy aggregate source event is outside the requested cycle window")]
+    EventOutsideCycle,
     /// The same source event id appeared twice in the build input.
-    #[error("duplicate privacy aggregate source event `{event_id}`")]
-    DuplicateSourceEvent {
-        /// Event id.
-        event_id: String,
-    },
-    /// Source events for one aggregate carry conflicting metric units.
-    #[error("privacy aggregate metric `{key}` has conflicting units")]
-    ConflictingMetricUnit {
-        /// Metric key.
-        key: String,
-    },
-    /// Source events for one aggregate carry conflicting policy digests.
-    #[error("privacy aggregate source events carry conflicting policy digests")]
-    ConflictingPolicyDigest,
+    #[error("privacy aggregate source event id is duplicated")]
+    DuplicateSourceEvent,
+    /// A source event references a population outside the governed universe.
+    #[error("privacy aggregate source event is outside the governed population inventory")]
+    PopulationOutsideInventory,
+    /// A source event does not match the fixed governed metric schema.
+    #[error("privacy aggregate source event does not match the governed metric schema")]
+    MetricSchemaMismatch,
+    /// A source event does not bind the active governed policy.
+    #[error("privacy aggregate source event does not match the governed policy")]
+    PolicyDigestMismatch,
+    /// One subject was assigned to more than one population in a single cycle.
+    #[error("privacy aggregate subject spans multiple population buckets in one cycle")]
+    SubjectPopulationOverlap,
     /// All source buckets were suppressed.
     #[error("privacy aggregate cycle suppressed every source bucket")]
     AllBucketsSuppressed,
     /// Generated aggregate payload failed validation.
-    #[error("generated privacy aggregate is invalid: {message}")]
-    InvalidAggregate {
-        /// Validation detail.
-        message: String,
-    },
+    #[error("generated privacy aggregate is invalid")]
+    InvalidAggregate,
 }
 
 pub(crate) fn build_privacy_aggregates_from_source_events(
     cycle_start_unix: u64,
     cycle_end_unix: u64,
-    generated_at_unix: u64,
     config: &PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<[u8; 32]>,
+    cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
     events: &[PrivacyAggregateSourceEvent],
 ) -> Result<Vec<ModerationPrivacyAggregateV1>, PrivacyAggregateWorkerError> {
     config.validate()?;
     if config.privacy.per_subject_metric_cap.is_some() {
-        let prf_output = cycle_prf_output
+        let prf_input = cycle_prf_input
             .as_ref()
             .ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
-        require_nonzero32("cycle_prf_output", prf_output)?;
-    } else if cycle_prf_output.is_some() {
+        prf_input.validate_for_release(config, cycle_start_unix, cycle_end_unix)?;
+    } else if cycle_prf_input.is_some() {
         return Err(PrivacyAggregateWorkerError::UnexpectedCyclePrfOutput);
     }
-    if events.is_empty() {
+    if events.is_empty() && matches!(config.privacy.mode, ModerationPrivacyModeV1::Suppression) {
         return Err(PrivacyAggregateWorkerError::NoSourceEvents);
+    }
+    if events.len() > PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1 {
+        return Err(PrivacyAggregateWorkerError::TooManySourceEvents {
+            count: events.len(),
+            max: PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
+        });
     }
     if cycle_start_unix == 0 || cycle_end_unix <= cycle_start_unix {
         return Err(PrivacyAggregateWorkerError::InvalidTimestamp {
             field: "cycle_window",
         });
     }
-    if generated_at_unix < cycle_end_unix {
-        return Err(PrivacyAggregateWorkerError::InvalidTimestamp {
-            field: "generated_at_unix",
-        });
-    }
 
     let mut seen_events = BTreeSet::new();
-    let mut groups = BTreeMap::<PopulationKey, Vec<PrivacyAggregateSourceEvent>>::new();
+    let mut subject_populations = BTreeMap::<[u8; 32], PopulationKey>::new();
+    let mut groups = config
+        .populations
+        .iter()
+        .map(|population| {
+            (
+                PopulationKey {
+                    label: population.label.clone(),
+                    digest: population.digest,
+                },
+                Vec::new(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     for event in events {
-        event.validate()?;
+        config.validate_source_event(event)?;
         if event.occurred_at_unix < cycle_start_unix || event.occurred_at_unix >= cycle_end_unix {
-            return Err(PrivacyAggregateWorkerError::EventOutsideCycle {
-                event_id: event.event_id.clone(),
-            });
+            return Err(PrivacyAggregateWorkerError::EventOutsideCycle);
         }
         if !seen_events.insert(event.event_id.clone()) {
-            return Err(PrivacyAggregateWorkerError::DuplicateSourceEvent {
-                event_id: event.event_id.clone(),
-            });
+            return Err(PrivacyAggregateWorkerError::DuplicateSourceEvent);
         }
-        let population_digest = event
-            .population_digest
-            .unwrap_or_else(|| population_digest_from_label(&event.population_label));
-        groups
-            .entry(PopulationKey {
-                label: event.population_label.clone(),
-                digest: population_digest,
-            })
-            .or_default()
-            .push(event.clone());
+        let population = PopulationKey {
+            label: event.population_label.clone(),
+            digest: event.population_digest,
+        };
+        let Some(bucket) = groups.get_mut(&population) else {
+            return Err(PrivacyAggregateWorkerError::PopulationOutsideInventory);
+        };
+        if let Some(previous) = subject_populations.insert(event.subject_digest, population.clone())
+            && previous != population
+        {
+            return Err(PrivacyAggregateWorkerError::SubjectPopulationOverlap);
+        }
+        bucket.push(event.clone());
     }
 
+    let private_source_digest =
+        canonical_private_source_digest(cycle_start_unix, cycle_end_unix, config, events)?;
     let suppression_threshold = config.privacy.suppression_threshold.unwrap_or(0);
-    let suppressed_count = groups
-        .values()
-        .filter(|bucket| distinct_subject_count(bucket) < suppression_threshold)
-        .count() as u64;
+    let vector_sensitivity = privacy_vector_sensitivity(config)?;
     let build_context = PopulationAggregateBuildContext {
         cycle_start_unix,
         cycle_end_unix,
-        generated_at_unix,
         config,
-        cycle_prf_output: cycle_prf_output.as_ref(),
-        suppressed_count,
+        cycle_prf_input: cycle_prf_input.as_ref(),
+        vector_sensitivity,
+        private_source_digest,
     };
     let mut aggregates = Vec::new();
     for (population, mut bucket) in groups {
         bucket.sort_by(|left, right| left.event_id.cmp(&right.event_id));
-        if distinct_subject_count(&bucket) < suppression_threshold {
+        let below_threshold = distinct_subject_count(&bucket) < suppression_threshold;
+        if matches!(config.privacy.mode, ModerationPrivacyModeV1::Suppression) && below_threshold {
             continue;
         }
-        let aggregate = build_population_aggregate(&build_context, population, &bucket)?;
+        let aggregate = build_population_aggregate(
+            &build_context,
+            population,
+            &bucket,
+            below_threshold
+                && matches!(
+                    config.privacy.mode,
+                    ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression
+                ),
+        )?;
         aggregates.push(aggregate);
     }
     if aggregates.is_empty() {
@@ -2291,42 +3060,40 @@ struct PopulationKey {
 struct PopulationAggregateBuildContext<'a> {
     cycle_start_unix: u64,
     cycle_end_unix: u64,
-    generated_at_unix: u64,
     config: &'a PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<&'a [u8; 32]>,
-    suppressed_count: u64,
+    cycle_prf_input: Option<&'a PrivacyCyclePrfInputV1>,
+    vector_sensitivity: Option<u64>,
+    private_source_digest: [u8; 32],
 }
 
 fn build_population_aggregate(
     context: &PopulationAggregateBuildContext<'_>,
     population: PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
+    suppress_contributions: bool,
 ) -> Result<ModerationPrivacyAggregateV1, PrivacyAggregateWorkerError> {
     let config = context.config;
-    let cycle_prf_output = context.cycle_prf_output;
-    let policy_digest = resolve_policy_digest(config.policy_digest, events)?;
-    let metrics = clipped_population_metrics(events, config.privacy.per_subject_metric_cap)?;
-    let source_subject_count = distinct_subject_count(events);
-
+    let metrics = if suppress_contributions {
+        zero_metric_vector(&config.metrics)
+    } else {
+        clipped_population_metrics(
+            events,
+            &config.metrics,
+            config.privacy.per_subject_metric_cap,
+        )?
+    };
     let aggregate_id = aggregate_id(&config.aggregate_id_prefix, &population);
-    let source_payload_digest = source_payload_digest(
-        config,
-        cycle_prf_output,
-        &population,
-        events,
-        context.suppressed_count,
-        policy_digest,
-    );
     let published_metrics = metrics
         .into_iter()
         .map(|(key, (unit, value))| {
             let noised = apply_metric_noise(
                 value,
                 config,
-                cycle_prf_output,
+                context.cycle_prf_input,
+                context.vector_sensitivity,
                 &aggregate_id,
                 &key,
-                &source_payload_digest,
+                &context.private_source_digest,
             )?;
             Ok(ModerationPrivacyAggregateMetricV1 {
                 key,
@@ -2336,29 +3103,28 @@ fn build_population_aggregate(
         })
         .collect::<Result<Vec<_>, PrivacyAggregateWorkerError>>()?;
 
-    let mut privacy = config.privacy;
-    privacy.suppressed_count = context.suppressed_count;
+    let noise_source = context
+        .cycle_prf_input
+        .map_or(ModerationPrivacyNoiseSourceV1::SuppressionOnly, |input| {
+            ModerationPrivacyNoiseSourceV1::ThresholdPrf(input.commitment())
+        });
     let aggregate = ModerationPrivacyAggregateV1 {
         version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
         aggregate_id,
         window_start_unix: context.cycle_start_unix,
         window_end_unix: context.cycle_end_unix,
-        generated_at_unix: context.generated_at_unix,
+        generated_at_unix: context.cycle_end_unix,
         population_label: population.label,
         population_digest: population.digest,
-        privacy,
-        source_event_count: events.len() as u64,
-        source_subject_count,
-        source_payload_digest,
+        privacy: config.privacy,
+        noise_source,
         metrics: published_metrics,
-        policy_digest,
-        metadata: publication_metadata(config, cycle_prf_output),
+        policy_digest: config.policy_digest,
+        metadata: config.metadata.clone(),
     };
     aggregate
         .validate()
-        .map_err(|err| PrivacyAggregateWorkerError::InvalidAggregate {
-            message: err.to_string(),
-        })?;
+        .map_err(|_| PrivacyAggregateWorkerError::InvalidAggregate)?;
     Ok(aggregate)
 }
 
@@ -2370,27 +3136,26 @@ fn distinct_subject_count(events: &[PrivacyAggregateSourceEvent]) -> u64 {
         .len() as u64
 }
 
+fn event_metrics_match_schema(
+    metrics: &[PrivacyAggregateSourceMetric],
+    schema: &[PrivacyAggregateMetricSchemaV1],
+) -> bool {
+    metrics.len() == schema.len()
+        && metrics
+            .iter()
+            .zip(schema)
+            .all(|(metric, expected)| metric.key == expected.key && metric.unit == expected.unit)
+}
+
 fn clipped_population_metrics(
     events: &[PrivacyAggregateSourceEvent],
+    schema: &[PrivacyAggregateMetricSchemaV1],
     per_subject_metric_cap: Option<u64>,
 ) -> Result<BTreeMap<String, (String, u128)>, PrivacyAggregateWorkerError> {
-    let mut units = BTreeMap::<String, String>::new();
     let mut subject_metrics = BTreeMap::<[u8; 32], BTreeMap<String, u128>>::new();
     for event in events {
         let per_subject = subject_metrics.entry(event.subject_digest).or_default();
         for metric in &event.metrics {
-            match units.entry(metric.key.clone()) {
-                std::collections::btree_map::Entry::Occupied(occupied) => {
-                    if occupied.get() != &metric.unit {
-                        return Err(PrivacyAggregateWorkerError::ConflictingMetricUnit {
-                            key: metric.key.clone(),
-                        });
-                    }
-                }
-                std::collections::btree_map::Entry::Vacant(vacant) => {
-                    vacant.insert(metric.unit.clone());
-                }
-            }
             let contribution = per_subject.entry(metric.key.clone()).or_default();
             *contribution = if let Some(cap) = per_subject_metric_cap {
                 (*contribution)
@@ -2404,9 +3169,9 @@ fn clipped_population_metrics(
         }
     }
 
-    let mut totals = units
-        .into_iter()
-        .map(|(key, unit)| (key, (unit, 0_u128)))
+    let mut totals = schema
+        .iter()
+        .map(|metric| (metric.key.clone(), (metric.unit.clone(), 0_u128)))
         .collect::<BTreeMap<_, _>>();
     for metrics in subject_metrics.values() {
         for (key, contribution) in metrics {
@@ -2422,38 +3187,29 @@ fn clipped_population_metrics(
     Ok(totals)
 }
 
-fn resolve_policy_digest(
-    configured: Option<[u8; 32]>,
-    events: &[PrivacyAggregateSourceEvent],
-) -> Result<Option<[u8; 32]>, PrivacyAggregateWorkerError> {
-    let mut resolved = configured;
-    for event in events {
-        if let Some(event_digest) = event.policy_digest {
-            match resolved {
-                Some(current) if current != event_digest => {
-                    return Err(PrivacyAggregateWorkerError::ConflictingPolicyDigest);
-                }
-                Some(_) => {}
-                None => resolved = Some(event_digest),
-            }
-        }
-    }
-    Ok(resolved)
+fn zero_metric_vector(
+    schema: &[PrivacyAggregateMetricSchemaV1],
+) -> BTreeMap<String, (String, u128)> {
+    schema
+        .iter()
+        .map(|metric| (metric.key.clone(), (metric.unit.clone(), 0)))
+        .collect()
 }
 
 fn apply_metric_noise(
     value: u128,
     config: &PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<&[u8; 32]>,
+    cycle_prf_input: Option<&PrivacyCyclePrfInputV1>,
+    vector_sensitivity: Option<u64>,
     aggregate_id: &str,
     metric_key: &str,
-    source_payload_digest: &[u8; 32],
+    private_source_digest: &[u8; 32],
 ) -> Result<u64, PrivacyAggregateWorkerError> {
-    let Some(sensitivity) = config.privacy.per_subject_metric_cap else {
+    let Some(sensitivity) = vector_sensitivity else {
         return u64::try_from(value)
             .map_err(|_| PrivacyAggregateWorkerError::MetricArithmeticOverflow);
     };
-    let prf_output = cycle_prf_output.ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
+    let prf_input = cycle_prf_input.ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
     let epsilon_numerator = config.privacy.epsilon_numerator.ok_or(
         PrivacyAggregateWorkerError::InvalidPrivacyParameters {
             message: "epsilon_numerator is required for exact discrete-Laplace noise".to_string(),
@@ -2464,71 +3220,81 @@ fn apply_metric_noise(
             message: "epsilon_denominator is required for exact discrete-Laplace noise".to_string(),
         },
     )?;
-    let mut hasher = blake3::Hasher::new_keyed(prf_output);
+    let mut hasher = blake3::Hasher::new_keyed(prf_input.output());
     hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
-    hasher.update(source_payload_digest);
+    hasher.update(private_source_digest);
     hash_text(&mut hasher, aggregate_id);
     hash_text(&mut hasher, metric_key);
-    let mut sampler = ExactNoiseSampler::new(hasher.finalize_xof());
-    let noise =
-        sampler.sample_discrete_laplace(epsilon_numerator, epsilon_denominator, sensitivity)?;
-    let adjusted = if noise.is_negative() {
-        value.saturating_sub(noise.unsigned_abs())
-    } else {
-        value
-            .checked_add(noise as u128)
-            .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?
-    };
-    u64::try_from(adjusted).map_err(|_| PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+    let bounded_value = value.min(u128::from(u64::MAX)) as u64;
+    ExactNoiseSampler::new(hasher.finalize_xof()).apply_discrete_laplace(
+        bounded_value,
+        epsilon_numerator,
+        epsilon_denominator,
+        sensitivity,
+    )
 }
 
 struct ExactNoiseSampler {
     reader: blake3::OutputReader,
-    remaining_draws: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExactDiscreteLaplaceLaw {
+    continuation_numerator: u128,
+    continuation_denominator: u128,
+    zero_numerator: u128,
+    zero_denominator: u128,
 }
 
 impl ExactNoiseSampler {
     fn new(reader: blake3::OutputReader) -> Self {
-        Self {
-            reader,
-            remaining_draws: MAX_DISCRETE_LAPLACE_RANDOM_DRAWS_V1,
-        }
+        Self { reader }
     }
 
-    fn sample_discrete_laplace(
+    fn apply_discrete_laplace(
         &mut self,
+        value: u64,
         epsilon_numerator: u64,
         epsilon_denominator: u64,
         sensitivity: u64,
-    ) -> Result<i128, PrivacyAggregateWorkerError> {
-        validate_discrete_laplace_parameters(epsilon_numerator, epsilon_denominator, sensitivity)?;
-        // Let q = ΔD / (ΔD + N), where ε = N/D and Δ is sensitivity.
-        // The difference of two independent geometric(q) variates is an exact
-        // two-sided geometric (discrete-Laplace) variate. Its privacy loss is
-        // -ln(q) = ln(1 + N/(ΔD)) <= N/(ΔD), so it is conservatively bounded
-        // by the governed rational ε without floating-point approximation.
-        let continuation_numerator =
-            u128::from(sensitivity).saturating_mul(u128::from(epsilon_denominator));
-        let geometric_denominator =
-            continuation_numerator.saturating_add(u128::from(epsilon_numerator));
-        let positive = self.sample_geometric(continuation_numerator, geometric_denominator)?;
-        let negative = self.sample_geometric(continuation_numerator, geometric_denominator)?;
-        Ok(i128::from(positive) - i128::from(negative))
-    }
-
-    fn sample_geometric(
-        &mut self,
-        continuation_numerator: u128,
-        denominator: u128,
     ) -> Result<u64, PrivacyAggregateWorkerError> {
-        let mut successes = 0_u64;
+        validate_discrete_laplace_parameters(epsilon_numerator, epsilon_denominator, sensitivity)?;
+        // Let q = A/B where A = ΔD, B = ΔD + N, ε = N/D, and Δ is
+        // sensitivity. The exact two-sided geometric law is
+        //
+        //   P(Z = z) = ((1-q)/(1+q)) q^|z|.
+        //
+        // Therefore P(Z = 0) = N/(2A + N). Conditional on nonzero noise, the
+        // sign is uniform and |Z| is one plus a geometric variate whose
+        // continuation probability is A/B. Every choice below is an exact
+        // integer rejection sample; no floating-point approximation is used.
+        // Its privacy loss is -ln(q) = ln(1 + N/(ΔD)) <= N/(ΔD), so the
+        // governed rational ε conservatively bounds the complete vector.
+        let law = exact_discrete_laplace_law(epsilon_numerator, epsilon_denominator, sensitivity)?;
+        if self.uniform_below(law.zero_denominator)? < law.zero_numerator {
+            return Ok(value);
+        }
+        let positive = self.uniform_below(2)? == 1;
+        let mut adjusted = value;
         loop {
-            if self.uniform_below(denominator)? >= continuation_numerator {
-                return Ok(successes);
+            // The public metric is a u64, so saturating post-processing maps
+            // the entire still-unbounded latent tail to the reached boundary.
+            // Returning at that point is exact post-processing, not tail
+            // truncation: every possible continuation has the same output.
+            adjusted = if positive {
+                let Some(next) = adjusted.checked_add(1) else {
+                    return Ok(u64::MAX);
+                };
+                next
+            } else {
+                let Some(next) = adjusted.checked_sub(1) else {
+                    return Ok(0);
+                };
+                next
+            };
+            if self.uniform_below(law.continuation_denominator)? >= law.continuation_numerator {
+                return Ok(adjusted);
             }
-            successes = successes
-                .checked_add(1)
-                .ok_or(PrivacyAggregateWorkerError::NoiseSamplingLimitExceeded)?;
         }
     }
 
@@ -2545,10 +3311,6 @@ impl ExactNoiseSampler {
         // below that threshold leaves an exact multiple of `upper` candidates.
         let rejection_threshold = upper_exclusive.wrapping_neg() % upper_exclusive;
         loop {
-            if self.remaining_draws == 0 {
-                return Err(PrivacyAggregateWorkerError::NoiseSamplingLimitExceeded);
-            }
-            self.remaining_draws -= 1;
             let mut bytes = [0_u8; 16];
             self.reader.fill(&mut bytes);
             let candidate = u128::from_le_bytes(bytes);
@@ -2559,28 +3321,27 @@ impl ExactNoiseSampler {
     }
 }
 
-fn validate_discrete_laplace_resource_policy(
-    privacy: ModerationPrivacyParametersV1,
-) -> Result<(), PrivacyAggregateWorkerError> {
-    let epsilon_numerator =
-        privacy
-            .epsilon_numerator
-            .ok_or(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
-                message: "epsilon_numerator is required for exact discrete-Laplace noise"
-                    .to_string(),
-            })?;
-    let epsilon_denominator = privacy.epsilon_denominator.ok_or(
-        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
-            message: "epsilon_denominator is required for exact discrete-Laplace noise".to_string(),
-        },
-    )?;
-    let sensitivity = privacy.per_subject_metric_cap.ok_or(
-        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
-            message: "per_subject_metric_cap is required for exact discrete-Laplace noise"
-                .to_string(),
-        },
-    )?;
-    validate_discrete_laplace_parameters(epsilon_numerator, epsilon_denominator, sensitivity)
+fn exact_discrete_laplace_law(
+    epsilon_numerator: u64,
+    epsilon_denominator: u64,
+    sensitivity: u64,
+) -> Result<ExactDiscreteLaplaceLaw, PrivacyAggregateWorkerError> {
+    let continuation_numerator = u128::from(sensitivity)
+        .checked_mul(u128::from(epsilon_denominator))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let continuation_denominator = continuation_numerator
+        .checked_add(u128::from(epsilon_numerator))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let zero_denominator = continuation_numerator
+        .checked_mul(2)
+        .and_then(|twice| twice.checked_add(u128::from(epsilon_numerator)))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    Ok(ExactDiscreteLaplaceLaw {
+        continuation_numerator,
+        continuation_denominator,
+        zero_numerator: u128::from(epsilon_numerator),
+        zero_denominator,
+    })
 }
 
 fn validate_discrete_laplace_parameters(
@@ -2588,10 +3349,12 @@ fn validate_discrete_laplace_parameters(
     epsilon_denominator: u64,
     sensitivity: u64,
 ) -> Result<(), PrivacyAggregateWorkerError> {
-    let sensitivity_numerator =
-        u128::from(sensitivity).saturating_mul(u128::from(epsilon_denominator));
-    let maximum_numerator =
-        u128::from(epsilon_numerator).saturating_mul(MAX_DISCRETE_LAPLACE_MEAN_SUCCESSES_V1);
+    let sensitivity_numerator = u128::from(sensitivity)
+        .checked_mul(u128::from(epsilon_denominator))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let maximum_numerator = u128::from(epsilon_numerator)
+        .checked_mul(MAX_DISCRETE_LAPLACE_EXPECTED_CONTINUATIONS_V1)
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
     if epsilon_numerator == 0
         || epsilon_denominator == 0
         || sensitivity == 0
@@ -2608,63 +3371,125 @@ fn validate_discrete_laplace_parameters(
     Ok(())
 }
 
-fn noise_randomness_commitment(prf_output: &[u8; 32]) -> [u8; 32] {
+fn validate_release_noise_complexity(
+    population_count: usize,
+    metric_count: usize,
+    epsilon_numerator: u64,
+    epsilon_denominator: u64,
+    sensitivity: u64,
+) -> Result<(), PrivacyAggregateWorkerError> {
+    if epsilon_numerator == 0 || epsilon_denominator == 0 || sensitivity == 0 {
+        return Err(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+            message: "exact sampler parameters must be positive".to_string(),
+        });
+    }
+    let continuation_numerator = u128::from(sensitivity)
+        .checked_mul(u128::from(epsilon_denominator))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let numerator = continuation_numerator
+        .checked_add(u128::from(epsilon_numerator).saturating_sub(1))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let expected_continuations_ceiling = numerator / u128::from(epsilon_numerator);
+    // One zero-mass choice, then (conservatively, even when zero was chosen)
+    // one sign choice and one terminating geometric choice. Exact u128
+    // rejection sampling accepts more than half of all candidates, so fewer
+    // than two 128-bit XOF draws are expected for every uniform choice.
+    let expected_xof_draws_per_coordinate = expected_continuations_ceiling
+        .checked_add(3)
+        .and_then(|draws| draws.checked_mul(2))
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let coordinate_count = u128::try_from(population_count)
+        .ok()
+        .and_then(|populations| {
+            u128::try_from(metric_count)
+                .ok()
+                .and_then(|metrics| populations.checked_mul(metrics))
+        })
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    let estimated_draws = coordinate_count
+        .checked_mul(expected_xof_draws_per_coordinate)
+        .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+    if estimated_draws > MAX_DISCRETE_LAPLACE_RELEASE_EXPECTED_DRAWS_V1 {
+        return Err(
+            PrivacyAggregateWorkerError::NoiseReleaseComplexityExceedsResourceLimit {
+                estimated_draws,
+                max_draws: MAX_DISCRETE_LAPLACE_RELEASE_EXPECTED_DRAWS_V1,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn noise_randomness_commitment(request_binding: [u8; 32], prf_output: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1);
+    hasher.update(&request_binding);
     hasher.update(prf_output);
     *hasher.finalize().as_bytes()
 }
 
-fn publication_metadata(
+pub(crate) fn canonical_private_source_digest(
+    cycle_start_unix: u64,
+    cycle_end_unix: u64,
     config: &PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<&[u8; 32]>,
-) -> Vec<ModerationLedgerMetadataV1> {
-    let mut metadata = config.metadata.clone();
-    if let Some(prf_output) = cycle_prf_output {
-        let commitment = ModerationLedgerMetadataV1 {
-            key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
-            value: hex::encode(noise_randomness_commitment(prf_output)),
-        };
-        let index = metadata
-            .binary_search_by(|item| {
-                item.key
-                    .as_str()
-                    .cmp(NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
-            })
-            .unwrap_or_else(|index| index);
-        metadata.insert(index, commitment);
-    }
-    metadata
-}
-
-fn source_payload_digest(
-    config: &PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<&[u8; 32]>,
-    population: &PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
-    suppressed_count: u64,
-    policy_digest: Option<[u8; 32]>,
-) -> [u8; 32] {
+) -> Result<[u8; 32], PrivacyAggregateWorkerError> {
+    config.validate()?;
+    if cycle_start_unix == 0 || cycle_end_unix <= cycle_start_unix {
+        return Err(PrivacyAggregateWorkerError::InvalidTimestamp {
+            field: "cycle_window",
+        });
+    }
+    if events.len() > PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1 {
+        return Err(PrivacyAggregateWorkerError::TooManySourceEvents {
+            count: events.len(),
+            max: PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
+        });
+    }
+    let mut ordered = events.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.event_id.cmp(&right.event_id));
+    let mut previous_event_id = None;
+    let mut subject_populations = BTreeMap::new();
+    for event in &ordered {
+        config.validate_source_event(event)?;
+        if event.occurred_at_unix < cycle_start_unix || event.occurred_at_unix >= cycle_end_unix {
+            return Err(PrivacyAggregateWorkerError::EventOutsideCycle);
+        }
+        if previous_event_id.is_some_and(|previous| previous == event.event_id.as_str()) {
+            return Err(PrivacyAggregateWorkerError::DuplicateSourceEvent);
+        }
+        previous_event_id = Some(event.event_id.as_str());
+        let population = (&event.population_label, event.population_digest);
+        if let Some(previous) = subject_populations.insert(event.subject_digest, population)
+            && previous != population
+        {
+            return Err(PrivacyAggregateWorkerError::SubjectPopulationOverlap);
+        }
+    }
+
     let mut hasher = blake3::Hasher::new();
-    hasher.update(SOURCE_PAYLOAD_DIGEST_DOMAIN_V1);
+    hasher.update(PRIVATE_SOURCE_DIGEST_DOMAIN_V1);
+    hasher.update(&config.query_id);
+    hasher.update(&cycle_start_unix.to_le_bytes());
+    hasher.update(&cycle_end_unix.to_le_bytes());
+    hasher.update(&privacy_population_inventory_digest(&config.populations));
+    hasher.update(&privacy_metric_schema_digest(&config.metrics));
+    hasher.update(&config.policy_digest);
     hash_text(&mut hasher, &config.aggregate_id_prefix);
-    hash_privacy_parameters(&mut hasher, config.privacy, suppressed_count);
-    if let Some(prf_output) = cycle_prf_output {
-        hasher.update(&noise_randomness_commitment(prf_output));
+    hash_privacy_parameters(&mut hasher, config.privacy);
+    hasher.update(&(config.metadata.len() as u64).to_le_bytes());
+    for item in &config.metadata {
+        hash_text(&mut hasher, &item.key);
+        hash_text(&mut hasher, &item.value);
     }
-    if let Some(digest) = &policy_digest {
-        hasher.update(digest);
-    }
-    hash_text(&mut hasher, &population.label);
-    hasher.update(&population.digest);
-    hasher.update(&(events.len() as u64).to_le_bytes());
-    for event in events {
+    hasher.update(&(ordered.len() as u64).to_le_bytes());
+    for event in ordered {
         hash_text(&mut hasher, &event.event_id);
         hasher.update(&event.occurred_at_unix.to_le_bytes());
+        hash_text(&mut hasher, &event.population_label);
+        hasher.update(&event.population_digest);
         hasher.update(&event.subject_digest);
-        if let Some(digest) = &event.policy_digest {
-            hasher.update(digest);
-        }
+        hasher.update(&event.policy_digest);
         hasher.update(&(event.metrics.len() as u64).to_le_bytes());
         for metric in &event.metrics {
             hash_text(&mut hasher, &metric.key);
@@ -2672,15 +3497,10 @@ fn source_payload_digest(
             hasher.update(&metric.value.to_le_bytes());
         }
     }
-    *hasher.finalize().as_bytes()
+    Ok(*hasher.finalize().as_bytes())
 }
 
-fn hash_privacy_parameters(
-    hasher: &mut blake3::Hasher,
-    mut privacy: ModerationPrivacyParametersV1,
-    suppressed_count: u64,
-) {
-    privacy.suppressed_count = suppressed_count;
+fn hash_privacy_parameters(hasher: &mut blake3::Hasher, privacy: ModerationPrivacyParametersV1) {
     hasher.update(&privacy.version.to_le_bytes());
     hasher.update(privacy_mode_label(privacy.mode).as_bytes());
     hash_option_u64(hasher, privacy.epsilon_numerator);
@@ -2688,7 +3508,6 @@ fn hash_privacy_parameters(
     hash_option_u64(hasher, privacy.delta_ppb);
     hash_option_u64(hasher, privacy.per_subject_metric_cap);
     hash_option_u64(hasher, privacy.suppression_threshold);
-    hasher.update(&privacy.suppressed_count.to_le_bytes());
 }
 
 fn hash_option_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
@@ -2711,13 +3530,6 @@ fn aggregate_id(prefix: &str, population: &PopulationKey) -> String {
         sanitize_label(&population.label),
         digest_prefix
     )
-}
-
-fn population_digest_from_label(label: &str) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(POPULATION_DIGEST_DOMAIN_V1);
-    hasher.update(label.as_bytes());
-    *hasher.finalize().as_bytes()
 }
 
 fn validate_source_metrics(
@@ -2743,9 +3555,7 @@ fn validate_source_metrics(
             return Err(PrivacyAggregateWorkerError::SourceMetricKeysUnsorted);
         }
         if !seen.insert(metric.key.as_str()) {
-            return Err(PrivacyAggregateWorkerError::DuplicateSourceMetricKey {
-                key: metric.key.clone(),
-            });
+            return Err(PrivacyAggregateWorkerError::DuplicateSourceMetricKey);
         }
         last_key = Some(metric.key.as_str());
     }
@@ -2766,9 +3576,7 @@ fn validate_metadata(
             return Err(PrivacyAggregateWorkerError::MetadataKeysUnsorted);
         }
         if !seen.insert(item.key.as_str()) {
-            return Err(PrivacyAggregateWorkerError::DuplicateMetadataKey {
-                key: item.key.clone(),
-            });
+            return Err(PrivacyAggregateWorkerError::DuplicateMetadataKey);
         }
         last_key = Some(item.key.as_str());
     }
@@ -2970,32 +3778,10 @@ fn validate_reserve_source_id(
     Ok(())
 }
 
-fn reserve_lifecycle_source_error(
+fn reserve_finalized_event_source_error(
     message: impl Into<String>,
 ) -> TransparencySourceEntryAdapterError {
-    TransparencySourceEntryAdapterError::InvalidReserveLifecycleEvent {
-        message: message.into(),
-    }
-}
-
-fn reserve_movement_source_error(
-    message: impl Into<String>,
-) -> TransparencySourceEntryAdapterError {
-    TransparencySourceEntryAdapterError::InvalidReserveMovement {
-        message: message.into(),
-    }
-}
-
-fn reserve_appeal_source_error(message: impl Into<String>) -> TransparencySourceEntryAdapterError {
-    TransparencySourceEntryAdapterError::InvalidReserveAppeal {
-        message: message.into(),
-    }
-}
-
-fn reserve_lifecycle_policy_source_error(
-    message: impl Into<String>,
-) -> TransparencySourceEntryAdapterError {
-    TransparencySourceEntryAdapterError::InvalidReserveLifecyclePolicy {
+    TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent {
         message: message.into(),
     }
 }
@@ -3010,19 +3796,21 @@ fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
     }
 }
 
-fn reserve_movement_kind_label(kind: ReserveMovementKind) -> &'static str {
+fn reserve_ledger_event_kind_label(kind: SorafsReserveLedgerEventKind) -> &'static str {
     match kind {
-        ReserveMovementKind::TopUp => "top_up",
-        ReserveMovementKind::Withdrawal => "withdrawal",
+        SorafsReserveLedgerEventKind::PolicyActivated => "policy_activated",
+        SorafsReserveLedgerEventKind::ProviderRegistered => "provider_registered",
+        SorafsReserveLedgerEventKind::MovementRequested => "movement_requested",
+        SorafsReserveLedgerEventKind::MovementApproved => "movement_approved",
+        SorafsReserveLedgerEventKind::MovementRejected => "movement_rejected",
+        SorafsReserveLedgerEventKind::RentCharged => "rent_charged",
+        SorafsReserveLedgerEventKind::LifecycleAdvanced => "lifecycle_advanced",
+        SorafsReserveLedgerEventKind::CreditDrawn => "credit_drawn",
+        SorafsReserveLedgerEventKind::CreditRepaid => "credit_repaid",
+        SorafsReserveLedgerEventKind::AppealSubmitted => "appeal_submitted",
+        SorafsReserveLedgerEventKind::AppealAccepted => "appeal_accepted",
+        SorafsReserveLedgerEventKind::AppealRejected => "appeal_rejected",
     }
-}
-
-fn reserve_movement_custody_status_label(status: ReserveMovementCustodyStatus) -> &'static str {
-    status.label()
-}
-
-fn reserve_appeal_status_label(status: ReserveAppealStatus) -> &'static str {
-    status.label()
 }
 
 fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
@@ -3209,6 +3997,39 @@ mod tests {
         .expect("account id")
     }
 
+    fn reserve_finalized_event_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveFinalizedEventV1 {
+        let policy_activation = kind == SorafsReserveLedgerEventKind::PolicyActivated;
+        let operation = matches!(
+            kind,
+            SorafsReserveLedgerEventKind::MovementRequested
+                | SorafsReserveLedgerEventKind::MovementApproved
+                | SorafsReserveLedgerEventKind::MovementRejected
+                | SorafsReserveLedgerEventKind::AppealSubmitted
+                | SorafsReserveLedgerEventKind::AppealAccepted
+                | SorafsReserveLedgerEventKind::AppealRejected
+        );
+        ReserveFinalizedEventV1 {
+            sequence: 17,
+            block_height: 43,
+            block_hash: [0xA1; 32],
+            event_index: 2,
+            event: iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
+                kind,
+                provider_id: (!policy_activation)
+                    .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
+                operation_id: operation.then_some([0xC3; 32]),
+                policy_digest: [0xD4; 32],
+                provider_revision: if policy_activation { 0 } else { 9 },
+                resulting_lifecycle_stage: (!policy_activation)
+                    .then_some(ReserveLifecycleStage::Grace),
+                authority: gar_operator_account(),
+                occurred_at_unix_ms: 1_800_000_123_000,
+            },
+        }
+    }
+
     fn gar_receipt_fixture(action: GarEnforcementActionV1) -> GarEnforcementReceiptV1 {
         GarEnforcementReceiptV1 {
             receipt_id: *b"gar-receipt-0001",
@@ -3348,95 +4169,20 @@ mod tests {
         }
     }
 
-    fn reserve_quote_fixture() -> iroha_data_model::sorafs::reserve::ReserveQuote {
-        iroha_data_model::sorafs::reserve::ReservePolicyV1::default()
-            .quote(
-                iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
-                10,
-                iroha_data_model::sorafs::reserve::ReserveDuration::Monthly,
-                iroha_data_model::sorafs::reserve::ReserveTier::TierA,
-                sorafs_manifest::deal::XorQuantity::zero(),
-            )
-            .expect("reserve quote")
-    }
-
-    fn reserve_lifecycle_event_fixture() -> ReserveLifecycleEvent {
-        let quote = reserve_quote_fixture();
-        let lifecycle = quote
-            .lifecycle_projection(3, 7, 30)
-            .expect("lifecycle projection");
-        ReserveLifecycleEvent {
-            sequence: 3,
-            provider_id: [0x44; 32],
-            previous_stage: Some(ReserveLifecycleStage::Warning),
-            current_stage: lifecycle.stage,
-            observed_at_unix: 1_800_000_040,
-            ledger: quote.ledger_projection().expect("ledger projection"),
-            lifecycle,
-            grace_period_days: 7,
-            default_after_days: 30,
-            applied_policy_id: None,
-            applied_appeal_id: None,
-        }
-    }
-
-    fn reserve_movement_record_fixture() -> ReserveMovementRecord {
-        ReserveMovementRecord {
-            sequence: 4,
-            movement_id: [0x45; 32],
-            provider_id: [0x44; 32],
-            provider_account: b"provider-account".to_vec(),
-            reserve_account: b"reserve-account".to_vec(),
-            asset_definition_id: b"xor#sora".to_vec(),
-            kind: ReserveMovementKind::TopUp,
-            amount: sorafs_manifest::deal::XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            balance_after: sorafs_manifest::deal::XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            confirmed_balance_after: sorafs_manifest::deal::XorQuantity::zero(),
-            idempotency_key: "movement-1".to_string(),
-            observed_at_unix: 1_800_000_050,
-            custody_status: ReserveMovementCustodyStatus::Submitted,
-            custody_tx_hash_hex: Some(hex::encode([0x55; 32])),
-            custody_updated_at_unix: Some(1_800_000_060),
-        }
-    }
-
-    fn reserve_appeal_record_fixture() -> ReserveAppealRecord {
-        ReserveAppealRecord {
-            sequence: 5,
-            appeal_id: [0x46; 32],
-            provider_id: [0x44; 32],
-            provider_account: b"provider-account".to_vec(),
-            requested_stage: Some(ReserveLifecycleStage::Grace),
-            reason: "provider asks for grace while custody tx settles".to_string(),
-            evidence_digest_hex: Some(hex::encode([0x56; 32])),
-            idempotency_key: "appeal-1".to_string(),
-            status: ReserveAppealStatus::Accepted,
-            opened_at_unix: 1_800_000_070,
-            decision_account: Some(b"reserve-authority".to_vec()),
-            decision_rationale: Some("custody evidence confirmed".to_string()),
-            decided_at_unix: Some(1_800_000_080),
-        }
-    }
-
-    fn reserve_lifecycle_policy_record_fixture() -> ReserveLifecyclePolicyRecord {
-        ReserveLifecyclePolicyRecord {
-            sequence: 6,
-            policy_id: [0x47; 32],
-            authority_account: b"reserve-authority".to_vec(),
-            grace_period_days: 7,
-            default_after_days: 30,
-            effective_at_unix: 1_800_000_090,
-            reason: "mainnet rollout baseline".to_string(),
-            idempotency_key: "policy-1".to_string(),
-            observed_at_unix: 1_800_000_085,
-        }
-    }
-
     fn privacy_config() -> PrivacyAggregateCycleConfig {
         PrivacyAggregateCycleConfig {
+            query_id: [0xB0; 32],
+            first_cycle_start_unix: 100,
+            cycle_seconds: 100,
             aggregate_id_prefix: "sfm4c-cycle".to_string(),
+            populations: vec![PrivacyAggregatePopulationV1 {
+                label: "jurisdiction-a".to_string(),
+                digest: [0xA0; 32],
+            }],
+            metrics: vec![PrivacyAggregateMetricSchemaV1 {
+                key: "moderation_actions".to_string(),
+                unit: "count".to_string(),
+            }],
             privacy: ModerationPrivacyParametersV1 {
                 version:
                     iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
@@ -3446,9 +4192,8 @@ mod tests {
                 delta_ppb: Some(0),
                 per_subject_metric_cap: Some(1),
                 suppression_threshold: Some(2),
-                suppressed_count: 0,
             },
-            policy_digest: Some([0xC0; 32]),
+            policy_digest: [0xC0; 32],
             metadata: vec![ModerationLedgerMetadataV1 {
                 key: "publisher".to_string(),
                 value: "sfm4c-worker".to_string(),
@@ -3456,19 +4201,39 @@ mod tests {
         }
     }
 
+    fn privacy_prf_input(output: [u8; 32]) -> PrivacyCyclePrfInputV1 {
+        let config = privacy_config();
+        let request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            [0xC0; 32],
+            privacy_population_inventory_digest(&config.populations),
+            privacy_metric_schema_digest(&config.metrics),
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 100,
+                cycle_end_unix: 200,
+                due_at_unix: 200,
+            },
+        )
+        .expect("canonical test PRF request");
+        PrivacyCyclePrfInputV1::new(
+            request,
+            PrivacyCyclePrfOutputV1::new(output).expect("valid test PRF output"),
+        )
+    }
+
     fn privacy_event(event_id: &str, occurred_at_unix: u64) -> PrivacyAggregateSourceEvent {
         PrivacyAggregateSourceEvent {
             event_id: event_id.to_string(),
             occurred_at_unix,
             population_label: "jurisdiction-a".to_string(),
-            population_digest: Some([0xA0; 32]),
+            population_digest: [0xA0; 32],
             subject_digest: *blake3::hash(event_id.as_bytes()).as_bytes(),
             metrics: vec![PrivacyAggregateSourceMetric {
                 key: "moderation_actions".to_string(),
                 value: 1,
                 unit: "count".to_string(),
             }],
-            policy_digest: Some([0xC0; 32]),
+            policy_digest: [0xC0; 32],
         }
     }
 
@@ -3478,9 +4243,12 @@ mod tests {
             let mut hasher = blake3::Hasher::new_keyed(&[0x5A; 32]);
             hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
             hasher.update(context);
-            ExactNoiseSampler::new(hasher.finalize_xof())
-                .sample_discrete_laplace(4, 5, 1)
-                .expect("bounded exact sample")
+            let center = u64::MAX / 2;
+            i128::from(
+                ExactNoiseSampler::new(hasher.finalize_xof())
+                    .apply_discrete_laplace(center, 4, 5, 1)
+                    .expect("exact sample"),
+            ) - i128::from(center)
         }
 
         let sample_a = sample(b"aggregate-a/metric-a");
@@ -3496,6 +4264,126 @@ mod tests {
     }
 
     #[test]
+    fn exact_discrete_laplace_normalizes_zero_before_sampling_sign() {
+        let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
+
+        // q = 1/2 gives P(0) = (1-q)/(1+q) = 1/3, followed by a
+        // conditional fair sign and P(|Z|=k | Z!=0) = (1-q)q^(k-1).
+        // Sampling a sign after a geometric magnitude starting at zero would
+        // instead assign P(0)=1-q=1/2 and is not this distribution.
+        assert_eq!(law.continuation_numerator, 1);
+        assert_eq!(law.continuation_denominator, 2);
+        assert_eq!(law.zero_numerator, 1);
+        assert_eq!(law.zero_denominator, 3);
+        assert_ne!(
+            (law.zero_numerator, law.zero_denominator,),
+            (
+                law.continuation_denominator - law.continuation_numerator,
+                law.continuation_denominator,
+            )
+        );
+    }
+
+    #[test]
+    fn exact_discrete_laplace_has_symmetric_geometric_tail_structure() {
+        let mut zero = 0_u64;
+        let mut positive = 0_u64;
+        let mut negative = 0_u64;
+        let mut tail_one = 0_u64;
+        let mut tail_two = 0_u64;
+        let mut tail_three = 0_u64;
+        let mut signed_sum = 0_i128;
+        const SAMPLE_COUNT: u64 = 8_192;
+
+        for sample_index in 0..SAMPLE_COUNT {
+            let mut hasher = blake3::Hasher::new_keyed(&[0xA5; 32]);
+            hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
+            hasher.update(&sample_index.to_le_bytes());
+            let center = u64::MAX / 2;
+            let sample = i128::from(
+                ExactNoiseSampler::new(hasher.finalize_xof())
+                    .apply_discrete_laplace(center, 1, 1, 1)
+                    .expect("exact sample"),
+            ) - i128::from(center);
+            signed_sum += sample;
+            match sample.cmp(&0) {
+                std::cmp::Ordering::Less => negative += 1,
+                std::cmp::Ordering::Equal => zero += 1,
+                std::cmp::Ordering::Greater => positive += 1,
+            }
+            let magnitude = sample.unsigned_abs();
+            tail_one += u64::from(magnitude >= 1);
+            tail_two += u64::from(magnitude >= 2);
+            tail_three += u64::from(magnitude >= 3);
+        }
+
+        assert_eq!(zero + positive + negative, SAMPLE_COUNT);
+        assert!((2_000..=3_500).contains(&zero));
+        assert!((2_000..=3_500).contains(&positive));
+        assert!((2_000..=3_500).contains(&negative));
+        assert!(positive.abs_diff(negative) < 500);
+        assert!(tail_one > tail_two && tail_two > tail_three && tail_three > 0);
+        assert!(signed_sum.unsigned_abs() < u128::from(SAMPLE_COUNT / 4));
+    }
+
+    #[test]
+    fn exact_discrete_laplace_folds_only_at_the_public_integer_boundary() {
+        fn sample(sample_index: u64, value: u64) -> u64 {
+            let mut hasher = blake3::Hasher::new_keyed(&[0x3C; 32]);
+            hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
+            hasher.update(&sample_index.to_le_bytes());
+            ExactNoiseSampler::new(hasher.finalize_xof())
+                .apply_discrete_laplace(value, 1, 1, 1)
+                .expect("exact sample")
+        }
+
+        let center = u64::MAX / 2;
+        let positive_context = (0..1_024)
+            .find(|index| sample(*index, center) > center)
+            .expect("deterministic corpus contains positive noise");
+        let negative_context = (0..1_024)
+            .find(|index| sample(*index, center) < center)
+            .expect("deterministic corpus contains negative noise");
+
+        assert_eq!(sample(positive_context, u64::MAX), u64::MAX);
+        assert_eq!(sample(negative_context, 0), 0);
+        let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
+        assert!(
+            law.continuation_numerator > 0
+                && law.continuation_numerator < law.continuation_denominator,
+            "every finite latent tail length has nonzero probability"
+        );
+    }
+
+    #[test]
+    fn privacy_release_noise_complexity_is_globally_bounded() {
+        fn dimensioned_config(dimension: usize) -> PrivacyAggregateCycleConfig {
+            let mut config = privacy_config();
+            config.populations = (0..dimension)
+                .map(|index| PrivacyAggregatePopulationV1 {
+                    label: format!("population-{index:03}"),
+                    digest: [u8::try_from(index + 1).expect("bounded test dimension"); 32],
+                })
+                .collect();
+            config.metrics = (0..dimension)
+                .map(|index| PrivacyAggregateMetricSchemaV1 {
+                    key: format!("metric-{index:03}"),
+                    unit: "count".to_string(),
+                })
+                .collect();
+            config
+        }
+
+        dimensioned_config(32)
+            .validate()
+            .expect("bounded whole-release sampler workload");
+        assert!(matches!(
+            dimensioned_config(40).validate(),
+            Err(PrivacyAggregateWorkerError::NoiseReleaseComplexityExceedsResourceLimit { .. })
+        ));
+    }
+
+    #[test]
     fn privacy_metrics_clip_each_subject_before_population_sum() {
         let mut first = privacy_event("event-a", 110);
         first.metrics[0].value = 9;
@@ -3505,9 +4393,12 @@ mod tests {
         let mut second_subject = privacy_event("event-c", 130);
         second_subject.metrics[0].value = 7;
 
-        let metrics =
-            clipped_population_metrics(&[first, repeated_subject, second_subject], Some(10))
-                .expect("clip contributions");
+        let metrics = clipped_population_metrics(
+            &[first, repeated_subject, second_subject],
+            &privacy_config().metrics,
+            Some(10),
+        )
+        .expect("clip contributions");
         assert_eq!(
             metrics.get("moderation_actions"),
             Some(&("count".to_string(), 17))
@@ -3515,20 +4406,138 @@ mod tests {
     }
 
     #[test]
-    fn suppression_counts_distinct_subjects_not_repeated_events() {
+    fn dp_k_emits_fixed_bucket_when_distinct_subjects_are_below_threshold() {
         let first = privacy_event("event-a", 110);
         let mut replayed_subject = privacy_event("event-b", 120);
         replayed_subject.subject_digest = first.subject_digest;
-        let error = build_privacy_aggregates_from_source_events(
+        let aggregates = build_privacy_aggregates_from_source_events(
             100,
             200,
-            201,
             &privacy_config(),
-            Some([0x5A; 32]),
+            Some(privacy_prf_input([0x5A; 32])),
             &[first, replayed_subject],
         )
-        .expect_err("one subject cannot satisfy k=2");
-        assert_eq!(error, PrivacyAggregateWorkerError::AllBucketsSuppressed);
+        .expect("DP+k must publish a noised zero vector below k");
+        assert_eq!(aggregates.len(), 1);
+        assert_eq!(aggregates[0].population_label, "jurisdiction-a");
+        assert_eq!(aggregates[0].metrics.len(), 1);
+    }
+
+    #[test]
+    fn dp_k_emits_the_same_fixed_bucket_schema_for_an_empty_cycle() {
+        let config = privacy_config();
+        let aggregates = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            &config,
+            Some(privacy_prf_input([0x5A; 32])),
+            &[],
+        )
+        .expect("DP+k must publish every governed bucket for an empty cycle");
+
+        assert_eq!(aggregates.len(), config.populations.len());
+        assert_eq!(aggregates[0].population_label, "jurisdiction-a");
+        assert_eq!(
+            aggregates[0]
+                .metrics
+                .iter()
+                .map(|metric| (metric.key.as_str(), metric.unit.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("moderation_actions", "count")]
+        );
+    }
+
+    #[test]
+    fn privacy_cycle_rejects_replay_overlap_and_metric_schema_differencing() {
+        let event = privacy_event("event-a", 110);
+        assert!(matches!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &privacy_config(),
+                Some(privacy_prf_input([0x5A; 32])),
+                &[event.clone(), event.clone()],
+            ),
+            Err(PrivacyAggregateWorkerError::DuplicateSourceEvent)
+        ));
+
+        let mut overlap_config = privacy_config();
+        overlap_config
+            .populations
+            .push(PrivacyAggregatePopulationV1 {
+                label: "jurisdiction-b".to_string(),
+                digest: [0xB0; 32],
+            });
+        let mut other_population = privacy_event("event-b", 120);
+        other_population.subject_digest = event.subject_digest;
+        other_population.population_label = "jurisdiction-b".to_string();
+        other_population.population_digest = [0xB0; 32];
+        assert!(matches!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &overlap_config,
+                Some({
+                    let request = PrivacyCyclePrfRequestV1::new(
+                        overlap_config.query_id,
+                        overlap_config.policy_digest,
+                        privacy_population_inventory_digest(&overlap_config.populations),
+                        privacy_metric_schema_digest(&overlap_config.metrics),
+                        PrivacyAggregateCycleWindow {
+                            cycle_start_unix: 100,
+                            cycle_end_unix: 200,
+                            due_at_unix: 200,
+                        },
+                    )
+                    .expect("overlap config request");
+                    PrivacyCyclePrfInputV1::new(
+                        request,
+                        PrivacyCyclePrfOutputV1::new([0x5A; 32]).expect("valid overlap PRF output"),
+                    )
+                }),
+                &[event.clone(), other_population],
+            ),
+            Err(PrivacyAggregateWorkerError::SubjectPopulationOverlap)
+        ));
+
+        let mut mismatched_schema = privacy_event("event-b", 120);
+        mismatched_schema
+            .metrics
+            .push(PrivacyAggregateSourceMetric {
+                key: "proof_failures".to_string(),
+                value: 1,
+                unit: "count".to_string(),
+            });
+        assert!(matches!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &privacy_config(),
+                Some(privacy_prf_input([0x5A; 32])),
+                &[event, mismatched_schema],
+            ),
+            Err(PrivacyAggregateWorkerError::MetricSchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn privacy_cycle_bounds_source_events_before_grouping() {
+        let events = (0..=PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1)
+            .map(|index| privacy_event(&format!("event-{index:04}"), 110))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &privacy_config(),
+                Some(privacy_prf_input([0x5A; 32])),
+                &events,
+            ),
+            Err(PrivacyAggregateWorkerError::TooManySourceEvents {
+                count: PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1 + 1,
+                max: PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
+            })
+        );
     }
 
     #[test]
@@ -3584,7 +4593,6 @@ mod tests {
             delta_ppb: None,
             per_subject_metric_cap: None,
             suppression_threshold: Some(1),
-            suppressed_count: 0,
         };
         let mut first = privacy_event("event-a", 110);
         first.metrics[0].value = u64::MAX;
@@ -3592,16 +4600,88 @@ mod tests {
         second.metrics[0].value = u64::MAX;
 
         assert_eq!(
+            build_privacy_aggregates_from_source_events(100, 200, &config, None, &[first, second],),
+            Err(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn privacy_noise_uses_joint_metric_vector_sensitivity() {
+        let mut config = privacy_config();
+        config.privacy.epsilon_numerator = Some(1);
+        config.privacy.epsilon_denominator = Some(300);
+        config.privacy.per_subject_metric_cap = Some(10);
+        config.metrics.insert(
+            0,
+            PrivacyAggregateMetricSchemaV1 {
+                key: "appeals".to_string(),
+                unit: "count".to_string(),
+            },
+        );
+        let mut first = privacy_event("event-a", 110);
+        first.metrics.insert(
+            0,
+            PrivacyAggregateSourceMetric {
+                key: "appeals".to_string(),
+                value: 1,
+                unit: "count".to_string(),
+            },
+        );
+        let mut second = privacy_event("event-b", 120);
+        second.metrics.insert(
+            0,
+            PrivacyAggregateSourceMetric {
+                key: "appeals".to_string(),
+                value: 1,
+                unit: "count".to_string(),
+            },
+        );
+
+        assert_eq!(
             build_privacy_aggregates_from_source_events(
                 100,
                 200,
-                201,
                 &config,
-                None,
+                Some(privacy_prf_input([0x5A; 32])),
                 &[first, second],
             ),
-            Err(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+            Err(
+                PrivacyAggregateWorkerError::NoiseParametersExceedResourceLimit {
+                    epsilon_numerator: 1,
+                    epsilon_denominator: 300,
+                    sensitivity: 40,
+                }
+            )
         );
+    }
+
+    #[test]
+    fn privacy_noise_clamps_wide_internal_sums_before_integer_post_processing() {
+        let config = privacy_config();
+        let sensitivity = privacy_vector_sensitivity(&config).expect("valid sensitivity");
+        let private_source_digest = [0x44; 32];
+        let at_u64_max = apply_metric_noise(
+            u128::from(u64::MAX),
+            &config,
+            Some(&privacy_prf_input([0x5A; 32])),
+            sensitivity,
+            "aggregate-a",
+            "moderation_actions",
+            &private_source_digest,
+        )
+        .expect("noise at the public integer bound");
+        let above_u64_max = apply_metric_noise(
+            u128::MAX,
+            &config,
+            Some(&privacy_prf_input([0x5A; 32])),
+            sensitivity,
+            "aggregate-a",
+            "moderation_actions",
+            &private_source_digest,
+        )
+        .expect("wide sum is deterministically clamped");
+
+        assert_eq!(above_u64_max, at_u64_max);
     }
 
     fn privacy_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
@@ -3681,29 +4761,158 @@ mod tests {
             tampered.validate(),
             Err(PrivacyCompositionBudgetError::InvalidChargeChain)
         );
+
+        let mut truncated =
+            norito::to_bytes(&before).expect("encode valid privacy budget checkpoint");
+        truncated.pop();
+        assert!(
+            norito::decode_from_bytes::<PrivacyCompositionBudgetLedgerV1>(&truncated).is_err(),
+            "truncated privacy budget checkpoint must fail closed"
+        );
+    }
+
+    fn privacy_release_record(
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        seed: u8,
+        previous_publication_block_hash: Option<[u8; 32]>,
+    ) -> PrivacyReleaseRecordV1 {
+        let config = privacy_config();
+        let request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            config.policy_digest,
+            privacy_population_inventory_digest(&config.populations),
+            privacy_metric_schema_digest(&config.metrics),
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix,
+                cycle_end_unix,
+                due_at_unix: cycle_end_unix,
+            },
+        )
+        .expect("release PRF request");
+        PrivacyReleaseRecordV1 {
+            sequence: 0,
+            release_id: privacy_aggregate_cycle_id(
+                config.query_id,
+                cycle_start_unix,
+                cycle_end_unix,
+            ),
+            query_id: config.query_id,
+            first_cycle_start_unix: config.first_cycle_start_unix,
+            cycle_seconds: config.cycle_seconds,
+            publish_delay_seconds: 0,
+            cycle_start_unix,
+            cycle_end_unix,
+            due_at_unix: cycle_end_unix,
+            private_source_digest: [seed; 32],
+            policy_digest: config.policy_digest,
+            population_inventory_digest: privacy_population_inventory_digest(&config.populations),
+            metric_schema_digest: privacy_metric_schema_digest(&config.metrics),
+            privacy: config.privacy,
+            prf_request_binding: Some(request.binding_digest()),
+            prf_commitment: Some([seed.wrapping_add(2); 32]),
+            budget_charge_digest: Some([seed.wrapping_add(3); 32]),
+            publication_payload_digest: Some([seed.wrapping_add(4); 32]),
+            published_aggregate_inventory_digest: Some([seed.wrapping_add(6); 32]),
+            previous_publication_block_hash,
+            publication_block_hash: Some([seed.wrapping_add(5); 32]),
+            status: PrivacyReleaseStatusV1::Published,
+            previous_record_digest: None,
+            record_digest: [0; 32],
+        }
+    }
+
+    #[test]
+    fn privacy_release_ledger_is_append_only_hash_chained_and_redacts_private_input() {
+        let mut ledger = PrivacyReleaseLedgerV1::default();
+        let first = ledger
+            .append(privacy_release_record(100, 200, 0x41, None))
+            .expect("append first release");
+        let second = ledger
+            .append(privacy_release_record(
+                200,
+                300,
+                0x51,
+                first.publication_block_hash,
+            ))
+            .expect("append second release");
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(second.previous_record_digest, Some(first.record_digest));
+        assert_eq!(ledger.head([0xB0; 32]).expect("release head").sequence(), 2);
+        ledger.validate().expect("release ledger validates");
+        let restored: PrivacyReleaseLedgerV1 =
+            norito::decode_from_bytes(&norito::to_bytes(&ledger).expect("encode release ledger"))
+                .expect("decode release ledger");
+        assert_eq!(restored, ledger);
+        assert!(!format!("{:?}", ledger.records[0]).contains(&hex::encode([0x41; 32])));
+
+        let mut delay_ledger = PrivacyReleaseLedgerV1::default();
+        let delay_first = delay_ledger
+            .append(privacy_release_record(100, 200, 0x41, None))
+            .expect("append first delay-lineage release");
+        let mut changed_delay =
+            privacy_release_record(200, 300, 0x61, delay_first.publication_block_hash);
+        changed_delay.publish_delay_seconds = 10;
+        changed_delay.due_at_unix = 310;
+        assert_eq!(
+            delay_ledger
+                .append(changed_delay)
+                .expect_err("publish delay is immutable for a query lineage"),
+            PrivacyReleaseLedgerErrorV1::InvalidRecord
+        );
+
+        let mut tampered = ledger;
+        tampered.records[0].private_source_digest[0] ^= 1;
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyReleaseLedgerErrorV1::InvalidRecord)
+        );
     }
 
     #[test]
     fn privacy_cycle_prf_request_binds_policy_and_exact_window() {
+        let config = privacy_config();
+        let population_inventory_digest = privacy_population_inventory_digest(&config.populations);
+        let metric_schema_digest = privacy_metric_schema_digest(&config.metrics);
         let window = PrivacyAggregateCycleWindow {
             cycle_start_unix: 100,
             cycle_end_unix: 200,
             due_at_unix: 210,
         };
-        let request =
-            PrivacyCyclePrfRequestV1::new([0xC0; 32], window).expect("canonical PRF request");
+        let request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            [0xC0; 32],
+            population_inventory_digest,
+            metric_schema_digest,
+            window,
+        )
+        .expect("canonical PRF request");
 
         assert_eq!(request.version(), PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1);
+        assert_eq!(request.query_id(), config.query_id);
         assert_eq!(request.policy_digest(), [0xC0; 32]);
-        assert_eq!(request.cycle_id(), privacy_aggregate_cycle_id(window));
+        assert_eq!(
+            request.cycle_id(),
+            privacy_aggregate_cycle_id(config.query_id, 100, 200)
+        );
         assert_eq!(request.cycle_start_unix(), 100);
         assert_eq!(request.cycle_end_unix(), 200);
-        assert_eq!(request.due_at_unix(), 210);
 
-        let other_policy =
-            PrivacyCyclePrfRequestV1::new([0xC1; 32], window).expect("other policy request");
+        let other_policy = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            [0xC1; 32],
+            population_inventory_digest,
+            metric_schema_digest,
+            window,
+        )
+        .expect("other policy request");
         let other_window = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
             [0xC0; 32],
+            population_inventory_digest,
+            metric_schema_digest,
             PrivacyAggregateCycleWindow {
                 cycle_start_unix: 200,
                 cycle_end_unix: 300,
@@ -3712,11 +4921,30 @@ mod tests {
         )
         .expect("other window request");
         assert_ne!(request.binding_digest(), other_policy.binding_digest());
+        assert_eq!(request.cycle_id(), other_policy.cycle_id());
         assert_ne!(request.cycle_id(), other_window.cycle_id());
         assert_ne!(request.binding_digest(), other_window.binding_digest());
+        let changed_due = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            [0xC0; 32],
+            population_inventory_digest,
+            metric_schema_digest,
+            PrivacyAggregateCycleWindow {
+                due_at_unix: 999,
+                ..window
+            },
+        )
+        .expect("changed operational due time");
+        assert_eq!(request, changed_due);
         assert_eq!(
-            PrivacyCyclePrfRequestV1::new([0; 32], window),
-            Err(PrivacyCyclePrfRequestErrorV1::MissingPolicyDigest)
+            PrivacyCyclePrfRequestV1::new(
+                [0; 32],
+                [0xC0; 32],
+                population_inventory_digest,
+                metric_schema_digest,
+                window,
+            ),
+            Err(PrivacyCyclePrfRequestErrorV1::MissingQueryId)
         );
     }
 
@@ -3728,18 +4956,16 @@ mod tests {
         let first = build_privacy_aggregates_from_source_events(
             100,
             200,
-            201,
             &config,
-            Some([0x5A; 32]),
+            Some(privacy_prf_input([0x5A; 32])),
             &events,
         )
         .expect("build aggregate");
         let second = build_privacy_aggregates_from_source_events(
             100,
             200,
-            201,
             &config,
-            Some([0x5A; 32]),
+            Some(privacy_prf_input([0x5A; 32])),
             &events,
         )
         .expect("rebuild aggregate");
@@ -3747,10 +4973,11 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 1);
         let aggregate = &first[0];
-        let commitment_hex = hex::encode(noise_randomness_commitment(&[0x5A; 32]));
-        assert!(aggregate.metadata.iter().any(|item| {
-            item.key == NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1 && item.value == commitment_hex
-        }));
+        let expected_commitment = privacy_prf_input([0x5A; 32]).commitment();
+        assert_eq!(
+            aggregate.noise_source,
+            ModerationPrivacyNoiseSourceV1::ThresholdPrf(expected_commitment)
+        );
         assert!(
             aggregate
                 .metadata
@@ -3768,15 +4995,128 @@ mod tests {
         let changed = build_privacy_aggregates_from_source_events(
             100,
             200,
-            201,
             &privacy_config(),
-            Some([0x5B; 32]),
+            Some(privacy_prf_input([0x5B; 32])),
             &events,
         )
         .expect("build with changed runtime output");
         assert_ne!(
-            changed[0].source_payload_digest, aggregate.source_payload_digest,
-            "the public source digest must bind the cycle randomness commitment"
+            changed[0].noise_source, aggregate.noise_source,
+            "the opaque public commitment must bind the runtime PRF output"
+        );
+    }
+
+    #[test]
+    fn privacy_cycle_rejects_wrong_prf_binding_and_commitment_without_logging_output() {
+        let events = vec![privacy_event("event-a", 110), privacy_event("event-b", 120)];
+        let config = privacy_config();
+        let wrong_request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            [0xC1; 32],
+            privacy_population_inventory_digest(&config.populations),
+            privacy_metric_schema_digest(&config.metrics),
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 100,
+                cycle_end_unix: 200,
+                due_at_unix: 200,
+            },
+        )
+        .expect("canonical wrong-policy request");
+        let wrong_binding = PrivacyCyclePrfInputV1::new(
+            wrong_request,
+            PrivacyCyclePrfOutputV1::new([0x5A; 32]).expect("valid provider output"),
+        );
+        assert_eq!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &privacy_config(),
+                Some(wrong_binding),
+                &events,
+            ),
+            Err(PrivacyAggregateWorkerError::CyclePrfBindingMismatch)
+        );
+
+        let mut wrong_commitment = privacy_prf_input([0x5A; 32]);
+        wrong_commitment.commitment.commitment[0] ^= 1;
+        assert_eq!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                &privacy_config(),
+                Some(wrong_commitment),
+                &events,
+            ),
+            Err(PrivacyAggregateWorkerError::CyclePrfCommitmentMismatch)
+        );
+
+        let input = privacy_prf_input([0x5A; 32]);
+        let debug = format!("{input:?}");
+        assert!(debug.contains("output: \"<redacted>\""));
+        assert!(
+            !debug.contains(&format!("{:?}", [0x5A; 32])),
+            "runtime threshold-PRF output must not enter Debug/log output"
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_is_byte_identical_across_input_orderings() {
+        let events = vec![
+            privacy_event("event-a", 110),
+            privacy_event("event-b", 120),
+            privacy_event("event-c", 130),
+        ];
+        let mut reversed = events.clone();
+        reversed.reverse();
+        let first = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            &privacy_config(),
+            Some(privacy_prf_input([0x5A; 32])),
+            &events,
+        )
+        .expect("build first replica output");
+        let second = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            &privacy_config(),
+            Some(privacy_prf_input([0x5A; 32])),
+            &reversed,
+        )
+        .expect("build second replica output");
+
+        assert_eq!(first, second);
+        assert_eq!(
+            norito::to_bytes(&first).expect("encode first replica output"),
+            norito::to_bytes(&second).expect("encode second replica output")
+        );
+    }
+
+    #[test]
+    fn suppression_only_release_has_no_randomness_commitment() {
+        let mut config = privacy_config();
+        config.privacy = ModerationPrivacyParametersV1 {
+            version:
+                iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            mode: ModerationPrivacyModeV1::Suppression,
+            epsilon_numerator: None,
+            epsilon_denominator: None,
+            delta_ppb: None,
+            per_subject_metric_cap: None,
+            suppression_threshold: Some(2),
+        };
+        let aggregates = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            &config,
+            None,
+            &[privacy_event("event-a", 110), privacy_event("event-b", 120)],
+        )
+        .expect("build suppression-only aggregate");
+        assert_eq!(aggregates.len(), 1);
+        assert_eq!(
+            aggregates[0].noise_source,
+            ModerationPrivacyNoiseSourceV1::SuppressionOnly
         );
     }
 
@@ -3789,9 +5129,8 @@ mod tests {
         let error = build_privacy_aggregates_from_source_events(
             100,
             200,
-            201,
             &config,
-            Some([0x5A; 32]),
+            Some(privacy_prf_input([0x5A; 32])),
             &[privacy_event("event-a", 110), privacy_event("event-b", 120)],
         )
         .expect_err("unbounded expected sampler work must fail");
@@ -3801,7 +5140,7 @@ mod tests {
             PrivacyAggregateWorkerError::NoiseParametersExceedResourceLimit {
                 epsilon_numerator: 1,
                 epsilon_denominator: 10_000,
-                sensitivity: 1,
+                sensitivity: 2,
             }
         );
     }
@@ -3810,7 +5149,7 @@ mod tests {
     fn privacy_aggregate_rejects_caller_supplied_randomness_commitment() {
         let mut config = privacy_config();
         config.metadata = vec![ModerationLedgerMetadataV1 {
-            key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
+            key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
             value: hex::encode([0x11; 32]),
         }];
 
@@ -3820,8 +5159,17 @@ mod tests {
         assert_eq!(
             error,
             PrivacyAggregateWorkerError::ReservedMetadataKey {
-                key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+                key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
             }
+        );
+
+        let mut missing_policy = privacy_config();
+        missing_policy.policy_digest = [0; 32];
+        assert_eq!(
+            missing_policy.validate(),
+            Err(PrivacyAggregateWorkerError::MissingDigest {
+                field: "policy_digest",
+            })
         );
     }
 
@@ -3883,212 +5231,187 @@ mod tests {
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
+    }
 
-        let reserve_lifecycle = reserve_lifecycle_event_fixture();
-        let reserve_lifecycle_entry = reserve_lifecycle_event_source_entry(&reserve_lifecycle)
-            .expect("reserve lifecycle source entry");
-        assert_eq!(
-            reserve_lifecycle_entry.kind,
-            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle".to_string())
+    #[test]
+    fn finalized_reserve_event_adapter_binds_exact_committed_cursor_and_payload() {
+        let event = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let entry =
+            reserve_finalized_event_source_entry(&event).expect("finalized reserve source entry");
+        let expected_block_hash = hex::encode(event.block_hash);
+        let expected_provider_id = hex::encode(
+            event
+                .event
+                .provider_id
+                .expect("provider transition")
+                .as_bytes(),
         );
+
         assert_eq!(
-            reserve_lifecycle_entry.event_id,
+            entry.event_id,
             format!(
-                "reserve-lifecycle:{}:{}",
-                reserve_lifecycle.sequence,
-                hex::encode(reserve_lifecycle.provider_id)
+                "reserve-ledger:{}:{}:{}:{}",
+                event.sequence, event.block_height, expected_block_hash, event.event_index
             )
         );
-        assert!(
-            reserve_lifecycle_entry
-                .metadata
-                .iter()
-                .any(|item| item.key == "current_stage" && item.value == "grace")
-        );
-        reserve_lifecycle_entry
-            .validate()
-            .expect("reserve lifecycle entry validates");
-
-        let reserve_movement = reserve_movement_record_fixture();
-        let reserve_movement_entry =
-            reserve_movement_source_entry(&reserve_movement).expect("reserve movement entry");
+        assert_eq!(entry.occurred_at_unix, 1_800_000_123);
         assert_eq!(
-            reserve_movement_entry.kind,
-            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement".to_string())
+            entry.kind,
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement_approved".to_string())
         );
-        assert_eq!(reserve_movement_entry.occurred_at_unix, 1_800_000_060);
-        assert!(
-            reserve_movement_entry
-                .metadata
-                .iter()
-                .any(|item| item.key == "provider_account_digest_hex")
-        );
-        assert!(
-            !reserve_movement_entry
-                .metadata
-                .iter()
-                .any(|item| item.value == "provider-account")
-        );
-        reserve_movement_entry
-            .validate()
-            .expect("reserve movement entry validates");
-
-        let reserve_appeal = reserve_appeal_record_fixture();
-        let reserve_appeal_entry =
-            reserve_appeal_source_entry(&reserve_appeal).expect("reserve appeal entry");
+        assert_eq!(entry.policy_digest, Some(event.event.policy_digest));
         assert_eq!(
-            reserve_appeal_entry.kind,
-            ModerationLedgerEntryKindV1::AppealOutcome
+            entry.subject,
+            format!("reserve-provider:{expected_provider_id}")
         );
         assert!(
-            reserve_appeal_entry
+            entry
                 .metadata
                 .iter()
-                .any(|item| item.key == "reason_digest_hex")
+                .any(|item| item.key == "block_hash_hex" && item.value == expected_block_hash)
         );
         assert!(
-            !reserve_appeal_entry
+            entry
                 .metadata
                 .iter()
-                .any(|item| item.value == reserve_appeal.reason)
-        );
-        reserve_appeal_entry
-            .validate()
-            .expect("reserve appeal entry validates");
-
-        let reserve_policy = reserve_lifecycle_policy_record_fixture();
-        let reserve_policy_entry =
-            reserve_lifecycle_policy_source_entry(&reserve_policy).expect("reserve policy entry");
-        assert_eq!(
-            reserve_policy_entry.kind,
-            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle_policy".to_string())
-        );
-        assert_eq!(
-            reserve_policy_entry.policy_digest,
-            Some(reserve_policy.policy_id)
+                .any(|item| item.key == "event_kind" && item.value == "movement_approved")
         );
         assert!(
-            reserve_policy_entry
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "operation_id_hex"
+                    && item.value == hex::encode([0xC3; 32]))
+        );
+        assert!(
+            entry
                 .metadata
                 .iter()
                 .any(|item| item.key == "authority_account_digest_hex")
         );
-        reserve_policy_entry
-            .validate()
-            .expect("reserve policy entry validates");
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .all(|item| item.value != event.event.authority.to_string()),
+            "raw authority account must not enter public transparency metadata"
+        );
+        let canonical = event.encode();
+        assert_eq!(
+            entry.payload_digest,
+            reserve_source_payload_digest(
+                "reserve_finalized_event",
+                &[("canonical_event", canonical.as_slice())],
+            )
+        );
+        entry.validate().expect("derived entry validates");
+
+        let replica =
+            reserve_finalized_event_source_entry(&event).expect("second replica source entry");
+        assert_eq!(replica, entry);
+        assert_eq!(
+            replica.encode(),
+            entry.encode(),
+            "replicas must emit byte-identical source entries"
+        );
+
+        let mut competing_fork = event.clone();
+        competing_fork.block_hash[0] ^= 0xFF;
+        let competing_entry = reserve_finalized_event_source_entry(&competing_fork)
+            .expect("well-formed competing cursor");
+        assert_ne!(competing_entry.event_id, entry.event_id);
+        assert_ne!(competing_entry.payload_digest, entry.payload_digest);
     }
 
     #[test]
-    fn reserve_source_entries_preserve_exact_quantities_and_hash_canonical_records() {
-        let sub_micro: sorafs_manifest::deal::XorQuantity =
-            "0.0000001".parse().expect("sub-micro quantity");
-        let wide: sorafs_manifest::deal::XorQuantity = "340282366920938463463374607431768211456"
-            .parse()
-            .expect("quantity wider than u128");
-        let high_precision: sorafs_manifest::deal::XorQuantity =
-            "1.000000001".parse().expect("high precision quantity");
-
-        let mut lifecycle = reserve_lifecycle_event_fixture();
-        lifecycle.ledger.rent_due = sub_micro.clone();
-        lifecycle.ledger.reserve_shortfall = wide.clone();
-        lifecycle.ledger.top_up_shortfall = high_precision.clone();
-        lifecycle.lifecycle.credit_draw = wide.clone();
-        lifecycle.lifecycle.credit_available_after_draw = Some(high_precision.clone());
-        lifecycle.lifecycle.credit_shortfall = sub_micro.clone();
-        lifecycle.lifecycle.accrued_interest = high_precision.clone();
-        lifecycle.lifecycle.total_due_after_credit = wide.clone();
-        let lifecycle_entry =
-            reserve_lifecycle_event_source_entry(&lifecycle).expect("exact lifecycle entry");
-        for (key, expected) in [
-            ("rent_due", "0.0000001"),
-            (
-                "reserve_shortfall",
-                "340282366920938463463374607431768211456",
-            ),
-            ("top_up_shortfall", "1.000000001"),
-            ("credit_draw", "340282366920938463463374607431768211456"),
-            ("credit_available_after_draw", "1.000000001"),
-            ("credit_shortfall", "0.0000001"),
-            ("accrued_interest", "1.000000001"),
-            (
-                "total_due_after_credit",
-                "340282366920938463463374607431768211456",
-            ),
-        ] {
-            assert!(
-                lifecycle_entry
-                    .metadata
-                    .iter()
-                    .any(|item| item.key == key && item.value == expected),
-                "missing exact lifecycle metadata {key}"
-            );
-        }
-        assert!(
-            lifecycle_entry
-                .metadata
-                .iter()
-                .all(|item| !item.key.contains("micro_xor")),
-            "legacy micro-XOR metadata must not be emitted"
-        );
-        let lifecycle_bytes = lifecycle.encode();
+    fn finalized_reserve_event_adapter_maps_policy_and_appeal_kinds() {
+        let policy = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        let policy_entry =
+            reserve_finalized_event_source_entry(&policy).expect("policy activation source");
         assert_eq!(
-            lifecycle_entry.payload_digest,
-            reserve_source_payload_digest(
-                "reserve_lifecycle_event",
-                &[("canonical_event", lifecycle_bytes.as_slice())],
-            )
+            policy_entry.kind,
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_policy_activated".to_string())
         );
-        let mut changed_lifecycle = lifecycle.clone();
-        changed_lifecycle.lifecycle.total_due_after_credit = high_precision.clone();
-        assert_ne!(
-            reserve_lifecycle_event_source_entry(&changed_lifecycle)
-                .expect("changed lifecycle entry")
-                .payload_digest,
-            lifecycle_entry.payload_digest,
-            "every canonical lifecycle field must be authenticated"
+        assert_eq!(
+            policy_entry.subject,
+            format!("reserve-policy:{}", hex::encode(policy.event.policy_digest))
         );
 
-        let mut movement = reserve_movement_record_fixture();
-        movement.amount = sub_micro;
-        movement.balance_after = wide;
-        movement.confirmed_balance_after = high_precision;
-        let movement_entry =
-            reserve_movement_source_entry(&movement).expect("exact movement entry");
-        for (key, expected) in [
-            ("amount", "0.0000001"),
-            ("balance_after", "340282366920938463463374607431768211456"),
-            ("confirmed_balance_after", "1.000000001"),
+        for kind in [
+            SorafsReserveLedgerEventKind::AppealAccepted,
+            SorafsReserveLedgerEventKind::AppealRejected,
         ] {
-            assert!(
-                movement_entry
-                    .metadata
-                    .iter()
-                    .any(|item| item.key == key && item.value == expected),
-                "missing exact movement metadata {key}"
+            let appeal = reserve_finalized_event_fixture(kind);
+            let appeal_entry =
+                reserve_finalized_event_source_entry(&appeal).expect("appeal outcome source");
+            assert_eq!(
+                appeal_entry.kind,
+                ModerationLedgerEntryKindV1::AppealOutcome
             );
         }
-        let movement_bytes = movement.encode();
-        assert_eq!(
-            movement_entry.payload_digest,
-            reserve_source_payload_digest(
-                "reserve_movement",
-                &[("canonical_record", movement_bytes.as_slice())],
-            )
+    }
+
+    #[test]
+    fn finalized_reserve_event_adapter_rejects_malformed_native_invariants() {
+        let base = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let mut malformed = Vec::new();
+
+        let mut zero_sequence = base.clone();
+        zero_sequence.sequence = 0;
+        malformed.push(zero_sequence);
+        let mut zero_height = base.clone();
+        zero_height.block_height = 0;
+        malformed.push(zero_height);
+        let mut zero_hash = base.clone();
+        zero_hash.block_hash = [0; 32];
+        malformed.push(zero_hash);
+        let mut zero_policy = base.clone();
+        zero_policy.event.policy_digest = [0; 32];
+        malformed.push(zero_policy);
+        let mut sub_second_timestamp = base.clone();
+        sub_second_timestamp.event.occurred_at_unix_ms = 999;
+        malformed.push(sub_second_timestamp);
+        let mut missing_provider = base.clone();
+        missing_provider.event.provider_id = None;
+        malformed.push(missing_provider);
+        let mut zero_provider = base.clone();
+        zero_provider.event.provider_id =
+            Some(iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]));
+        malformed.push(zero_provider);
+        let mut zero_revision = base.clone();
+        zero_revision.event.provider_revision = 0;
+        malformed.push(zero_revision);
+        let mut missing_stage = base.clone();
+        missing_stage.event.resulting_lifecycle_stage = None;
+        malformed.push(missing_stage);
+        let mut missing_operation = base.clone();
+        missing_operation.event.operation_id = None;
+        malformed.push(missing_operation);
+        let mut zero_operation = base.clone();
+        zero_operation.event.operation_id = Some([0; 32]);
+        malformed.push(zero_operation);
+
+        let mut unexpected_operation =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::RentCharged);
+        unexpected_operation.event.operation_id = Some([0xE5; 32]);
+        malformed.push(unexpected_operation);
+
+        let mut malformed_policy =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        malformed_policy.event.provider_id = Some(
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]),
         );
-        let mut changed_movement = movement.clone();
-        changed_movement.custody_updated_at_unix = Some(
-            changed_movement
-                .custody_updated_at_unix
-                .expect("custody timestamp")
-                .saturating_add(1),
-        );
-        assert_ne!(
-            reserve_movement_source_entry(&changed_movement)
-                .expect("changed movement entry")
-                .payload_digest,
-            movement_entry.payload_digest,
-            "every canonical movement field must be authenticated"
-        );
+        malformed.push(malformed_policy);
+
+        for event in malformed {
+            assert!(
+                matches!(
+                    reserve_finalized_event_source_entry(&event),
+                    Err(TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent { .. })
+                ),
+                "malformed event unexpectedly accepted: {event:?}"
+            );
+        }
     }
 
     #[test]
@@ -4118,24 +5441,6 @@ mod tests {
         assert!(matches!(
             err,
             TransparencySourceEntryAdapterError::InvalidAppealFinanceReport { .. }
-        ));
-
-        let mut reserve_lifecycle = reserve_lifecycle_event_fixture();
-        reserve_lifecycle.provider_id = [0; 32];
-        let err = reserve_lifecycle_event_source_entry(&reserve_lifecycle)
-            .expect_err("invalid reserve lifecycle rejected");
-        assert!(matches!(
-            err,
-            TransparencySourceEntryAdapterError::InvalidReserveLifecycleEvent { .. }
-        ));
-
-        let mut reserve_policy = reserve_lifecycle_policy_record_fixture();
-        reserve_policy.default_after_days = reserve_policy.grace_period_days;
-        let err = reserve_lifecycle_policy_source_entry(&reserve_policy)
-            .expect_err("invalid reserve policy rejected");
-        assert!(matches!(
-            err,
-            TransparencySourceEntryAdapterError::InvalidReserveLifecyclePolicy { .. }
         ));
     }
 

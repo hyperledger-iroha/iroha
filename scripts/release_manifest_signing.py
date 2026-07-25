@@ -6,8 +6,11 @@ reviewed external signer with two positional arguments:
 
     external-signer MANIFEST_PATH NEW_RAW_SIGNATURE_PATH
 
-The signer must create exactly one raw 64-byte Ed25519 signature. Verification
-is delegated to the canonical native contract:
+The signer must create exactly one raw 64-byte Ed25519 signature. The wrapper
+executes an owner-private snapshot of the inspected signer against an
+owner-private snapshot of the canonical manifest, so path substitution cannot
+select a different executable or signing payload. Verification is delegated to
+the canonical native contract:
 
     sorafs-validate release-manifest \
       --manifest MANIFEST_PATH \
@@ -337,17 +340,21 @@ def _unlink_if_identity(path: Path, expected_identity: FileIdentity) -> None:
             pass
 
 
-def _snapshot_native_verifier(
+def _snapshot_executable(
     source: Path,
     destination: Path,
-    trusted_sha256: str,
+    expected_sha256: str,
+    *,
+    label: str,
+    mismatch_message: str,
 ) -> Tuple[str, FileIdentity]:
     before = _inspect_regular(
         source,
-        "native release-manifest verifier",
+        label,
         executable=True,
     )
-    _require_new_output(destination, "native verifier snapshot")
+    snapshot_label = f"{label} snapshot"
+    _require_new_output(destination, snapshot_label)
     read_flags = os.O_RDONLY
     write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
@@ -361,7 +368,7 @@ def _snapshot_native_verifier(
         opened = os.fstat(read_descriptor)
         if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise ReleaseManifestSignatureError(
-                "native release-manifest verifier changed while it was opened"
+                f"{label} changed while it was opened"
             )
         write_descriptor = os.open(destination, write_flags, 0o700)
         snapshot_identity = _identity(os.fstat(write_descriptor))
@@ -376,20 +383,18 @@ def _snapshot_native_verifier(
                 written = os.write(write_descriptor, view)
                 if written <= 0:
                     raise ReleaseManifestSignatureError(
-                        "short write while snapshotting native verifier"
+                        f"short write while snapshotting {label}"
                     )
                 view = view[written:]
         os.fsync(write_descriptor)
         closed = os.fstat(read_descriptor)
         if _identity(opened) != _identity(closed):
             raise ReleaseManifestSignatureError(
-                "native release-manifest verifier changed while it was snapshotted"
+                f"{label} changed while it was snapshotted"
             )
         actual_sha256 = digest.hexdigest()
-        if actual_sha256 != trusted_sha256:
-            raise ReleaseManifestSignatureError(
-                "native release-manifest verifier does not match the reviewed SHA256"
-            )
+        if actual_sha256 != expected_sha256:
+            raise ReleaseManifestSignatureError(mismatch_message)
     except BaseException:
         if snapshot_identity is not None:
             _unlink_if_identity(destination, snapshot_identity)
@@ -402,9 +407,30 @@ def _snapshot_native_verifier(
     return actual_sha256, _identity(opened)
 
 
+def _snapshot_native_verifier(
+    source: Path,
+    destination: Path,
+    trusted_sha256: str,
+) -> Tuple[str, FileIdentity]:
+    return _snapshot_executable(
+        source,
+        destination,
+        trusted_sha256,
+        label="native release-manifest verifier",
+        mismatch_message=(
+            "native release-manifest verifier does not match the reviewed SHA256"
+        ),
+    )
+
+
 def _native_snapshot_path(temp_dir: Path, source: Path) -> Path:
     suffix = ".exe" if source.suffix.lower() == ".exe" else ""
     return temp_dir / f"sorafs-validate-pinned{suffix}"
+
+
+def _signer_snapshot_path(temp_dir: Path, source: Path) -> Path:
+    suffix = ".exe" if source.suffix.lower() == ".exe" else ""
+    return temp_dir / f"external-ed25519-signer-pinned{suffix}"
 
 
 def _native_verifier_environment() -> Dict[str, str]:
@@ -704,8 +730,9 @@ def sign_release_manifest(
     public_key_output_path: Path,
     release_manifest_verifier_path: Path,
     trusted_release_manifest_verifier_sha256: str,
+    verification_summary_output_path: Optional[Path] = None,
 ) -> Dict[str, object]:
-    """Sign via an external signer and verify through ``sorafs-validate``."""
+    """Sign via a pinned external signer and verify through ``sorafs-validate``."""
 
     _validate_sha256(trusted_fingerprint, "trusted signing fingerprint")
     _validate_sha256(
@@ -717,17 +744,36 @@ def sign_release_manifest(
     raw_public_key_file = _absolute(raw_public_key_path)
     signature_output = _absolute(signature_output_path)
     public_key_output = _absolute(public_key_output_path)
+    verification_summary_output = (
+        _absolute(verification_summary_output_path)
+        if verification_summary_output_path is not None
+        else None
+    )
     native_verifier = _absolute(release_manifest_verifier_path)
 
-    if signature_output == public_key_output:
+    release_outputs = {signature_output, public_key_output}
+    if verification_summary_output is not None:
+        release_outputs.add(verification_summary_output)
+    if len(release_outputs) != (
+        3 if verification_summary_output is not None else 2
+    ):
         raise ReleaseManifestSignatureError(
-            "signature and public-key outputs must be different paths"
+            "signature, public-key, and verification-summary outputs "
+            "must be different paths"
         )
     signing_inputs = {manifest, signer, raw_public_key_file, native_verifier}
-    for output, label in (
+    outputs = [
         (signature_output, "aggregate signature output"),
         (public_key_output, "aggregate public-key output"),
-    ):
+    ]
+    if verification_summary_output is not None:
+        outputs.append(
+            (
+                verification_summary_output,
+                "aggregate verification-summary output",
+            )
+        )
+    for output, label in outputs:
         if output in signing_inputs:
             raise ReleaseManifestSignatureError(
                 f"{label} must not overwrite a signing input"
@@ -762,10 +808,43 @@ def sign_release_manifest(
         prefix="iroha-release-manifest-sign-",
         dir=str(manifest.parent),
     ) as signer_temp_raw:
-        signature_temp = Path(signer_temp_raw) / "release_manifest.json.sig"
+        signer_temp = Path(signer_temp_raw)
+        signature_temp = signer_temp / "release_manifest.json.sig"
+        signer_manifest_snapshot = signer_temp / "release_manifest.json"
+        signer_manifest_snapshot_identity = _install_exclusive(
+            signer_manifest_snapshot,
+            manifest_payload,
+            "external signer manifest snapshot",
+            mode=0o600,
+        )
+        signer_snapshot = _signer_snapshot_path(signer_temp, signer)
+        snapshot_digest, signer_snapshot_source_identity = _snapshot_executable(
+            signer,
+            signer_snapshot,
+            signer_digest,
+            label="external signer",
+            mismatch_message="external signer changed before it could be snapshotted",
+        )
+        if signer_snapshot_source_identity != signer_identity:
+            raise ReleaseManifestSignatureError(
+                "external signer changed before it could be snapshotted"
+            )
+        signer_snapshot_digest, signer_snapshot_identity = _stable_digest(
+            signer_snapshot,
+            "external signer snapshot",
+            executable=True,
+        )
+        if signer_snapshot_digest != snapshot_digest:
+            raise ReleaseManifestSignatureError(
+                "external signer snapshot does not match the inspected executable"
+            )
         try:
             completed = subprocess.run(
-                [str(signer), str(manifest), str(signature_temp)],
+                [
+                    str(signer_snapshot),
+                    str(signer_manifest_snapshot),
+                    str(signature_temp),
+                ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -800,6 +879,20 @@ def sign_release_manifest(
             manifest_payload,
             manifest_identity,
             max_size=MAX_MANIFEST_SIZE,
+        )
+        _assert_unchanged(
+            signer_manifest_snapshot,
+            "external signer manifest snapshot",
+            manifest_payload,
+            signer_manifest_snapshot_identity,
+            max_size=MAX_MANIFEST_SIZE,
+        )
+        _assert_digest_unchanged(
+            signer_snapshot,
+            "external signer snapshot",
+            signer_snapshot_digest,
+            signer_snapshot_identity,
+            executable=True,
         )
         _assert_digest_unchanged(
             signer,
@@ -869,18 +962,37 @@ def sign_release_manifest(
                 native_verifier,
                 trusted_release_manifest_verifier_sha256,
             )
+            verification.update(
+                {
+                    "manifest": str(manifest),
+                    "signature": str(signature_output),
+                    "public_key": str(public_key_output),
+                }
+            )
+            if verification_summary_output is not None:
+                verification_payload = (
+                    json.dumps(
+                        verification,
+                        indent=2,
+                        sort_keys=True,
+                        allow_nan=False,
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                verification_identity = _install_exclusive(
+                    verification_summary_output,
+                    verification_payload,
+                    "aggregate verification-summary output",
+                    mode=0o600,
+                )
+                installed.append(
+                    (verification_summary_output, verification_identity)
+                )
         except BaseException:
             for installed_path, installed_identity in reversed(installed):
                 _unlink_if_identity(installed_path, installed_identity)
             raise
 
-    verification.update(
-        {
-            "manifest": str(manifest),
-            "signature": str(signature_output),
-            "public_key": str(public_key_output),
-        }
-    )
     return verification
 
 
@@ -898,6 +1010,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sign.add_argument("--trusted-signing-fingerprint", required=True)
     sign.add_argument("--signature-output", required=True)
     sign.add_argument("--public-key-output", required=True)
+    sign.add_argument("--verification-summary-output")
     sign.add_argument("--release-manifest-verifier", required=True)
     sign.add_argument("--trusted-release-manifest-verifier-sha256", required=True)
 
@@ -927,6 +1040,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 Path(args.public_key_output),
                 Path(args.release_manifest_verifier),
                 args.trusted_release_manifest_verifier_sha256,
+                (
+                    Path(args.verification_summary_output)
+                    if args.verification_summary_output is not None
+                    else None
+                ),
             )
         else:
             result = verify_release_manifest(

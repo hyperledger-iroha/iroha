@@ -13,11 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "workspace_release.yml"
 PR_WORKFLOW = ROOT / ".github" / "workflows" / "pr.yml"
 PINNED_RUST = "1.93.1"
-SETUP_RUST_ACTION = (
-    "actions-rust-lang/setup-rust-toolchain@"
-    "166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
-)
-RUST_CACHE_ACTION = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+SETUP_RUST_TOOLCHAIN_COMMIT = "166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
+RUST_CACHE_COMMIT = "e18b497796c12c097a38f9edb9d0641fb99eee32"
 
 
 def _job_block(workflow: str, name: str) -> str:
@@ -45,6 +42,18 @@ def _replace_once(text: str, old: str, new: str) -> str:
 
     assert text.count(old) >= 1, f"mutation source is absent: {old!r}"
     return text.replace(old, new, 1)
+
+
+def _replace_once_in_job(
+    workflow: str, job_name: str, old: str, new: str
+) -> str:
+    """Apply one deliberate mutation inside exactly one named workflow job."""
+
+    job = _job_block(workflow, job_name)
+    assert job, f"workflow job is absent: {job_name!r}"
+    mutated_job = _replace_once(job, old, new)
+    assert workflow.count(job) == 1, f"workflow job block is not unique: {job_name!r}"
+    return workflow.replace(job, mutated_job, 1)
 
 
 def _validate_release_workflow(workflow: str) -> list[str]:
@@ -117,8 +126,13 @@ def _validate_release_workflow(workflow: str) -> list[str]:
         for marker in exact_source_markers:
             if marker not in job:
                 errors.append(f"{job_name} must verify the exact workflow SHA: {marker}")
-        if f"uses: {SETUP_RUST_ACTION}" not in job:
-            errors.append(f"{job_name} must install the managed Rust toolchain")
+        if (
+            "uses: actions-rust-lang/setup-rust-toolchain@"
+            f"{SETUP_RUST_TOOLCHAIN_COMMIT}"
+        ) not in job:
+            errors.append(
+                f"{job_name} must install the managed Rust toolchain from the reviewed commit"
+            )
         if f"toolchain: {PINNED_RUST}" not in job:
             errors.append(f"{job_name} must pin Rust {PINNED_RUST}")
 
@@ -154,8 +168,13 @@ def _validate_pr_parity(workflow: str) -> list[str]:
     if not numeric_job:
         errors.append("PR workflow is missing Numeric V1 architecture parity")
         return errors
-    if f"uses: {SETUP_RUST_ACTION}" not in numeric_job:
-        errors.append("PR numeric parity must install the managed Rust toolchain")
+    if (
+        "uses: actions-rust-lang/setup-rust-toolchain@"
+        f"{SETUP_RUST_TOOLCHAIN_COMMIT}"
+    ) not in numeric_job:
+        errors.append(
+            "PR numeric parity must install the managed Rust toolchain from the reviewed commit"
+        )
     if f"toolchain: {PINNED_RUST}" not in numeric_job:
         errors.append(f"PR numeric parity must pin Rust {PINNED_RUST}")
 
@@ -233,6 +252,14 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
+                f"actions-rust-lang/setup-rust-toolchain@{SETUP_RUST_TOOLCHAIN_COMMIT}",
+                "actions-rust-lang/setup-rust-toolchain@v1",
+            ),
+            "format must install the managed Rust toolchain from the reviewed commit",
+        ),
+        (
+            lambda workflow: _replace_once(
+                workflow,
                 "python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py",
                 "python3 -m pytest -q pytests/scripts/check_kotodama_docs_test.py",
             ),
@@ -285,12 +312,24 @@ def test_release_workflow_guard_rejects_weakening(
             "PR full test must explicitly select the locked workspace",
         ),
         (
-            lambda workflow: _replace_once(
+            lambda workflow: _replace_once_in_job(
                 workflow,
-                f"          toolchain: 1.93.1\n      - uses: {RUST_CACHE_ACTION}",
-                f"          toolchain: stable\n      - uses: {RUST_CACHE_ACTION}",
+                "numeric_v1_architecture_parity",
+                "          toolchain: 1.93.1\n"
+                f"      - uses: Swatinem/rust-cache@{RUST_CACHE_COMMIT}",
+                "          toolchain: stable\n"
+                f"      - uses: Swatinem/rust-cache@{RUST_CACHE_COMMIT}",
             ),
             "PR numeric parity must pin Rust 1.93.1",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "numeric_v1_architecture_parity",
+                f"actions-rust-lang/setup-rust-toolchain@{SETUP_RUST_TOOLCHAIN_COMMIT}",
+                "actions-rust-lang/setup-rust-toolchain@v1",
+            ),
+            "PR numeric parity must install the managed Rust toolchain from the reviewed commit",
         ),
         (
             lambda workflow: _replace_once(

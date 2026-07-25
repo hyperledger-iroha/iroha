@@ -71,6 +71,9 @@ impl SorafsReconciliationReportV1 {
         if self.generated_at_unix == 0 {
             return Err(ReconciliationValidationError::InvalidTimestamp);
         }
+        if self.provider_id == [0; 32] {
+            return Err(ReconciliationValidationError::InvalidProviderId);
+        }
         if let Some(summary) = &self.appeal_finance {
             summary.validate()?;
         }
@@ -96,6 +99,9 @@ pub enum ReconciliationValidationError {
     /// Timestamp missing or invalid.
     #[error("reconciliation report timestamp must be non-zero")]
     InvalidTimestamp,
+    /// Provider identity is missing.
+    #[error("reconciliation report provider id must be non-zero")]
+    InvalidProviderId,
     /// Appeal finance rollups were present but the snapshot hash was empty.
     #[error(
         "appeal finance reconciliation snapshot hash must be non-zero when rollups are present"
@@ -166,6 +172,29 @@ mod tests {
         assert_eq!(
             report.validate(),
             Err(ReconciliationValidationError::InvalidAppealFinanceSnapshotHash)
+        );
+    }
+
+    #[test]
+    fn reconciliation_report_rejects_missing_provider_identity() {
+        let report = SorafsReconciliationReportV1 {
+            version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+            provider_id: [0; 32],
+            generated_at_unix: 1_700_000_123,
+            repair_snapshot_hash: [0x01; 32],
+            retention_snapshot_hash: [0x02; 32],
+            gc_snapshot_hash: [0x03; 32],
+            repair_task_count: 2,
+            retention_manifest_count: 3,
+            gc_evictions_total: 4,
+            gc_freed_bytes_total: 5,
+            divergence_count: 0,
+            appeal_finance: None,
+        };
+
+        assert_eq!(
+            report.validate(),
+            Err(ReconciliationValidationError::InvalidProviderId)
         );
     }
 }

@@ -17,6 +17,7 @@ CONTRACT_FIXTURE_PATHS = (
     "crates/iroha_torii/src/sorafs/gateway/mod.rs",
     "crates/iroha_torii/src/sorafs/gateway/acme.rs",
     "crates/iroha_torii/src/lib.rs",
+    "crates/irohad/src/main.rs",
     "xtask/src/sorafs.rs",
     "docs/source/sorafs_gateway_tls_automation.md",
 )
@@ -78,6 +79,25 @@ def test_guard_rejects_fake_renewal_and_stale_docs(tmp_path: Path) -> None:
     failures = MODULE.check_contract(root)
     assert any(item.startswith("xtask:placeholder-renewal:") for item in failures)
     assert any(":stale-claim:" in item for item in failures)
+
+
+def test_guard_rejects_missing_daemon_runtime_forwarding(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    copy_contract_fixture(root)
+
+    irohad = root / "crates/irohad/src/main.rs"
+    text = irohad.read_text(encoding="utf-8")
+    text = text.replace(
+        "runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)",
+        "runtime_deps",
+        1,
+    )
+    irohad.write_text(text, encoding="utf-8")
+
+    assert (
+        "irohad:missing-compliance-transport-forwarding"
+        in MODULE.check_contract(root)
+    )
 
 
 def test_guard_rejects_symlinked_contract_source(tmp_path: Path) -> None:

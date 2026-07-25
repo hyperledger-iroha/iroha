@@ -2,7 +2,13 @@
 
 use std::collections::BTreeSet;
 
-use iroha_crypto::Hash;
+use iroha_crypto::{
+    Hash,
+    blake2::{
+        Blake2bVar,
+        digest::{Update, VariableOutput},
+    },
+};
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -42,6 +48,12 @@ pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOU
 pub const VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT: usize = 4;
 /// Domain separator for policy hashing.
 pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.parliament.v1";
+/// Canonical domain separator shared by all V1 governance proposal fingerprints.
+///
+/// This remains available without the `governance` feature because validation-fee
+/// registry authorization must reproduce the exact fingerprint of the governing
+/// proposal in lightweight data-model builds.
+pub(crate) const GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"gov:proposal:v1";
 /// Domain separator for an exact Parliament-approved payout lifecycle.
 pub const VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN: &[u8] =
     b"iroha.validation_fee.payout_lifecycle.seal.v1";
@@ -629,10 +641,8 @@ impl ValidationFeePolicyRegistryV1 {
     /// Validate the complete contiguous policy chain and authenticate every retained Parliament
     /// proposal fingerprint.
     ///
-    /// Builds without the `governance` feature retain the typed registry for canonical decoding,
-    /// but deliberately return
-    /// [`ValidationFeePolicyRegistryError::InvalidParliamentAuthorization`] because the complete
-    /// Parliament proposal preimage is unavailable.
+    /// The validation-fee module reproduces the frozen V1 proposal preimages locally, so this
+    /// authentication remains available in lightweight builds without the `governance` feature.
     ///
     /// # Errors
     ///
@@ -984,14 +994,74 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
-#[cfg(feature = "governance")]
+// Validation-fee registries are needed by lightweight data-model consumers
+// that do not compile the governance API, but their authorization checks must
+// still reproduce the exact governance proposal fingerprint. Explicit V1
+// discriminants avoid placeholder variants and bind this private preimage to
+// the matching `ProposalKind` wire tags. Governance-enabled parity tests below
+// verify the complete encoded bytes.
+#[derive(Encode)]
+enum ValidationFeeProposalFingerprintEnvelopeV1 {
+    #[codec(index = 3)]
+    ValidationFeePolicy(ValidationFeePolicyFingerprintPayloadV1),
+    #[codec(index = 4)]
+    ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleFingerprintPayloadV1),
+}
+
+#[derive(Encode)]
+struct ValidationFeePolicyFingerprintPayloadV1 {
+    policy: ValidationFeePolicyV1,
+    payout_lifecycle_proposal_id: Option<[u8; 32]>,
+}
+
+#[derive(Encode)]
+struct ValidationFeePayoutLifecycleFingerprintPayloadV1 {
+    payout_binding: ValidationFeeTreasuryPayoutBindingV1,
+}
+
+fn validation_fee_proposal_fingerprint(
+    proposal: ValidationFeeProposalFingerprintEnvelopeV1,
+) -> [u8; 32] {
+    let encoded = proposal.encode();
+    let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length is fixed and valid");
+    hasher.update(GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1);
+    hasher.update(&encoded);
+    let mut fingerprint = [0_u8; 32];
+    hasher
+        .finalize_variable(&mut fingerprint)
+        .expect("fingerprint output has the configured Blake2b length");
+    fingerprint
+}
+
+fn validation_fee_policy_proposal_fingerprint(
+    policy: &ValidationFeePolicyV1,
+    payout_lifecycle_proposal_id: Option<[u8; 32]>,
+) -> [u8; 32] {
+    validation_fee_proposal_fingerprint(
+        ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+            ValidationFeePolicyFingerprintPayloadV1 {
+                policy: policy.clone(),
+                payout_lifecycle_proposal_id,
+            },
+        ),
+    )
+}
+
+fn validation_fee_payout_lifecycle_proposal_fingerprint(
+    payout_binding: &ValidationFeeTreasuryPayoutBindingV1,
+) -> [u8; 32] {
+    validation_fee_proposal_fingerprint(
+        ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+            ValidationFeePayoutLifecycleFingerprintPayloadV1 {
+                payout_binding: payout_binding.clone(),
+            },
+        ),
+    )
+}
+
 fn validate_registry_entry_authorization(
     entry: &ValidationFeePolicyRegistryEntryV1,
 ) -> Result<(), ValidationFeePolicyRegistryError> {
-    use crate::governance::types::{
-        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-    };
-
     let policy_version = entry.policy.policy_version;
     if entry.parliament_authorization.invariant_error().is_some() {
         return Err(
@@ -1006,11 +1076,7 @@ fn validate_registry_entry_authorization(
             if reference.invariant_error().is_none()
                 && binding.lifecycle_seal().ok() == Some(reference.lifecycle_seal) =>
         {
-            let lifecycle_kind =
-                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                    payout_binding: binding.clone(),
-                });
-            let fingerprint = lifecycle_kind.fingerprint();
+            let fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint(binding);
             if reference.parliament_authorization.proposal_id != fingerprint
                 || reference.parliament_authorization.proposal_fingerprint != fingerprint
             {
@@ -1031,11 +1097,8 @@ fn validate_registry_entry_authorization(
             );
         }
     };
-    let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
-        policy: entry.policy.clone(),
-        payout_lifecycle_proposal_id,
-    });
-    let fingerprint = policy_kind.fingerprint();
+    let fingerprint =
+        validation_fee_policy_proposal_fingerprint(&entry.policy, payout_lifecycle_proposal_id);
     if entry.parliament_authorization.proposal_id != fingerprint
         || entry.parliament_authorization.proposal_fingerprint != fingerprint
     {
@@ -1044,21 +1107,6 @@ fn validate_registry_entry_authorization(
         );
     }
     Ok(())
-}
-
-#[cfg(not(feature = "governance"))]
-fn validate_registry_entry_authorization(
-    entry: &ValidationFeePolicyRegistryEntryV1,
-) -> Result<(), ValidationFeePolicyRegistryError> {
-    // Proposal fingerprints commit to the complete governance `ProposalKind` encoding. A build
-    // that deliberately omits that feature can still decode the typed registry for clients, but
-    // it cannot prove that the retained authorization matches the enacted Parliament proposal.
-    // Keep registry validation fail-closed rather than accepting a weaker surrogate fingerprint.
-    Err(
-        ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
-            policy_version: entry.policy.policy_version,
-        },
-    )
 }
 
 /// One exact recipient and share in the atomic treasury-payout effect plan.
@@ -1406,18 +1454,18 @@ pub fn validation_fee_payout_recipient_share() -> Numeric {
         .expect("hard-coded validation-fee payout recipient share is canonical")
 }
 
-#[cfg(all(test, feature = "governance"))]
+#[cfg(test)]
 mod parliament_tests {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
-    use crate::{
-        domain::DomainId,
-        governance::types::{ProposalKind, ValidationFeePayoutLifecycleProposal},
-        name::Name,
+    #[cfg(feature = "governance")]
+    use crate::governance::types::{
+        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     };
+    use crate::{domain::DomainId, name::Name};
 
     fn account(seed: u8) -> AccountId {
         let key_pair =
@@ -1509,19 +1557,86 @@ mod parliament_tests {
     }
 
     fn entry(policy: ValidationFeePolicyV1, marker: u8) -> ValidationFeePolicyRegistryEntryV1 {
-        let proposal_id = ProposalKind::ValidationFeePolicy(
-            crate::governance::types::ValidationFeePolicyProposal {
-                policy: policy.clone(),
-                payout_lifecycle_proposal_id: None,
-            },
-        )
-        .fingerprint();
+        let proposal_id = validation_fee_policy_proposal_fingerprint(&policy, None);
         ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
             authorization(proposal_id, marker),
             None,
         )
         .expect("policy hash")
+    }
+
+    #[cfg(feature = "governance")]
+    #[test]
+    fn lightweight_validation_fee_fingerprints_match_governance_proposal_bytes() {
+        let payout_binding = payout_binding();
+        let lifecycle_governance =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: payout_binding.clone(),
+            });
+        let lifecycle_lightweight =
+            ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+                ValidationFeePayoutLifecycleFingerprintPayloadV1 {
+                    payout_binding: payout_binding.clone(),
+                },
+            );
+        assert_eq!(
+            lifecycle_lightweight.encode(),
+            lifecycle_governance.encode()
+        );
+        assert_eq!(
+            validation_fee_payout_lifecycle_proposal_fingerprint(&payout_binding),
+            lifecycle_governance.fingerprint()
+        );
+
+        let lifecycle_id = lifecycle_governance.fingerprint();
+        let mut governed_policy = policy(1, None);
+        governed_policy.treasury_payout_binding = Some(payout_binding);
+        for payout_lifecycle_proposal_id in [None, Some(lifecycle_id)] {
+            let policy_governance =
+                ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    policy: governed_policy.clone(),
+                    payout_lifecycle_proposal_id,
+                });
+            let policy_lightweight =
+                ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+                    ValidationFeePolicyFingerprintPayloadV1 {
+                        policy: governed_policy.clone(),
+                        payout_lifecycle_proposal_id,
+                    },
+                );
+            assert_eq!(policy_lightweight.encode(), policy_governance.encode());
+            assert_eq!(
+                validation_fee_policy_proposal_fingerprint(
+                    &governed_policy,
+                    payout_lifecycle_proposal_id,
+                ),
+                policy_governance.fingerprint()
+            );
+        }
+    }
+
+    #[test]
+    fn lightweight_validation_fee_preimages_use_frozen_v1_tags() {
+        let policy = ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePolicy(
+            ValidationFeePolicyFingerprintPayloadV1 {
+                policy: policy(1, None),
+                payout_lifecycle_proposal_id: None,
+            },
+        );
+        let lifecycle = ValidationFeeProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
+            ValidationFeePayoutLifecycleFingerprintPayloadV1 {
+                payout_binding: payout_binding(),
+            },
+        );
+        assert_eq!(
+            policy.encode().get(..4),
+            Some(3_u32.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            lifecycle.encode().get(..4),
+            Some(4_u32.to_le_bytes().as_slice())
+        );
     }
 
     #[test]
@@ -1660,23 +1775,18 @@ mod parliament_tests {
         let binding = payout_binding();
         let seal = binding.lifecycle_seal().expect("lifecycle seal");
         assert_ne!(seal, [0; 32]);
-        let proposal =
-            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                payout_binding: binding.clone(),
-            });
+        let proposal_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint(&binding);
 
         let mut changed_binding = binding;
         changed_binding.code_hash[0] ^= 1;
         let changed_seal = changed_binding
             .lifecycle_seal()
             .expect("changed lifecycle seal");
-        let binding_variant =
-            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                payout_binding: changed_binding,
-            });
+        let changed_fingerprint =
+            validation_fee_payout_lifecycle_proposal_fingerprint(&changed_binding);
 
         assert_ne!(seal, changed_seal);
-        assert_ne!(proposal.fingerprint(), binding_variant.fingerprint());
+        assert_ne!(proposal_fingerprint, changed_fingerprint);
     }
 
     #[test]
@@ -1740,18 +1850,9 @@ mod parliament_tests {
             .treasury_payout_binding
             .as_ref()
             .expect("payout binding");
-        let lifecycle_id =
-            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
-                payout_binding: binding.clone(),
-            })
-            .fingerprint();
-        let policy_id = ProposalKind::ValidationFeePolicy(
-            crate::governance::types::ValidationFeePolicyProposal {
-                policy: payout_policy.clone(),
-                payout_lifecycle_proposal_id: Some(lifecycle_id),
-            },
-        )
-        .fingerprint();
+        let lifecycle_id = validation_fee_payout_lifecycle_proposal_fingerprint(binding);
+        let policy_id =
+            validation_fee_policy_proposal_fingerprint(&payout_policy, Some(lifecycle_id));
         let valid = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![
                 ValidationFeePolicyRegistryEntryV1::from_enactment(

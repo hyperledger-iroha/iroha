@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   使 `policy_source` 值在證據包中保持有意義的字符串。參見
   子命令為 `crates/iroha_cli/src/commands/da.rs` 和 `docs/source/da/rent_policy.md`
   用於策略模式。 【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin 註冊表奇偶校驗現在擴展到 SDK：`ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK 構建 `iroha app sorafs pin register` 使用的確切負載，強制執行規範
-  分塊器元數據、pin 策略、別名證明和 POST 之前的後繼摘要
-  `/v1/sorafs/pin/register`。這可以防止 CI 機器人和自動化在以下情況下向 CLI 發起攻擊：
+- Pin registry 對等能力現已擴展到 SDK：
+  `ToriiClient.registerSorafsPinManifest(...)` 構建封閉的 JSON V1 請求，
+  其中 `manifest_payload` 包含精確的 canonical padded-base64 `ManifestV1`。
+  Torii 僅從 decoded manifest 派生 digest、chunker、content length、pin policy
+  和 fee input，並拒絕 duplicate summary；optional alias 和 nonzero
+  predecessor 保持不變。這樣，CI 機器人和自動化在使用
+  `/v1/sorafs/pin/register` 時無需調用 CLI 來
   記錄清單註冊，並且幫助程序附帶了 TypeScript/README 覆蓋範圍，因此 DA-8 的
   JS 和 Rust/Swift 完全滿足“提交/獲取/證明”工具對等性。 【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` 鏈接以上所有內容：它需要存儲票，下載

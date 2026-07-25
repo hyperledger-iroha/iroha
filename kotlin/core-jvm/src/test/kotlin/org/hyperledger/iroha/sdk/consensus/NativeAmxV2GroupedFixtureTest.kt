@@ -17,7 +17,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class NativeAmxV2GroupedFixtureTest {
     @Test
@@ -34,6 +36,28 @@ class NativeAmxV2GroupedFixtureTest {
             golden.arrayValue("ordered_source_ids").map { it.jsonPrimitive.content }
         assertEquals(expectedSources, group.receipts.map { it.sourceId.value })
         assertEquals(2, group.receipts.size)
+        val firstLeg = group.receipts.first().legs.first()
+        assertEquals(
+            "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
+            firstLeg.participantProposal.descriptor.validatorSetHash.value,
+        )
+        assertEquals(
+            "hash:568077DEBB5ECE0F6655571DBD81F8B8935CA5FB064F6B74864B4F58F3CB1A33#E6A5",
+            firstLeg.participantProposal.descriptor.descriptorHash.value,
+        )
+        assertEquals(
+            "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
+            firstLeg.participantProposal.proposalHash.value,
+        )
+        assertEquals(
+            "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C",
+            firstLeg.participantSettlementHash.value,
+        )
+        assertTrue(
+            NativeAmxV2.isCanonicalBlsNormalPeerId(
+                firstLeg.participantProposal.descriptor.validatorSet.first(),
+            ),
+        )
         group.receipts.forEach { receipt ->
             assertEquals(2, receipt.legs.size)
             assertEquals(BigInteger.valueOf(9), receipt.laneBlockView)
@@ -73,7 +97,25 @@ class NativeAmxV2GroupedFixtureTest {
     @Test
     fun `Rust-owned negative corpus is consumable`() {
         val canonical = fixture()
-        for (controlElement in canonical.arrayValue("negative_controls")) {
+        val controls = canonical.arrayValue("negative_controls")
+        val identifiers = controls.map { it.jsonObject.string("id") }.toSet()
+        assertTrue(
+            identifiers.containsAll(
+                setOf(
+                    "coherent_forged_validator_set_hash",
+                    "coherent_stale_descriptor_hash",
+                    "coherent_stale_proposal_hash",
+                    "coherent_stale_settlement_hash",
+                    "non_canonical_validator_peer_id",
+                ),
+            ),
+        )
+        assertFalse(
+            NativeAmxV2.isCanonicalBlsNormalPeerId(
+                "ea0130" + "00".repeat(48),
+            ),
+        )
+        for (controlElement in controls) {
             val control = controlElement.jsonObject
             assertEquals("reject", control.string("expectation"), control.string("id"))
             var mutated: JsonElement = canonical
@@ -99,30 +141,27 @@ class NativeAmxV2GroupedFixtureTest {
 
     @Test
     fun `mixed-role participant exposes deferred anchor validation`() {
-        var mutated: JsonElement = fixture()
-        val descriptorPath =
-            "/golden/receipt_group/native_amx_receipts/0/legs/1/" +
-                "participant_proposal/descriptor"
-        val descriptor = resolve(mutated, pointerTokens(descriptorPath)).jsonObject
-        val hashes = descriptor.arrayValue("accepted_transaction_hashes")
-        val indices = descriptor.arrayValue("accepted_candidate_indices")
-        mutated = assign(
-            mutated,
-            pointerTokens("$descriptorPath/accepted_transaction_hashes"),
-            JsonArray(listOf(hashes[1])),
-        )
-        mutated = assign(
-            mutated,
-            pointerTokens("$descriptorPath/accepted_candidate_indices"),
-            JsonArray(listOf(indices[1])),
-        )
-        val group =
-            mutated.jsonObject
-                .objectValue("golden")
-                .objectValue("receipt_group")
+        val group = fixture()
+            .objectValue("golden")
+            .objectValue("receipt_group")
         val parsed = NativeAmxV2.parseReceiptGroup(group.toString())
         val remote = parsed.receipts.first().legs.single { it.laneId == 8L }
-        assertEquals(true, remote.requiresMixedRoleAnchorValidation)
+        val current = remote.prepareQc.body.transactionEntrypointHash
+        assertFalse(
+            NativeAmxV2.requiresMixedRoleAnchorValidation(
+                remote.participantProposal.descriptor,
+                current,
+            ),
+        )
+        val absent = NativeAmxV2.TransactionEntrypointHash(
+            "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781",
+        )
+        assertTrue(
+            NativeAmxV2.requiresMixedRoleAnchorValidation(
+                remote.participantProposal.descriptor,
+                absent,
+            ),
+        )
     }
 
     @Test

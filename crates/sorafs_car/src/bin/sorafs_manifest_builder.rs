@@ -19,7 +19,10 @@ use rand::rng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload, FilePayload,
     FilePlan, InMemoryPayload, PorMerkleTree, compute_chunk_plan_digest_sha3,
-    fetch_plan::{chunk_fetch_specs_from_json, try_chunk_fetch_specs_to_json},
+    fetch_plan::{
+        MANIFEST_BUILDER_REPORT_SCHEMA_V1, chunk_fetch_plan_from_json, chunk_fetch_plan_to_string,
+        try_chunk_fetch_specs_to_json,
+    },
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 use sorafs_manifest::{
@@ -298,8 +301,15 @@ fn run() -> Result<(), String> {
     };
     if let Some(source) = opts.plan_in.as_ref() {
         let plan_value = load_json_source(source)?;
-        let specs = chunk_fetch_specs_from_json(&plan_value)
-            .map_err(|err| format!("failed to parse chunk fetch specs: {err}"))?;
+        let parsed = chunk_fetch_plan_from_json(&plan_value)
+            .map_err(|err| format!("failed to parse canonical chunk fetch plan: {err}"))?;
+        if parsed.payload_digest != *car_plan.payload_digest.as_bytes() {
+            return Err(
+                "chunk fetch plan whole-payload digest does not match the packed payload"
+                    .to_string(),
+            );
+        }
+        let specs = parsed.chunk_fetch_specs;
         if specs.len() != car_plan.chunks.len() {
             return Err(format!(
                 "chunk fetch specs length {} does not match computed plan length {}",
@@ -591,6 +601,7 @@ fn run() -> Result<(), String> {
         .dag_codec(DagCodecId(dag_codec))
         .chunking_profile(chunk_profile.clone())
         .chunk_digest_sha3_256(chunk_digest_sha3)
+        .por_root(*chunk_store.por_tree().root())
         .content_length(car_plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_size)
@@ -740,12 +751,9 @@ fn run() -> Result<(), String> {
         report_object.insert("por_samples_truncated".into(), Value::from(true));
     }
     if let Some(path) = &opts.chunk_fetch_plan_out {
-        let specs_value =
-            try_chunk_fetch_specs_to_json(&car_plan).map_err(|err| err.to_string())?;
-        let mut specs_text = to_string_pretty(&specs_value)
-            .map_err(|err| format!("failed to serialise chunk fetch specs: {err}"))?;
-        specs_text.push('\n');
-        write_json(path, &specs_text)?;
+        let plan_text = chunk_fetch_plan_to_string(&car_plan)
+            .map_err(|err| format!("failed to serialise chunk fetch plan: {err}"))?;
+        write_json(path, &plan_text)?;
     }
     if let Some(hybrid) = hybrid_output.as_ref() {
         let mut obj = Map::new();
@@ -865,7 +873,7 @@ fn usage() -> &'static str {
      [--car-out=path] \
      [--json-out=path] \
      [--chunk-fetch-plan-out=path] \
-     [--plan=chunk_fetch_specs.json|-] \
+     [--plan=sorafs.chunk_fetch_plan.v1.json|-] \
      [--por-json-out=path] \
      [--por-proof=chunk:segment:leaf] \
      [--por-proof-out=path] \
@@ -1006,6 +1014,10 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
         Value::from(to_hex(&ctx.manifest.chunk_digest_sha3_256)),
     );
     manifest_obj.insert(
+        "por_root_hex".into(),
+        Value::from(to_hex(&ctx.manifest.por_root)),
+    );
+    manifest_obj.insert(
         "car_digest_hex".into(),
         Value::from(to_hex(&ctx.manifest.car_digest)),
     );
@@ -1044,6 +1056,10 @@ fn build_report(ctx: ReportContext<'_>) -> Result<Value, String> {
     manifest_obj.insert("council_signatures".into(), Value::Array(council_entries));
 
     let mut report_obj = Map::new();
+    report_obj.insert(
+        "schema".into(),
+        Value::from(MANIFEST_BUILDER_REPORT_SCHEMA_V1),
+    );
     report_obj.insert("chunking".into(), Value::Object(chunking_obj));
     report_obj.insert("chunk_digests".into(), Value::Array(chunk_digests));
     report_obj.insert("chunk_fetch_specs".into(), chunk_fetch_specs);
@@ -2137,6 +2153,7 @@ mod tests {
             .dag_codec(DagCodecId(0x71))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(17)
             .car_digest([0x42; 32])
             .car_size(97)

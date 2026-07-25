@@ -77,7 +77,9 @@ Review `/tmp/docs.report.json` for:
   it matches the chunker fixtures and changes when content changes even if the
   boundaries do not.
 - `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunk_fetch_specs[]` – ordered fetch instructions embedded in the versioned
+  report. Standalone interchange uses the separately emitted payload-bound
+  `sorafs.chunk_fetch_plan.v1` object; do not copy this array into a plan file.
 
 The `--council-signature` value must be a reviewed council signer public key and
 Ed25519 signature pair. The command verifies every Ed25519 signature before

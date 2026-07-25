@@ -42,45 +42,67 @@ Sidebar_label: خطة تسجيل الرقم السري
 
 ###تطلب الامرة (Norito)| المعرفة | الوصف | بمعنى |
 |--------|-------|--------|
-| `PinRecordV1` | مانيفست الإدخال كنسي. | `manifest_cid`، `chunk_plan_digest`، `por_root`، `profile_handle`، `approved_at`، `retention_epoch`، `pin_policy`، `successor_of`، `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` | ربط الاسم المستعار -> CID الخاص بالـ البيان. | `alias`، `manifest_cid`، `bound_at`، `expiry_epoch`. |
 | `ReplicationOrderV1` | تعليمات للمنظمين المانيفست. | `order_id`، `manifest_cid`، `providers`، `redundancy`، `deadline`، `policy_hash`. |
 | `ReplicationReceiptV1` | قرار المحكم. | `order_id`، `provider_id`، `status`، `timestamp`، `por_sample_digest`. |
 | `ManifestPolicyV1` | لقطة إلى ال تور. | `min_replicas`، `max_retention_epochs`، `allowed_profiles`، `pin_fee_basis_points`. |
 
-مرجع التنفيذ: مرجع `crates/sorafs_manifest/src/pin_registry.rs` لخططات Norito في Rust
-ومساعدات التحقق التي تدعم هذه السجلات. التحقق من صحة الأدوات الخاصة بالـ البيان
-(بحث عن ــ Chunker Registration وpin Policy Gating) دائمًا ان العقد وواجهات Torii وCLI
-تتقاسم نفس الثوابت.
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-:
-- انهاء مخططات Norito في `crates/sorafs_manifest/src/pin_registry.rs`.
-- توليد مشاريع (Rust + SDKs وغيرها) باستخدام ماكرو Norito.
-- تحديث السجلات (`sorafs_architecture_rfc.md`) بعد تثبيت التثبيت.
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## تنفيذ العقد| | المالك/المالكون | مذكرة |
-|--------|------------------|----------|
-| تنفيذ تخزين التسجيل (sled/sqlite/off-chain) او وحدة عقد ذكي. | البنية التحتية الأساسية / فريق العقد الذكي | توفير التجزئة حتمي حدث مشاركة العائمة. |
-| نقاط الدخول: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | الأشعة تحت الحمراء الأساسية | استخدام `ManifestValidator` من خطة التحقق. الاسم المستعار للاتصال يمر الان عبر `RegisterPinManifest` (DTO من Torii) بينما يبقى `bind_alias` مخططا لتحديثات لاحقة. |
-| انتقالات الحالة: فرض التعاقب (البيان أ -> ب)، عصور الإصلاح، تفرد الاسم المستعار. | مجلس الحكم / البنية الأساسية | تفرد الاسم المستعار وحدود الإصلاح والفحوصات المعتمدة/سحب السلف موجود في `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`؛ استعادة التتابع المتعدد للقفزات ودفاتر التكرار ما يمكن استخدامه. |
-| المعلمات الحكومية: تحميل `ManifestPolicyV1` من config/حالة التورم؛ مما أدى إلى التحديث عبر احداث ال تور. | مجلس الحكم | توفير CLI لتحديثات السياسة. |
-| اصدار الاحداث: اصدار احدث Norito للتليمتري (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | إمكانية الملاحظة | تعريف مخطط الاحداث + التسجيل. |
+## Contract Implementation
 
-الموضوع:
-- درجة وحدة لكل نقطة دخول (ايجابي + الرفض).
-- خصائص خصائص سلسلة التتابع (بدون دورة، عصور معززة).
-- Fuzz لخلق عبر توليد بيانات غير مباشرة (مقيدة).
+| Task | Owner(s) | Notes |
+|------|----------|-------|
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-## واجهة خدمة (تكامل Torii/SDK)| المكون | | المالك/المالكون |
-|--------|--------|-----------------|
-| خدمة Torii | كشف `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). توفير ترقيم + ترشيح. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
-| الاتستاشن | تضمين ارتفاع/هاش التسجيل في الاستجابات؛ إضافة بناء Norito للاتستاشن تستهلكها SDKs. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | النهائي `sorafs_manifest_builder` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
-| SDK | توليد الارتباطات من أجل (Rust/Go/TS) من مخطط Norito؛ إضافة إلى تكامل. | فرق SDK |
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-العمليات:
-- إضافة ذاكرة التخزين المؤقت/ETag لنقاط نهاية الطبقة GET.
-- توفير تحديد المعدل / المصادقة بما يتناسب مع السياسات Torii.
+## Service Facade (Torii/SDK Integration)
+
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
+
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## المباريات و CI- دليل المباريات: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` يخزن لقطات موقعة لـ البيان/الاسم المستعار/الأمر يعاد توليدها عبر `cargo run -p iroha_core --example gen_pin_snapshot`.
 - خطوة CI: `ci/check_sorafs_fixtures.sh` يمكن إضافة اللقطة وفشل عند وجود الإكتشافات، لتحافظ على تماهي التركيبات الخاصة بـ CI.
@@ -126,8 +148,8 @@ Sidebar_label: خطة تسجيل الرقم السري
 يجب ان تشاهد كل قائمة تحقق ضمن SF-4 الى هذه البناء عند تسجيل التقدم.
 واجهة REST تتطلب الان نهاية نقاط قائمة مع اتستاشن:
 
-- `GET /v1/sorafs/pin` و `GET /v1/sorafs/pin/{digest}` يتجلى مع
-  ربط الأسماء المستعارة واوامر التكرار وكائن اتستاشن مشغل من هاش اخر كتلة.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` ليزران كتالوج الاسم المستعار
   يجب وتراكم اوامر التكرار بترقيم ثابت ومرشحات الحالة.
 

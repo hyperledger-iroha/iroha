@@ -1,40 +1,18 @@
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/sorafs/repair-plan.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 302b74b4022656e57c2b876a8f15bf5301a593030a18ad1b93780061e5d783ef
-source_last_modified: "2026-01-21T19:17:13.232211+00:00"
-translation_last_reviewed: 2026-02-07
-id: repair-plan
-title: SoraFS Repair Automation & Auditor API
-sidebar_label: Repair Automation
-description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
-translator: machine-google-reviewed
+source_hash: 3b3148617cf0935fe010a37343fc7398400d9c33572b8c41329f6334f3b03496
+source_last_modified: "2026-07-25T00:40:34.079232+00:00"
+translation_last_reviewed: null
 ---
 
-:::nota Fuente canónica
-Espejos `docs/source/sorafs_repair_plan.md`. Mantenga ambas versiones sincronizadas hasta que se retire el conjunto Sphinx.
-:::
+# Traducción en curso
 
-## Ciclo de vida de las decisiones de gobernanza
-1. Las reparaciones escaladas crean un borrador de propuesta de barra diagonal y abren la ventana de disputa.
-2. Los votantes de gobernanza envían votos de aprobación/rechazo durante el período de disputa.
-3. En `escalated_at_unix + dispute_window_secs` la decisión se calcula de manera determinista: votantes mínimos, las aprobaciones superan los rechazos y el índice de aprobación alcanza el umbral de quórum.
-4. Las decisiones aprobadas abren una ventana de apelación; Las apelaciones registradas antes de `approved_at_unix + appeal_window_secs` marcan la decisión como apelada.
-5. Se aplican límites a las sanciones a todas las propuestas; las presentaciones que superen el límite se rechazan.
+Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
 
-## Política de escalada de gobernanza
-La política de escalada tiene su origen en `governance.sorafs_repair_escalation` en `iroha_config` y se aplica para cada propuesta de barra diagonal de reparación.
-
-| Configuración | Predeterminado | Significado |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Ratio mínimo de aprobación (puntos básicos) entre los votos escrutados. |
-| `minimum_voters` | 3 | Número mínimo de votantes distintos necesarios para resolver una decisión. |
-| `dispute_window_secs` | 86400 | Tiempo después de la escalada antes de que finalicen las votaciones (segundos). |
-| `appeal_window_secs` | 604800 | Tiempo después de la aprobación durante el cual se aceptan apelaciones (segundos). |
-| `max_penalty` | 1.000.000.000 | Penalización máxima permitida para escaladas de reparación (nano-XOR). |
-
-- Las propuestas generadas por el programador tienen un límite de `max_penalty`; Las presentaciones del auditor por encima del límite se rechazan.
-- Los registros de votación se almacenan en `repair_state.to` con orden determinista (clasificación `voter_id`) para que todos los nodos obtengan la misma marca de tiempo y resultado de decisión.
+Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.

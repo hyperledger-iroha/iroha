@@ -23,7 +23,6 @@ El suite de conformidad del gateway (`integration_tests/tests/sorafs_gateway_con
 | C4 | Capability TLV desconocida | 428 | `unsupported_capability` | Capability GREASE rechazada cuando `allow_unknown_capabilities=false`. |
 | C5 | Request de rango sin header `dag-scope` | 428 | `missing_header` | Hace cumplir el contrato trustless `Accept: …; dag-scope=block`; `details.header` es `Sora-Dag-Scope`. |
 | C6 | Request gzip cuando el perfil no permite compresion | 406 | `unsupported_encoding` | El harness envia `Accept-Encoding: gzip`; `details.encoding` registra el encoding no soportado. |
-| C7 | Manipulacion de prueba (mismatch de digest de chunk) | 422 | `proof_mismatch` | El gateway rechaza pruebas PoR cuyo digest de chunk es reemplazado con el sentinel de tamper `0xff`; `details.section` identifica la muestra ofensora. |
 
 Los fixtures viven bajo `fixtures/sorafs_gateway/capability_refusal/` y son referenciados por los integration tests. Cada escenario expone `request.json`, `response.json` y `gateway.json` junto al indice compartido `scenarios.json`, para que operadores y autores de SDK puedan reproducir el rechazo end-to-end usando el bundle canonico de fixtures en `fixtures/sorafs_gateway/1.0.0/`.
 

@@ -174,26 +174,34 @@ The GC CLI is intentionally read-only. Use it to capture retention deadlines
 and expired-manifest inventory for audit trails; do not remove data manually in
 production.
 
-## 6. PoR Sampling Probe
+## 6. Authenticated PoR Sampling Probe
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. Pin and approve the canonical manifest, then obtain the provider identifier
+   and runtime-only proof-stream credential for the deployment.
+2. Request bounded PoR witnesses through the authenticated proof stream:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
-     -H 'Content-Type: application/json' \
-     -d '{
-       "manifest_id_hex": "<hex id from pin>",
-       "count": 4,
-       "seed": 12345
-     }'
+   sorafs_cli proof stream \
+     --manifest=/path/to/manifest.to \
+     --torii-url="https://$TORII/" \
+     --provider-id-hex="$PROVIDER_ID_HEX" \
+     --proof-kind=por \
+     --samples=4 \
+     --sample-seed=12345 \
+     --stream-token="$SORAFS_STREAM_TOKEN" \
+     --emit-events=false \
+     --summary-out=por_probe_summary.json
    ```
 
-   Manual requests must set `count` between 1 and 500; the node still caps the
-   returned `samples` array by the stored manifest leaf count.
+   The unauthenticated local `/v1/sorafs/storage/por-sample` route is retired
+   and is not mounted. Proof-stream requests must set `sample_count` between 1
+   and 500. The CLI must resolve the exact native pin record first and carry its
+   non-zero finalized height/hash pair in the PoR request; Torii rejects stale
+   cursors and verifies every generated witness against that record's committed
+   manifest root.
 
-3. Verify the response contains `samples` with the expected bounded count and
-   that each proof validates against the stored manifest root.
+3. Archive the payload-free summary only after the CLI has authenticated every
+   returned witness against the exact canonical manifest.
 
 ## 7. PoR Proof Replay Helper
 

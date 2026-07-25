@@ -237,6 +237,9 @@ fn validate_builtin_initial_query_permission(
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
         | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveProviders(_)
+        | SingularQueryBox::FindSorafsReserveMovements(_)
+        | SingularQueryBox::FindSorafsReserveAppeals(_)
         | SingularQueryBox::FindSorafsReserveEvents(_) => {
             let can_set_reserve_policy: Permission =
                 executor_permission::sorafs::CanSetSorafsReservePolicy.into();
@@ -10665,6 +10668,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsRepair",
     "CanManageSorafsProofOutcomePolicy",
     "CanRecordSorafsProofOutcome",
+    "CanManageSorafsReputationJournalPolicy",
+    "CanRecordSorafsReputationJournal",
+    "CanResolveSorafsCapacityDispute",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
     "CanSetMusubiShortAlias",

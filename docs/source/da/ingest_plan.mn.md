@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   нотлох баримтын багцад `policy_source` утгыг утга учиртай байлгах мөрүүд. Харна уу
   Дэд командын `crates/iroha_cli/src/commands/da.rs` ба `docs/source/da/rent_policy.md`
   бодлогын схемийн хувьд.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Пин бүртгэлийн паритет одоо SDK-д хүрч байна: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK нь `iroha app sorafs pin register`-ийн ашигладаг яг ачааллыг бүтээж, каноник стандартыг хэрэгжүүлдэг.
-  chunker мета өгөгдөл, пин бодлого, нэрийн баталгаа, залгамжлагчийн мэдээлэл
-  `/v1/sorafs/pin/register`. Энэ нь CI роботууд болон автоматжуулалтыг CLI руу нэвтрэхээс хамгаалдаг
+- Pin registry-ийн паритет одоо SDK-д хүрч байна:
+  `ToriiClient.registerSorafsPinManifest(...)` нь `manifest_payload` дотор яг
+  canonical padded-base64 `ManifestV1` агуулсан хаалттай JSON V1 хүсэлт үүсгэнэ.
+  Torii digest, chunker, content length, pin policy болон fee input-ийг зөвхөн
+  decoded manifest-ээс гаргаж, duplicate summary-г татгалзана; optional alias
+  болон nonzero predecessor хэвээр байна. Ингэснээр `/v1/sorafs/pin/register`
+  ашиглах үед CI роботууд болон автоматжуулалт CLI дуудах шаардлагагүй болно
   манифест бүртгэлийг бүртгэх ба туслагч нь TypeScript/README хамрах хүрээтэй тул DA-8
   Rust/Swift-тэй зэрэгцэн JS дээр "илгээх/авах/баталгаажуулах" хэрэгслийн паритет бүрэн хангагдсан.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】
 - `iroha app da prove-availability` дээрх бүх зүйлийг холбодог: хадгалах тасалбар авч, татаж авдаг.

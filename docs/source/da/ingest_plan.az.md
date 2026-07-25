@@ -274,10 +274,13 @@ isteğe bağlı manifestlərin hashing, parçalanması və yoxlanması.
   `policy_source` dəyərlərini sübut paketlərində mənalı saxlamaq üçün sətirlər. Bax
   Alt komanda üçün `crates/iroha_cli/src/commands/da.rs` və `docs/source/da/rent_policy.md`
   siyasət sxemi üçün.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin reyestrinin pariteti indi SDK-lara yayılır: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK `iroha app sorafs pin register` tərəfindən istifadə olunan dəqiq yükü qurur və kanonik standartları tətbiq edir.
-  POST-a göndərməzdən əvvəl chunker metadata, pin siyasətləri, ləqəb sübutları və davamçı həzmlər
-  `/v1/sorafs/pin/register`. Bu, CI botlarını və avtomatlaşdırmanı zaman CLI-yə atmaqdan qoruyur
+- Pin reyestrinin pariteti indi SDK-lara yayılır:
+  `ToriiClient.registerSorafsPinManifest(...)` `manifest_payload` daxilində dəqiq
+  canonical padded-base64 `ManifestV1` olan qapalı JSON V1 sorğusunu qurur. Torii
+  digest, chunker, content length, pin policy və fee inputları yalnız decoded
+  manifestdən çıxarır və duplicate summary-ləri rədd edir; optional alias və
+  nonzero predecessor qalır. Bu, `/v1/sorafs/pin/register` istifadə edilərkən CI
+  botlarını və avtomatlaşdırmanı CLI-yə atmaqdan qoruyur
   manifest qeydiyyatlarını qeyd edir və köməkçi TypeScript/README əhatə dairəsi ilə göndərilir ki, DA-8
   Rust/Swift ilə yanaşı JS-də “submit/get/prove” alət pariteti tam təmin edilir.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】
 - `iroha app da prove-availability` yuxarıda göstərilənlərin hamısını zəncirləyir: saxlama bileti alır,

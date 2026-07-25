@@ -43,7 +43,9 @@ use norito::{
 };
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
-use sorafs_car::{CarBuildPlan, ChunkStore, FilePayload, PorProof};
+use sorafs_car::{
+    CarBuildPlan, ChunkStore, FilePayload, PorProof, fetch_plan::chunk_fetch_plan_from_json,
+};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
@@ -1169,6 +1171,13 @@ pub(super) fn persist_manifest_bundle<C: RunContext>(
     output_dir: Option<PathBuf>,
     ticket_label: &str,
 ) -> Result<PersistedManifestPaths> {
+    let parsed_chunk_plan = chunk_fetch_plan_from_json(&bundle.chunk_plan)
+        .map_err(|err| eyre!("refusing to persist invalid DA chunk plan: {err}"))?;
+    if hex::encode(parsed_chunk_plan.payload_digest) != bundle.blob_hash_hex {
+        return Err(eyre!(
+            "refusing to persist DA chunk plan whose payload digest does not match blob_hash"
+        ));
+    }
     let root = default_fetch_root(output_dir)?;
     fs::create_dir_all(&root).wrap_err_with(|| {
         format!(
@@ -1708,12 +1717,13 @@ fn proof_to_json(report: &ProofReport) -> Value {
                 .collect(),
         ),
     );
+    map.insert("chunk_count".into(), Value::from(report.proof.chunk_count));
     map.insert(
-        "chunk_roots".into(),
+        "chunk_merkle_path".into(),
         Value::Array(
             report
                 .proof
-                .chunk_roots
+                .chunk_merkle_path
                 .iter()
                 .map(|digest| Value::from(hex::encode(digest)))
                 .collect(),
@@ -2381,7 +2391,7 @@ mod tests {
         let bundle = DaManifestFetchBundle {
             manifest_bytes: manifest_bytes.clone(),
             manifest_json,
-            chunk_plan: Value::Object(Map::new()),
+            chunk_plan: sample_chunk_fetch_plan(&manifest),
             storage_ticket_hex: "feedface".repeat(8),
             manifest_hash_hex,
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
@@ -2425,7 +2435,7 @@ mod tests {
         let bundle = DaManifestFetchBundle {
             manifest_bytes,
             manifest_json,
-            chunk_plan: Value::Object(Map::new()),
+            chunk_plan: sample_chunk_fetch_plan(&manifest),
             storage_ticket_hex: storage_ticket.clone(),
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
@@ -2465,7 +2475,7 @@ mod tests {
         let bundle = DaManifestFetchBundle {
             manifest_bytes: Vec::new(),
             manifest_json: norito::json::to_value(&manifest).expect("manifest JSON"),
-            chunk_plan: Value::Object(Map::new()),
+            chunk_plan: sample_chunk_fetch_plan(&manifest),
             storage_ticket_hex: "feedface".repeat(8),
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
@@ -2854,9 +2864,18 @@ mod tests {
         }
     }
 
+    fn sample_chunk_fetch_plan(manifest: &DaManifestV1) -> Value {
+        let plan =
+            sorafs_car::build_plan_from_da_manifest(manifest).expect("build sample fetch plan");
+        sorafs_car::fetch_plan::try_chunk_fetch_plan_to_json(&plan)
+            .expect("render canonical sample fetch plan")
+    }
+
     fn dummy_proof() -> PorProof {
         PorProof {
             payload_len: 4,
+            leaf_count: 1,
+            leaf_index_flat: 0,
             chunk_index: 0,
             chunk_offset: 0,
             chunk_length: 4,
@@ -2873,7 +2892,8 @@ mod tests {
             leaf_digest: [0xEE; 32],
             segment_leaves: vec![[0xEE; 32]],
             chunk_segments: vec![[0xCC; 32]],
-            chunk_roots: vec![[0xBB; 32]],
+            chunk_count: 1,
+            chunk_merkle_path: Vec::new(),
         }
     }
 }

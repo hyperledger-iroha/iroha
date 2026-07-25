@@ -31,6 +31,7 @@ struct NativeSorafsOrderbookOrderRequestFields {
     let quantityGib: UInt64
     let remainingGib: UInt64
     let ownerAccount: Data
+    let providerId: Data
     let expiryUnix: UInt64
     let nonce: UInt64
     let makerFeeBps: UInt32
@@ -1890,6 +1891,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UInt64, UInt64,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UInt64, UInt64,
         UInt32, UInt32,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2377,6 +2379,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.canonicalJSONBlake3Fn = staticHandle
             .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
             .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
+        self.publicKeyFromPrivateFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_public_key_from_private") }
+            .map { unsafeBitCast($0, to: PublicKeyFromPrivateFn.self) }
+        self.keypairFromSeedFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_keypair_from_seed") }
+            .map { unsafeBitCast($0, to: KeypairFromSeedFn.self) }
+        self.signDetachedFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_sign_detached") }
+            .map { unsafeBitCast($0, to: SignDetachedFn.self) }
+        self.verifyDetachedFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_verify_detached") }
+            .map { unsafeBitCast($0, to: VerifyDetachedFn.self) }
         self.freeFn = connect_norito_free
         if let enterSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_chain_discriminant_scope_enter")
@@ -8183,27 +8197,31 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let status = withDataPointer(fields.orderId) { orderIdPtr, orderIdLen in
             withDataPointer(priceData) { pricePtr, priceLen in
                 withDataPointer(fields.ownerAccount) { ownerPtr, ownerLen in
-                    withDataPointer(privateKey) { keyPtr, keyLen in
-                        function(
-                            orderIdPtr,
-                            orderIdLen,
-                            fields.side,
-                            fields.tier,
-                            pricePtr,
-                            priceLen,
-                            fields.quantityGib,
-                            fields.remainingGib,
-                            ownerPtr,
-                            ownerLen,
-                            fields.expiryUnix,
-                            fields.nonce,
-                            fields.makerFeeBps,
-                            fields.takerFeeBps,
-                            keyPtr,
-                            keyLen,
-                            &outPtr,
-                            &outLen
-                        )
+                    withDataPointer(fields.providerId) { providerPtr, providerLen in
+                        withDataPointer(privateKey) { keyPtr, keyLen in
+                            function(
+                                orderIdPtr,
+                                orderIdLen,
+                                fields.side,
+                                fields.tier,
+                                pricePtr,
+                                priceLen,
+                                fields.quantityGib,
+                                fields.remainingGib,
+                                ownerPtr,
+                                ownerLen,
+                                providerPtr,
+                                providerLen,
+                                fields.expiryUnix,
+                                fields.nonce,
+                                fields.makerFeeBps,
+                                fields.takerFeeBps,
+                                keyPtr,
+                                keyLen,
+                                &outPtr,
+                                &outLen
+                            )
+                        }
                     }
                 }
             }

@@ -69,11 +69,13 @@ detailed walkthrough of these steps.
    ```
 4. Exercise manifest/plan endpoints with governance headers:
    ```bash
-   sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
+   sorafs-fetch --plan fixtures/chunk_fetch_plan.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
+   The file must be the strict payload-bound
+   `sorafs.chunk_fetch_plan.v1` object, not a bare spec array.
 5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
    new profile without errors.
 

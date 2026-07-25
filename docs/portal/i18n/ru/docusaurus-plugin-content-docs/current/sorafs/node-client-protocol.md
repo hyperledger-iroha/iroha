@@ -128,10 +128,12 @@ SDKs через `sorafs_orchestrator`):
 - `iroha app sorafs pin list|show`, `alias list` и `replication list` оборачивают
   pin-registry REST endpoints и печатают сырой Norito JSON с блоками attestation
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` принимают Norito
-  или JSON manifests плюс опциональные alias proofs и successors; malformed proofs
-  возвращают `400`, stale proofs дают `503` с `Warning: 110`, а hard-expired proofs
-  возвращают `412`.
+- `torii /v1/sorafs/pin/register` принимает закрытый JSON-запрос V1.
+  `manifest_payload` должен быть точным каноническим padded-base64 от байтов
+  канонического Norito `ManifestV1`. Torii выводит digest, chunker, content
+  length, pin policy и fee inputs только из декодированного manifest и отклоняет
+  выведенные из обращения дублирующие summary fields. `alias` и ненулевой
+  predecessor `successor_of_hex` остаются опциональными.
 - REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) включают структуры attestation, чтобы клиенты могли
   проверить данные относительно последних block headers перед действием.

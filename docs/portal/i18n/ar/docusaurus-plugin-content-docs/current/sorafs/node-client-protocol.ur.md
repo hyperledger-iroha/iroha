@@ -119,10 +119,12 @@ translation_last_reviewed: 2026-02-07
 - `iroha app sorafs pin list|show`، `alias list`، و`replication list` دبوس التسجيل
   تقوم نقاط نهاية REST بتغليف البطاقة وأدلة التدقيق لكتل المصادقة تلقائيًا
   طباعة خام Norito JSON.
-- `iroha app sorafs storage pin` أو `torii /v1/sorafs/pin/register` Norito أو JSON
-  يُظهر البراهين الاسم المستعار الاختياري والخلفاء يقبلون البطاقة؛ مشوه
-  بروفات پر `400`، بروفات قديمة پر `503` مع `Warning: 110`، وبراهين منتهية الصلاحية
-  پر `412`۔
+- يقبل `torii /v1/sorafs/pin/register` طلب JSON V1 المغلق. يجب أن يكون
+  `manifest_payload` ترميز base64 مبطنًا canonical ودقيقًا لبايتات
+  `ManifestV1` canonical بنمط Norito. يشتق Torii الـ digest والـ chunker وطول
+  المحتوى وسياسة pin ومدخلات الرسوم حصريًا من الـ manifest المفكوك، ويرفض
+  حقول الملخص المكررة المتقاعدة. يبقى `alias` وسلف `successor_of_hex` غير
+  الصفري اختياريين.
 - نقاط نهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
   تشتمل هياكل التصديق على أحدث رؤوس الكتل للعملاء
   التحقق من البيانات المختلفة کر سكای۔

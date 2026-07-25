@@ -24,7 +24,7 @@ use crate::{
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
-const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v1\0";
+const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v2\0";
 const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\0";
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
 const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
@@ -33,7 +33,10 @@ const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain:unresolved-evidence:empty:v1\0";
 
 /// Current-only first-release merge-ledger entry layout.
-pub const MERGE_LEDGER_ENTRY_VERSION_V1: u8 = 1;
+///
+/// Version two adds globally ordered queue-plan admission controls. Version one
+/// has no compatibility path and is intentionally rejected by live consensus.
+pub const MERGE_LEDGER_ENTRY_VERSION_V2: u8 = 2;
 
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
@@ -62,6 +65,15 @@ pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;
 /// four-MiB source ceiling therefore preserves enough of the 12-MiB execution
 /// envelope for every individually certified lane source to remain mergeable.
 pub const MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Maximum number of globally ordered queue-plan admission controls in one entry.
+pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS: usize = 4_096;
+
+/// Maximum canonical size of one opaque queue-plan admission certificate.
+pub const MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
+
+/// Maximum aggregate queue-plan admission bytes carried by one merge entry.
+pub const MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
 
 /// Maximum canonical size reserved for the certified-proposal half of one source bundle.
 ///
@@ -96,6 +108,23 @@ pub const fn merge_ledger_entry_size_within_limit(encoded_len: usize) -> bool {
 #[must_use]
 pub const fn merge_execution_batch_size_within_limit(encoded_len: usize) -> bool {
     encoded_len <= MAX_MERGE_EXECUTION_BATCH_BYTES
+}
+
+/// Return whether opaque queue-plan admission bytes fit their protocol envelope.
+#[must_use]
+pub fn merge_queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
+    if admissions.len() > MAX_MERGE_QUEUE_PLAN_ADMISSIONS {
+        return false;
+    }
+    admissions
+        .iter()
+        .try_fold(0_usize, |total, admission| {
+            if admission.is_empty() || admission.len() > MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES {
+                return None;
+            }
+            total.checked_add(admission.len())
+        })
+        .is_some_and(|total| total <= MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES)
 }
 
 /// Proof of possession for one signer selected by a merge QC bitmap.
@@ -698,7 +727,7 @@ pub struct MergeExecutionBatch {
 )]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerEntry {
-    /// Exact first-release entry layout. Only version one is supported.
+    /// Exact first-release entry layout. Only version two is supported.
     pub version: u8,
     /// Epoch in which the entry was committed.
     pub epoch_id: u64,
@@ -726,11 +755,18 @@ pub struct MergeLedgerEntry {
     /// without inventing an executable lane payload. Runtime admission limits
     /// an entry to the single highest autoscale retirement candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
+    /// Canonical framed queue-plan admission certificates in strict source order.
+    ///
+    /// The concrete certificate type belongs to `iroha_core`, so the data
+    /// model retains exact canonical bytes without introducing a dependency
+    /// cycle. Runtime admission decodes, authenticates, and stages the
+    /// certificate bindings through an immutable WSV compare-and-set.
+    pub queue_plan_admissions: Vec<Vec<u8>>,
 }
 
 impl MergeLedgerEntry {
     /// Current supported entry layout.
-    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V1;
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
 
     /// Return whether this entry advertises the current first-release layout.
     #[must_use]
@@ -826,7 +862,7 @@ mod tests {
     }
 
     #[derive(Encode)]
-    struct PreviousMergeLedgerEntry {
+    struct PreDrainMergeLedgerEntry {
         version: u8,
         epoch_id: u64,
         lane_catalog_hash: Hash,
@@ -837,6 +873,21 @@ mod tests {
         global_state_root: Hash,
         merge_qc: MergeQuorumCertificate,
         execution_batch: Option<MergeExecutionBatch>,
+    }
+
+    #[derive(Encode)]
+    struct PreviousMergeLedgerEntryV1 {
+        version: u8,
+        epoch_id: u64,
+        lane_catalog_hash: Hash,
+        active_lanes: Vec<MergeLaneBinding>,
+        incarnation_root: Hash,
+        activation_root: Hash,
+        lane_snapshots: Vec<MergeLaneSnapshot>,
+        global_state_root: Hash,
+        merge_qc: MergeQuorumCertificate,
+        execution_batch: Option<MergeExecutionBatch>,
+        lane_drain_certificates: Vec<LaneDrainCertificateV1>,
     }
 
     fn sample_tip(label: &[u8]) -> HashOf<BlockHeader> {
@@ -1065,6 +1116,27 @@ mod tests {
             MAX_MERGE_LEDGER_ENTRY_BYTES - MAX_MERGE_EXECUTION_BATCH_BYTES,
             4 * 1024 * 1024
         );
+        assert!(merge_queue_plan_admissions_within_limits(&[vec![
+            0xA5;
+            MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+        ]]));
+        assert!(!merge_queue_plan_admissions_within_limits(&[Vec::new()]));
+        assert!(!merge_queue_plan_admissions_within_limits(&[vec![
+            0xA5;
+            MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                + 1
+        ]]));
+        assert!(!merge_queue_plan_admissions_within_limits(&vec![
+            vec![0xA5];
+            MAX_MERGE_QUEUE_PLAN_ADMISSIONS
+                + 1
+        ]));
+        assert!(!merge_queue_plan_admissions_within_limits(&vec![
+                vec![0xA5; MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES];
+                MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES
+                    / MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                    + 1
+            ]));
     }
 
     #[test]
@@ -1121,6 +1193,7 @@ mod tests {
             ),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
         };
         let envelope_overhead = entry.canonical_bytes().len();
         assert!(
@@ -1223,6 +1296,10 @@ mod tests {
             ],
             execution_batch: None,
             lane_drain_certificates: vec![sample_lane_drain_certificate()],
+            queue_plan_admissions: vec![
+                norito::to_bytes(&sample_hash(b"queue-plan-admission"))
+                    .expect("opaque queue-plan admission fixture encodes"),
+            ],
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };
@@ -1270,7 +1347,7 @@ mod tests {
         );
 
         let previous_batch = sample_execution_batch();
-        let previous = PreviousMergeLedgerEntry {
+        let previous = PreDrainMergeLedgerEntry {
             version: MergeLedgerEntry::VERSION,
             epoch_id: entry.epoch_id,
             lane_catalog_hash: entry.lane_catalog_hash,
@@ -1286,6 +1363,25 @@ mod tests {
         assert!(
             MergeLedgerEntry::decode(&mut previous_encoded.as_slice()).is_err(),
             "the layout omitting drain certificates must fail closed"
+        );
+
+        let previous_v1 = PreviousMergeLedgerEntryV1 {
+            version: 1,
+            epoch_id: entry.epoch_id,
+            lane_catalog_hash: entry.lane_catalog_hash,
+            active_lanes: entry.active_lanes.clone(),
+            incarnation_root: entry.incarnation_root,
+            activation_root: entry.activation_root,
+            lane_snapshots: entry.lane_snapshots.clone(),
+            global_state_root: entry.global_state_root,
+            merge_qc: entry.merge_qc.clone(),
+            execution_batch: Some(previous_batch),
+            lane_drain_certificates: entry.lane_drain_certificates.clone(),
+        };
+        let previous_v1_encoded = previous_v1.encode();
+        assert!(
+            MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice()).is_err(),
+            "the complete version-one layout must fail closed"
         );
 
         let mut unsupported = entry;

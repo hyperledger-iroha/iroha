@@ -2,8 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
-import { ToriiClient as SourceToriiClient } from "../src/toriiClient.js";
+import {
+  ToriiClient as DistToriiClient,
+  __sumeragiNativeAmxTestHelpers as distNativeAmxTestHelpers,
+} from "../dist/toriiClient.js";
+import {
+  ToriiClient as SourceToriiClient,
+  __sumeragiNativeAmxTestHelpers as sourceNativeAmxTestHelpers,
+} from "../src/toriiClient.js";
 
 const fixtureUrl = new URL(
   "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",
@@ -13,6 +19,26 @@ const fixtureDocument = JSON.parse(readFileSync(fixtureUrl, "utf8"));
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function resealNativeAmxLeg(leg, helpers) {
+  const descriptor = leg.participant_proposal.descriptor;
+  descriptor.validator_set_hash = helpers.computeValidatorSetHash(
+    descriptor.validator_set,
+  );
+  descriptor.descriptor_hash = helpers.computeDescriptorHash(descriptor);
+  leg.participant_proposal.proposal_hash =
+    helpers.computeProposalHash(descriptor);
+  leg.participant_settlement_hash =
+    helpers.computeParticipantSettlementHash(leg.participant_settlement);
+  for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+    qc.validator_set_hash = descriptor.validator_set_hash;
+    qc.body.participant_validator_set_hash = descriptor.validator_set_hash;
+    qc.body.participant_proposal_hash =
+      leg.participant_proposal.proposal_hash;
+    qc.body.participant_settlement_commitment =
+      leg.participant_settlement_hash;
+  }
 }
 
 function pointerTokens(pointer) {
@@ -289,26 +315,69 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
 });
 
 test("grouped Native AMX v2 exposes mixed-role anchor deferral", async () => {
-  const diagnosticsPayload = clone(fixtureDocument.golden.expected_diagnostics);
-  const descriptor = diagnosticsPayload
-    .lane_settlement_commitments[0]
-    .native_amx_receipts[0]
-    .legs[1]
-    .participant_proposal
-    .descriptor;
-  descriptor.accepted_candidate_indices = [descriptor.accepted_candidate_indices[1]];
-  descriptor.accepted_transaction_hashes = [descriptor.accepted_transaction_hashes[1]];
-
-  const diagnostics = await diagnosticsClient(
-    diagnosticsPayload,
-  ).getSumeragiDiagnosticsTyped();
-  assert.equal(
-    diagnostics.lane_settlement_commitments[0]
+  for (const [implementation, Client] of clientImplementations) {
+    const diagnosticsPayload = clone(
+      fixtureDocument.golden.expected_diagnostics,
+    );
+    const leg = diagnosticsPayload
+      .lane_settlement_commitments[0]
       .native_amx_receipts[0]
-      .legs[1]
-      .requires_mixed_role_anchor_validation,
-    true,
-  );
+      .legs[1];
+    const descriptor = leg.participant_proposal.descriptor;
+    descriptor.accepted_candidate_indices = [
+      descriptor.accepted_candidate_indices[1],
+    ];
+    descriptor.accepted_transaction_hashes = [
+      descriptor.accepted_transaction_hashes[1],
+    ];
+    resealNativeAmxLeg(
+      leg,
+      implementation === "source"
+        ? sourceNativeAmxTestHelpers
+        : distNativeAmxTestHelpers,
+    );
+
+    const diagnostics = await diagnosticsClient(
+      diagnosticsPayload,
+      Client,
+    ).getSumeragiDiagnosticsTyped();
+    assert.equal(
+      diagnostics.lane_settlement_commitments[0]
+        .native_amx_receipts[0]
+        .legs[1]
+        .requires_mixed_role_anchor_validation,
+      true,
+      implementation,
+    );
+  }
+});
+
+test("grouped Native AMX v2 rejects noncanonical validator PeerIds", async () => {
+  const invalidValidators = [
+    " not-a-canonical-bls-peer-id",
+    `ed0120${"AA".repeat(32)}`,
+    `ea013080${"00".repeat(47)}`,
+    `EA0130${"AA".repeat(48)}`,
+  ];
+  for (const validator of invalidValidators) {
+    for (const [implementation, Client] of clientImplementations) {
+      const diagnostics = clone(
+        fixtureDocument.golden.expected_diagnostics,
+      );
+      diagnostics.lane_settlement_commitments[0]
+        .native_amx_receipts[0]
+        .legs[0]
+        .prepare_qc
+        .validator_set[0] = validator;
+      await assert.rejects(
+        () => diagnosticsClient(
+          diagnostics,
+          Client,
+        ).getSumeragiDiagnosticsTyped(),
+        implementation,
+      );
+    }
+  }
 });
 
 test("grouped Native AMX v2 requires the exact ordered outer source group", async () => {

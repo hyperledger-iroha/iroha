@@ -9,7 +9,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
@@ -30,7 +30,6 @@ use iroha_executor_data_model::permission::sorafs::{
     CanIssueSorafsReplicationOrder, CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
     CanRetireSorafsPin,
 };
-use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
@@ -51,9 +50,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     bootstrap_sorafs(&mut tx);
 
     let digest = default_digest();
+    let chunk_digest = default_chunk_digest();
     let council_keys = council_keypair();
 
-    register_and_approve(&mut tx, digest, &council_keys)?;
+    register_and_approve(&mut tx, digest, chunk_digest, &council_keys)?;
 
     let alias_binding = alias_binding_for(digest, "sora", "docs", 12, 36, &council_keys)?;
     BindManifestAlias {
@@ -111,7 +111,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    if tx.tx_call_hash.is_none() {
+        tx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
+    }
+
     let alice = alice();
+    let default_domain = DomainId::try_new(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "universal",
+    )
+    .expect("default account domain label");
+    if tx.world().domains().get(&default_domain).is_none() {
+        Register::domain(Domain::new(default_domain.clone()))
+            .execute(&alice, tx)
+            .expect("register default domain");
+    }
+    if tx.world().account(&alice).is_err() {
+        Register::account(NewAccount::new(alice.clone()))
+            .execute(&alice, tx)
+            .expect("register sorafs authority");
+    }
+
     {
         let world = &mut tx.world;
         for perm in [
@@ -126,6 +146,7 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
             world.add_account_permission(&alice, perm);
         }
     }
+    seed_public_pin_fee_assets(tx);
 
     for provider_id in [
         ProviderId::new([0x51; 32]),
@@ -150,10 +171,18 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
 fn register_and_approve(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     digest: ManifestDigest,
+    chunk_digest: [u8; 32],
     council_keys: &KeyPair,
 ) -> Result<(), iroha_crypto::Error> {
+    let seed = fixture_seed_for_digest(digest);
+    let manifest = manifest_fixture_with_chunk_digest(seed, chunk_digest);
+    assert_eq!(
+        ManifestDigest::from_manifest(&manifest).expect("digest registration fixture"),
+        digest,
+        "registration helper chunk digest must match the fixture digest"
+    );
     RegisterPinManifest {
-        manifest_payload: default_manifest_payload(),
+        manifest_payload: manifest.encode().expect("encode registration fixture"),
         submitted_epoch: 5,
         alias: None,
         successor_of: None,
@@ -167,6 +196,15 @@ fn register_and_approve(
         .get(&digest)
         .expect("manifest stored")
         .clone();
+    tx.gov.sorafs_pin_policy.require_council_signatures = true;
+    tx.gov.sorafs_pin_policy.approval_quorum = 1;
+    tx.gov.sorafs_pin_policy.approval_signers =
+        vec![iroha_config::parameters::actual::SorafsPinApprovalSigner {
+            signer_id: "council-a".to_owned(),
+            public_key: council_keys.public_key().clone(),
+            valid_from_block_height: 0,
+            revoked_at_block_height: None,
+        }];
     let envelope = build_envelope(&stored, council_keys)?;
 
     ApprovePinManifest {
@@ -374,37 +412,62 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    let gov = iroha_config::parameters::actual::Governance::default();
-    let world = public_pin_fee_world(&gov);
+    let default_domain = DomainId::try_new(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "universal",
+    )
+    .expect("default account domain label");
+    let alice = alice();
+    let bob = iroha_test_samples::BOB_ID.clone();
+    let domain = Domain::new(default_domain.clone()).build(&alice);
+    let alice_account = Account::new(alice.clone()).build(&alice);
+    let bob_account = Account::new(bob.clone()).build(&bob);
+    let world = World::with(
+        [domain],
+        [alice_account, bob_account],
+        std::iter::empty::<AssetDefinition>(),
+    );
     State::new_for_testing(world, kura, live)
 }
 
-fn public_pin_fee_world(gov: &iroha_config::parameters::actual::Governance) -> World {
-    let fee_asset_id = gov.sorafs_pin_fee_asset_id.clone();
-    let authority = alice();
-    let domains = fee_asset_id
-        .try_domain()
-        .cloned()
-        .map(|domain_id| Domain::new(domain_id).build(&authority))
-        .into_iter();
-    let mut accounts = vec![Account::new(authority.clone()).build(&authority)];
-    let treasury = gov.sorafs_pin_fee_treasury_account.clone();
-    if treasury != authority {
-        accounts.push(Account::new(treasury).build(&authority));
+fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
+    let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
+    if let Some(domain_id) = fee_asset_id.try_domain().cloned()
+        && tx.world().domains().get(&domain_id).is_none()
+    {
+        Register::domain(Domain::new(domain_id))
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee asset domain");
     }
-    let definition = AssetDefinition::numeric(fee_asset_id.clone())
-        .with_name(
+    let treasury = tx.gov.sorafs_pin_fee_treasury_account.clone();
+    if tx.world().account(&treasury).is_err() {
+        Register::account(NewAccount::new(treasury))
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee treasury account");
+    }
+    if tx.world().asset_definitions().get(&fee_asset_id).is_none() {
+        let definition = AssetDefinition::numeric(fee_asset_id.clone()).with_name(
             fee_asset_id
                 .try_name()
-                .map_or_else(|| "xor".to_owned(), ToString::to_string),
-        )
-        .build(&authority);
-    let asset = Asset::new(
-        AssetId::new(fee_asset_id, authority),
-        Quantity::from(10_000_000_000_000_u128),
-    );
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "xor".to_owned()),
+        );
+        Register::asset_definition(definition)
+            .execute(&alice(), tx)
+            .expect("register SoraFS fee asset definition");
+    }
+    seed_pin_fee_balance(tx, &alice(), 10_000_000_000_000);
+}
 
-    World::with_assets(domains, accounts, [definition], [asset], [])
+fn seed_pin_fee_balance(
+    tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+    account: &AccountId,
+    amount: u128,
+) {
+    let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
+    Mint::asset_quantity(amount, asset_id)
+        .execute(&alice(), tx)
+        .expect("mint SoraFS public pin fee balance");
 }
 
 fn default_chunker() -> ChunkerProfileHandle {
@@ -423,17 +486,21 @@ fn default_block_header() -> iroha_data_model::block::BlockHeader {
 }
 
 fn default_digest() -> ManifestDigest {
-    ManifestDigest::from_manifest(&default_manifest()).expect("digest fixture manifest")
+    manifest_digest_for_seed(0xAA)
 }
 
-fn default_manifest() -> ManifestV1 {
+fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32]) -> ManifestV1 {
+    let commitment = seed.max(1);
     ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA5; 32]))
+        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
+            [commitment; 32],
+        ))
         .dag_codec(DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
         .chunking_from_registry(chunker_registry::default_descriptor().id)
-        .chunk_digest_sha3_256(default_chunk_digest())
+        .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root([commitment.wrapping_add(2).max(1); 32])
         .content_length(default_content_length())
-        .car_digest([0xB5; 32])
+        .car_digest([commitment.wrapping_add(1).max(1); 32])
         .car_size(default_content_length() + 4096)
         .pin_policy(sorafs_manifest::PinPolicy {
             min_replicas: default_policy().min_replicas,
@@ -445,23 +512,31 @@ fn default_manifest() -> ManifestV1 {
         .expect("fixture manifest")
 }
 
-fn default_manifest_payload() -> Vec<u8> {
-    default_manifest()
-        .encode()
-        .expect("encode fixture manifest")
+fn chunk_digest_for_seed(seed: u8) -> [u8; 32] {
+    [seed.wrapping_add(0x23).max(1); 32]
+}
+
+fn manifest_fixture(seed: u8) -> ManifestV1 {
+    manifest_fixture_with_chunk_digest(seed, chunk_digest_for_seed(seed))
+}
+
+fn manifest_digest_for_seed(seed: u8) -> ManifestDigest {
+    ManifestDigest::from_manifest(&manifest_fixture(seed)).expect("digest fixture manifest")
+}
+
+fn fixture_seed_for_digest(digest: ManifestDigest) -> u8 {
+    (1..=u8::MAX)
+        .find(|seed| manifest_digest_for_seed(*seed) == digest)
+        .expect("manifest digest must belong to a fixture seed")
 }
 
 fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
-    assert_eq!(
-        digest,
-        default_digest(),
-        "snapshot uses the default manifest"
-    );
-    ManifestRootCid::try_from_slice(&default_manifest().root_cid).expect("canonical root CID")
+    ManifestRootCid::try_from_slice(&manifest_fixture(fixture_seed_for_digest(digest)).root_cid)
+        .expect("canonical root CID")
 }
 
 fn default_chunk_digest() -> [u8; 32] {
-    [0xCD; 32]
+    chunk_digest_for_seed(0xAA)
 }
 
 fn default_content_length() -> u64 {
@@ -641,6 +716,8 @@ mod tests {
             root_cid_for_manifest(default_digest()),
             default_chunker(),
             default_chunk_digest(),
+            manifest_fixture(0xAA).por_root,
+            default_content_length(),
             default_policy(),
             alice(),
             5,
@@ -648,7 +725,6 @@ mod tests {
             None,
             Metadata::default(),
         )
-        .with_content_length(default_content_length())
     }
 
     #[test]

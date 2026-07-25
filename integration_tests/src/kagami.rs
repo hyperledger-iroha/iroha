@@ -8,6 +8,9 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
+use iroha_test_network::{
+    ReleasePrebuiltBinary, resolve_release_prebuilt_binary, revalidate_release_prebuilt_binary,
+};
 
 use crate::process::{build_timeout, output_with_timeout};
 
@@ -32,7 +35,14 @@ static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
 /// Returns an error when no suitable binary can be found or built.
 pub fn resolve_kagami_bin() -> Result<PathBuf> {
     if let Some(path) = KAGAMI_BIN.get() {
-        return Ok(path.clone());
+        if let Some(revalidated) =
+            revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami, path)?
+        {
+            return Ok(revalidated);
+        }
+        if path.is_file() {
+            return Ok(path.clone());
+        }
     }
 
     let resolved = resolve_kagami_bin_uncached()?;
@@ -41,6 +51,18 @@ pub fn resolve_kagami_bin() -> Result<PathBuf> {
 }
 
 fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
+    if let Some(expected) = resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami)? {
+        if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
+            let candidate = canonicalize_repo_relative(PathBuf::from(path))
+                .wrap_err_with(|| format!("resolve path from {KAGAMI_BIN_ENV}"))?;
+            return revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Kagami, &candidate)?
+                .ok_or_else(|| {
+                    eyre!("release prebuilt contract disappeared while validating {KAGAMI_BIN_ENV}")
+                });
+        }
+        return Ok(expected);
+    }
+
     if let Ok(path) = env::var(KAGAMI_BIN_ENV) {
         return canonicalize_repo_relative(PathBuf::from(path))
             .wrap_err_with(|| format!("resolve path from {KAGAMI_BIN_ENV}"));

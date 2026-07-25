@@ -43,7 +43,7 @@ use super::{
 };
 use crate::{
     block::BlockBuilder,
-    queue::{Queue, RoutingPlan, execution_context_for_routing_plan},
+    queue::{GlobalQueueSelectionLease, Queue, RoutingPlan, execution_context_for_routing_plan},
     state::{State, StateReadOnly, compute_confidential_feature_digest},
     tx::AcceptedTransaction,
 };
@@ -304,7 +304,7 @@ pub(crate) struct CandidateRequest<'request, Work> {
     /// Committed state at the parent height.
     pub(crate) state: &'request State,
     /// Shared pending queue; selection is read-only.
-    pub(crate) queue: &'request Queue,
+    pub(crate) queue: &'request std::sync::Arc<Queue>,
     /// Consensus key corresponding to `local_validator`.
     pub(crate) key_pair: &'request KeyPair,
     /// Process-lifetime guard covering candidate signing and canonicalization.
@@ -341,6 +341,7 @@ pub(crate) struct AssembledV2Candidate {
     encoded_payload: EncodedV2Payload,
     events: Vec<PipelineEventBox>,
     scan_report: CandidateScanReport,
+    _selection_lease: GlobalQueueSelectionLease,
 }
 
 impl AssembledV2Candidate {
@@ -368,6 +369,7 @@ impl AssembledV2Candidate {
         EncodedV2Payload,
         Vec<PipelineEventBox>,
         CandidateScanReport,
+        GlobalQueueSelectionLease,
     ) {
         (
             self.block,
@@ -375,6 +377,7 @@ impl AssembledV2Candidate {
             self.encoded_payload,
             self.events,
             self.scan_report,
+            self._selection_lease,
         )
     }
 }
@@ -433,6 +436,9 @@ impl V2CandidateAssembler {
         mut request: CandidateRequest<'_, Work>,
     ) -> Result<AssembledV2Candidate, CandidateError> {
         validate_request(&request)?;
+        if request.queue.transaction_selection_durability_faulted() {
+            return Err(CandidateError::RestartRequired);
+        }
 
         let tag = request.directive.tag();
         let view = tag.view();
@@ -440,13 +446,20 @@ impl V2CandidateAssembler {
             usize::try_from(request.context.da_layout.max_payload_size_bytes).unwrap_or(usize::MAX),
         );
         let mut report = CandidateScanReport::default();
+        let state_view = request.state.view();
+        let (pending, mut selection_lease) = request
+            .queue
+            .bounded_pending_snapshot(&state_view, self.limits.max_queue_scan)
+            .ok_or(CandidateError::RestartRequired)?;
+        drop(state_view);
         let mut pool = self.snapshot_routable_candidates(
             request.queue,
             request.state,
             &request.attachments,
+            pending,
             exact_payload_limit,
             &mut report,
-        );
+        )?;
         canonicalize_records(&mut pool);
 
         let mut reserve = VecDeque::from(pool);
@@ -543,6 +556,13 @@ impl V2CandidateAssembler {
             validate_request(&request)?;
 
             report.selected = selected.len();
+            let selected_hashes = selected
+                .iter()
+                .map(|record| record.transaction.hash())
+                .collect::<Vec<_>>();
+            if !selection_lease.retain_only(&selected_hashes) {
+                return Err(CandidateError::RestartRequired);
+            }
             signing.complete();
             return Ok(AssembledV2Candidate {
                 tag,
@@ -551,6 +571,7 @@ impl V2CandidateAssembler {
                 encoded_payload,
                 events,
                 scan_report: report,
+                _selection_lease: selection_lease,
             });
         }
 
@@ -562,12 +583,13 @@ impl V2CandidateAssembler {
         queue: &Queue,
         state: &State,
         attachments: &CandidateAttachments,
+        pending: Vec<AcceptedTransaction<'static>>,
         payload_limit: usize,
         report: &mut CandidateScanReport,
-    ) -> Vec<CandidateRecord> {
-        let state_view = state.view();
-        let pending = queue.bounded_pending_snapshot(&state_view, self.limits.max_queue_scan);
-        drop(state_view);
+    ) -> Result<Vec<CandidateRecord>, CandidateError> {
+        if queue.transaction_selection_durability_faulted() {
+            return Err(CandidateError::RestartRequired);
+        }
         let certified_merge_filter = attachments
             .certified_merge_entry
             .as_ref()
@@ -604,9 +626,12 @@ impl V2CandidateAssembler {
                 Ok(plan) => plan,
                 Err(_) => {
                     report.unresolved = report.unresolved.saturating_add(1);
-                    continue;
+                    return Err(CandidateError::RestartRequired);
                 }
             };
+            if queue.transaction_selection_durability_faulted() {
+                return Err(CandidateError::RestartRequired);
+            }
             report.routable = report.routable.saturating_add(1);
             let encoded_len = transaction.encoded_len();
             if encoded_len > payload_limit {
@@ -621,7 +646,10 @@ impl V2CandidateAssembler {
                 source_ordinal,
             });
         }
-        records
+        if queue.transaction_selection_durability_faulted() {
+            return Err(CandidateError::RestartRequired);
+        }
+        Ok(records)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1388,7 +1416,7 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::{LaneQueueReservationKeyV1, RouteLeg, RouteLegRole, RoutingDecision},
+        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
         state::{State, World},
         sumeragi::network_topology::Topology,
     };
@@ -1484,10 +1512,11 @@ mod tests {
             .find(|key| key.public_key() == producer.public_key())
             .expect("producer belongs to fixture validator set");
         let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
-        let reservation = LaneQueueReservationKeyV1 {
-            version: LaneQueueReservationKeyV1::VERSION,
+        let reservation = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: transaction.hash(),
             entrypoint_hash: transaction.hash_as_entrypoint(),
+            queue_plan_admission_binding_hash: Hash::new(b"candidate-queue-plan-admission-binding"),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id,

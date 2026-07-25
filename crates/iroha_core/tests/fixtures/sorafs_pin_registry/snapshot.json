@@ -5,7 +5,7 @@
       "bound_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
       "bound_epoch": 12,
       "expiry_epoch": 36,
-      "manifest_digest_hex": "fefa3f241ebe5ef236b44054a592e7e562e8e0bb9e8cb099b652cd437a93dd73",
+      "manifest_digest_hex": "37600e2aa821481f3d0753fe0fabf3b9642f187b47b9b1dec0d970fc97ff817f",
       "name": "docs",
       "namespace": "sora",
       "proof_b64": "TlJUMAAAd/ds21b4nd9f6PTnOiscpQAEAQAAAAAAALCJd5GFJrLqAkoKCXNvcmEvZG9jcywkAAAAAAAAAAFxHyCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqggMAAAAAAAAAAgkAAAAAAAAACCNj3x29lWXnIoAvaPcbSN9RwStFH48vgKrNHFVWRB4iwgMAAAAAAAAAAgA8VNlAAAAAAiAQlVlAAAAAAgAAAAAAAAAAHMBAAAAAAAAAGog0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzdIQAAAAAAAAAB1WXVRfo5aRxlqzKuD9SexiiQUmmWN4EsMAR2CsIr6h9hwmV2sbWE2qgfXQh55zrStqBJ1lix4OBZXtSilXM8E"
@@ -16,8 +16,8 @@
       "alias_label": "sora/docs",
       "chunk_digest_sha3_256_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
       "chunker_handle": "sorafs.sf1@1.0.0",
-      "council_envelope_digest_hex": "4eeea189ec73fa61cf6757e71e2c74f7490a9797dd5323162f67c34fb8b1cba1",
-      "digest_hex": "fefa3f241ebe5ef236b44054a592e7e562e8e0bb9e8cb099b652cd437a93dd73",
+      "council_envelope_digest_hex": "28f4f97c2c432e6ad9208cc895234f98d50d4286e4c97328117494a952707745",
+      "digest_hex": "37600e2aa821481f3d0753fe0fabf3b9642f187b47b9b1dec0d970fc97ff817f",
       "policy": {
         "min_replicas": 3,
         "retention_epoch": 42,
@@ -46,11 +46,11 @@
           "slice_gib": 512
         }
       ],
-      "canonical_order_b64": "TlJUMAAA6bea6uRlsXOvwA7O+YmP3ABCAQAAAAAAAMiphM9SJ3CFAgEBIERERERERERERERERERERERERERERERERERERERERERELCQAAAAAAAAAAXEfIKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqIP76PyQevl7yNrRAVKWS5+Vi6OC7noywmbZSzUN6k91zERBzb3JhZnMuc2YxQDEuMC4wAgMAjwEDAAAAAAAAACwgUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVEIAAIAAAAAAAABACwgUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlIIAAIAAAAAAAABACwgU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MIAAIAAAAAAAABAAgA8VNlAAAAAAiAQlVlAAAAAA8EgFEBAASshAEABNB+AQAIAAAAAAAAAAA=",
+      "canonical_order_b64": "TlJUMAAA6bea6uRlsXOvwA7O+YmP3ABCAQAAAAAAAGR4LKQ/kB2sAgEBIERERERERERERERERERERERERERERERERERERERERERELCQAAAAAAAAAAXEfIKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqIDdgDiqoIUgfPQdT/g+r87lkLxh7R7mx3sDZcPyX/4F/ERBzb3JhZnMuc2YxQDEuMC4wAgMAjwEDAAAAAAAAACwgUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVEIAAIAAAAAAAABACwgUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlIIAAIAAAAAAAABACwgU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MIAAIAAAAAAAABAAgA8VNlAAAAAAiAQlVlAAAAAA8EgFEBAASshAEABNB+AQAIAAAAAAAAAAA=",
       "deadline_epoch": 28,
       "issued_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
       "issued_epoch": 20,
-      "manifest_digest_hex": "fefa3f241ebe5ef236b44054a592e7e562e8e0bb9e8cb099b652cd437a93dd73",
+      "manifest_digest_hex": "37600e2aa821481f3d0753fe0fabf3b9642f187b47b9b1dec0d970fc97ff817f",
       "manifest_root_cid_hex": "01711f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
       "sla_ingest_deadline_secs": 86400,

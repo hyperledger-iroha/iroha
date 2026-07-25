@@ -261,21 +261,24 @@ certificate round.
   signing request. The deliberately violated negated predicate is a regression
   witness, not a release invariant or deductive proof.
 - `SumeragiV2AutoscaleLifecycle.tla`,
-  `SumeragiV2NativeApplicationEvidence.tla`, and
-  `SumeragiV2AutonomousReservationCarrier.tla` are the bounded multilane
+  `SumeragiV2NativeApplicationEvidence.tla`,
+  `SumeragiV2AutonomousReservationCarrier.tla`, and
+  `SumeragiV2QueuePlanAdmissionRegistry.tla` are the bounded multilane
   closure kernels. Their fixed configurations check storage-before-activation,
   evidence-aware retirement, fresh incarnation reuse, durable Native
   publication/pruning order, same-route control-only treatment, unchanged
   reservation identity, single ownership, a control-only autonomous anchor,
   durable full-candidate authorization, ordered two-phase release, ABA-safe
-  recreation, and at-most-once canonical application. The closure-ledger
+  recreation, at-most-once canonical application, exact global QueuePlan CAS,
+  certificate-before-acceptance durability, Exact-gated queue eligibility,
+  immutable admission tombstones, and cancellation. The closure-ledger
   predicates additionally cover atomic route publication, quorum-bound drain
   certificates, exact-incarnation retirement, V4 Native source claims,
   contiguous active routes, exact grouped application, authenticated
   manifests, startup repair/latest-index exactness, durable reservation
   ownership, route/incarnation-first merge prefixes, canonical re-execution,
   restart ownership partitioning, and observer-only monotonic stage evidence
-  derived from durable State/Kura artifacts. Twenty-seven `_bug.cfg` controls
+  derived from durable State/Kura artifacts. Thirty-seven `_bug.cfg` controls
   deliberately weaken one boundary each and must produce the named invariant
   counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
@@ -287,14 +290,29 @@ certificate round.
   exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
   route/incarnation-first canonical source ordering, startup ownership
   reconciliation, and exact full-candidate signing authorization.
+  The QueuePlan binding covers the shared V2 binding and coordinator quorum,
+  Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
+  Exact-gated autonomous ownership, restart/TTL retention, and exact
+  authenticated loser cleanup.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
+  The same version-2 ledger machine-maps every conceptual `ML-MUT-*` ID from
+  the closure ledger. `tla_counterexample` entries cover every and only the 37
+  `_bug.cfg` files. `MLDiagnosticsAreDerived`,
+  `MLApiAuthoritySeparation`, `MLSdkAcceptSetEqualsRust`,
+  `MLFixtureHasOneCanonicalOwner`, and `MLConsensusLayoutAgreement` are
+  explicitly `static_release` or `differential_release` invariants with zero
+  TLA mutation configs; their exact unit, endpoint, parity, regeneration, and
+  legacy-codec check contracts are source-bound instead. The non-Cargo
+  structural checker rejects a missing, duplicate, reclassified, or reassigned
+  conceptual map and rejects declaring one of those release-only invariants in
+  a TLA+ module; the owning release gate still executes each bound check.
 
   `run_sumeragi_v2_multilane_apalache.sh` is the second bounded positive
   checker. It accepts no length argument or environment length override,
   requires the exact source-binding check first, validates the pinned Apalache 0.52.2
-  launcher and jar hashes, typechecks all three complete modules, and
+  launcher and jar hashes, typechecks all four complete modules, and
   requires one exact `NoError` result at these reviewed bounds:
 
   | Kernel | Fixed configuration | `Next` bound |
@@ -302,12 +320,13 @@ certificate round.
   | autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |
   | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
   | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
+  | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
 
-  Eight runner-contract negative controls reject tool-version or checksum
-  drift, source-binding bypass, a reduced autoscale bound, mutation
+  Nine runner-contract negative controls reject tool-version or checksum
+  drift, source-binding bypass, reduced autoscale or QueuePlan bounds, mutation
   substitution, a weakened success marker, and a length override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  twenty-seven exact TLC mutation witnesses. Apalache does not run those mutations:
+  thirty-seven exact TLC mutation witnesses. Apalache does not run those mutations:
   their named-counterexample contract is owned by the deterministic TLC
   runner, while the Apalache leg accepts positive `NoError` only.
 
@@ -328,7 +347,7 @@ certificate round.
   ledger, and bound production source before and after checking, then records
   each model/config/log hash, bound length, and exact `NoError` result. A
   failed or source-drifting run removes or withholds the completion evidence.
-  These finite checks constrain the three `specified_unproved`
+  These finite checks constrain the four `specified_unproved`
   production-refinement obligations in `proof_coverage.json`; they are not TLAPS
   or cross-tool proof evidence and do not change proof-ledger status.
 
@@ -922,10 +941,10 @@ authenticated origin.
 
 The final successor/recovery closure adds six exact regressions without adding
 a module. Six source-sealed command legs and the G-SCALE runner/validator
-preflight bring the current inventory to 515 tests across 38 modules and 65
+preflight bring the current inventory to 515 tests across 38 modules and 78
 legs.
 The canonical module/test TSV inventory SHA-256 is
-`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -962,7 +981,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 65 legs, including separate exact
+the complete pre-network corridor now spans 78 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
 module, and source-sealed command-success legs. Its finality, offline compact-QC,
@@ -1045,7 +1064,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 65 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 78 pre-network legs and the exact
 515-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

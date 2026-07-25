@@ -117,8 +117,21 @@ def test_dry_run_prints_complete_repair_rollout_plan(tmp_path: Path, capsys) -> 
         "statuses_observed"
         in plan["evidence_contract"]["worker_lifecycle"]["required_payload_fields"]
     )
+    for field in (
+        "finalized_task_projection_verified",
+        "exact_live_lease_execution_verified",
+        "durable_transaction_forwarding_verified",
+        "restart_reconciliation_verified",
+        "single_terminal_outcome_verified",
+    ):
+        assert (
+            field
+            in plan["evidence_contract"]["worker_lifecycle"][
+                "required_payload_fields"
+            ]
+        )
     assert (
-        "sse_delivery_verified"
+        "finalized_chain_projection_verified"
         in plan["evidence_contract"]["event_streams"]["required_payload_fields"]
     )
     assert (

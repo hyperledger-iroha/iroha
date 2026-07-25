@@ -36,10 +36,21 @@ use std::error::Error;
 use std::io::{BufRead, BufReader};
 
 use reqwest::blocking::Response;
-use sorafs_car::proof_stream::{ProofStreamItem, ProofStreamMetrics, ProofStreamSummary};
+use sorafs_car::proof_stream::{
+    ProofStreamItem, ProofStreamMetrics, ProofStreamSummary, ProofStreamVerificationContext,
+};
+use sorafs_manifest::ProofStreamRequestV1;
 
 /// Consume an NDJSON proof stream and return aggregated metrics.
-pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, Box<dyn Error>> {
+pub fn collect_proof_metrics(
+    response: Response,
+    exact_request: ProofStreamRequestV1,
+    trusted_por_root: Option<[u8; 32]>,
+) -> Result<ProofStreamSummary, Box<dyn Error>> {
+    // exact_request must be the request sent to the gateway. For PoR, load
+    // trusted_por_root from the authenticated manifest; use None for PDP/PoTR.
+    let verification_context =
+        ProofStreamVerificationContext::new(exact_request, trusted_por_root)?;
     if !response.status().is_success() {
         return Err(format!("gateway returned {}", response.status()).into());
     }
@@ -55,8 +66,8 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
             line.clear();
             continue;
         }
-        let item = ProofStreamItem::from_ndjson(trimmed.as_bytes())?;
-        if item.status.is_failure() && failures.len() < 5 {
+        let item = ProofStreamItem::from_ndjson(trimmed.as_bytes(), &verification_context)?;
+        if item.status().is_failure() && failures.len() < 5 {
             failures.push(item.clone());
         }
         metrics.record(&item);

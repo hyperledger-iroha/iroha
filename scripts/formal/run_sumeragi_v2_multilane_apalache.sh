@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fail-closed bounded Apalache gate for the three Sumeragi v2 multilane
+# Fail-closed bounded Apalache gate for the four Sumeragi v2 multilane
 # closure kernels. The fixed bounds are part of the reviewed contract; they
 # are deliberately not configurable through the environment.
 
@@ -182,10 +182,12 @@ run_positive() {
 readonly AUTOSCALE_MODULE="SumeragiV2AutoscaleLifecycle"
 readonly NATIVE_MODULE="SumeragiV2NativeApplicationEvidence"
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier"
+readonly QUEUE_PLAN_ADMISSION_MODULE="SumeragiV2QueuePlanAdmissionRegistry"
 
 run_typecheck "$AUTOSCALE_MODULE"
 run_typecheck "$NATIVE_MODULE"
 run_typecheck "$AUTONOMOUS_MODULE"
+run_typecheck "$QUEUE_PLAN_ADMISSION_MODULE"
 
 run_positive \
   autoscale-lifecycle \
@@ -198,13 +200,19 @@ run_positive \
   "$NATIVE_MODULE" \
   multilane_native_application_evidence_fixed.cfg \
   5 \
-  "NativeEvidenceTypeInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact"
+  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact"
 run_positive \
   autonomous-reservation-carrier \
   "$AUTONOMOUS_MODULE" \
   multilane_autonomous_reservation_carrier_fixed.cfg \
   10 \
   "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLStageEvidenceMonotonic"
+run_positive \
+  queue-plan-admission-registry \
+  "$QUEUE_PLAN_ADMISSION_MODULE" \
+  multilane_queue_plan_admission_registry_fixed.cfg \
+  8 \
+  "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution"
 
 final_source_manifest_sha256="$(
   python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256
@@ -222,7 +230,7 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
   printf 'launcher_sha256\t%s\n' "$APALACHE_LAUNCHER_SHA256"
   printf 'jar_sha256\t%s\n' "$APALACHE_JAR_SHA256"
   printf 'source_manifest_sha256\t%s\n' "$source_manifest_sha256"
-  printf 'result_count\t3\n'
+  printf 'result_count\t4\n'
   printf 'result\tautoscale-lifecycle\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
     "$AUTOSCALE_MODULE" \
     "multilane_autoscale_lifecycle_fixed.cfg" \
@@ -241,7 +249,13 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${FORMAL_DIR}/${AUTONOMOUS_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_autonomous_reservation_carrier_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/autonomous-reservation-carrier.check.log")"
+  printf 'result\tqueue-plan-admission-registry\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
+    "$QUEUE_PLAN_ADMISSION_MODULE" \
+    "multilane_queue_plan_admission_registry_fixed.cfg" \
+    "$(hash_file "${FORMAL_DIR}/${QUEUE_PLAN_ADMISSION_MODULE}.tla")" \
+    "$(hash_file "${FORMAL_DIR}/multilane_queue_plan_admission_registry_fixed.cfg")" \
+    "$(hash_file "${LOG_DIR}/queue-plan-admission-registry.check.log")"
 } >"$evidence_tmp"
 mv -- "$evidence_tmp" "$EVIDENCE_PATH"
 
-echo "[apalache] all 3 source-bound multilane kernels passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"
+echo "[apalache] all 4 source-bound multilane kernels passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"

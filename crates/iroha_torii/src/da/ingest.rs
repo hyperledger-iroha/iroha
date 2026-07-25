@@ -55,7 +55,7 @@ use norito::{
     to_bytes,
 };
 use sorafs_car::{
-    ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_specs_to_json,
+    ChunkStore, build_plan_from_da_manifest, fetch_plan::try_chunk_fetch_plan_to_json,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -932,7 +932,7 @@ pub async fn handler_get_da_manifest(
         }
     };
 
-    let chunk_plan = match try_chunk_fetch_specs_to_json(&plan) {
+    let chunk_plan = match try_chunk_fetch_plan_to_json(&plan) {
         Ok(plan) => plan,
         Err(err) => {
             return Err(ResponseError::from(build_error_response(

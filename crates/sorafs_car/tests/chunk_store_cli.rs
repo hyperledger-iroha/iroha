@@ -1,6 +1,6 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::Value;
-use sorafs_car::ChunkStore;
+use sorafs_car::{ChunkStore, fetch_plan::chunk_fetch_plan_from_json};
 use sorafs_chunker::fixtures::FixtureProfile;
 use tempfile::{NamedTempFile, TempDir};
 
@@ -346,7 +346,21 @@ fn cli_writes_chunk_fetch_plan_json() {
         .expect("chunk_fetch_specs in stdout");
     let file_json: Value = norito::json::from_slice(&std::fs::read(&plan_path).expect("read plan"))
         .expect("parse plan json");
-    assert_eq!(stdout_specs, file_json);
+    let parsed = chunk_fetch_plan_from_json(&file_json).expect("canonical V1 plan");
+    assert_eq!(
+        stdout_specs,
+        file_json
+            .get("chunk_fetch_specs")
+            .cloned()
+            .expect("canonical plan specs")
+    );
+    let payload_digest_hex = hex::encode(parsed.payload_digest);
+    assert_eq!(
+        stdout_json
+            .get("payload_digest_blake3")
+            .and_then(Value::as_str),
+        Some(payload_digest_hex.as_str())
+    );
 }
 
 #[test]
@@ -703,11 +717,12 @@ fn cli_writes_chunk_fetch_plan_to_stdout_when_dash() {
         .success();
 
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
-    let plan_value: Value = norito::json::from_str(&stdout).expect("parse chunk fetch specs");
-    let specs = plan_value
-        .as_array()
-        .expect("chunk fetch specs array from stdout");
-    assert!(!specs.is_empty(), "expected chunk fetch specs entries");
+    let plan_value: Value = norito::json::from_str(&stdout).expect("parse chunk fetch plan");
+    let plan = chunk_fetch_plan_from_json(&plan_value).expect("canonical V1 plan from stdout");
+    assert!(
+        !plan.chunk_fetch_specs.is_empty(),
+        "expected chunk fetch specs entries"
+    );
 }
 
 #[test]

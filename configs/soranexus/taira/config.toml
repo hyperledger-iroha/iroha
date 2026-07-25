@@ -43,7 +43,7 @@ disconnect_on_post_overflow = false
 
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
-preauth_allow_cidrs = ["127.0.0.1/32"]
+preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
 max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 1000
 deploy_burst_per_origin = 2000
@@ -162,21 +162,16 @@ storage_pin_window_secs = 3600
 
 [sorafs.repair]
 enabled = false
-# state_dir = "./storage/sorafs/repair"
 claim_ttl_secs = 900
 heartbeat_interval_secs = 60
 max_attempts = 3
 worker_concurrency = 4
-backoff_initial_secs = 5
-backoff_max_secs = 60
 
 [sorafs.gc]
 enabled = false
-# state_dir = "./storage/sorafs/gc"
 interval_secs = 900
 max_deletions_per_run = 500
 retention_grace_secs = 86400
-pre_admission_sweep = true
 
 [soracloud_runtime]
 production_mode = true

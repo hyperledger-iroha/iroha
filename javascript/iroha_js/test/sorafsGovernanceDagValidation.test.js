@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
   SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
   SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
   validateGovernanceDagBlock,
@@ -39,46 +40,43 @@ function governanceFixture(name) {
 }
 
 function governanceOutcomeFixture(name) {
-  return JSON.parse(
-    readFileSync(new URL(name, GOVERNANCE_FIXTURE_ROOT), "utf8"),
-  );
+  return JSON.parse(governanceOutcomeFixtureText(name));
+}
+
+function governanceOutcomeFixtureText(name) {
+  return readFileSync(new URL(name, GOVERNANCE_FIXTURE_ROOT), "utf8");
+}
+
+function assertGovernanceOutcome(outcome, fixtureName) {
+  const expectedText = governanceOutcomeFixtureText(fixtureName);
+  assert.deepEqual(outcome, governanceOutcomeFixture(fixtureName));
+  assert.equal(`${JSON.stringify(outcome, null, 2)}\n`, expectedText);
 }
 
 test("validateGovernanceDagBlock accepts the canonical signed fixture", () => {
   const { root } = governanceFixtures();
   const outcome = validateGovernanceDagBlock(root, {
-    label: "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-    generatedAtUnix: 1_700_002_001,
+    label: "dag_block_0_v1.to",
+    generatedAtUnix: 123,
   });
 
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.generated_at, 1_700_002_001);
-  assert.deepEqual(outcome.inputs, [
-    {
-      kind: "governance_dag_block",
-      path: "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-    },
-  ]);
+  assertGovernanceOutcome(
+    outcome,
+    "dag_block_validation_outcome_v1.json",
+  );
 });
 
 test("validateGovernanceDagBlock rejects an expected CID mismatch", () => {
   const { root } = governanceFixtures();
   const outcome = validateGovernanceDagBlock(root, {
-    expected_block_cid: Buffer.alloc(32),
-    generated_at: 1_700_002_002,
+    expected_block_cid: Buffer.alloc(32, 0x7f),
+    generated_at: 123,
   });
 
-  assert.equal(outcome.status, "Error");
-  assert.equal(outcome.code, "SFS-GOV-004");
-  assert.equal(outcome.category, "validation");
-  assert.equal(outcome.generated_at, 1_700_002_002);
-  assert.deepEqual(outcome.inputs, [
-    {
-      kind: "governance_dag_block",
-      path: "governance-dag-block.to",
-    },
-  ]);
+  assertGovernanceOutcome(
+    outcome,
+    "dag_block_cid_mismatch_validation_outcome_v1.json",
+  );
 });
 
 test("validateGovernanceDagHeadChain accepts canonical root-to-head order", () => {
@@ -88,29 +86,22 @@ test("validateGovernanceDagHeadChain accepts canonical root-to-head order", () =
     [
       {
         payload: root,
-        label: "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+        label: "dag_block_0_v1.to",
       },
       {
         bytes: child,
-        label: "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+        label: "dag_block_1_v1.to",
       },
     ],
     {
-      headLabel: "fixtures/sorafs_manifest/governance/dag_head_v1.to",
-      generatedAtUnix: 1_700_002_003,
+      headLabel: "dag_head_v1.to",
+      generatedAtUnix: 123,
     },
   );
 
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.generated_at, 1_700_002_003);
-  assert.deepEqual(
-    outcome.inputs.map((entry) => entry.kind),
-    [
-      "governance_dag_head",
-      "governance_dag_block",
-      "governance_dag_block",
-    ],
+  assertGovernanceOutcome(
+    outcome,
+    "dag_head_validation_outcome_v1.json",
   );
 });
 
@@ -122,19 +113,12 @@ test("validateGovernanceDagHeadChain rejects reordered blocks", () => {
       { payload: child },
       { payload: root },
     ],
-    { generatedAtUnix: 1_700_002_004 },
+    { generatedAtUnix: 123 },
   );
 
-  assert.equal(outcome.status, "Error");
-  assert.equal(outcome.code, "SFS-GOV-006");
-  assert.equal(outcome.generated_at, 1_700_002_004);
-  assert.deepEqual(
-    outcome.inputs.map((entry) => entry.path),
-    [
-      "governance-dag-head.to",
-      "governance-dag-block-0.to",
-      "governance-dag-block-1.to",
-    ],
+  assertGovernanceOutcome(
+    outcome,
+    "dag_head_reordered_validation_outcome_v1.json",
   );
 });
 
@@ -147,11 +131,9 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
       generatedAtUnix: 123,
     },
   );
-  assert.deepEqual(
+  assertGovernanceOutcome(
     blockSignatureOutcome,
-    governanceOutcomeFixture(
-      "dag_block_bad_signature_validation_outcome_v1.json",
-    ),
+    "dag_block_bad_signature_validation_outcome_v1.json",
   );
 
   const trailingBytesOutcome = validateGovernanceDagBlock(
@@ -161,11 +143,9 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
       generatedAtUnix: 123,
     },
   );
-  assert.deepEqual(
+  assertGovernanceOutcome(
     trailingBytesOutcome,
-    governanceOutcomeFixture(
-      "dag_block_trailing_bytes_validation_outcome_v1.json",
-    ),
+    "dag_block_trailing_bytes_validation_outcome_v1.json",
   );
 
   const headSignatureOutcome = validateGovernanceDagHeadChain(
@@ -179,11 +159,9 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
       generatedAtUnix: 123,
     },
   );
-  assert.deepEqual(
+  assertGovernanceOutcome(
     headSignatureOutcome,
-    governanceOutcomeFixture(
-      "dag_head_bad_signature_validation_outcome_v1.json",
-    ),
+    "dag_head_bad_signature_validation_outcome_v1.json",
   );
 
   const predecessorOutcome = validateGovernanceDagHeadChain(
@@ -200,11 +178,9 @@ test("governance DAG validators match canonical noncanonical, signature, and pre
       generatedAtUnix: 123,
     },
   );
-  assert.deepEqual(
+  assertGovernanceOutcome(
     predecessorOutcome,
-    governanceOutcomeFixture(
-      "dag_head_bad_predecessor_validation_outcome_v1.json",
-    ),
+    "dag_head_bad_predecessor_validation_outcome_v1.json",
   );
 });
 
@@ -217,6 +193,22 @@ test("governance DAG wrappers enforce label and block-count bounds", () => {
       }),
     /UTF-8 bytes/i,
   );
+  assert.throws(
+    () => validateGovernanceDagBlock(root, { label: "bad\u0001label" }),
+    /control characters/i,
+  );
+  for (const invalidLength of [0, 31, 33]) {
+    assert.throws(
+      () =>
+        validateGovernanceDagBlock(root, {
+          expectedBlockCid: Buffer.alloc(invalidLength),
+        }),
+      new RegExp(
+        `exactly ${SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes`,
+        "i",
+      ),
+    );
+  }
   assert.throws(
     () => validateGovernanceDagHeadChain(head, []),
     /1\.\.=64 entries/i,

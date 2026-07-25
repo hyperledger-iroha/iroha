@@ -188,13 +188,13 @@ drand/VRF inputs are implemented. Coordinator status surfaces are under
    - Write event to Governance DAG (`governance/sorafs/por/challenges/<epoch_id>/<manifest_...>.json`).
    - Response deadline = `epoch_start + 15 minutes`.
 4. **Proof handling**
-   - Providers submit `PorProofV1` via `POST /sorafs/por/proof`.
+   - Providers submit `PorProofV1` through authenticated `POST /v1/sorafs/capacity/por-proof`.
    - Coordinator verifies proof (Merkle paths, digests, manifest alignment).
-   - On success: update history to `verified`, emit telemetry, and sign `AuditVerdictV1` summarising result.
-   - On failure or timeout: mark `failed`, emit `PorFailureEventV1`, hand over to repair scheduler (SF-8b).
+   - Trusted auditors submit signed `AuditVerdictV1` decisions through authenticated `POST /v1/sorafs/capacity/por-verdict`.
+   - A failed verdict finalises only after the durable native repair transaction forwarder accepts its canonical task; successful and repaired verdicts create no repair task.
 5. **Retry logic**
    - If submission fails due to transport, provider may retry until deadline; the coordinator keeps the earliest valid proof.
-   - After deadline, coordinator optionally issues a `grace` challenge (smaller sample set) if network anomalies are detected; otherwise escalate immediately.
+   - Exact failed-verdict replay reuses the retained native task identifier without invoking the repair handoff again; a different terminal verdict for the same challenge is rejected.
 
 ## Proof Verification
 - `sorafs_manifest::reference::validate_por_challenge_proof_bytes` validates
@@ -223,7 +223,7 @@ drand/VRF inputs are implemented. Coordinator status surfaces are under
   - `SoraFSPoRForcedChallenges`: any forced challenge over 2 hours.
   - `SoraFSPoRIngestBacklogHigh`: backlog above 3 items for 10 minutes.
   - `SoraFSPoRDuplicateSamplesHigh`: more than 100 duplicate samples in 1 hour.
-- Logs include `epoch_id`, `manifest_digest`, `provider_id`, `sample_count`, `result`, `failure_reason`.
+- Logs are payload-free and include only `epoch_id`, `manifest_digest`, `provider_id`, `sample_count`, and `result`; verdict reasons, proof bytes, signatures, and metadata are excluded.
 - `dashboards/grafana/sorafs_gateway_observability.json` overlays gateway proof
   outcomes with PoR scheduler and ingestion health.
 
@@ -250,7 +250,7 @@ CREATE TABLE sorafs_por_history (
     status SMALLINT NOT NULL, -- 0 pending,1 verified,2 failed,3 repaired,4 forced
     failure_reason TEXT,
     proof_digest BYTEA,
-    repair_task_id UUID,
+    repair_task_id BYTEA, -- 32-byte native BLAKE3 task id
     gov_event_cid TEXT
 );
 
@@ -306,18 +306,20 @@ evidence and any production governance archive handoff required by the
 operator.
 
 ## Integration with Repair Automation
-- On `failed` status, coordinator emits:
-  ```norito
-  struct PorFailureEventV1 {
-      manifest_digest: Digest32,
-      provider_id: ProviderId,
-      epoch_id: U64,
-      failure_reason: PorFailureReason,
-      proof_digest: Option<Digest32>,
-  }
-  ```
-- Repair scheduler receives the event, attaches to `RepairTaskV1.evidence`.
-- After repair success, scheduler updates `sorafs_por_history.status = 3 (repaired)` and `notes`.
+- For a `Failed` `AuditVerdictV1`, Torii derives the exactly-once source as
+  `BLAKE3("sorafs.por.repair-source.v1" || challenge_id)` and derives the
+  chain task identifier with `sorafs_repair_task_id_v1`.
+- The canonical payload-free `RepairReportV1` uses
+  `ticket_id = "POR-" + uppercase_hex(challenge_id)`, the runtime transaction
+  authority, the verdict decision time, and a typed `por_failure` cause carrying
+  only `challenge_id`, `failed_samples`, and the optional proof digest.
+- Torii fails closed when the runtime repair signer, finalized cursor, or
+  durable forwarder is unavailable. Exact source replay is idempotent; the same
+  source with different canonical report bytes is rejected as an identity
+  conflict.
+- `Success` and `Repaired` verdicts never create a repair task. Failed status
+  exposes the exact 32-byte chain task identifier rather than a process-local
+  repair-history sequence.
 - Slash proposals reference the original `PorChallengeV1` and `PorProofV1`.
 
 ## Fixtures & QA

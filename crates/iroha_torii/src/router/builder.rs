@@ -489,6 +489,27 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 
+    /// Apply the route-specific internal Torii-proxy peer-signature middleware.
+    ///
+    /// This is cataloged as identity-bound authentication because the cryptographically verified
+    /// remote peer is authorized against the routed request by the handler, rather than receiving
+    /// generic operator privileges.
+    #[must_use]
+    pub(crate) fn authenticated_torii_proxy_peer(
+        self,
+        app_state: SharedAppState,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let layer = axum::middleware::from_fn_with_state(
+            app_state,
+            operator_signatures::enforce_torii_proxy_peer_signature,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::IdentityBoundSignature),
+            inner: self.inner.layer(layer),
+        }
+    }
+
     /// Apply Torii's concrete operator-authentication middleware.
     ///
     /// Unlike the general [`Self::layer`] method, this method also supplies the
@@ -785,6 +806,14 @@ mod tests {
         Listener::Torii,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature);
+    const TORII_PROXY_PEER_AUTHENTICATED: RouteDescriptor = RouteDescriptor::new(
+        "test.torii_proxy_peer_authenticated",
+        HttpMethod::Post,
+        "/v1/tests/torii-proxy-peer-authenticated",
+        ApiSurface::Public,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
     const ACCOUNT_AUTHENTICATED: RouteDescriptor = RouteDescriptor::new(
         "test.account_authenticated",
         HttpMethod::Post,
@@ -980,6 +1009,31 @@ mod tests {
                 actual: AuthenticationPolicy::ToriiDefault,
             }
         )));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn torii_proxy_peer_witness_is_sealed_as_identity_bound_authentication() {
+        let app = crate::mk_app_state_for_tests();
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[TORII_PROXY_PEER_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid catalog");
+        builder.route(
+            &TORII_PROXY_PEER_AUTHENTICATED,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .authenticated_torii_proxy_peer(app.clone()),
+        );
+
+        let (_, manifest) = builder
+            .finish()
+            .expect("Torii proxy peer authentication witness must match the catalog");
+        assert_eq!(
+            manifest.explicit_routes(),
+            &[TORII_PROXY_PEER_AUTHENTICATED]
+        );
     }
 
     #[test]

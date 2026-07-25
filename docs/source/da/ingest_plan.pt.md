@@ -274,10 +274,14 @@ hash, fragmentação e verificação de manifestos opcionais.
   strings para manter os valores `policy_source` significativos em pacotes de evidências. Veja
   `crates/iroha_cli/src/commands/da.rs` para o subcomando e `docs/source/da/rent_policy.md`
   para o esquema de política.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- A paridade do registro de pinos agora se estende aos SDKs: `ToriiClient.registerSorafsPinManifest(...)` no
-  O JavaScript SDK cria a carga exata usada por `iroha app sorafs pin register`, impondo
-  metadados do chunker, políticas de pin, provas de alias e resumos de sucessores antes do POST para
-  `/v1/sorafs/pin/register`. Isso evita que os bots de CI e a automação paguem pela CLI quando
+- A paridade do registro de pins agora se estende aos SDKs:
+  `ToriiClient.registerSorafsPinManifest(...)` constroi a requisicao JSON V1
+  fechada com o `ManifestV1` exato em base64 canonico com padding dentro de
+  `manifest_payload`. Torii deriva o digest, chunker, comprimento do conteudo,
+  politica de pin e entradas de taxa somente do manifest decodificado e rejeita
+  resumos duplicados; o alias opcional e o predecessor nao zero permanecem.
+  Isso evita que bots de CI e automacao chamem a CLI ao usar
+  `/v1/sorafs/pin/register` para
   gravando registros de manifesto, e o auxiliar vem com cobertura TypeScript/README para que DA-8's
   A paridade de ferramentas “enviar/obter/provar” é totalmente satisfeita em JS junto com Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` encadeia todos os itens acima: pega um ticket de armazenamento, baixa o

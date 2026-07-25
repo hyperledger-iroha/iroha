@@ -121,8 +121,10 @@ REQUIRED_FAILURE_SOURCES = ("por", "potr")
 REQUIRED_AUDITOR_ROUTES = (
     "repair_report",
     "repair_slash",
+    "repair_appeal",
     "repair_status",
-    "repair_status_manifest",
+    "repair_tasks",
+    "repair_task",
 )
 REQUIRED_WORKER_ROUTES = (
     "repair_claim",
@@ -130,7 +132,20 @@ REQUIRED_WORKER_ROUTES = (
     "repair_complete",
     "repair_fail",
 )
-REQUIRED_EVENT_ROUTES = ("repair_events", "repair_events_sse", "repair_events_ws")
+REQUIRED_EVENT_ROUTES = ("repair_events",)
+REQUIRED_ROUTE_STATUS_CODES: dict[str, int] = {
+    "repair_report": 202,
+    "repair_slash": 202,
+    "repair_appeal": 202,
+    "repair_status": 200,
+    "repair_tasks": 200,
+    "repair_task": 200,
+    "repair_claim": 202,
+    "repair_heartbeat": 202,
+    "repair_complete": 202,
+    "repair_fail": 202,
+    "repair_events": 200,
+}
 REQUIRED_LIFECYCLE_STATUSES = ("queued", "in_progress", "completed", "escalated")
 REQUIRED_GOVERNANCE_TARGETS = (
     "governance_dag",
@@ -258,10 +273,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "passed_route_count",
         "roster_digest_hex",
         "routes",
-        "signed_auditor_envelope_required",
-        "nonce_replay_rejected",
-        "legacy_raw_payload_rejected",
-        "per_auditor_rate_limit_enforced",
+        "caller_signed_transaction_required",
+        "single_native_instruction_required",
+        "transaction_replay_rejected",
+        "non_transaction_payload_rejected",
+        "per_authority_rate_limit_enforced",
         "response_bodies_included",
     ),
     "worker_lifecycle": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -276,7 +292,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "worker_permission_enforced",
         "lease_heartbeat_enforced",
         "idempotency_enforced",
-        "norito_snapshot_persisted",
+        "finalized_task_projection_verified",
+        "exact_live_lease_execution_verified",
+        "durable_transaction_forwarding_verified",
+        "restart_reconciliation_verified",
+        "single_terminal_outcome_verified",
         "gc_protection_verified",
         "repair_latency_seconds",
         "raw_repair_payloads_included",
@@ -288,9 +308,10 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "roster_digest_hex",
         "evidence_bundle_digest_hex",
         "routes",
-        "backlog_replay_verified",
-        "sse_delivery_verified",
-        "websocket_delivery_verified",
+        "finalized_chain_projection_verified",
+        "cursor_resume_verified",
+        "etag_revalidation_verified",
+        "cross_peer_consistency_verified",
         "event_lag_seconds",
         "response_bodies_included",
     ),
@@ -399,6 +420,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
+        route_name = record.get("name")
+        expected_status = REQUIRED_ROUTE_STATUS_CODES.get(route_name)
+        if expected_status is not None and record.get("status_code") != expected_status:
+            errors.append(
+                f"routes[{index}].status_code must equal {expected_status} "
+                f"for {route_name}"
+            )
         require_hex(
             record,
             "body_blake3_hex",
@@ -544,10 +572,11 @@ def validate_auditor_api(
 ) -> None:
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_AUDITOR_ROUTES, errors)
-    require_bool_true(payload, "signed_auditor_envelope_required", errors)
-    require_bool_true(payload, "nonce_replay_rejected", errors)
-    require_bool_true(payload, "legacy_raw_payload_rejected", errors)
-    require_bool_true(payload, "per_auditor_rate_limit_enforced", errors)
+    require_bool_true(payload, "caller_signed_transaction_required", errors)
+    require_bool_true(payload, "single_native_instruction_required", errors)
+    require_bool_true(payload, "transaction_replay_rejected", errors)
+    require_bool_true(payload, "non_transaction_payload_rejected", errors)
+    require_bool_true(payload, "per_authority_rate_limit_enforced", errors)
     require_false(payload, "response_bodies_included", errors)
     validate_routes(payload, errors, options)
 
@@ -579,7 +608,11 @@ def validate_worker_lifecycle(
     require_bool_true(payload, "worker_permission_enforced", errors)
     require_bool_true(payload, "lease_heartbeat_enforced", errors)
     require_bool_true(payload, "idempotency_enforced", errors)
-    require_bool_true(payload, "norito_snapshot_persisted", errors)
+    require_bool_true(payload, "finalized_task_projection_verified", errors)
+    require_bool_true(payload, "exact_live_lease_execution_verified", errors)
+    require_bool_true(payload, "durable_transaction_forwarding_verified", errors)
+    require_bool_true(payload, "restart_reconciliation_verified", errors)
+    require_bool_true(payload, "single_terminal_outcome_verified", errors)
     require_bool_true(payload, "gc_protection_verified", errors)
     require_maximum_int(
         payload,
@@ -599,9 +632,10 @@ def validate_event_streams(
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "evidence_bundle_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_EVENT_ROUTES, errors)
-    require_bool_true(payload, "backlog_replay_verified", errors)
-    require_bool_true(payload, "sse_delivery_verified", errors)
-    require_bool_true(payload, "websocket_delivery_verified", errors)
+    require_bool_true(payload, "finalized_chain_projection_verified", errors)
+    require_bool_true(payload, "cursor_resume_verified", errors)
+    require_bool_true(payload, "etag_revalidation_verified", errors)
+    require_bool_true(payload, "cross_peer_consistency_verified", errors)
     require_maximum_int(
         payload,
         "event_lag_seconds",

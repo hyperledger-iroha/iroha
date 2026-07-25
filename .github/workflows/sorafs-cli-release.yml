@@ -223,17 +223,35 @@ jobs:
           cp docs/portal/docs/sorafs/release-rollback-yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md
           cp CHANGELOG.md LICENSE artifacts/sorafs-cli/
 
-      - name: Package reference validator and FFI header
+      - name: Package reference validator and FFI header reproducibly
         shell: bash
         run: |
+          version="${{ needs.release-gate.outputs.version }}"
+          target="${{ matrix.target }}"
           suffix="${{ matrix.binary_suffix }}"
+          first_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-first.XXXXXX")"
+          replay_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-replay.XXXXXX")"
           bash scripts/package_sorafs_validate_release.sh \
-            --version "${{ needs.release-gate.outputs.version }}" \
+            --version "$version" \
             --target "${{ matrix.target }}" \
             --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
-            --out-dir dist/sorafs-validate-release
+            --out-dir "$first_out"
+          bash scripts/package_sorafs_validate_release.sh \
+            --version "$version" \
+            --target "$target" \
+            --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
+            --out-dir "$replay_out"
+          package_name="sorafs-validate-${version}-${target}"
+          for relative in \
+            "${package_name}.tar.gz" \
+            "${package_name}.tar.gz.sha256" \
+            "${package_name}.manifest.json" \
+            "${package_name}.manifest.json.sha256" \
+            "${package_name}.sha256"; do
+            cmp "${first_out}/${relative}" "${replay_out}/${relative}"
+          done
           mkdir -p artifacts/sorafs-cli/reference-validator
-          cp -R dist/sorafs-validate-release/. artifacts/sorafs-cli/reference-validator/
+          cp -R "${first_out}/." artifacts/sorafs-cli/reference-validator/
       - name: Rebuild deterministic platform archive and run clean-consumer smoke
         shell: bash
         run: |
@@ -260,6 +278,12 @@ jobs:
           cmp \
             "${first_out}/${package_name}.manifest.json" \
             "${replay_out}/${package_name}.manifest.json"
+          for suffix in .tar.gz.sha256 .manifest.json.sha256; do
+            cmp \
+              "${first_out}/${package_name}${suffix}" \
+              "${replay_out}/${package_name}${suffix}"
+          done
+          cmp candidate-package-first.json candidate-package-replay.json
           mkdir -p artifacts/sorafs-cli/platform-archive
           cp \
             "${first_out}/${package_name}.tar.gz" \

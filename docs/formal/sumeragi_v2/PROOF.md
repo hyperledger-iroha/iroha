@@ -988,9 +988,9 @@ height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
 a module. Six source-sealed command legs and the G-SCALE runner/validator
-preflight harden the release corridor, yielding the current 515-test, 38-module, 65-leg
+preflight harden the release corridor, yielding the current 515-test, 38-module, 78-leg
 inventory. The canonical module/test TSV inventory SHA-256 is
-`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1026,7 +1026,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 65 legs, including separate exact data-model status and atomic
+now has 78 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin

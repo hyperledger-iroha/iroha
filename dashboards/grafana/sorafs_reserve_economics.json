@@ -49,11 +49,11 @@
         }
       },
       {
-        "name": "reserve_provider",
-        "label": "Reserve Provider",
+        "name": "reserve_stage",
+        "label": "Reserve Lifecycle Stage",
         "type": "query",
         "datasource": "$datasource",
-        "query": "label_values(torii_sorafs_reserve_credit_draw_micro_xor, provider_id)",
+        "query": "label_values(torii_sorafs_reserve_credit_draw_micro_xor, stage)",
         "refresh": 1,
         "includeAll": true,
         "current": {
@@ -338,7 +338,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Runtime Lifecycle Stages",
+      "title": "Finalized Lifecycle Stages",
       "id": 9,
       "datasource": "$datasource",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
@@ -356,28 +356,28 @@
         },
         "overrides": []
       },
-      "description": "Current provider count by local reserve lifecycle stage."
+      "description": "Current provider count by authoritative lifecycle stage from one reconciled finalized projection."
     },
     {
       "type": "timeseries",
-      "title": "Runtime Credit Exposure (XOR)",
+      "title": "Finalized Credit Exposure (XOR)",
       "id": 10,
       "datasource": "$datasource",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
       "targets": [
         {
-          "expr": "sum by (provider_id) (torii_sorafs_reserve_credit_draw_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
-          "legendFormat": "{{provider_id}} draw",
+          "expr": "sum by (stage) (torii_sorafs_reserve_credit_draw_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} principal",
           "refId": "A"
         },
         {
-          "expr": "sum by (provider_id) (torii_sorafs_reserve_credit_shortfall_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
-          "legendFormat": "{{provider_id}} shortfall",
+          "expr": "sum by (stage) (torii_sorafs_reserve_credit_shortfall_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} shortfall",
           "refId": "B"
         },
         {
-          "expr": "sum by (provider_id) (torii_sorafs_reserve_accrued_interest_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
-          "legendFormat": "{{provider_id}} interest",
+          "expr": "sum by (stage) (torii_sorafs_reserve_accrued_interest_micro_xor{stage=~\"$reserve_stage\"}) / 1e6",
+          "legendFormat": "{{stage}} interest",
           "refId": "C"
         }
       ],
@@ -391,7 +391,7 @@
         },
         "overrides": []
       },
-      "description": "Local reserve credit draw, uncovered shortfall, and accrued interest derived from accepted lifecycle updates."
+      "description": "Committed credit principal, uncovered shortfall, and accrued interest grouped by a bounded lifecycle-stage label."
     },
     {
       "type": "stat",
@@ -426,7 +426,7 @@
         },
         "overrides": []
       },
-      "description": "Open reserve defaults and appeal backlog from the local signed reserve runtime."
+      "description": "Defaulted providers and open appeals reconciled from the finalized reserve journal and provider accounts."
     },
     {
       "type": "timeseries",
@@ -453,7 +453,7 @@
         },
         "overrides": []
       },
-      "description": "Local movement custody status counts and terminal chain-reconciled movement counts."
+      "description": "Finalized movement status counts rebuilt from the typed reserve event journal."
     },
     {
       "type": "timeseries",
@@ -498,6 +498,38 @@
         "overrides": []
       },
       "description": "Reserve service rate-limit events by route and reason."
+    },
+    {
+      "type": "stat",
+      "title": "Finalized Projection Health",
+      "id": 15,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 52},
+      "targets": [
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_ready",
+          "legendFormat": "ready",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_height",
+          "legendFormat": "finalized height",
+          "refId": "B"
+        },
+        {
+          "expr": "increase(torii_sorafs_reserve_finalized_projection_failure_total[5m])",
+          "legendFormat": "refresh failures / 5m",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Readiness is one only after the typed event journal catches up and pending movement/appeal totals match committed provider accounts at the published height."
     }
   ]
 }

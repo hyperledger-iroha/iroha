@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   տողեր՝ ապացույցների փաթեթներում `policy_source` արժեքները իմաստալից պահելու համար: Տես
   `crates/iroha_cli/src/commands/da.rs` ենթահրամանի համար և `docs/source/da/rent_policy.md`
   քաղաքականության սխեմայի համար:【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin ռեեստրի հավասարությունը այժմ տարածվում է SDK-ների վրա՝ `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK-ն ստեղծում է `iroha app sorafs pin register`-ի կողմից օգտագործվող ճշգրիտ բեռնվածությունը՝ կիրառելով կանոնական
-  chunker մետատվյալներ, PIN քաղաքականություն, կեղծանունների ապացույցներ և իրավահաջորդների ամփոփումներ՝ նախքան POST-ում հրապարակելը
-  `/v1/sorafs/pin/register`. Սա թույլ չի տալիս CI բոտերին և ավտոմատացմանը CLI-ին չհանձնել, երբ
+- Pin registry-ի հավասարությունը այժմ տարածվում է SDK-ների վրա՝
+  `ToriiClient.registerSorafsPinManifest(...)`-ը կառուցում է փակ JSON V1 հարցում,
+  որի `manifest_payload`-ում ճշգրիտ canonical padded-base64 `ManifestV1` է։
+  Torii-ն digest-ը, chunker-ը, content length-ը, pin policy-ն և fee input-ները
+  ստանում է միայն decoded manifest-ից և մերժում duplicate summary-ները, իսկ
+  optional alias-ը և nonzero predecessor-ը մնում են։ Սա թույլ չի տալիս CI
+  բոտերին և ավտոմատացմանը CLI կանչել `/v1/sorafs/pin/register` օգտագործելիս՝
   գրանցում է մանիֆեստի գրանցումները, և օգնականը առաքվում է TypeScript/README ծածկույթով, որպեսզի DA-8-ը
   «ներկայացնել/ստանալ/ապացուցել» գործիքների հավասարությունը JS-ում Rust/Swift-ի հետ միասին լիովին բավարարված է:【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788
 - `iroha app da prove-availability`-ը կապում է վերը նշված բոլորը. վերցնում է պահեստավորման տոմս, ներբեռնում է

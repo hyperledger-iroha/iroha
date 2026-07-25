@@ -38,23 +38,16 @@ signature_threshold = 1
 
 [sorafs.repair]
 enabled = false
-# state_dir = "./storage/sorafs/repair"
 claim_ttl_secs = 900
 heartbeat_interval_secs = 60
 max_attempts = 3
 worker_concurrency = 4
-backoff_initial_secs = 5
-backoff_max_secs = 60
-auditor_rate_per_sec = 4
-auditor_burst = 16
 
 [sorafs.gc]
 enabled = false
-# state_dir = "./storage/sorafs/gc"
 interval_secs = 900
 max_deletions_per_run = 500
 retention_grace_secs = 86400
-pre_admission_sweep = true
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"

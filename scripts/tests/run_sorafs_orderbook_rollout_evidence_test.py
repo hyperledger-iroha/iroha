@@ -124,7 +124,7 @@ def test_dry_run_prints_complete_orderbook_rollout_plan(tmp_path: Path, capsys) 
         in plan["evidence_contract"]["sdk_release"]["required_payload_fields"]
     )
     assert (
-        "contract_mirror_reconciliation_passed"
+        "finalized_projection_reconciliation_passed"
         in plan["evidence_contract"]["reconciliation"]["required_payload_fields"]
     )
     assert "peers" in plan["evidence_contract"]["reconciliation"]["required_payload_fields"]

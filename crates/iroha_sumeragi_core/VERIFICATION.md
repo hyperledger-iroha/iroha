@@ -61,8 +61,7 @@ bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
 bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
   50,000 permissioned + 50,000 NPoS heights passed
   400,000 validator finalizations; 0 failures; 91.29 seconds
-bash scripts/formal/run_sumeragi_v2_harness.sh \
-  cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
+bash scripts/formal/run_sumeragi_v2_harness.sh --clippy
   passed
 ```
 

@@ -126,10 +126,12 @@ SF-6 олон эх сурвалжаас татахыг идэвхжүүлсэн 
 - `iroha app sorafs pin list|show`, `alias list`, `replication list`,
   pin бүртгэлийн REST төгсгөлийн цэгүүд болон баталгаажуулалтын блоктой Norito түүхий JSON хэвлэх
   аудитын нотлох баримтын хувьд.
-- `iroha app sorafs storage pin` болон `torii /v1/sorafs/pin/register` Norito-г хүлээн зөвшөөрдөг
-  эсвэл JSON манифест болон нэмэлт нэрийн баталгаа болон залгамжлагч; алдаатай нотлох баримтууд
-  `400`, хуучирсан гадаргууг `503`-ийг `Warning: 110`-ээр дээшлүүлж,
-  хугацаа нь дууссан баталгаа `412` буцаана.
+- `torii /v1/sorafs/pin/register` хаалттай JSON V1 хүсэлтийг хүлээн авна.
+  `manifest_payload` нь canonical Norito `ManifestV1` байтын яг canonical
+  padding-тай base64 байх ёстой. Torii digest, chunker, content length, pin
+  policy болон fee input-ийг зөвхөн decoded manifest-ээс гаргаж, хүчингүй болсон
+  duplicate summary талбаруудыг татгалзана. `alias` болон тэг биш
+  `successor_of_hex` predecessor нь сонголттой хэвээр байна.
 - `iroha app sorafs repair list` толь нь дарааллын шүүлтүүрийг засдаг
   `repair claim|complete|fail|escalate` гарын үсэг зурсан ажилтны үйлдлүүдийг илгээх буюу зураасаар зур
   санал Torii. Таслах саналууд нь засаглалын зөвшөөрлийн хураангуйг агуулж болно

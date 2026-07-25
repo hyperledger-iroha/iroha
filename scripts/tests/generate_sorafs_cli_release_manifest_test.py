@@ -21,14 +21,22 @@ REF = "refs/tags/sorafs-cli-v1.2.3"
 def _write_candidates(root: Path) -> None:
     for index, target in enumerate(release_manifest.TARGETS):
         candidate = root / f"sorafs-cli-{VERSION}-{target}"
-        nested = candidate / "platform-archive"
-        nested.mkdir(parents=True)
-        binary = candidate / ("sorafs_cli.exe" if "windows" in target else "sorafs_cli")
-        archive = nested / f"candidate-{index}.tar.gz"
-        binary.write_bytes(f"binary-{target}\n".encode())
-        archive.write_bytes(f"archive-{target}\n".encode())
+        payload_paths = release_manifest.required_candidate_payload_paths(
+            VERSION,
+            target,
+        )
+        for relative in sorted(payload_paths):
+            path = candidate / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            prefix = (
+                "common"
+                if relative in release_manifest.COMMON_TARGET_FILES
+                else str(index)
+            )
+            path.write_bytes(f"{prefix}:{relative}\n".encode())
         checksums = []
-        for path in (archive, binary):
+        for relative in sorted(payload_paths):
+            path = candidate / relative
             relative = path.relative_to(candidate).as_posix()
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             checksums.append(f"{digest}  {relative}\n")
@@ -64,8 +72,13 @@ def test_manifest_is_canonical_deterministic_and_checks_exact_inventory(
     decoded = json.loads(first)
     assert decoded["schema"] == release_manifest.SCHEMA
     assert decoded["targets"] == list(release_manifest.TARGETS)
-    assert decoded["artifact_count"] == 15
-    assert len(decoded["artifacts"]) == 15
+    expected_artifact_count = sum(
+        len(release_manifest.required_candidate_payload_paths(VERSION, target))
+        + 1
+        for target in release_manifest.TARGETS
+    )
+    assert decoded["artifact_count"] == expected_artifact_count
+    assert len(decoded["artifacts"]) == expected_artifact_count
 
     manifest = tmp_path / "release_manifest.json"
     assert (
@@ -144,7 +157,17 @@ def test_check_rejects_candidate_tampering(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("mutation", ["missing-target", "extra-root", "incomplete-sums"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-target",
+        "extra-root",
+        "incomplete-sums",
+        "missing-required",
+        "unexpected-candidate-file",
+        "empty-scan-evidence",
+    ],
+)
 def test_manifest_rejects_open_inventory(tmp_path: Path, mutation: str) -> None:
     candidates = tmp_path / "candidates"
     candidates.mkdir()
@@ -160,11 +183,47 @@ def test_manifest_rejects_open_inventory(tmp_path: Path, mutation: str) -> None:
         candidate.rmdir()
     elif mutation == "extra-root":
         (candidates / "unreviewed.txt").write_text("unexpected", encoding="utf-8")
-    else:
+    elif mutation == "incomplete-sums":
         (candidate / "SHA256SUMS").write_text(
             (candidate / "SHA256SUMS").read_text(encoding="utf-8").splitlines(
                 keepends=True
             )[0],
+            encoding="utf-8",
+        )
+    elif mutation == "missing-required":
+        (candidate / "ROLLBACK-YANK.md").unlink()
+        checksum_lines = (
+            candidate / "SHA256SUMS"
+        ).read_text(encoding="utf-8").splitlines(keepends=True)
+        (candidate / "SHA256SUMS").write_text(
+            "".join(
+                line
+                for line in checksum_lines
+                if not line.endswith("  ROLLBACK-YANK.md\n")
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "unexpected-candidate-file":
+        unexpected = candidate / "unreviewed.bin"
+        unexpected.write_bytes(b"not part of the release contract")
+        digest = hashlib.sha256(unexpected.read_bytes()).hexdigest()
+        with (candidate / "SHA256SUMS").open("a", encoding="utf-8") as handle:
+            handle.write(f"{digest}  unreviewed.bin\n")
+    else:
+        empty = candidate / f"sorafs-cli-{target}.spdx.json"
+        empty.write_bytes(b"")
+        checksum_lines = (
+            candidate / "SHA256SUMS"
+        ).read_text(encoding="utf-8").splitlines(keepends=True)
+        empty_relative = empty.relative_to(candidate).as_posix()
+        empty_digest = hashlib.sha256(b"").hexdigest()
+        (candidate / "SHA256SUMS").write_text(
+            "".join(
+                f"{empty_digest}  {empty_relative}\n"
+                if line.endswith(f"  {empty_relative}\n")
+                else line
+                for line in checksum_lines
+            ),
             encoding="utf-8",
         )
 
@@ -196,6 +255,34 @@ def test_manifest_rejects_symlink_and_hardlink_candidates(tmp_path: Path) -> Non
     hardlink = candidate / "hardlinked"
     os.link(candidate / "sorafs_cli", hardlink)
     with pytest.raises(release_manifest.ManifestError, match="hard link"):
+        _build(candidates)
+
+
+def test_manifest_rejects_release_wide_file_drift_across_targets(
+    tmp_path: Path,
+) -> None:
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _write_candidates(candidates)
+    target = release_manifest.TARGETS[-1]
+    candidate = candidates / f"sorafs-cli-{VERSION}-{target}"
+    common_file = candidate / "version-map.toml"
+    common_file.write_bytes(b"substituted target-specific version map\n")
+    common_digest = hashlib.sha256(common_file.read_bytes()).hexdigest()
+    checksum_lines = (
+        candidate / "SHA256SUMS"
+    ).read_text(encoding="utf-8").splitlines(keepends=True)
+    (candidate / "SHA256SUMS").write_text(
+        "".join(
+            f"{common_digest}  version-map.toml\n"
+            if line.endswith("  version-map.toml\n")
+            else line
+            for line in checksum_lines
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release_manifest.ManifestError, match="differ across"):
         _build(candidates)
 
 

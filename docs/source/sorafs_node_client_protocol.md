@@ -357,13 +357,14 @@ message instead of a stack trace.
 
 The SoraFS subcommands under `iroha app sorafs …` expose structured JSON for pin
 registry listings (`pin list`), alias enumeration (`alias list`), replication
-order listings (`replication list`), repair queue listings (`repair list`), and
+order listings (`replication list`), finalized repair tasks (`repair list`), and
 storage stats (`storage show`). Pin/alias/replication list commands accept
 pagination parameters (`--limit`, `--offset`) and filters (for example
-`--alias-namespace`, `--manifest-digest`); `repair list` adds status/provider
-filters for audit queries. GC helpers (`gc inspect`, `gc dry-run`) scan the local
-storage directory to report retention deadlines and expired manifests without
-performing deletions.
+`--alias-namespace`, `--manifest-digest`). `repair list` instead uses a bounded
+immutable task-id cursor, an optional exact finalized height/block-hash pair,
+and optional `--ticket-id` for the singular finalized task. GC helpers (`gc
+inspect`, `gc dry-run`) scan the local storage directory to report retention
+deadlines and expired manifests without performing deletions.
 
 Effective retention is computed as the minimum of `pin_policy.retention_epoch`
 and any manifest metadata caps (`sorafs.retention.deal_end_epoch`,
@@ -383,30 +384,26 @@ and SDKs can inspect manifests without issuing ad-hoc queries:
   - `status=pending|approved|retired`
   - `limit` (defaults to 50, capped at 500)
   - `offset`
-- `GET /v1/sorafs/pin/{manifest_digest_hex}` fetches a single manifest together
-  with its bound alias (if any) and associated replication orders. The server
-  rejects malformed digests (non-hex / wrong length) with HTTP 400 and missing
-  manifests with HTTP 404. Alias proofs are evaluated on the fly and surfaced
-  via standard HTTP caching headers:
-  - Fresh proofs return `200 OK`.
-  - Proofs older than the positive TTL return `503 Service Unavailable` with
-    `Retry-After` set to the refresh window, `Cache-Control: no-store`,
-    `Age >= positive_ttl`, and `Warning: 110 - "alias proof stale"`.
-  - Proofs past the hard expiry return `412 Precondition Failed`, omit
-    `Retry-After`, and set `Warning: 111 - "alias proof expired"`.
-  In both stale and hard-expired cases the response includes
-  `Sora-Proof-Status: expired|hard-expired`, the canonical alias payload, and a
-  human-readable `error` string instructing clients to refresh the proof before
-  serving cached content. The JSON body always exposes the alias cache health
-  via `cache_state` (`fresh`, `expired`, `hard-expired`) and, when the proof is
-  still inside the refresh window, a `proof_expires_in_seconds` field so SDKs
-  can pro-actively renew the bundle.
-- `POST /v1/sorafs/pin/register` accepts the manifest metadata, policy, optional
-  alias proof, and an optional `successor_of_hex` (BLAKE3-256) pointer. Both
-  JSON and Norito payloads are supported (set `Content-Type:
-  application/x-norito` for the latter). The alias proof payload must be valid
-  base64 (rejects with HTTP 400 otherwise). Torii rejects unknown, unapproved,
-  or retired predecessors with HTTP 400 so cycles never enter the registry.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact native Norito JSON
+  `PinManifestFinalizedRecordV1`: `finalized_cursor` contains the finalized
+  height and block-hash bytes, while `manifest` is the chain-authoritative
+  `PinManifestRecord`, including `por_root`, `content_length`, and `status`.
+  Callers may supply `expected_finalized_height` and
+  `expected_finalized_block_hash_hex` together to pin the read; an unmatched
+  cursor returns HTTP 409. Malformed requests return HTTP 400, missing manifests
+  return HTTP 404, and unavailable authoritative state returns HTTP 503. The
+  response is `Cache-Control: no-store`; the retired `limit`, attestation,
+  alias-list, replication-order, cache-state, and proof-expiry projections are
+  neither accepted nor returned. Query aliases and replication orders through
+  their dedicated list endpoints.
+- `POST /v1/sorafs/pin/register` accepts the closed JSON V1 request. Its required
+  `manifest_payload` is exact canonical padded base64 of canonical Norito
+  `ManifestV1` bytes. Torii derives the digest, chunker, content length, pin
+  policy, and fee inputs solely from that decoded manifest and rejects retired
+  duplicate summary fields. `alias` and `successor_of_hex` remain optional; a
+  supplied predecessor must be a nonzero canonical digest. The alias proof must
+  be valid base64, and unknown, unapproved, or retired predecessors return HTTP
+  400 so cycles never enter the registry.
 - `GET /v1/sorafs/aliases` lists active alias bindings with filters for
   `namespace` and `manifest_digest`, sharing the same `limit`/`offset` controls
   as the manifest listing.
@@ -414,8 +411,8 @@ and SDKs can inspect manifests without issuing ad-hoc queries:
   Clients can scope the response via `status=pending|completed|expired` and
   `manifest_digest` query parameters.
 
-Every response includes the attestation object so clients can verify the data
-against the latest block header before acting on it.
+Registry list responses retain their listing attestation. The single-manifest
+read instead binds the native record directly to its `finalized_cursor`.
 
 ### CLI Helpers
 
@@ -427,16 +424,23 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
   bound aliases and replication orders.
 - `iroha app sorafs alias list --namespace=docs` and
   `iroha app sorafs replication list --status=pending` mirror the REST filters.
-- `iroha app sorafs repair list --status=queued` mirrors the repair queue filters,
-  while `repair claim|complete|fail|escalate` submit signed worker actions or
-  slash proposals to Torii. Slash proposals may include a governance approval
-  summary (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
+- `iroha app sorafs repair list` reads the finalized task page, or one task with
+  `--ticket-id`; callers can pin a scan with
+  `--expected-finalized-height` and `--expected-finalized-block-hash` and resume
+  with `--after-task-id`.
+- `repair claim|renew|complete|fail|escalate` constructs exactly one matching
+  native instruction, signs the containing Iroha transaction with the CLI
+  authority, and submits the exact bytes to the route-specific strict durable
+  ingress. Each command returns a transaction hash after the route accepts it;
+  the caller must reconcile the finalized task/event projection before acting
+  on the transition.
+- Repair commands carry the expected task revision; renew, complete, fail, and
+  escalate also carry the exact live lease generation. The native instruction
+  enforces provider-scoped authority, lease ownership/expiry, idempotency, and
+  terminal uniqueness.
+- At the HTTP boundary, report, slash, appeal, claim, heartbeat, complete, and
+  fail command routes return `202 Accepted`; finalized status, task-list,
+  single-task, and committed-event queries return `200 OK`.
 - `iroha app sorafs storage pin --manifest=manifest.to --payload=payload.bin`
   submits a Norito manifest and payload to the storage façade for pinning.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
@@ -493,8 +497,13 @@ and telemetry stay in sync.【crates/iroha_torii/tests/sorafs_discovery.rs:989-1
 3. `POST /v1/sorafs/storage/fetch` using the returned manifest id, an offset,
    and a bounded length. The response echoes the request fields and streams the
    chunk data as `data_b64`.
-4. `POST /v1/sorafs/storage/por-sample` to request deterministic PoR leaves.
-   The sampler returns the flattened indices and proofs encoded as JSON maps.
+4. Submit an authenticated `POST /v1/sorafs/proof/stream` PoR request bound to
+   the canonical manifest digest and provider identifier. The request must carry
+   the non-zero `expected_finalized_height` and canonical
+   `expected_finalized_block_hash_hex` returned beside the authoritative record
+   in step one; Torii rejects an incomplete or stale cursor and streams only
+   witnesses that verify against that record's committed root. The
+   unauthenticated local storage PoR route is retired.
 5. `GET /v1/sorafs/storage/state` to verify the scheduler snapshot. A fully
    successful cycle drives `pin_queue_depth`, `fetch_inflight`, and
    `por_inflight` back to zero, bumps `fetch_bytes_per_sec` above zero (smoothing
@@ -586,7 +595,9 @@ Clock rollback and poisoned accounting state also fail closed with `503`.
 Once a manifest is pinned, clients retrieve deterministic byte ranges via
 `POST /v1/sorafs/storage/fetch`. The request body mirrors the DTO defined in
 Torii (`StorageFetchRequestDto`) and must include the manifest digest, the byte
-offset, and the number of bytes to return.【crates/iroha_torii/src/sorafs/api.rs:68】
+offset, and the number of bytes to return. The serving provider identity comes
+from the node's governed runtime configuration and cannot be supplied or
+overridden by the caller.【crates/iroha_torii/src/sorafs/api.rs:68】
 
 ```json
 {
@@ -614,7 +625,10 @@ Request parameters must honour the provider’s advertisement:
 
 The repository ships a deterministic multi-source plan in
 `fixtures/sorafs_manifest/provider_admission/multi_fetch_plan.json` that SDKs
-can reuse to validate offset/length handling against the default chunker
+can reuse to validate offset/length handling against the default chunker. The
+fixture is a strict `sorafs.chunk_fetch_plan.v1` object whose
+`payload_digest_blake3_hex` binds the complete fixture payload; SDKs must reject
+the retired bare-array form and missing or substituted bindings. Tests also
 exercise downgrade paths and ensure the cache surfaces the correct warnings for
 providers missing range capabilities.【crates/iroha_torii/tests/sorafs_discovery.rs:333-392】【crates/iroha_torii/tests/sorafs_discovery.rs:410-435】
 

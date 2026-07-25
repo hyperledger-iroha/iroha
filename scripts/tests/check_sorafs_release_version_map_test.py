@@ -124,7 +124,10 @@ def test_read_declared_version_supports_every_mapped_ecosystem(tmp_path: Path) -
 def test_validate_version_map_emits_schema_closed_summary(tmp_path: Path) -> None:
     rows = _write_package_sources(tmp_path)
     _write_map(tmp_path, rows)
-    summary = version_map.validate_version_map(tmp_path)
+    summary = version_map.validate_version_map(
+        tmp_path,
+        required_package_contracts=None,
+    )
     assert summary == {
         "schema": version_map.SCHEMA,
         "release_version": "0.1.0",
@@ -159,7 +162,10 @@ def test_validate_version_map_rejects_adversarial_rows(
     mutated = mutation(rows)  # type: ignore[operator]
     _write_map(tmp_path, mutated)
     with pytest.raises(ValueError, match=message):
-        version_map.validate_version_map(tmp_path)
+        version_map.validate_version_map(
+            tmp_path,
+            required_package_contracts=None,
+        )
 
 
 def test_validate_version_map_rejects_version_drift_and_extra_fields(tmp_path: Path) -> None:
@@ -167,12 +173,18 @@ def test_validate_version_map_rejects_version_drift_and_extra_fields(tmp_path: P
     rows[0]["version"] = "0.1.1"
     _write_map(tmp_path, rows)
     with pytest.raises(ValueError, match="does not match"):
-        version_map.validate_version_map(tmp_path)
+        version_map.validate_version_map(
+            tmp_path,
+            required_package_contracts=None,
+        )
 
     rows[0]["version"] = "0.1.0"
     _write_map(tmp_path, rows, extra='unexpected = "payload"')
     with pytest.raises(ValueError, match="schema-closed"):
-        version_map.validate_version_map(tmp_path)
+        version_map.validate_version_map(
+            tmp_path,
+            required_package_contracts=None,
+        )
 
 
 def test_main_validates_repository_map(capsys: pytest.CaptureFixture[str]) -> None:
@@ -182,8 +194,39 @@ def test_main_validates_repository_map(capsys: pytest.CaptureFixture[str]) -> No
     assert summary["package_count"] == 12
 
 
+def test_required_first_release_inventory_rejects_replaced_package(
+    tmp_path: Path,
+) -> None:
+    rows = _write_package_sources(tmp_path)
+    required = {
+        row["id"]: (
+            row["ecosystem"],
+            row["path"],
+            row.get("version_key"),
+        )
+        for row in rows
+    }
+    rows[0]["id"] = "a-replacement"
+    _write_map(tmp_path, rows)
+
+    with pytest.raises(ValueError, match="required first-release contract"):
+        version_map.validate_version_map(
+            tmp_path,
+            required_package_contracts=required,
+        )
+
+
 def test_first_release_sdk_versions_are_final_and_swift_is_tag_pinned() -> None:
     summary = version_map.validate_version_map(Path(__file__).resolve().parents[2])
+    actual_contracts = {
+        row["id"]: (
+            row["ecosystem"],
+            row["path"],
+            row.get("version_key"),
+        )
+        for row in summary["packages"]
+    }
+    assert actual_contracts == version_map.REQUIRED_PACKAGE_CONTRACTS
     versions = {row["id"]: row["version"] for row in summary["packages"]}
     assert versions["iroha-sdk-csharp"] == "0.1.0"
     assert versions["iroha-sdk-kotlin"] == "0.1.0"

@@ -58,7 +58,9 @@ use sorafs_car::gateway::{
     GatewayFetchConfig as SorafsGatewayFetchConfig,
     GatewayProviderInput as SorafsGatewayProviderInput,
 };
-use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
+use sorafs_car::{
+    CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3, compute_por_root,
+};
 use sorafs_car::{CarChunk, FilePlan};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder, chunker_registry,
@@ -2577,6 +2579,10 @@ fn build_sorafs_source_manifest(
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .map_err(|err| eyre!("failed to derive SoraFS PoR root: {err}"))?,
+        )
         .content_length(plan.content_length)
         .car_digest(*stats.car_archive_digest.as_bytes())
         .car_size(stats.car_size)

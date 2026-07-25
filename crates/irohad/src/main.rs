@@ -1231,6 +1231,11 @@ pub struct Iroha {
 pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+    privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
+    sorafs_gateway_acme_client:
+        Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
+    sorafs_gateway_compliance_feed_transport:
+        Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1253,6 +1258,42 @@ impl IrohaRuntimeDeps {
         provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+
+    /// Attach the independently administered finalized privacy-release head.
+    #[must_use]
+    pub fn with_privacy_release_anchor(
+        mut self,
+        anchor: Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>,
+    ) -> Self {
+        self.privacy_release_anchor = Some(anchor);
+        self
+    }
+
+    /// Attach the runtime-owned ACME client used by the SoraFS regional gateway.
+    ///
+    /// Account and DNS-provider credentials remain inside the implementation
+    /// and never enter resolved configuration or Torii state.
+    #[must_use]
+    pub fn with_sorafs_gateway_acme_client(
+        mut self,
+        client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
+    ) -> Self {
+        self.sorafs_gateway_acme_client = Some(client);
+        self
+    }
+
+    /// Attach the authenticated, address-pinned SoraFS compliance feed transport.
+    ///
+    /// Bearer tokens, client identities, DNS credentials, and TLS key material
+    /// remain owned by the deployment adapter.
+    #[must_use]
+    pub fn with_sorafs_gateway_compliance_feed_transport(
+        mut self,
+        transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+    ) -> Self {
+        self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
 }
@@ -5053,8 +5094,8 @@ mod network_relay_tests {
             message::{BlockMessage, BlockMessageWire},
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -6120,13 +6161,13 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
             request_id: Hash::prehashed([0x41; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -7487,11 +7528,12 @@ impl Iroha {
         });
 
         let (kura, mut block_count) =
-            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
+            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
                 &config.kura,
                 &config.nexus.lane_config,
                 &config.nexus.configured_lane_catalog,
                 &config.snapshot.bootstrap,
+                &config.sumeragi.limits,
             )
             .map_err(|err| {
                 let resolved = config.kura.store_dir.resolve_relative_path();
@@ -8127,9 +8169,6 @@ impl Iroha {
             replayed = replay_summary.replayed,
             tombstoned_committed = replay_summary.tombstoned_committed,
             tombstoned_expired = replay_summary.tombstoned_expired,
-            tombstoned_stale = replay_summary.tombstoned_stale,
-            tombstoned_malformed = replay_summary.tombstoned_malformed,
-            rejected = replay_summary.rejected,
             "queue plan journal installed"
         );
 
@@ -8956,14 +8995,17 @@ impl Iroha {
 
         let sorafs_storage_config =
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
-        let sorafs_repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
-            &config.torii.sorafs_repair,
-            &state.gov.sorafs_repair_escalation,
-        );
+        let sorafs_repair_config =
+            sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
+        let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
+        let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
+        let sorafs_gateway_compliance_feed_transport = runtime_deps
+            .sorafs_gateway_compliance_feed_transport
+            .clone();
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
@@ -8973,6 +9015,11 @@ impl Iroha {
             };
         let sorafs_runtime_deps = if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
             sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
+        } else {
+            sorafs_runtime_deps
+        };
+        let sorafs_runtime_deps = if let Some(anchor) = privacy_release_anchor.as_ref() {
+            sorafs_runtime_deps.with_privacy_release_anchor(Arc::clone(anchor))
         } else {
             sorafs_runtime_deps
         };
@@ -9066,6 +9113,27 @@ impl Iroha {
             // CanRecordSorafsProofOutcome permission. Deployments can replace
             // this adapter with a PKCS#11/HSM implementation at this boundary.
             .with_sorafs_proof_outcome_signer(Arc::new(config.common.key_pair.clone()))
+            // Native repair forwarding uses an independent runtime-only signer
+            // boundary. The standard launcher adapts the node key; production
+            // deployments can replace it with PKCS#11/HSM signing without
+            // exposing key material to the durable forwarder.
+            .with_sorafs_repair_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Reserve/rent forwarding has its own runtime-only signer boundary.
+            // The standard launcher adapts the node key, but the durable
+            // worker never sees key material. Reference production must
+            // replace this adapter through ToriiRuntimeDeps with PKCS#11/HSM.
+            .with_sorafs_reserve_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Native orderbook matcher/maintenance forwarding has a separate
+            // runtime-only signing boundary. The standard launcher adapts the
+            // node key for reproducible deployments; reference production
+            // must inject its governed PKCS#11/HSM-backed signer here.
+            .with_sorafs_orderbook_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Moderation orchestration signs exact, bounded native ISI
+            // envelopes through an independent runtime-only boundary. The
+            // reference launcher adapts the node key for reproducibility;
+            // production operators must inject the governed PKCS#11/HSM
+            // signer through ToriiRuntimeDeps at this boundary.
+            .with_sorafs_moderation_transaction_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -9083,6 +9151,22 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let runtime_deps = if let Some(anchor) = privacy_release_anchor {
+            runtime_deps.with_sorafs_privacy_release_anchor(anchor)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(client) = sorafs_gateway_acme_client {
+            runtime_deps.with_sorafs_gateway_acme_client(client)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps =
+            if let Some(transport) = sorafs_gateway_compliance_feed_transport {
+                runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
+            } else {
+                runtime_deps
+            };
         let queue_backpressure = queue.backpressure_handle();
         // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
         // during node startup instead of the first hot-path transaction burst.
@@ -12391,17 +12475,19 @@ fn validate_genesis_execution_offline(
     })?;
     let mut kura_config = config.kura.clone();
     kura_config.store_dir = WithOrigin::inline(validation_root.path().join("kura"));
-    let (kura, block_count) = Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
-        &kura_config,
-        &config.nexus.lane_config,
-        &config.nexus.configured_lane_catalog,
-        &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "failed to initialize disposable Kura for genesis validation: {error}"
-        ))
-    })?;
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            &kura_config,
+            &config.nexus.lane_config,
+            &config.nexus.configured_lane_catalog,
+            &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
+            &config.sumeragi.limits,
+        )
+        .map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "failed to initialize disposable Kura for genesis validation: {error}"
+            ))
+        })?;
     if block_count.0 != 0 {
         return Err(Report::new(MainError::Config).attach(format!(
             "disposable genesis validation storage was not empty ({} blocks)",
@@ -13345,8 +13431,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -13360,13 +13446,13 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V5,
                     request_id: Hash::new(b"torii-proxy-request"),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
-                    request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+                    request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,
                         path_args: Vec::new(),

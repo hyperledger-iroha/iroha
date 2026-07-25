@@ -37,14 +37,20 @@ interleave multiple providers without out-of-band trust.
 | `GET`  | `/car/{manifest_cid}`           | Range retrieval (byte ranges)              | `Accept: application/vnd.ipld.car; dag-scope=block`, `Range` |
 | `HEAD` | `/car/{manifest_cid}`           | Metadata probe                             | `Accept: application/vnd.ipld.car`           |
 | `GET`  | `/chunk/{chunk_digest}`         | Single chunk retrieval                     | `Accept: application/octet-stream`, `X-SoraFS-Chunk-Index` |
-| `GET`  | `/proof/{manifest_cid}`         | PoR proof payload (`PorProofV1`)           | `Accept: application/json`                   |
+
+Proof retrieval is not part of the standalone CAR router. Clients submit the
+canonical authenticated `POST /v1/sorafs/proof/stream` request to Torii after
+reading the approved `PinManifestFinalizedRecordV1` from
+`GET /v1/sorafs/pin/{digest_hex}`.
+
 
 ### 2.1. Required Request Headers
 
 * `X-SoraFS-Version`: `sf1` for the initial rollout, bump on future profiles.
 * `X-SoraFS-Client`: opaque identifier (useful for telemetry). OPTIONAL but
   **RECOMMENDED**.
-* `X-SoraFS-Nonce`: 32-byte hex nonce echoed in the response signature to prevent replay.
+* `X-SoraFS-Nonce`: 32-byte hex nonce echoed on CAR responses for request
+  correlation. It is not a proof challenge.
 
 Clients MUST attach the Norito-signed manifest envelope (`manifest_signatures.json`)
 using `X-SoraFS-Manifest-Envelope` when requesting a full CAR to allow gateways to
@@ -56,13 +62,13 @@ perform policy checks (GAR, PDP/PoR status).
 
 All successful responses (2xx) MUST include:
 
-* `Content-Type`: `application/vnd.ipld.car` for CAR streams, `application/json`
-  for proof bundles, `application/octet-stream` for raw chunks.
+* `Content-Type`: `application/vnd.ipld.car` for CAR streams and
+  `application/octet-stream` for raw chunks.
 * `X-SoraFS-Nonce`: echo of the request nonce.
 * `X-SoraFS-Chunker`: canonical chunker handle (`sorafs.sf1@1.0.0`).
-* `X-SoraFS-Proof-Digest`: hex digest of the accompanying PoR proof payload
-  (`PorProofV1.proof_digest`, BLAKE3-256 over the proof fields excluding the signature).
-* `X-SoraFS-PoR-Root`: hex digest of the PoR Merkle root for the requested scope.
+* `X-SoraFS-PoR-Root`: advisory hex digest of the manifest PoR root. Clients
+  MUST compare it with the approved finalized native pin record; this header is
+  not an independent trust anchor.
 
 Gateways MUST fail requests with `428 Precondition Required` when the manifest
 envelope is missing or does not match the locally cached admission record.
@@ -103,16 +109,19 @@ Clients MUST verify:
 
 ### 4.2. Proof-of-Retrievability (PoR)
 
-* Gateways must serve `GET /proof/{manifest_cid}` returning a Norito JSON `PorProofV1` payload:
-  * `manifest_digest`, `provider_id`, `samples[]`, `auth_path`, `signature`, `submitted_at`.
-  * `auth_path` is the ordered list of chunk roots for the PoR tree.
-  * `signature` is Ed25519 over `proof_digest` (BLAKE3-256 of the proof fields excluding
-    the signature), and `signature.public_key` is the gateway's Ed25519 public key.
-* The signing key is configured at `torii.sorafs.storage.stream_tokens.signing_key_path`
-  and is shared with stream token issuance.
+Torii is the sole V1 HTTP proof surface. A PoR request to
+`POST /v1/sorafs/proof/stream` binds the manifest digest, provider, requested
+sample count, optional client seed, nonce, tier, approved finalized height and
+block hash, and the trusted PoR root into one canonical request digest. The
+provider derives the exact unique sample schedule from that digest.
 
-Clients MUST verify the signature and ensure the public key matches the provider's
-admitted gateway key before trusting the `X-SoraFS-PoR-Root` header.
+Each NDJSON row carries `request_digest_hex`, `finalized_block_height`,
+`finalized_block_hash_hex`, and the authenticated `proof.leaf_index_flat`.
+Clients MUST reject a missing, duplicate, reordered, out-of-schedule, wrong-root,
+wrong-cursor, or wrong-request row, and MUST receive exactly
+`min(sample_count, committed_leaf_count)` rows before publishing events or
+evidence. The retired standalone `GET /proof/{manifest_cid}` response is not
+part of V1.
 
 ### 4.3. Streaming Receipts
 
@@ -147,7 +156,6 @@ Gateways MUST return deterministic error codes for refusal paths:
 | Manifest envelope missing/invalid                    | 428    | `{ "error": "manifest_envelope_required" }`              |
 | Manifest not admitted / admission registry unavailable | 412  | `{ "error": "provider_not_admitted" \| "admission_unavailable" }` |
 | Missing provider identifier for admission/capability | 428    | `{ "error": "provider_id_missing" }`                     |
-| Proof verification failure                           | 422    | `{ "error": "proof_verification_failed" }`               |
 | Downgrade attempt (missing headers)                  | 428    | `{ "error": "required_headers_missing" }`                |
 | Rate limit / GAR policy violation                    | 429    | `{ "error": "rate_limited", "reason": "..." }`           |
 | Denylist (provider/manifest/CID/perceptual family)   | 451    | `{ "error": "denylisted", "kind": "..." }`               |
@@ -178,7 +186,6 @@ Gateways SHOULD emit the following Prometheus metrics and HTTP headers:
 |--------------------------------|-----------------------------------------------------|
 | `sorafs_gateway_requests_total{result}` | Success/err buckets                            |
 | `sorafs_gateway_range_bytes_total`      | Bytes served per chunker handle                |
-| `sorafs_gateway_proof_failures_total`   | Count of failed PoR/manifest validations       |
 | `sorafs_gateway_latency_ms_bucket`      | Request latency histogram                      |
 | `X-SoraFS-Telemetry-Nonce`              | 16-byte nonce correlated with telemetry events |
 
@@ -189,9 +196,10 @@ statistics using pseudonymous identifiers derived from the request nonce.
 
 The conformance suite validates this profile through:
 
-1. Canonical fixture replay for full and ranged CARs, including BLAKE3 and PoR checks.
-2. Negative requests for unsupported chunkers, corrupted proofs, and refusal codes.
-3. Seeded concurrent range streams that confirm deterministic throughput and proof integrity under load.
+1. Canonical fixture replay for full and ranged CARs, including BLAKE3 checks.
+2. Negative requests for unsupported chunkers and deterministic refusal codes.
+3. Seeded concurrent range streams that confirm deterministic throughput and
+   authenticated proof-stream verification under load.
 
 Gateways MUST satisfy the harness before onboarding. The local CI target is:
 

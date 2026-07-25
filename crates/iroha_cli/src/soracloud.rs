@@ -96,7 +96,7 @@ use reqwest::{
     header::{self, HeaderValue},
 };
 use sha2::{Digest as _, Sha256};
-use sorafs_car::{CarBuildPlan, CarChunk, CarWriter};
+use sorafs_car::{CarBuildPlan, CarChunk, CarWriter, compute_por_root};
 use sorafs_manifest::{
     ChunkingProfileV1, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     MetadataEntry, PinPolicy, StorageClass as ManifestStorageClass, chunker_registry,
@@ -9696,6 +9696,10 @@ fn publish_public_service_discovery(
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .wrap_err("failed to compute public discovery PoR root")?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
@@ -9737,9 +9741,7 @@ fn publish_public_service_discovery(
         iroha::client::SorafsPinRegisterArgs {
             authority,
             private_key: key_pair.private_key(),
-            manifest: &manifest,
-            manifest_bytes: None,
-            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
             successor_of: None,
@@ -9902,6 +9904,10 @@ fn publish_app_static_site(
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .wrap_err("failed to compute app static site PoR root")?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
@@ -9943,9 +9949,7 @@ fn publish_app_static_site(
         iroha::client::SorafsPinRegisterArgs {
             authority,
             private_key: key_pair.private_key(),
-            manifest: &manifest,
-            manifest_bytes: None,
-            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
             successor_of: None,
@@ -10075,6 +10079,10 @@ fn plan_app_static_site_publication(
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .wrap_err("failed to compute app static site PoR root")?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
@@ -10155,6 +10163,10 @@ fn publish_sorafs_directory_artifact(
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
@@ -10196,9 +10208,7 @@ fn publish_sorafs_directory_artifact(
         iroha::client::SorafsPinRegisterArgs {
             authority,
             private_key: key_pair.private_key(),
-            manifest: &manifest,
-            manifest_bytes: None,
-            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
             successor_of: None,
@@ -10298,6 +10308,10 @@ fn publish_sorafs_file_artifact(
         .dag_codec(DagCodecId(car_stats.dag_codec))
         .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(
+            compute_por_root(&payload, &plan)
+                .wrap_err_with(|| format!("failed to compute {description} PoR root"))?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_payload_digest)
         .car_size(car_stats.car_size)
@@ -10331,9 +10345,7 @@ fn publish_sorafs_file_artifact(
         iroha::client::SorafsPinRegisterArgs {
             authority,
             private_key: key_pair.private_key(),
-            manifest: &manifest,
-            manifest_bytes: None,
-            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
             successor_of: None,

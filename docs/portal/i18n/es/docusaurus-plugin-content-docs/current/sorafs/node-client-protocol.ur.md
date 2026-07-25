@@ -119,10 +119,12 @@ Errores de operadores/SDK:
 - `iroha app sorafs pin list|show`, `alias list`, o `replication list` registro pin
   Los puntos finales REST envuelven pruebas de auditoría y bloques de atestación.
   raw Norito Impresión JSON کرتے ہیں۔
-- `iroha app sorafs storage pin` o `torii /v1/sorafs/pin/register` Norito y JSON
-  manifiesta کے ساتھ pruebas de alias opcionales اور sucesores aceptan کرتے ہیں؛ mal formado
-  pruebas de `400`, pruebas obsoletas de `503` o `Warning: 110`, pruebas caducadas
-  Por `412`۔
+- `torii /v1/sorafs/pin/register` acepta la solicitud JSON V1 cerrada.
+  `manifest_payload` debe ser el base64 canónico con padding exacto de los bytes
+  Norito `ManifestV1` canónicos. Torii deriva el digest, chunker, longitud de
+  contenido, política de pin y entradas de tarifa únicamente del manifest
+  decodificado, y rechaza los campos de resumen duplicados retirados. `alias` y
+  un predecessor `successor_of_hex` distinto de cero siguen siendo opcionales.
 - Puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   estructuras de atestación شامل کرتے ہیں تاکہ clientes últimos encabezados de bloque کے
   خلاف verificar datos کر سکیں۔

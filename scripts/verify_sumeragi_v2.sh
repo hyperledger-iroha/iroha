@@ -168,12 +168,7 @@ printf '%s\n' \
   >"$verus_log_tmp"
 
 set +e
-bash scripts/formal/run_sumeragi_v2_harness.sh \
-  cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \
-  --fwd-verus-args-to roots -- \
-  --rlimit 60 \
-  --expand-errors \
-  --no-cheating \
+bash scripts/formal/run_sumeragi_v2_harness.sh --verus \
   2>&1 | tee -a "$verus_log_tmp"
 verus_pipeline_status=("${PIPESTATUS[@]}")
 set -e

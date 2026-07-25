@@ -1198,9 +1198,12 @@ pub struct PorChallengeStatusV1 {
     /// Optional proof digest.
     #[norito(default)]
     pub proof_digest: Option<[u8; 32]>,
-    /// Optional repair task identifier linked to the challenge.
-    #[norito(default)]
-    pub repair_task_id: Option<[u8; 16]>,
+    /// Chain-authoritative repair task identifier for a failed challenge.
+    ///
+    /// This field is intentionally not defaulted: the canonical V1 wire shape
+    /// rejects pre-release snapshots that omitted the field or encoded the
+    /// former process-local 16-byte identifier.
+    pub repair_task_id: Option<[u8; 32]>,
     /// Optional failure reason when the challenge was unsuccessful.
     #[norito(default)]
     pub failure_reason: Option<String>,
@@ -1240,11 +1243,26 @@ impl PorChallengeStatusV1 {
             .is_some_and(|reason| reason.trim().is_empty())
         {
             return Err(PorChallengeStatusValidationError::InvalidFailureReason);
-        } else if matches!(
+        }
+        if matches!(
             self.status,
             PorChallengeOutcome::Failed | PorChallengeOutcome::Repaired
-        ) {
+        ) && self.failure_reason.is_none()
+        {
             return Err(PorChallengeStatusValidationError::MissingFailureReason);
+        }
+        match (self.status, self.repair_task_id) {
+            (PorChallengeOutcome::Failed, None) => {
+                return Err(PorChallengeStatusValidationError::MissingRepairTaskId);
+            }
+            (PorChallengeOutcome::Failed, Some(task_id)) if task_id == [0; 32] => {
+                return Err(PorChallengeStatusValidationError::InvalidRepairTaskId);
+            }
+            (PorChallengeOutcome::Failed, Some(_)) => {}
+            (_, Some(_)) => {
+                return Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId);
+            }
+            (_, None) => {}
         }
         Ok(())
     }
@@ -1267,6 +1285,12 @@ pub enum PorChallengeStatusValidationError {
     MissingFailureReason,
     #[error("failure reason must not be empty")]
     InvalidFailureReason,
+    #[error("failed challenge must reference a chain-authoritative repair task")]
+    MissingRepairTaskId,
+    #[error("repair task id must be non-zero")]
+    InvalidRepairTaskId,
+    #[error("only failed challenges may reference a repair task")]
+    UnexpectedRepairTaskId,
     #[error("responded_at must not precede issued_at")]
     InvalidResponseTimestamp,
 }
@@ -1653,6 +1677,43 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyPorChallengeStatusV1 {
+        version: u8,
+        challenge_id: [u8; 32],
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        epoch_id: u64,
+        drand_round: u64,
+        status: PorChallengeOutcome,
+        sample_count: u16,
+        forced: bool,
+        issued_at: u64,
+        responded_at: Option<u64>,
+        proof_digest: Option<[u8; 32]>,
+        repair_task_id: Option<[u8; 16]>,
+        failure_reason: Option<String>,
+        verifier_latency_ms: Option<u32>,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct MissingRepairTaskFieldStatusV1 {
+        version: u8,
+        challenge_id: [u8; 32],
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        epoch_id: u64,
+        drand_round: u64,
+        status: PorChallengeOutcome,
+        sample_count: u16,
+        forced: bool,
+        issued_at: u64,
+        responded_at: Option<u64>,
+        proof_digest: Option<[u8; 32]>,
+        failure_reason: Option<String>,
+        verifier_latency_ms: Option<u32>,
+    }
 
     fn proof_fixture() -> PorProofV1 {
         PorProofV1 {
@@ -2195,7 +2256,7 @@ mod tests {
             issued_at: 1_700_000_000,
             responded_at: Some(1_700_000_100),
             proof_digest: None,
-            repair_task_id: None,
+            repair_task_id: Some([4; 32]),
             failure_reason: None,
             verifier_latency_ms: Some(1_500),
         };
@@ -2203,6 +2264,87 @@ mod tests {
             .validate()
             .expect_err("missing failure reason rejected");
         assert_eq!(err, PorChallengeStatusValidationError::MissingFailureReason);
+    }
+
+    #[test]
+    fn failed_challenge_status_requires_native_repair_task() {
+        let mut status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::Failed,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: Some(1_700_000_100),
+            proof_digest: None,
+            repair_task_id: None,
+            failure_reason: Some("provider missed deadline".to_owned()),
+            verifier_latency_ms: Some(1_500),
+        };
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::MissingRepairTaskId)
+        );
+
+        status.repair_task_id = Some([4; 32]);
+        status.validate().expect("canonical failed status");
+        status.status = PorChallengeOutcome::Repaired;
+        assert_eq!(
+            status.validate(),
+            Err(PorChallengeStatusValidationError::UnexpectedRepairTaskId)
+        );
+    }
+
+    #[test]
+    fn challenge_status_rejects_pre_release_task_width_and_missing_field() {
+        let legacy = LegacyPorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::Failed,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: Some(1_700_000_100),
+            proof_digest: None,
+            repair_task_id: Some([4; 16]),
+            failure_reason: Some("provider missed deadline".to_owned()),
+            verifier_latency_ms: Some(1_500),
+        };
+        let legacy_bytes = norito::to_bytes(&legacy).expect("encode legacy status");
+        assert!(
+            norito::decode_from_bytes::<PorChallengeStatusV1>(&legacy_bytes).is_err(),
+            "the pre-release 16-byte repair task form must not decode"
+        );
+
+        let missing = MissingRepairTaskFieldStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::Failed,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: Some(1_700_000_100),
+            proof_digest: None,
+            failure_reason: Some("provider missed deadline".to_owned()),
+            verifier_latency_ms: Some(1_500),
+        };
+        let missing_bytes = norito::to_bytes(&missing).expect("encode missing-field status");
+        assert!(
+            norito::decode_from_bytes::<PorChallengeStatusV1>(&missing_bytes).is_err(),
+            "a status that omits the canonical repair-task field must not decode"
+        );
     }
 
     #[test]
