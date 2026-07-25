@@ -530,7 +530,7 @@ pub enum ProviderDisputeKindV1 {
     Other,
 }
 
-/// Terminal material for a chain-authoritative provider-dispute resolution.
+/// Resolution material for a terminal provider-dispute transition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -599,19 +599,24 @@ impl ProviderDisputeEventV1 {
                     return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
                 }
             }
-            ProviderDisputeStatusV1::Resolved(resolution) => {
-                ensure_timestamp(resolution.resolved_at_unix_ms, "resolved_at_unix_ms")?;
-                ensure_digest(resolution.decision_digest, "decision_digest")?;
-                if resolution.resolved_at_unix_ms <= self.submitted_at_unix_ms {
+            ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
+                resolved_at_unix_ms,
+                decision_digest,
+                rationale,
+                ..
+            }) => {
+                ensure_timestamp(*resolved_at_unix_ms, "resolved_at_unix_ms")?;
+                ensure_digest(*decision_digest, "decision_digest")?;
+                if *resolved_at_unix_ms <= self.submitted_at_unix_ms {
                     return Err(ReputationJournalValidationError::InvalidTimestampOrder {
                         earlier: "submitted_at_unix_ms",
                         later: "resolved_at_unix_ms",
                     });
                 }
-                if recorded_at_unix_ms != resolution.resolved_at_unix_ms {
+                if recorded_at_unix_ms != *resolved_at_unix_ms {
                     return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
                 }
-                if let Some(rationale) = &resolution.rationale {
+                if let Some(rationale) = rationale {
                     validate_text(rationale)?;
                 }
             }
@@ -1328,7 +1333,7 @@ pub enum ReputationJournalValidationError {
     /// Recorder policy version is unsupported.
     #[error("unsupported reputation journal authority-policy version {found}")]
     UnsupportedAuthorityPolicyVersion {
-        /// Unsupported version found in the policy.
+        /// Version found in the rejected policy.
         found: u16,
     },
     /// Recorder policy revision zero is reserved.
@@ -1343,7 +1348,7 @@ pub enum ReputationJournalValidationError {
     /// Entry version is unsupported.
     #[error("unsupported reputation journal entry version {found}")]
     UnsupportedEntryVersion {
-        /// Unsupported version found in the entry.
+        /// Version found in the rejected entry.
         found: u16,
     },
     /// Event id zero is reserved.
@@ -1361,21 +1366,21 @@ pub enum ReputationJournalValidationError {
     /// A required digest is inert.
     #[error("reputation journal digest `{field}` must be non-zero")]
     ZeroDigest {
-        /// Name of the inert digest field.
+        /// Canonical field name containing the zero digest.
         field: &'static str,
     },
     /// A required timestamp is zero or the reserved maximum sentinel.
     #[error("reputation journal timestamp `{field}` must be finite and non-zero")]
     InvalidTimestamp {
-        /// Name of the invalid timestamp field.
+        /// Canonical field name containing the invalid timestamp.
         field: &'static str,
     },
     /// Two timestamps are not in canonical order.
     #[error("reputation journal timestamp `{later}` must follow `{earlier}`")]
     InvalidTimestampOrder {
-        /// Field that must contain the earlier timestamp.
+        /// Timestamp field that must occur first.
         earlier: &'static str,
-        /// Field that must contain the later timestamp.
+        /// Timestamp field that must occur later.
         later: &'static str,
     },
     /// Source decision time must equal the committing block time.
@@ -1420,9 +1425,9 @@ pub enum ReputationJournalValidationError {
     /// Entry exceeds the hard encoded-byte bound.
     #[error("reputation journal entry has {found} bytes; maximum is {maximum}")]
     EntryTooLarge {
-        /// Encoded entry size that was observed.
+        /// Encoded byte count found.
         found: usize,
-        /// Maximum accepted encoded entry size.
+        /// Maximum admitted encoded bytes.
         maximum: usize,
     },
     /// The active policy digest differs from the entry binding.
@@ -1452,17 +1457,17 @@ pub enum ReputationJournalValidationError {
     /// Page item count exceeds the hard bound.
     #[error("reputation journal page has {found} items; maximum is {maximum}")]
     TooManyPageItems {
-        /// Page item count that was observed.
+        /// Item count found.
         found: usize,
-        /// Maximum accepted page item count.
+        /// Maximum admitted item count.
         maximum: usize,
     },
     /// Encoded page exceeds the hard byte bound.
     #[error("reputation journal page has {found} bytes; maximum is {maximum}")]
     EncodedPageTooLarge {
-        /// Encoded page size that was observed.
+        /// Encoded byte count found.
         found: usize,
-        /// Maximum accepted encoded page size.
+        /// Maximum admitted encoded bytes.
         maximum: usize,
     },
     /// A page claims continuation without advancing.
@@ -1765,6 +1770,20 @@ mod tests {
             wrong_authority.validate_against_policy(&policy()),
             Err(ReputationJournalValidationError::RecorderAuthorityMismatch)
         );
+    }
+
+    #[test]
+    fn instruction_payloads_have_total_structural_order() {
+        fn assert_total_order<T: Ord>() {}
+
+        assert_total_order::<ReputationJournalAuthorityPolicyV1>();
+        assert_total_order::<ReputationJournalEntryV1>();
+
+        let first = por_entry(1);
+        let second = por_entry(2);
+        let ordering = first.cmp(&second);
+        assert_ne!(ordering, std::cmp::Ordering::Equal);
+        assert_eq!(ordering, second.cmp(&first).reverse());
     }
 
     #[test]

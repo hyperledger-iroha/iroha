@@ -4,6 +4,71 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 const GIT_SHA1_HEX = /^[0-9a-f]{40}$/;
 
 /**
+ * Parse and validate a release OpenAPI document.
+ *
+ * Release publication requires actual route and schema inventories. A
+ * syntactically valid skeleton with empty `paths` or `components.schemas`
+ * must never be signed, versioned, or accepted by verification tooling.
+ */
+export function validateReleaseOpenApiDocumentBytes(
+  bytes,
+  {label = 'OpenAPI document'} = {},
+) {
+  let document;
+  try {
+    const text =
+      typeof bytes === 'string' ? bytes : Buffer.from(bytes).toString('utf8');
+    document = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error?.message ?? error}`);
+  }
+  return validateReleaseOpenApiDocument(document, {label});
+}
+
+export function validateReleaseOpenApiDocument(
+  document,
+  {label = 'OpenAPI document'} = {},
+) {
+  if (!isObject(document)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  if (
+    typeof document.openapi !== 'string' ||
+    !document.openapi.startsWith('3.')
+  ) {
+    throw new Error(`${label} must declare an OpenAPI 3.x version`);
+  }
+  if (!isObject(document.info)) {
+    throw new Error(`${label} is missing the info object`);
+  }
+  for (const field of ['title', 'version']) {
+    if (
+      typeof document.info[field] !== 'string' ||
+      document.info[field].trim().length === 0
+    ) {
+      throw new Error(`${label} info.${field} must be a non-empty string`);
+    }
+  }
+  if (!isObject(document.paths)) {
+    throw new Error(`${label} is missing the paths object`);
+  }
+  if (Object.keys(document.paths).length === 0) {
+    throw new Error(
+      `${label} must define at least one path; empty/stub specifications are forbidden`,
+    );
+  }
+  if (!isObject(document.components?.schemas)) {
+    throw new Error(`${label} is missing components.schemas`);
+  }
+  if (Object.keys(document.components.schemas).length === 0) {
+    throw new Error(
+      `${label} must define at least one component schema; empty/stub specifications are forbidden`,
+    );
+  }
+  return document;
+}
+
+/**
  * Validate schema-compatible OpenAPI generator provenance.
  *
  * Legacy version-1 manifests without `generator_dirty` remain clean manifests.
@@ -49,4 +114,8 @@ export function validateOpenApiGeneratorProvenance(
     throw new Error(`${label} clean provenance must omit generator_source_sha256_hex`);
   }
   return {dirty: false, commit, sourceSha256Hex: null};
+}
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

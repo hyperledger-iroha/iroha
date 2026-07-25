@@ -1444,28 +1444,6 @@ public sealed partial class ToriiClient : IDisposable
         return NormalizeSoraFsPinRegisterResponse(response);
     }
 
-    public async Task<ToriiSoraFsDenylistCatalogResponse> GetSoraFsDenylistCatalogAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiSoraFsDenylistCatalogResponse>(
-            "/v1/sorafs/denylist/catalog",
-            cancellationToken: cancellationToken);
-        ValidateSoraFsDenylistCatalogResponse(response, "SoraFS denylist catalog response");
-        return response;
-    }
-
-    public async Task<ToriiSoraFsDenylistPackResponse> GetSoraFsDenylistPackAsync(
-        string packId,
-        CancellationToken cancellationToken = default)
-    {
-        var encodedPackId = EncodePathSegment(packId, nameof(packId));
-        var response = await GetAsync<ToriiSoraFsDenylistPackResponse>(
-            $"/v1/sorafs/denylist/packs/{encodedPackId}",
-            cancellationToken: cancellationToken);
-        ValidateSoraFsDenylistPackResponse(response, "SoraFS denylist pack response");
-        return response;
-    }
-
     public Task<HttpResponseMessage> OpenSoraFsCidContentAsync(
         string cid,
         string? relativePath = null,
@@ -3738,70 +3716,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateSoraFsFileEntry(ToriiSoraFsFileEntry file, string context)
     {
         ToriiSoraFsJson.ValidateFileEntry(file, context);
-    }
-
-    private static void ValidateSoraFsDenylistCatalogResponse(
-        ToriiSoraFsDenylistCatalogResponse response,
-        string context)
-    {
-        ToriiSoraFsJson.ValidateDenylistCatalogResponse(response, context);
-    }
-
-    private static void ValidateSoraFsDenylistPackResponse(
-        ToriiSoraFsDenylistPackResponse response,
-        string context)
-    {
-        ToriiSoraFsJson.ValidateDenylistPackResponse(response, context);
-    }
-
-    private static void ValidateSoraFsDenylistPackSummary(
-        ToriiSoraFsDenylistPackSummary response,
-        string context)
-    {
-        ToriiSoraFsJson.ValidateDenylistPackSummary(response, context);
-    }
-
-    private static void ValidateSoraFsDenylistPackFields(
-        string? packId,
-        string? version,
-        string? policyTier,
-        string? manifestCid,
-        string? merkleRoot,
-        string? issuedByProposalId,
-        string? reviewReference,
-        string? jurisdiction,
-        string? issuedAt,
-        string? expiresAt,
-        long entryCount,
-        string context)
-    {
-        ValidateExactNonEmptyText(packId, $"{context}.pack_id", message => new JsonException(message));
-        ValidateOptionalExactNonEmptyText(version, $"{context}.version");
-        ValidateOptionalExactNonEmptyText(policyTier, $"{context}.policy_tier");
-        if (manifestCid is not null)
-        {
-            ValidateSoraFsContentCid(manifestCid, $"{context}.manifest_cid");
-        }
-        ValidateOptionalExactNonEmptyText(merkleRoot, $"{context}.merkle_root");
-        ValidateOptionalExactNonEmptyText(issuedByProposalId, $"{context}.issued_by_proposal_id");
-        ValidateOptionalExactNonEmptyText(reviewReference, $"{context}.review_reference");
-        ValidateOptionalExactNonEmptyText(jurisdiction, $"{context}.jurisdiction");
-        ValidateOptionalExactNonEmptyText(issuedAt, $"{context}.issued_at");
-        ValidateOptionalExactNonEmptyText(expiresAt, $"{context}.expires_at");
-        ValidateNonNegativeInt64(entryCount, $"{context}.entry_count");
-    }
-
-    private static void ValidateSoraFsDenylistTextList(IReadOnlyList<string>? values, string context)
-    {
-        if (values is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        for (var index = 0; index < values.Count; index++)
-        {
-            ValidateExactNonEmptyText(values[index], $"{context}[{index}]", message => new JsonException(message));
-        }
     }
 
     private static void ValidateSoraFsContentCid(string? value, string field)

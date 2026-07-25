@@ -22,12 +22,11 @@ cargo xtask openapi
 Yuxarıdakı əmri işlətmək `docs/portal/static/openapi/torii.json` və yazır
 `docusaurus-plugin-openapi-docs` inteqrasiyasını təmin edir, beləliklə bu bölmə yenilənir
 avtomatik. Generator yaddaşdaxili Torii marşrutlaşdırıcısını işə salır və
-onun OpenAPI son nöqtəsini sorğulayın; bu uğursuz olarsa (məsələn, marşrutlaşdırıcının işə salınması
-səhvlər) əvəzinə deterministik yertutan spesifikasiyası buraxılır.
+Generator Torii marşrutlaşdırıcısından kanonik proyeksiyanı qurur və tam
+OpenAPI sənədi yaradıla bilmədikdə qapalı şəkildə dayandırılır.
 
-## Cari status- **Xüsusi mənbə:** `cargo xtask openapi` birbaşa Torii marşrutlaşdırıcısını sorğulayır; the
-  ehtiyat stub yalnız marşrutlaşdırıcı OpenAPI-i ifşa etmədikdə buraxılır
-  sənəd.
+## Cari status- **Xüsusi mənbə:** `cargo xtask openapi` birbaşa Torii marşrutlaşdırıcısını sorğulayır və
+  tam spesifikasiya mövcud olmadıqda uğursuz olur.
 - **Determinizm:** JSON çıxışı CI-də sabit fərqi təmin etmək üçün kanonlaşdırılıb.
 - **Autentifikasiya:** “Cəhd edin” sandbox indi sorğuları a
   məhdud səhnələşdirmə proxy. Operatorlar Torii son nöqtə və daşıyıcı təmin etməlidirlər
@@ -76,4 +75,3 @@ npm run start
 > ⚠️ Proksi səhnələşdirmə/demo girişi üçün nəzərdə tutulub. İstehsal yerləşdirmələri
 > sərtləşdirilmiş girişin arxasınca qaçmalı və eyni sürəti məhdudlaşdıran siyasətdən yenidən istifadə etməlidir
 > Torii ön.
-

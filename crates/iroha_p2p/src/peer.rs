@@ -76,7 +76,7 @@ pub const DEFAULT_BUFFER_CAPACITY: usize = 1024;
 /// retain one lease object per chunk.
 const SOURCE_ADMISSION_CHUNK_BYTES: usize = 64 * 1024;
 /// Maximum distinct byte owners retained while assembling one inbound frame:
-/// the process-wide source budget and, for progress traffic, one PeerId reserve.
+/// the process-wide source budget and, for progress traffic, one `PeerId` reserve.
 /// Incremental chunks from the same owner are coalesced into its existing lease.
 const SOURCE_RETENTION_MAX_LEASES: usize = 2;
 /// Upper bound for preallocating per-connection message buffers to reduce growth.
@@ -6693,6 +6693,10 @@ mod run {
             &scratch[offset..end]
         }
 
+        #[expect(
+            clippy::too_many_lines,
+            reason = "ordered one-pass validation keeps offsets, caps, alignment, and prefix delivery cohesive"
+        )]
         fn parse_decrypted_frame_messages(
             decrypted: &[u8],
             encrypted_size: usize,
@@ -7038,13 +7042,10 @@ mod run {
                         context,
                         messages,
                         topic_cap_violation,
-                    }) => {
-                        if let Some(violation) = topic_cap_violation {
-                            Ok(ParsedFrame::TopicCap(violation))
-                        } else {
-                            Ok(ParsedFrame::Malformed { context, messages })
-                        }
-                    }
+                    }) => Ok(topic_cap_violation.map_or_else(
+                        || ParsedFrame::Malformed { context, messages },
+                        ParsedFrame::TopicCap,
+                    )),
                 }
             })();
 
@@ -8598,8 +8599,8 @@ mod run {
     /// Serialization or arithmetic failure maps to `usize::MAX`; admission
     /// paths must use [`checked_data_message_wire_len`] so this diagnostic
     /// sentinel can never be mistaken for an exact configured maximum.
-    pub fn data_message_wire_len<T: ncore::NoritoSerialize>(payload: T) -> usize {
-        checked_data_message_wire_len(&payload).unwrap_or(usize::MAX)
+    pub fn data_message_wire_len<T: ncore::NoritoSerialize>(payload: &T) -> usize {
+        checked_data_message_wire_len(payload).unwrap_or(usize::MAX)
     }
 
     #[cfg(test)]
@@ -8831,20 +8832,13 @@ mod run {
             let credit = Arc::clone(&source_credits)
                 .try_acquire_owned()
                 .expect("source credit");
-            message
-                .retain_authenticated_source_credit(credit)
-                .expect("attach source credit once");
+            message.retain_authenticated_source_credit(credit);
             assert_eq!(source_credits.available_permits(), 0);
             let redundant_credits = Arc::new(tokio::sync::Semaphore::new(1));
             let redundant = Arc::clone(&redundant_credits)
                 .try_acquire_owned()
                 .expect("redundant downstream credit");
-            assert!(
-                message
-                    .retain_authenticated_source_credit(redundant)
-                    .is_ok(),
-                "later queue layers must reuse the upstream source owner"
-            );
+            message.retain_authenticated_source_credit(redundant);
             assert_eq!(
                 redundant_credits.available_permits(),
                 1,
@@ -17292,15 +17286,11 @@ pub mod message {
         /// final [`PeerMessageRetentionGuard`] is dropped. Attaching a second
         /// credit is idempotent: the redundant permit is released immediately,
         /// leaving the earlier upstream owner authoritative.
-        pub fn retain_authenticated_source_credit(
-            &mut self,
-            credit: OwnedSemaphorePermit,
-        ) -> Result<(), OwnedSemaphorePermit> {
+        pub fn retain_authenticated_source_credit(&mut self, credit: OwnedSemaphorePermit) {
             let _ = self.retain_source_credit_guard(AuthenticatedSourceCreditGuard {
                 _permit: credit,
                 _owner: None,
             });
-            Ok(())
         }
 
         fn retain_source_credit_guard(&mut self, credit: AuthenticatedSourceCreditGuard) -> bool {

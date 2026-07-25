@@ -90,20 +90,15 @@ const POP_PROOF_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-proof-
 const SIGNED_TRANSACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.signed-transaction.v1";
 const RETIRED_ENVELOPE_RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.retired-envelope-record.v1";
-const PANEL_NOTIFICATION_ID_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.panel-notification-id.v1";
-const PANEL_NOTIFICATION_SCOPE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.panel-notification-scope.v1";
-const PANEL_NOTIFICATION_LEASE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.panel-notification-lease.v1";
+const PANEL_NOTIFICATION_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-id.v1";
+const PANEL_NOTIFICATION_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-scope.v1";
+const PANEL_NOTIFICATION_LEASE_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-lease.v1";
 const PANEL_NOTIFICATION_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.panel-notification-record.v1";
 const PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.panel-notification-outbox.v1";
-const EXTERNAL_WORK_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.external-work-digest.v1";
-const EXTERNAL_WORK_LEASE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.external-work-lease.v1";
+const EXTERNAL_WORK_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-digest.v1";
+const EXTERNAL_WORK_LEASE_DOMAIN_V1: &[u8] = b"sorafs.moderation.external-work-lease.v1";
 static CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
@@ -135,6 +130,10 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 
 /// One exact native moderation mutation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a variant would change the canonical public Norito action shape"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationNativeActionV1 {
     /// Activate a policy revision.
@@ -611,9 +610,7 @@ impl ModerationTransactionRequestV1 {
                 "submission envelope generation must be non-zero".to_owned(),
             ));
         }
-        let operation_id = self
-            .action
-            .operation_id(&self.chain_id, &self.authority)?;
+        let operation_id = self.action.operation_id(&self.chain_id, &self.authority)?;
         if operation_id == [0; 32] || operation_id != self.operation_id {
             return Err(ModerationOrchestratorError::InvalidAction(
                 "submission operation identity does not match the authority and native action"
@@ -1450,9 +1447,7 @@ impl ModerationOrchestratorV1 {
 
             if let Some(existing) = find_operation(&state, operation_id) {
                 if existing.action_digest != action_digest || existing.authority != authority {
-                    return Err(ModerationOrchestratorError::IdempotencyConflict {
-                        operation_id,
-                    });
+                    return Err(ModerationOrchestratorError::IdempotencyConflict { operation_id });
                 }
                 true
             } else {
@@ -1731,10 +1726,7 @@ impl ModerationOrchestratorV1 {
         validate_panel_notification_clock(&state, now_unix_ms)?;
         preflight_expired_panel_notification_claims(&state, now_unix_ms)?;
         state.panel_notification_clock_unix_ms = now_unix_ms;
-        recover_expired_panel_notification_claims(
-            &mut state,
-            now_unix_ms,
-        )?;
+        recover_expired_panel_notification_claims(&mut state, now_unix_ms)?;
 
         let due = state
             .panel_notifications
@@ -1813,10 +1805,7 @@ impl ModerationOrchestratorV1 {
         lease_token: [u8; 32],
         receipt: ModerationPanelNotificationDeliveryReceiptV1,
         now_unix_ms: u64,
-    ) -> Result<
-        ModerationPanelNotificationFinalizeOutcomeV1,
-        ModerationOrchestratorError,
-    > {
+    ) -> Result<ModerationPanelNotificationFinalizeOutcomeV1, ModerationOrchestratorError> {
         if worker_id == [0; 32]
             || lease_token == [0; 32]
             || receipt.notification_id == [0; 32]
@@ -1848,23 +1837,26 @@ impl ModerationOrchestratorV1 {
                 self.persist_checkpoint_locked(&mut state)?;
                 return Ok(ModerationPanelNotificationFinalizeOutcomeV1::AlreadyDelivered);
             }
-            return Err(ModerationOrchestratorError::PanelNotificationReceiptConflict {
-                notification_id: receipt.notification_id,
-            });
+            return Err(
+                ModerationOrchestratorError::PanelNotificationReceiptConflict {
+                    notification_id: receipt.notification_id,
+                },
+            );
         }
 
         let live_claim = entry.state == StoredPanelNotificationStateV1::Claimed
             && entry.claimed_by == Some(worker_id)
             && entry.lease_token == Some(lease_token)
-            && receipt.delivered_at_unix_ms
-                >= entry.notification.source_occurred_at_unix_ms
+            && receipt.delivered_at_unix_ms >= entry.notification.source_occurred_at_unix_ms
             && entry
                 .lease_expires_at_unix_ms
                 .is_some_and(|expires_at| now_unix_ms < expires_at);
         if !live_claim {
-            return Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
-                notification_id: receipt.notification_id,
-            });
+            return Err(
+                ModerationOrchestratorError::PanelNotificationClaimConflict {
+                    notification_id: receipt.notification_id,
+                },
+            );
         }
 
         state.panel_notification_clock_unix_ms = now_unix_ms;
@@ -1909,9 +1901,7 @@ impl ModerationOrchestratorV1 {
             .panel_notifications
             .iter()
             .position(|entry| entry.notification.notification_id == notification_id)
-            .ok_or(ModerationOrchestratorError::PanelNotificationNotFound {
-                notification_id,
-            })?;
+            .ok_or(ModerationOrchestratorError::PanelNotificationNotFound { notification_id })?;
         let entry = &state.panel_notifications[position];
         if entry.state == StoredPanelNotificationStateV1::Delivered
             && entry.claimed_by == Some(worker_id)
@@ -1928,9 +1918,9 @@ impl ModerationOrchestratorV1 {
                 .lease_expires_at_unix_ms
                 .is_some_and(|expires_at| now_unix_ms < expires_at);
         if !live_claim {
-            return Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
-                notification_id,
-            });
+            return Err(
+                ModerationOrchestratorError::PanelNotificationClaimConflict { notification_id },
+            );
         }
         let retry_available_at_unix_ms = match failure {
             ModerationPanelNotificationFailureV1::NotDelivered
@@ -2040,10 +2030,7 @@ impl ModerationOrchestratorV1 {
 
     fn read_validated_finalized_snapshot(
         &self,
-    ) -> Result<
-        (ModerationFinalizedLedgerSnapshotV1, [u8; 32]),
-        ModerationOrchestratorError,
-    > {
+    ) -> Result<(ModerationFinalizedLedgerSnapshotV1, [u8; 32]), ModerationOrchestratorError> {
         let snapshot = self
             .deps
             .snapshot_reader
@@ -2144,10 +2131,7 @@ impl ModerationOrchestratorV1 {
         )?;
         let mut retained = Vec::with_capacity(state.outbox.len());
         let mut dead = Vec::new();
-        for (entry, effect) in std::mem::take(&mut state.outbox)
-            .into_iter()
-            .zip(effects)
-        {
+        for (entry, effect) in std::mem::take(&mut state.outbox).into_iter().zip(effects) {
             let operation_position = operation_index
                 .get(&entry.operation_id)
                 .copied()
@@ -2161,13 +2145,12 @@ impl ModerationOrchestratorV1 {
                     let operation = &mut state.operations[operation_position];
                     operation.status = StoredOperationStatusV1::Finalized;
                     if operation.transaction_id.is_none() {
-                        operation.transaction_id = retired_history_fence_transaction_id(&entry)
-                            .or(entry.transaction_id);
+                        operation.transaction_id =
+                            retired_history_fence_transaction_id(&entry).or(entry.transaction_id);
                     }
                 }
                 ActionEffect::Conflict => {
-                    state.operations[operation_position].status =
-                        StoredOperationStatusV1::Rejected;
+                    state.operations[operation_position].status = StoredOperationStatusV1::Rejected;
                     dead.push(StoredDeadLetterV1 {
                         identity: entry.operation_id,
                         action_label: entry.action.label().to_owned(),
@@ -2177,8 +2160,7 @@ impl ModerationOrchestratorV1 {
                 }
                 ActionEffect::Absent => {
                     state.operations[operation_position].transaction_id =
-                        retired_history_fence_transaction_id(&entry)
-                            .or(entry.transaction_id);
+                        retired_history_fence_transaction_id(&entry).or(entry.transaction_id);
                     retained.push(entry);
                 }
             }
@@ -2267,7 +2249,8 @@ impl ModerationOrchestratorV1 {
             let include_active_lookup = matches!(
                 entry.state,
                 StoredOutboxStateV1::Ambiguous | StoredOutboxStateV1::Submitted
-            ) || (entry.state == StoredOutboxStateV1::Signed && expired);
+            ) || (entry.state == StoredOutboxStateV1::Signed
+                && expired);
             let lookup_needed =
                 complete_transaction && (unresolved_retired || include_active_lookup);
             if lookup_needed {
@@ -2298,9 +2281,7 @@ impl ModerationOrchestratorV1 {
                         transaction_id: record.transaction_id,
                     })
                     .collect::<Vec<_>>();
-                if include_active_lookup
-                    && let Some(transaction_id) = candidate.transaction_id
-                {
+                if include_active_lookup && let Some(transaction_id) = candidate.transaction_id {
                     probes.push(ExternalLookupProbeV1 { transaction_id });
                 }
                 candidate.work_generation = generation;
@@ -2336,8 +2317,7 @@ impl ModerationOrchestratorV1 {
                         position += 1;
                         continue;
                     }
-                    let generation =
-                        next_external_work_generation(candidate.work_generation)?;
+                    let generation = next_external_work_generation(candidate.work_generation)?;
                     let claim = external_work_claim(
                         StoredExternalWorkKindV1::Sign,
                         candidate.operation_id,
@@ -2366,8 +2346,7 @@ impl ModerationOrchestratorV1 {
                         continue;
                     }
                     let mut candidate = entry.clone();
-                    let request =
-                        moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
                     let signed = moderation_signed_transaction(&candidate)?;
                     signed.decode_for_request(&request).map_err(|_| {
                         ModerationOrchestratorError::CheckpointCorrupt(
@@ -2389,8 +2368,7 @@ impl ModerationOrchestratorV1 {
                         position += 1;
                         continue;
                     }
-                    let generation =
-                        next_external_work_generation(candidate.work_generation)?;
+                    let generation = next_external_work_generation(candidate.work_generation)?;
                     let claim = external_work_claim(
                         StoredExternalWorkKindV1::Submit,
                         candidate.operation_id,
@@ -2471,31 +2449,29 @@ impl ModerationOrchestratorV1 {
         prepared: PreparedExternalWorkV1,
     ) -> Result<(), ModerationOrchestratorError> {
         match prepared {
-            PreparedExternalWorkV1::Sign {
-                claim, request, ..
-            } => match self.deps.submitter.sign(&request) {
-                Ok(signed) => {
-                    let validated = signed
-                        .decode_for_request(&request)
-                        .map_err(|_| {
-                            ModerationOrchestratorError::InvalidAction(
-                                "runtime signer returned an invalid exact transaction"
-                                    .to_owned(),
-                            )
-                        })
-                        .and_then(|transaction| signed_envelope_timing(&transaction));
-                    match validated {
-                        Ok(timing) => {
-                            self.finalize_sign_work(&claim, signed, timing)
-                        }
-                        Err(error) => {
-                            self.finalize_invalid_sign_work(&claim)?;
-                            Err(error)
+            PreparedExternalWorkV1::Sign { claim, request, .. } => {
+                match self.deps.submitter.sign(&request) {
+                    Ok(signed) => {
+                        let validated = signed
+                            .decode_for_request(&request)
+                            .map_err(|_| {
+                                ModerationOrchestratorError::InvalidAction(
+                                    "runtime signer returned an invalid exact transaction"
+                                        .to_owned(),
+                                )
+                            })
+                            .and_then(|transaction| signed_envelope_timing(&transaction));
+                        match validated {
+                            Ok(timing) => self.finalize_sign_work(&claim, signed, timing),
+                            Err(error) => {
+                                self.finalize_invalid_sign_work(&claim)?;
+                                Err(error)
+                            }
                         }
                     }
+                    Err(failure) => self.finalize_sign_failure(&claim, failure),
                 }
-                Err(failure) => self.finalize_sign_failure(&claim, failure),
-            },
+            }
             PreparedExternalWorkV1::Submit {
                 claim,
                 request,
@@ -2544,11 +2520,8 @@ impl ModerationOrchestratorV1 {
         timing: SignedEnvelopeTimingV1,
     ) -> Result<(), ModerationOrchestratorError> {
         let mut state = self.lock_state()?;
-        let Some(position) = outbox_claim_position(
-            &state,
-            StoredExternalWorkKindV1::Sign,
-            claim,
-        ) else {
+        let Some(position) = outbox_claim_position(&state, StoredExternalWorkKindV1::Sign, claim)
+        else {
             return Ok(());
         };
         let duplicate_or_stale = state.outbox[position]
@@ -2563,8 +2536,7 @@ impl ModerationOrchestratorV1 {
                 .last()
                 .is_some_and(|previous| {
                     timing.created_at_unix_ms <= previous.created_at_unix_ms
-                        || timing.expires_at_unix_ms
-                            <= previous.retired_at_finalized_unix_ms
+                        || timing.expires_at_unix_ms <= previous.retired_at_finalized_unix_ms
                 });
         if duplicate_or_stale {
             reset_sign_claim(&mut state.outbox[position]);
@@ -2574,8 +2546,7 @@ impl ModerationOrchestratorV1 {
             ));
         }
         state.outbox[position].transaction_id = Some(signed.transaction_id);
-        state.outbox[position].signed_transaction_digest =
-            Some(signed.canonical_bytes_digest);
+        state.outbox[position].signed_transaction_digest = Some(signed.canonical_bytes_digest);
         state.outbox[position].signed_transaction_bytes = Some(signed.canonical_bytes);
         state.outbox[position].state = StoredOutboxStateV1::Signed;
         state.outbox[position].work_claim = None;
@@ -2598,8 +2569,7 @@ impl ModerationOrchestratorV1 {
         claim: &StoredExternalWorkClaimV1,
     ) -> Result<(), ModerationOrchestratorError> {
         let mut state = self.lock_state()?;
-        if let Some(position) =
-            outbox_claim_position(&state, StoredExternalWorkKindV1::Sign, claim)
+        if let Some(position) = outbox_claim_position(&state, StoredExternalWorkKindV1::Sign, claim)
         {
             reset_sign_claim(&mut state.outbox[position]);
             self.persist_checkpoint_locked(&mut state)?;
@@ -2613,21 +2583,17 @@ impl ModerationOrchestratorV1 {
         failure: ModerationSubmissionFailureV1,
     ) -> Result<(), ModerationOrchestratorError> {
         let mut state = self.lock_state()?;
-        let Some(position) = outbox_claim_position(
-            &state,
-            StoredExternalWorkKindV1::Sign,
-            claim,
-        ) else {
+        let Some(position) = outbox_claim_position(&state, StoredExternalWorkKindV1::Sign, claim)
+        else {
             return Ok(());
         };
         match failure {
-            ModerationSubmissionFailureV1::PermanentRejection => {
-                self.dead_letter_submission_locked(
+            ModerationSubmissionFailureV1::PermanentRejection => self
+                .dead_letter_submission_locked(
                     &mut state,
                     position,
                     StoredDeadLetterReasonV1::PermanentRejection,
-                )
-            }
+                ),
             ModerationSubmissionFailureV1::NotSubmittedUnavailable
             | ModerationSubmissionFailureV1::NotSubmittedBackpressure
             | ModerationSubmissionFailureV1::Ambiguous
@@ -2645,11 +2611,8 @@ impl ModerationOrchestratorV1 {
         result: Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1>,
     ) -> Result<(), ModerationOrchestratorError> {
         let mut state = self.lock_state()?;
-        let Some(position) = outbox_claim_position(
-            &state,
-            StoredExternalWorkKindV1::Submit,
-            claim,
-        ) else {
+        let Some(position) = outbox_claim_position(&state, StoredExternalWorkKindV1::Submit, claim)
+        else {
             return Ok(());
         };
         state.outbox[position].work_claim = None;
@@ -2693,11 +2656,8 @@ impl ModerationOrchestratorV1 {
         observations: Vec<(ExternalLookupProbeV1, ModerationSubmissionLookupV1)>,
     ) -> Result<(), ModerationOrchestratorError> {
         let mut state = self.lock_state()?;
-        let Some(position) = outbox_claim_position(
-            &state,
-            StoredExternalWorkKindV1::Lookup,
-            claim,
-        ) else {
+        let Some(position) = outbox_claim_position(&state, StoredExternalWorkKindV1::Lookup, claim)
+        else {
             return Ok(());
         };
         let operation_id = state.outbox[position].operation_id;
@@ -2732,8 +2692,7 @@ impl ModerationOrchestratorV1 {
             }
         }
         if let Some(fenced_transaction_id) = retired_history_fence_transaction_id(&candidate) {
-            state.operations[operation_position].transaction_id =
-                Some(fenced_transaction_id);
+            state.operations[operation_position].transaction_id = Some(fenced_transaction_id);
             state.outbox[position] = candidate;
             return self.persist_checkpoint_locked(&mut state);
         }
@@ -2748,8 +2707,7 @@ impl ModerationOrchestratorV1 {
             .find(|(probe, _)| probe.transaction_id == expected_transaction_id)
             .map(|(_, lookup)| *lookup)
         else {
-            state.operations[operation_position].transaction_id =
-                Some(expected_transaction_id);
+            state.operations[operation_position].transaction_id = Some(expected_transaction_id);
             state.outbox[position] = candidate;
             return self.persist_checkpoint_locked(&mut state);
         };
@@ -2769,8 +2727,7 @@ impl ModerationOrchestratorV1 {
                 if transaction_id == expected_transaction_id =>
             {
                 candidate.state = StoredOutboxStateV1::Submitted;
-                state.operations[operation_position].transaction_id =
-                    Some(expected_transaction_id);
+                state.operations[operation_position].transaction_id = Some(expected_transaction_id);
             }
             ModerationSubmissionLookupV1::Rejected {
                 transaction_id,
@@ -2788,14 +2745,11 @@ impl ModerationOrchestratorV1 {
                 && observed_finalized_height <= cursor.height =>
             {
                 if candidate.attempts >= self.config.max_submit_attempts {
-                    dead_reason =
-                        Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
+                    dead_reason = Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
                 } else if expired {
-                    let next_generation =
-                        next_envelope_generation(candidate.envelope_generation)?;
+                    let next_generation = next_envelope_generation(candidate.envelope_generation)?;
                     if next_generation > self.config.max_submit_attempts {
-                        dead_reason =
-                            Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
+                        dead_reason = Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
                     } else if observed_finalized_height == cursor.height {
                         self.retire_expired_envelope(
                             &mut candidate,
@@ -2825,8 +2779,7 @@ impl ModerationOrchestratorV1 {
         }
         state.outbox[position] = candidate;
         if let Some(reason) = dead_reason {
-            state.operations[operation_position].transaction_id =
-                Some(expected_transaction_id);
+            state.operations[operation_position].transaction_id = Some(expected_transaction_id);
             return self.dead_letter_submission_locked(&mut state, position, reason);
         }
         self.persist_checkpoint_locked(&mut state)
@@ -2845,12 +2798,9 @@ impl ModerationOrchestratorV1 {
         let needs_dead_letter = matches!(result, Err(ModerationHandoffFailureV1::Permanent))
             || (matches!(
                 result,
-                Err(
-                    ModerationHandoffFailureV1::NotDelivered
-                        | ModerationHandoffFailureV1::Ambiguous
-                )
-            ) && state.pending_handoffs[position].attempts
-                >= self.config.max_submit_attempts);
+                Err(ModerationHandoffFailureV1::NotDelivered
+                    | ModerationHandoffFailureV1::Ambiguous)
+            ) && state.pending_handoffs[position].attempts >= self.config.max_submit_attempts);
         if needs_dead_letter {
             ensure_dead_letter_capacity(&state, &self.config, 1)?;
         }
@@ -2871,8 +2821,7 @@ impl ModerationOrchestratorV1 {
                 });
             }
             Err(
-                ModerationHandoffFailureV1::NotDelivered
-                | ModerationHandoffFailureV1::Ambiguous,
+                ModerationHandoffFailureV1::NotDelivered | ModerationHandoffFailureV1::Ambiguous,
             ) if entry.attempts >= self.config.max_submit_attempts => {
                 state.dead_letters.push(StoredDeadLetterV1 {
                     identity: entry.handoff.handoff_id,
@@ -2882,8 +2831,7 @@ impl ModerationOrchestratorV1 {
                 });
             }
             Err(
-                ModerationHandoffFailureV1::NotDelivered
-                | ModerationHandoffFailureV1::Ambiguous,
+                ModerationHandoffFailureV1::NotDelivered | ModerationHandoffFailureV1::Ambiguous,
             ) => {
                 state.pending_handoffs.insert(position, entry);
             }
@@ -3060,7 +3008,8 @@ impl ModerationOrchestratorV1 {
                                 self.config.max_submit_attempts,
                             );
                             let notification_id = entry.notification.notification_id;
-                            if !existing.contains(&notification_id) && added.insert(notification_id) {
+                            if !existing.contains(&notification_id) && added.insert(notification_id)
+                            {
                                 additions.push(entry);
                             }
                         }
@@ -3092,13 +3041,12 @@ impl ModerationOrchestratorV1 {
                                 .to_owned(),
                         ));
                     }
-                    let action = ModerationNativeActionV1::ActivateCase(
-                        ActivateSorafsModerationCase::new(
+                    let action =
+                        ModerationNativeActionV1::ActivateCase(ActivateSorafsModerationCase::new(
                             case_id.to_owned(),
                             round_id.to_owned(),
                             selection.sortition_digest,
-                        ),
-                    );
+                        ));
                     let source_operation_id =
                         action.operation_id(&self.chain_id, event.event.authority())?;
                     for recipient in &case.case.spec.jurors {
@@ -3130,11 +3078,7 @@ impl ModerationOrchestratorV1 {
                 | SorafsModerationLedgerEventKind::CaseFinalized => {}
             }
         }
-        make_panel_notification_capacity(
-            state,
-            additions.len(),
-            self.config.max_handoffs,
-        )?;
+        make_panel_notification_capacity(state, additions.len(), self.config.max_handoffs)?;
         state.panel_notifications.extend(additions);
         state
             .panel_notifications
@@ -3223,7 +3167,6 @@ impl ModerationOrchestratorV1 {
         state.pending_handoffs.extend(additions);
         Ok(())
     }
-
 }
 
 /// Compute the digest that binds authenticated HTTP material to one native action.
@@ -4408,34 +4351,29 @@ fn validate_retained_panel_notification_source(
                     "assignment notification has no authoritative selection".to_owned(),
                 )
             })?;
-            let expected_recipient = if notification.kind
-                == ModerationPanelNotificationKindV1::PrimaryAssignment
-            {
-                selection.jurors.contains(&notification.recipient)
-            } else {
-                selection.waitlist.contains(&notification.recipient)
-            };
+            let expected_recipient =
+                if notification.kind == ModerationPanelNotificationKindV1::PrimaryAssignment {
+                    selection.jurors.contains(&notification.recipient)
+                } else {
+                    selection.waitlist.contains(&notification.recipient)
+                };
             if !expected_recipient {
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                    "assignment notification recipient is outside the finalized roster"
-                        .to_owned(),
+                    "assignment notification recipient is outside the finalized roster".to_owned(),
                 ));
             }
-            ModerationNativeActionV1::FinalizeSortition(
-                FinalizeSorafsModerationSortition::new(
-                    case_id.to_owned(),
-                    round_id.to_owned(),
-                    appeal.appeal.pop_snapshot_digest,
-                    selection.randomness_anchor,
-                    selection.jurors.clone(),
-                    selection.waitlist.clone(),
-                ),
-            )
+            ModerationNativeActionV1::FinalizeSortition(FinalizeSorafsModerationSortition::new(
+                case_id.to_owned(),
+                round_id.to_owned(),
+                appeal.appeal.pop_snapshot_digest,
+                selection.randomness_anchor,
+                selection.jurors.clone(),
+                selection.waitlist.clone(),
+            ))
             .operation_id(chain_id, event.event.authority())
             .map_err(|_| {
                 ModerationOrchestratorError::CheckpointCorrupt(
-                    "assignment notification operation identity cannot be reconstructed"
-                        .to_owned(),
+                    "assignment notification operation identity cannot be reconstructed".to_owned(),
                 )
             })?
         }
@@ -4473,8 +4411,7 @@ fn validate_retained_panel_notification_source(
             .operation_id(chain_id, event.event.authority())
             .map_err(|_| {
                 ModerationOrchestratorError::CheckpointCorrupt(
-                    "activation notification operation identity cannot be reconstructed"
-                        .to_owned(),
+                    "activation notification operation identity cannot be reconstructed".to_owned(),
                 )
             })?
         }
@@ -4497,8 +4434,7 @@ fn external_work_cursor_is_valid(
     }
     snapshot.is_some_and(|snapshot| {
         height <= snapshot.finalized_height
-            && (height != snapshot.finalized_height
-                || block_hash == snapshot.finalized_block_hash)
+            && (height != snapshot.finalized_height || block_hash == snapshot.finalized_block_hash)
     })
 }
 
@@ -4516,9 +4452,8 @@ fn external_work_claim_is_valid(
             claim.claimed_at_finalized_block_hash,
             snapshot,
         )
-        && snapshot.is_some_and(|snapshot| {
-            claim.claimed_at_unix_ms <= snapshot.finalized_at_unix_ms
-        })
+        && snapshot
+            .is_some_and(|snapshot| claim.claimed_at_unix_ms <= snapshot.finalized_at_unix_ms)
         && claim
             .claimed_at_unix_ms
             .checked_add(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
@@ -4558,10 +4493,7 @@ fn validate_checkpoint(
         ));
     }
     if let Some(cursor) = state.panel_notification_scanned_cursor {
-        if cursor.sequence == 0
-            || cursor.block_height == 0
-            || cursor.block_hash == [0; 32]
-        {
+        if cursor.sequence == 0 || cursor.block_height == 0 || cursor.block_hash == [0; 32] {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "panel notification scan cursor is inert".to_owned(),
             ));
@@ -4578,17 +4510,14 @@ fn validate_checkpoint(
         (None, None) => {
             if state.panel_notification_scanned_cursor.is_some() {
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                    "panel notification scan cursor exists without a finalized snapshot"
-                        .to_owned(),
+                    "panel notification scan cursor exists without a finalized snapshot".to_owned(),
                 ));
             }
         }
         (Some(snapshot), Some(digest)) => {
             validate_finalized_snapshot(snapshot, config)?;
             validate_panel_notification_source_provenance(snapshot)?;
-            if !snapshot.events.is_empty()
-                && state.panel_notification_scanned_cursor.is_none()
-            {
+            if !snapshot.events.is_empty() && state.panel_notification_scanned_cursor.is_none() {
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
                     "finalized moderation events were not scanned for panel notifications"
                         .to_owned(),
@@ -4677,11 +4606,7 @@ fn validate_checkpoint(
             ));
         }
         entry.action.validate_authority(&entry.authority)?;
-        if entry
-            .action
-            .operation_id(chain_id, &entry.authority)?
-            != entry.operation_id
-        {
+        if entry.action.operation_id(chain_id, &entry.authority)? != entry.operation_id {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "outbox semantic identity mismatch".to_owned(),
             ));
@@ -4761,21 +4686,18 @@ fn validate_checkpoint(
             || (entry.work_claim.is_some() && entry.work_generation == 0)
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                "outbox crash, lookup cursor, or external-work claim is inconsistent"
-                    .to_owned(),
+                "outbox crash, lookup cursor, or external-work claim is inconsistent".to_owned(),
             ));
         }
         if !empty_cursor {
             let request = moderation_transaction_request(chain_id, entry)?;
             if complete_transaction {
                 let signed = moderation_signed_transaction(entry)?;
-                let transaction = signed
-                    .decode_for_request(&request)
-                    .map_err(|_| {
-                        ModerationOrchestratorError::CheckpointCorrupt(
-                            "outbox signed transaction is invalid".to_owned(),
-                        )
-                    })?;
+                let transaction = signed.decode_for_request(&request).map_err(|_| {
+                    ModerationOrchestratorError::CheckpointCorrupt(
+                        "outbox signed transaction is invalid".to_owned(),
+                    )
+                })?;
                 let timing = signed_envelope_timing(&transaction)?;
                 if entry.retired_envelopes.iter().any(|record| {
                     record.transaction_id == signed.transaction_id
@@ -4787,8 +4709,7 @@ fn validate_checkpoint(
                 }
                 if let Some(previous) = entry.retired_envelopes.last()
                     && (timing.created_at_unix_ms <= previous.created_at_unix_ms
-                        || timing.expires_at_unix_ms
-                            <= previous.retired_at_finalized_unix_ms)
+                        || timing.expires_at_unix_ms <= previous.retired_at_finalized_unix_ms)
                 {
                     return Err(ModerationOrchestratorError::CheckpointCorrupt(
                         "active signed envelope does not advance retired history".to_owned(),
@@ -4825,8 +4746,7 @@ fn validate_checkpoint(
             || !handoffs.insert(entry.handoff.handoff_id)
             || entry.attempts > config.max_submit_attempts
             || !valid_claim
-            || (entry.work_claim.is_some()
-                && (entry.work_generation == 0 || entry.attempts == 0))
+            || (entry.work_claim.is_some() && (entry.work_generation == 0 || entry.attempts == 0))
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "invalid, duplicate, or unfenced pending handoff".to_owned(),
@@ -4901,8 +4821,7 @@ fn validate_checkpoint(
                     ));
                 }
             }
-            StoredPanelNotificationStateV1::Claimed
-            | StoredPanelNotificationStateV1::Delivered => {
+            StoredPanelNotificationStateV1::Claimed | StoredPanelNotificationStateV1::Delivered => {
                 let (
                     Some(worker_id),
                     Some(lease_token),
@@ -4911,11 +4830,12 @@ fn validate_checkpoint(
                 ) = claim_fields
                 else {
                     return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                        "claimed or delivered panel notification has an incomplete lease".to_owned(),
+                        "claimed or delivered panel notification has an incomplete lease"
+                            .to_owned(),
                     ));
                 };
-                let expected_expiry = claimed_at_unix_ms
-                    .checked_add(MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1);
+                let expected_expiry =
+                    claimed_at_unix_ms.checked_add(MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1);
                 let expected_token = panel_notification_lease_token(
                     notification_id,
                     worker_id,
@@ -4954,8 +4874,7 @@ fn validate_checkpoint(
                             ));
                         };
                         if receipt_digest == [0; 32]
-                            || delivered_at_unix_ms
-                                < notification.source_occurred_at_unix_ms
+                            || delivered_at_unix_ms < notification.source_occurred_at_unix_ms
                             || delivered_at_unix_ms > state.panel_notification_clock_unix_ms
                         {
                             return Err(ModerationOrchestratorError::CheckpointCorrupt(
@@ -4977,11 +4896,9 @@ fn validate_checkpoint(
                     || delivery_fields != (None, None)
                     || entry.attempts == 0
                     || dead_lettered_at_unix_ms == 0
-                    || dead_lettered_at_unix_ms
-                        < notification.source_occurred_at_unix_ms
+                    || dead_lettered_at_unix_ms < notification.source_occurred_at_unix_ms
                     || dead_lettered_at_unix_ms > state.panel_notification_clock_unix_ms
-                    || (reason
-                        == ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted
+                    || (reason == ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted
                         && entry.attempts != entry.attempt_limit)
                 {
                     return Err(ModerationOrchestratorError::CheckpointCorrupt(
@@ -5197,11 +5114,12 @@ struct SignedEnvelopeTimingV1 {
 fn signed_envelope_timing(
     transaction: &SignedTransaction,
 ) -> Result<SignedEnvelopeTimingV1, ModerationOrchestratorError> {
-    let created_at_unix_ms = u64::try_from(transaction.creation_time().as_millis()).map_err(|_| {
-        ModerationOrchestratorError::CheckpointCorrupt(
-            "signed transaction creation time exceeds u64".to_owned(),
-        )
-    })?;
+    let created_at_unix_ms =
+        u64::try_from(transaction.creation_time().as_millis()).map_err(|_| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "signed transaction creation time exceeds u64".to_owned(),
+            )
+        })?;
     let expires_at_unix_ms = created_at_unix_ms
         .checked_add(MODERATION_TRANSACTION_TTL_MS_V1)
         .ok_or_else(|| {
@@ -5215,17 +5133,13 @@ fn signed_envelope_timing(
     })
 }
 
-fn next_envelope_generation(
-    generation: u32,
-) -> Result<u32, ModerationOrchestratorError> {
+fn next_envelope_generation(generation: u32) -> Result<u32, ModerationOrchestratorError> {
     generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)
 }
 
-fn retired_envelope_disposition_tag(
-    disposition: StoredRetiredEnvelopeDispositionV1,
-) -> [u8; 1] {
+fn retired_envelope_disposition_tag(disposition: StoredRetiredEnvelopeDispositionV1) -> [u8; 1] {
     [match disposition {
         StoredRetiredEnvelopeDispositionV1::NotFound => 0,
         StoredRetiredEnvelopeDispositionV1::Pending => 1,
@@ -5273,13 +5187,13 @@ fn retired_history_fence_transaction_id(entry: &StoredOutboxEntryV1) -> Option<[
         .retired_envelopes
         .iter()
         .rev()
-        .find(|record| {
-            record.disposition == StoredRetiredEnvelopeDispositionV1::Applied
-        })
+        .find(|record| record.disposition == StoredRetiredEnvelopeDispositionV1::Applied)
         .or_else(|| {
-            entry.retired_envelopes.iter().rev().find(|record| {
-                record.disposition == StoredRetiredEnvelopeDispositionV1::Pending
-            })
+            entry
+                .retired_envelopes
+                .iter()
+                .rev()
+                .find(|record| record.disposition == StoredRetiredEnvelopeDispositionV1::Pending)
         })
         .map(|record| record.transaction_id)
 }
@@ -5319,8 +5233,7 @@ fn validate_retired_envelope_history(
             || record.retired_at_finalized_block_hash == [0; 32]
             || record.retired_at_finalized_unix_ms < record.expires_at_unix_ms
             || record.record_digest == [0; 32]
-            || record.record_digest
-                != retired_envelope_record_digest(entry.operation_id, record)
+            || record.record_digest != retired_envelope_record_digest(entry.operation_id, record)
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "retired signed-envelope history is invalid".to_owned(),
@@ -5510,9 +5423,7 @@ fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn next_external_work_generation(
-    generation: u32,
-) -> Result<u32, ModerationOrchestratorError> {
+fn next_external_work_generation(generation: u32) -> Result<u32, ModerationOrchestratorError> {
     generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)
@@ -5552,10 +5463,7 @@ fn outbox_submit_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
             &baseline_height,
             &entry.baseline_finalized_block_hash,
             entry.transaction_id.as_ref().unwrap_or(&zero),
-            entry
-                .signed_transaction_digest
-                .as_ref()
-                .unwrap_or(&zero),
+            entry.signed_transaction_digest.as_ref().unwrap_or(&zero),
         ],
     )
 }
@@ -5607,10 +5515,7 @@ fn handoff_work_digest(handoff: &ModerationTerminalHandoffV1) -> [u8; 32] {
     )
 }
 
-fn external_work_lease_token(
-    identity: [u8; 32],
-    claim: &StoredExternalWorkClaimV1,
-) -> [u8; 32] {
+fn external_work_lease_token(identity: [u8; 32], claim: &StoredExternalWorkClaimV1) -> [u8; 32] {
     let kind = [claim.kind.tag()];
     let generation = claim.generation.to_le_bytes();
     let height = claim.claimed_at_finalized_height.to_le_bytes();
@@ -6008,10 +5913,12 @@ fn validate_panel_notification_clock(
         return Err(ModerationOrchestratorError::InvalidPanelNotificationClaim);
     }
     if observed_unix_ms < state.panel_notification_clock_unix_ms {
-        return Err(ModerationOrchestratorError::PanelNotificationClockRollback {
-            current: state.panel_notification_clock_unix_ms,
-            observed: observed_unix_ms,
-        });
+        return Err(
+            ModerationOrchestratorError::PanelNotificationClockRollback {
+                current: state.panel_notification_clock_unix_ms,
+                observed: observed_unix_ms,
+            },
+        );
     }
     Ok(())
 }
@@ -6181,12 +6088,10 @@ fn panel_notification_record_digest(entry: &StoredPanelNotificationV1) -> [u8; 3
     let receipt_digest = entry.receipt_digest.unwrap_or([0; 32]);
     let delivered_at_presence = [u8::from(entry.delivered_at_unix_ms.is_some())];
     let delivered_at = entry.delivered_at_unix_ms.unwrap_or(0).to_le_bytes();
-    let dead_reason = [
-        entry.dead_letter_reason.map_or(0, |reason| match reason {
-            ModerationPanelNotificationDeadLetterReasonV1::PermanentRejection => 1,
-            ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted => 2,
-        }),
-    ];
+    let dead_reason = [entry.dead_letter_reason.map_or(0, |reason| match reason {
+        ModerationPanelNotificationDeadLetterReasonV1::PermanentRejection => 1,
+        ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted => 2,
+    })];
     let dead_at_presence = [u8::from(entry.dead_lettered_at_unix_ms.is_some())];
     let dead_at = entry.dead_lettered_at_unix_ms.unwrap_or(0).to_le_bytes();
     domain_hash(
@@ -6615,9 +6520,7 @@ pub enum ModerationOrchestratorError {
     #[error("invalid moderation panel-notification delivery receipt")]
     InvalidPanelNotificationReceipt,
     /// Runtime notification time moved behind the durable high-water mark.
-    #[error(
-        "moderation panel-notification clock rollback: current {current}, observed {observed}"
-    )]
+    #[error("moderation panel-notification clock rollback: current {current}, observed {observed}")]
     PanelNotificationClockRollback {
         /// Durable runtime clock high-water mark.
         current: u64,
@@ -6864,7 +6767,6 @@ mod tests {
                 .operations
                 .insert((operation_id, transaction_id), lookup);
         }
-
     }
 
     impl ModerationTransactionSubmitterV1 for MockSubmitter {
@@ -7024,8 +6926,7 @@ mod tests {
 
     impl ReentrantLockProbe {
         fn attach(&self, orchestrator: &Arc<ModerationOrchestratorV1>) {
-            *self.orchestrator.lock().expect("probe lock") =
-                Some(Arc::downgrade(orchestrator));
+            *self.orchestrator.lock().expect("probe lock") = Some(Arc::downgrade(orchestrator));
         }
 
         fn check(&self) {
@@ -7064,8 +6965,7 @@ mod tests {
             max_events: usize,
         ) -> Result<ModerationFinalizedLedgerSnapshotV1, ModerationSnapshotReadErrorV1> {
             self.probe.check();
-            self.inner
-                .read_finalized_snapshot(max_cases, max_events)
+            self.inner.read_finalized_snapshot(max_cases, max_events)
         }
     }
 
@@ -7218,10 +7118,7 @@ mod tests {
         }
 
         fn unique_deliveries(&self) -> usize {
-            self.receipts
-                .lock()
-                .expect("panel sink receipt lock")
-                .len()
+            self.receipts.lock().expect("panel sink receipt lock").len()
         }
     }
 
@@ -7505,7 +7402,7 @@ mod tests {
                 reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
                 policy_digest: intake.policy_digest,
             },
-            policy: appeal.policy.clone(),
+            policy: appeal.policy,
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: 31,
             opened_by: governance.clone(),
@@ -7766,18 +7663,11 @@ mod tests {
         operation_id
     }
 
-    fn execute_one_prepared_sign(
-        orchestrator: &ModerationOrchestratorV1,
-        operation_id: [u8; 32],
-    ) {
+    fn execute_one_prepared_sign(orchestrator: &ModerationOrchestratorV1, operation_id: [u8; 32]) {
         let prepared = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare signer work")
                 .expect("one signer claim")
         };
@@ -7798,11 +7688,7 @@ mod tests {
         let prepared = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare ingress work")
                 .expect("one ingress claim")
         };
@@ -8078,11 +7964,9 @@ mod tests {
     fn every_external_collaborator_is_reentrant_without_holding_the_state_mutex() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 1,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
         let settlement = Arc::new(MockHandoffSink::default());
         let publication = Arc::new(MockHandoffSink::default());
         let probe = Arc::new(ReentrantLockProbe::default());
@@ -8115,18 +7999,11 @@ mod tests {
         orchestrator
             .submit(account(1), policy_action(policy(1)), [0x45; 32])
             .expect("sign and submit outside the mutex");
-        orchestrator
-            .reconcile()
-            .expect("lookup outside the mutex");
+        orchestrator.reconcile().expect("lookup outside the mutex");
 
         let governance = account(99);
         let open = activated_case_snapshot(2, [2; 32], governance.clone());
-        reader.replace(finalized_case_snapshot(
-            open,
-            3,
-            [3; 32],
-            governance,
-        ));
+        reader.replace(finalized_case_snapshot(open, 3, [3; 32], governance));
         orchestrator
             .reconcile()
             .expect("terminal sinks outside the mutex");
@@ -8140,16 +8017,11 @@ mod tests {
     fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let inner = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 1,
-            },
-        ));
+        let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
         let (entered_tx, entered_rx) = mpsc::channel();
-        let blocking = Arc::new(BlockingSignSubmitter::new(
-            Arc::clone(&inner),
-            entered_tx,
-        ));
+        let blocking = Arc::new(BlockingSignSubmitter::new(Arc::clone(&inner), entered_tx));
         let orchestrator = Arc::new(
             ModerationOrchestratorV1::open(
                 config(&temp, "blocking-duplicate-workers.norito"),
@@ -8185,8 +8057,7 @@ mod tests {
                 duplicate_tx.send(result).expect("signal duplicate worker");
             })
         };
-        let duplicate_result =
-            duplicate_rx.recv_timeout(core::time::Duration::from_secs(5));
+        let duplicate_result = duplicate_rx.recv_timeout(core::time::Duration::from_secs(5));
         blocking.release();
         first
             .join()
@@ -8434,8 +8305,7 @@ mod tests {
         for (index, (label, lookup)) in scenarios.into_iter().enumerate() {
             let temp = tempfile::tempdir().expect("tempdir");
             let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-            let submitter =
-                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+            let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
             let orchestrator = ModerationOrchestratorV1::open(
                 config(&temp, &format!("no-renew-{label}.norito")),
                 deps(Arc::clone(&reader), Arc::clone(&submitter)),
@@ -8697,9 +8567,7 @@ mod tests {
                 observed_finalized_height: 2,
             },
         );
-        submitter.set_sign_failure(Some(
-            ModerationSubmissionFailureV1::RuntimeUnavailable,
-        ));
+        submitter.set_sign_failure(Some(ModerationSubmissionFailureV1::RuntimeUnavailable));
         reader.replace(empty_snapshot_at(
             2,
             [2; 32],
@@ -8758,9 +8626,7 @@ mod tests {
                 observed_finalized_height: 2,
             },
         );
-        submitter.set_failure(Some(
-            ModerationSubmissionFailureV1::NotSubmittedUnavailable,
-        ));
+        submitter.set_failure(Some(ModerationSubmissionFailureV1::NotSubmittedUnavailable));
         reader.replace(empty_snapshot_at(
             2,
             [2; 32],
@@ -8863,11 +8729,9 @@ mod tests {
     fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 2,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 2,
+        }));
         let checkpoint = config(&temp, "crash-before-ingress.norito");
         let orchestrator = ModerationOrchestratorV1::open(
             checkpoint.clone(),
@@ -8890,11 +8754,9 @@ mod tests {
         drop(orchestrator);
 
         reader.replace(empty_snapshot(2, [2; 32]));
-        let restarted = ModerationOrchestratorV1::open(
-            checkpoint,
-            deps(reader, Arc::clone(&submitter)),
-        )
-        .expect("restart");
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
+                .expect("restart");
         restarted
             .reconcile()
             .expect("lookup proves no ingress before exact retry");
@@ -8918,11 +8780,9 @@ mod tests {
     fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 2,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 2,
+        }));
         let checkpoint = config(&temp, "crash-after-ingress.norito");
         let orchestrator = ModerationOrchestratorV1::open(
             checkpoint.clone(),
@@ -8952,11 +8812,9 @@ mod tests {
         drop(orchestrator);
 
         reader.replace(empty_snapshot(2, [2; 32]));
-        let restarted = ModerationOrchestratorV1::open(
-            checkpoint,
-            deps(reader, Arc::clone(&submitter)),
-        )
-        .expect("restart");
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
+                .expect("restart");
         restarted
             .reconcile()
             .expect("lookup finds the pre-crash ingress effect");
@@ -8980,11 +8838,9 @@ mod tests {
     fn expired_work_lease_rejects_stale_signer_completion() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 1,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "stale-signer-lease.norito"),
             deps(Arc::clone(&reader), Arc::clone(&submitter)),
@@ -8999,11 +8855,7 @@ mod tests {
         let stale = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare stale signer")
                 .expect("stale signer claim")
         };
@@ -9047,11 +8899,9 @@ mod tests {
     fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 2,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 2,
+        }));
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "stale-ingress-lease.norito"),
             deps(Arc::clone(&reader), Arc::clone(&submitter)),
@@ -9079,8 +8929,8 @@ mod tests {
         orchestrator
             .reconcile()
             .expect("lookup and exact retry reclaim expired ingress lease");
-        let before_stale_completion =
-            fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint before stale receipt");
+        let before_stale_completion = fs::read(&orchestrator.config.checkpoint_path)
+            .expect("checkpoint before stale receipt");
         orchestrator
             .execute_external_work(stale)
             .expect("stale ingress receipt is ignored");
@@ -9105,9 +8955,7 @@ mod tests {
     fn tampered_external_work_claim_fails_closed_on_restart() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::Unknown,
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
         let checkpoint = config(&temp, "tampered-external-claim.norito");
         let orchestrator = ModerationOrchestratorV1::open(
             checkpoint.clone(),
@@ -9123,11 +8971,7 @@ mod tests {
         let claimed = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare signer claim")
                 .expect("one signer claim")
         };
@@ -9189,9 +9033,7 @@ mod tests {
             assert_eq!(entry.state, StoredOutboxStateV1::Signed);
             (
                 entry.transaction_id.expect("transaction id"),
-                entry
-                    .signed_transaction_digest
-                    .expect("transaction digest"),
+                entry.signed_transaction_digest.expect("transaction digest"),
                 entry
                     .signed_transaction_bytes
                     .clone()
@@ -9245,11 +9087,7 @@ mod tests {
         let interrupted = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare interrupted signer work")
                 .expect("one interrupted signer claim")
         };
@@ -9352,9 +9190,7 @@ mod tests {
         let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
             observed_finalized_height: 1,
         }));
-        submitter.set_failure(Some(
-            ModerationSubmissionFailureV1::NotSubmittedUnavailable,
-        ));
+        submitter.set_failure(Some(ModerationSubmissionFailureV1::NotSubmittedUnavailable));
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "not-submitted.norito"),
             deps(reader, Arc::clone(&submitter)),
@@ -9412,11 +9248,7 @@ mod tests {
             )
             .expect("orchestrator");
             orchestrator
-                .submit(
-                    authority.clone(),
-                    policy_action(active_policy.clone()),
-                    [0x11; 32],
-                )
+                .submit(authority.clone(), policy_action(active_policy), [0x11; 32])
                 .expect("ambiguous submit remains pending");
             let state = orchestrator.state.lock().expect("orchestrator state");
             let [entry] = state.outbox.as_slice() else {
@@ -9464,7 +9296,7 @@ mod tests {
         reader.replace(snapshot_with_policy(
             3,
             [3; 32],
-            active_policy.clone(),
+            active_policy,
             authority.clone(),
         ));
         restarted.reconcile().expect("finalized reconciliation");
@@ -9489,11 +9321,9 @@ mod tests {
             governance,
         );
         let reader = Arc::new(MockSnapshotReader::new(finalized));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 3,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 3,
+        }));
         let settlement = Arc::new(MockHandoffSink::default());
         let publication = Arc::new(MockHandoffSink::default());
         let checkpoint = config(&temp, "handoff-crash-after-effect.norito");
@@ -9503,9 +9333,8 @@ mod tests {
             settlement_sink: settlement.clone(),
             publication_sink: publication.clone(),
         };
-        let orchestrator =
-            ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps())
-                .expect("orchestrator");
+        let orchestrator = ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps())
+            .expect("orchestrator");
         let (snapshot, digest) = orchestrator
             .read_validated_finalized_snapshot()
             .expect("read finalized snapshot");
@@ -9518,11 +9347,7 @@ mod tests {
         let interrupted = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
             orchestrator
-                .prepare_next_external_work_locked(
-                    &mut state,
-                    &BTreeSet::new(),
-                    &BTreeSet::new(),
-                )
+                .prepare_next_external_work_locked(&mut state, &BTreeSet::new(), &BTreeSet::new())
                 .expect("prepare terminal handoff")
                 .expect("one terminal handoff claim")
         };
@@ -9530,10 +9355,7 @@ mod tests {
             PreparedExternalWorkV1::Handoff { handoff, .. } => handoff.clone(),
             _ => unreachable!("terminal handoff claim"),
         };
-        assert_eq!(
-            handoff.kind,
-            ModerationTerminalHandoffKindV1::Settlement
-        );
+        assert_eq!(handoff.kind, ModerationTerminalHandoffKindV1::Settlement);
         settlement
             .deliver(&handoff)
             .expect("sink effect before checkpoint finalization");
@@ -9718,16 +9540,14 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let governance = account(100);
         let (snapshot, _) = awaiting_acceptance_snapshot(2, [2; 32], governance.clone());
-        let first_submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
+        let first_submitter =
+            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
                 observed_finalized_height: 2,
-            },
-        ));
-        let second_submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
+            }));
+        let second_submitter =
+            Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
                 observed_finalized_height: 2,
-            },
-        ));
+            }));
         let first = ModerationOrchestratorV1::open(
             config(&temp, "replica-a.norito"),
             deps(
@@ -9771,36 +9591,29 @@ mod tests {
     fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_identical() {
         let temp = tempfile::tempdir().expect("tempdir");
         let governance = account(99);
-        let (snapshot, _) =
-            awaiting_acceptance_snapshot(2, [0x22; 32], governance.clone());
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x22; 32], governance.clone());
         let selection = snapshot.appeals[0]
             .appeal
             .selection
             .as_ref()
             .expect("selection")
             .clone();
-        let expected_source_operation = ModerationNativeActionV1::FinalizeSortition(
-            FinalizeSorafsModerationSortition::new(
+        let expected_source_operation =
+            ModerationNativeActionV1::FinalizeSortition(FinalizeSorafsModerationSortition::new(
                 "case-failover".to_owned(),
                 "round-1".to_owned(),
                 snapshot.appeals[0].appeal.pop_snapshot_digest,
                 selection.randomness_anchor,
                 selection.jurors.clone(),
                 selection.waitlist.clone(),
-            ),
-        )
-        .operation_id(
-            &ChainId::from("moderation-orchestrator-test"),
-            &governance,
-        )
-        .expect("source operation");
+            ))
+            .operation_id(&ChainId::from("moderation-orchestrator-test"), &governance)
+            .expect("source operation");
         let first = ModerationOrchestratorV1::open(
             config(&temp, "panel-replica-a.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot.clone())),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("first orchestrator");
@@ -9808,9 +9621,7 @@ mod tests {
             config(&temp, "panel-replica-b.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot)),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("second orchestrator");
@@ -9834,8 +9645,7 @@ mod tests {
             first_entries
                 .iter()
                 .filter(|entry| {
-                    entry.notification.kind
-                        == ModerationPanelNotificationKindV1::PrimaryAssignment
+                    entry.notification.kind == ModerationPanelNotificationKindV1::PrimaryAssignment
                 })
                 .count(),
             2
@@ -9844,8 +9654,7 @@ mod tests {
             first_entries
                 .iter()
                 .filter(|entry| {
-                    entry.notification.kind
-                        == ModerationPanelNotificationKindV1::WaitlistStandby
+                    entry.notification.kind == ModerationPanelNotificationKindV1::WaitlistStandby
                 })
                 .count(),
             1
@@ -9897,10 +9706,7 @@ mod tests {
                 "round-1".to_owned(),
                 selection.sortition_digest,
             ))
-            .operation_id(
-                &ChainId::from("moderation-orchestrator-test"),
-                &governance,
-            )
+            .operation_id(&ChainId::from("moderation-orchestrator-test"), &governance)
             .expect("activation operation");
         let expected_recipients = snapshot.cases[0]
             .case
@@ -9913,9 +9719,7 @@ mod tests {
             config(&temp, "panel-activation.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot)),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("orchestrator");
@@ -9939,8 +9743,7 @@ mod tests {
     fn panel_notification_terminal_compaction_preserves_scan_progress_and_live_work() {
         let temp = tempfile::tempdir().expect("tempdir");
         let governance = account(99);
-        let (awaiting, _) =
-            awaiting_acceptance_snapshot(2, [0x29; 32], governance.clone());
+        let (awaiting, _) = awaiting_acceptance_snapshot(2, [0x29; 32], governance.clone());
         let reader = Arc::new(MockSnapshotReader::new(awaiting));
         let mut bounds = config(&temp, "panel-compaction.norito");
         bounds.max_handoffs = 3;
@@ -9948,18 +9751,12 @@ mod tests {
             bounds,
             deps(
                 Arc::clone(&reader),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("orchestrator");
         orchestrator.reconcile().expect("queue assignments");
-        reader.replace(activated_case_snapshot(
-            3,
-            [0x2A; 32],
-            governance,
-        ));
+        reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
         assert!(matches!(
             orchestrator.reconcile(),
             Err(ModerationOrchestratorError::ResourceExhausted {
@@ -10035,9 +9832,7 @@ mod tests {
         let governance = account(99);
         let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x23; 32], governance);
         let reader = Arc::new(MockSnapshotReader::new(snapshot));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::Unknown,
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
         let checkpoint = config(&temp, "panel-crash-recovery.norito");
         let orchestrator = ModerationOrchestratorV1::open(
             checkpoint.clone(),
@@ -10061,11 +9856,8 @@ mod tests {
         let target_id = first_claims[0].notification.notification_id;
         drop(orchestrator);
 
-        let restarted = ModerationOrchestratorV1::open(
-            checkpoint,
-            deps(reader, submitter),
-        )
-        .expect("restart with durable claims");
+        let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
+            .expect("restart with durable claims");
         assert!(
             restarted
                 .claim_panel_notifications([0xB2; 32], 30_999, 3)
@@ -10154,15 +9946,12 @@ mod tests {
     fn panel_notification_backoff_poison_and_retry_exhaustion_are_bounded() {
         let temp = tempfile::tempdir().expect("tempdir");
         let governance = account(99);
-        let (snapshot, _) =
-            awaiting_acceptance_snapshot(2, [0x24; 32], governance.clone());
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x24; 32], governance.clone());
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "panel-retry.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot.clone())),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("retry orchestrator");
@@ -10230,9 +10019,7 @@ mod tests {
             config(&temp, "panel-poison.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot)),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("poison orchestrator");
@@ -10275,9 +10062,7 @@ mod tests {
             bounds,
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot)),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("orchestrator");
@@ -10305,10 +10090,12 @@ mod tests {
             .expect("one valid claim");
         assert_eq!(
             orchestrator.claim_panel_notifications([0xB2; 32], 999, 1),
-            Err(ModerationOrchestratorError::PanelNotificationClockRollback {
-                current: 1_000,
-                observed: 999,
-            })
+            Err(
+                ModerationOrchestratorError::PanelNotificationClockRollback {
+                    current: 1_000,
+                    observed: 999,
+                }
+            )
         );
         assert!(matches!(
             orchestrator.release_panel_notification_claim(
@@ -10343,9 +10130,7 @@ mod tests {
         let governance = account(99);
         let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x25; 32], governance);
         let reader = Arc::new(MockSnapshotReader::new(snapshot));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::Unknown,
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
         let bounds = config(&temp, "panel-tamper.norito");
         let orchestrator = ModerationOrchestratorV1::open(
             bounds.clone(),
@@ -10360,14 +10145,13 @@ mod tests {
 
         let original = std::fs::read(&bounds.checkpoint_path).expect("read checkpoint");
         let limits = checkpoint_decode_limits(bounds.checkpoint_max_bytes).expect("decode limits");
-        let mut checkpoint = decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
-            &original, limits,
-        )
-        .expect("decode checkpoint");
-        checkpoint.panel_notifications[0].lease_expires_at_unix_ms =
-            checkpoint.panel_notifications[0]
-                .lease_expires_at_unix_ms
-                .map(|value| value.saturating_add(1));
+        let mut checkpoint =
+            decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(&original, limits)
+                .expect("decode checkpoint");
+        checkpoint.panel_notifications[0].lease_expires_at_unix_ms = checkpoint.panel_notifications
+            [0]
+        .lease_expires_at_unix_ms
+        .map(|value| value.saturating_add(1));
         std::fs::write(
             &bounds.checkpoint_path,
             norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
@@ -10382,11 +10166,10 @@ mod tests {
         ));
 
         for version in [2, 3] {
-            let mut old_checkpoint =
-                decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
-                    &original, limits,
-                )
-                .expect("decode original checkpoint");
+            let mut old_checkpoint = decode_from_bytes_with_limits::<
+                ModerationOrchestratorCheckpointV1,
+            >(&original, limits)
+            .expect("decode original checkpoint");
             old_checkpoint.version = version;
             std::fs::write(
                 &bounds.checkpoint_path,
@@ -10420,9 +10203,7 @@ mod tests {
             config(&temp, "panel-provenance.norito"),
             deps(
                 Arc::new(MockSnapshotReader::new(snapshot)),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("orchestrator");
@@ -10437,26 +10218,20 @@ mod tests {
     fn panel_notification_scan_rejects_cross_snapshot_event_gaps() {
         let temp = tempfile::tempdir().expect("tempdir");
         let governance = account(99);
-        let (awaiting, _) =
-            awaiting_acceptance_snapshot(2, [0x2B; 32], governance.clone());
+        let (awaiting, _) = awaiting_acceptance_snapshot(2, [0x2B; 32], governance.clone());
         let reader = Arc::new(MockSnapshotReader::new(awaiting));
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "panel-event-gap.norito"),
             deps(
                 Arc::clone(&reader),
-                Arc::new(MockSubmitter::new(
-                    ModerationSubmissionLookupV1::Unknown,
-                )),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
             ),
         )
         .expect("orchestrator");
         orchestrator.reconcile().expect("scan sortition event");
         let activated = activated_case_snapshot(3, [0x2C; 32], governance.clone());
         reader.replace(finalized_case_snapshot(
-            activated,
-            4,
-            [0x2D; 32],
-            governance,
+            activated, 4, [0x2D; 32], governance,
         ));
         assert!(matches!(
             orchestrator.reconcile(),
@@ -10469,11 +10244,9 @@ mod tests {
     fn same_tip_with_a_changed_finalized_timestamp_is_rejected_as_equivocation() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(2, [2; 32])));
-        let submitter = Arc::new(MockSubmitter::new(
-            ModerationSubmissionLookupV1::NotFound {
-                observed_finalized_height: 2,
-            },
-        ));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 2,
+        }));
         let orchestrator = ModerationOrchestratorV1::open(
             config(&temp, "timestamp-equivocation.norito"),
             deps(Arc::clone(&reader), submitter),

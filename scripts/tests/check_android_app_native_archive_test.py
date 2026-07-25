@@ -18,6 +18,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "check_android_app_native_archive
 ABIS = ("arm64-v8a", "x86_64")
 LIBRARY_NAME = "libconnect_norito_bridge.so"
 PROVENANCE_ENTRY = "assets/iroha/native-build-provenance-v1.json"
+ANDROID_NDK_BASE_REVISION = "28.0.12674087"
+ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
+    "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+)
 
 
 class AndroidAppNativeArchiveTest(unittest.TestCase):
@@ -59,12 +63,15 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
             "cargo_features": ["privacy-production-enabled"],
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
+                "android_ndk_revision": ANDROID_NDK_BASE_REVISION,
+                "android_ndk_source_properties_sha256":
+                    ANDROID_NDK_SOURCE_PROPERTIES_SHA256,
             },
             "source_commit": "1" * 40,
             "source_tree_dirty": False,
             "source_fingerprint_sha256": "2" * 64,
             "cargo_lock_sha256": "3" * 64,
-            "android_ndk_revision": "28.0.12674087",
+            "android_ndk_revision": ANDROID_NDK_BASE_REVISION,
             "strip_tool_sha256": "4" * 64,
             "libraries": {
                 abi: {
@@ -80,7 +87,8 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
         self.provenance_bytes = (
             json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode("utf-8")
-        provenance_path = (
+        self.provenance = provenance
+        self.provenance_path = (
             self.client_root
             / "generated"
             / "nativeProvenance"
@@ -88,8 +96,8 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
             / "iroha"
             / "native-build-provenance-v1.json"
         )
-        provenance_path.parent.mkdir(parents=True)
-        provenance_path.write_bytes(self.provenance_bytes)
+        self.provenance_path.parent.mkdir(parents=True)
+        self.provenance_path.write_bytes(self.provenance_bytes)
 
         self.aar_path = (
             self.client_root / "outputs" / "aar" / "client-android-release.aar"
@@ -128,6 +136,13 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
             *(duplicate_entries or []),
         ]
         self.write_zip(self.aar_path, entries)
+
+    def replace_provenance(self, provenance: dict[str, object]) -> None:
+        self.provenance_bytes = (
+            json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        self.provenance_path.write_bytes(self.provenance_bytes)
+        self.write_aar()
 
     def write_app_archive(
         self,
@@ -380,6 +395,85 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
         result = self.verify(self.write_app_archive("aab"), "aab")
         self.assertNotEqual(0, result.returncode)
         self.assertIn("AAR provenance differs from generated provenance", result.stderr)
+
+    def test_rejects_nonexact_top_level_ndk_base_revision(self) -> None:
+        provenance = json.loads(json.dumps(self.provenance))
+        provenance["android_ndk_revision"] = "28.0.12674087-beta2"
+        self.replace_provenance(provenance)
+
+        result = self.verify(self.write_app_archive("aab"), "aab")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Android NDK base revision is not exact", result.stderr)
+
+    def test_rejects_nonexact_nested_ndk_base_revision(self) -> None:
+        for replacement in ("28.0.12674087-beta2", None):
+            with self.subTest(replacement=replacement):
+                provenance = json.loads(json.dumps(self.provenance))
+                build_environment = provenance["build_environment"]
+                self.assertIsInstance(build_environment, dict)
+                if replacement is None:
+                    del build_environment["android_ndk_revision"]
+                else:
+                    build_environment["android_ndk_revision"] = replacement
+                self.replace_provenance(provenance)
+
+                result = self.verify(self.write_app_archive("apk"), "apk")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "build environment Android NDK base revision is not exact",
+                    result.stderr,
+                )
+
+    def test_rejects_nonexact_or_missing_ndk_source_properties_digest(self) -> None:
+        for replacement in ("0" * 64, None):
+            with self.subTest(replacement=replacement):
+                provenance = json.loads(json.dumps(self.provenance))
+                build_environment = provenance["build_environment"]
+                self.assertIsInstance(build_environment, dict)
+                if replacement is None:
+                    del build_environment[
+                        "android_ndk_source_properties_sha256"
+                    ]
+                else:
+                    build_environment[
+                        "android_ndk_source_properties_sha256"
+                    ] = replacement
+                self.replace_provenance(provenance)
+
+                result = self.verify(self.write_app_archive("aab"), "aab")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(
+                    "Android NDK source.properties digest is not exact",
+                    result.stderr,
+                )
+
+    def test_rejects_nonobject_or_wrong_schema_build_environment(self) -> None:
+        for replacement in (
+            [],
+            {
+                "schema": "iroha.mobile-native-build-environment.v2",
+                "android_ndk_revision": ANDROID_NDK_BASE_REVISION,
+                "android_ndk_source_properties_sha256":
+                    ANDROID_NDK_SOURCE_PROPERTIES_SHA256,
+            },
+        ):
+            with self.subTest(replacement=replacement):
+                provenance = json.loads(json.dumps(self.provenance))
+                provenance["build_environment"] = replacement
+                self.replace_provenance(provenance)
+
+                result = self.verify(self.write_app_archive("apk"), "apk")
+                self.assertNotEqual(0, result.returncode)
+                if isinstance(replacement, list):
+                    self.assertIn(
+                        "build environment must be an object",
+                        result.stderr,
+                    )
+                else:
+                    self.assertIn(
+                        "build environment schema is not exact",
+                        result.stderr,
+                    )
 
 
 if __name__ == "__main__":

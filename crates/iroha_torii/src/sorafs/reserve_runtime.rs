@@ -29,9 +29,8 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsReserveAppealById, FindSorafsReserveEvents,
-            FindSorafsReserveMovementById, FindSorafsReservePolicy,
-            FindSorafsReserveProviderById, FindSorafsReserveProviders,
+            FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+            FindSorafsReservePolicy, FindSorafsReserveProviderById, FindSorafsReserveProviders,
         },
     },
     sorafs::{
@@ -522,7 +521,9 @@ fn reserve_telemetry_event_shape_is_valid(
         | SorafsReserveLedgerEventKind::AppealAccepted
         | SorafsReserveLedgerEventKind::AppealRejected => {
             event.provider_id.is_some()
-                && event.operation_id.is_some_and(|operation_id| operation_id != [0; 32])
+                && event
+                    .operation_id
+                    .is_some_and(|operation_id| operation_id != [0; 32])
                 && event.provider_revision > 0
                 && event.resulting_lifecycle_stage.is_some()
         }
@@ -545,8 +546,7 @@ fn reserve_telemetry_event_cursor_is_successor(
     if current.sequence == 0
         || current.block_height == 0
         || current.block_hash == [0; 32]
-        || previous
-            .map_or(1, |cursor| cursor.sequence.checked_add(1).unwrap_or(0))
+        || previous.map_or(1, |cursor| cursor.sequence.checked_add(1).unwrap_or(0))
             != current.sequence
     {
         return false;
@@ -664,19 +664,12 @@ fn consume_reserve_finalized_telemetry_events(
         let limit = u32::try_from(remaining)
             .unwrap_or(u32::MAX)
             .min(RESERVE_QUERY_MAX_ITEMS_V1);
-        let page = FindSorafsReserveEvents::new(
-            Some(finalized_cursor),
-            projection.after_event,
-            limit,
-        )
-        .execute(view)
-        .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::QueryFailed)?;
+        let page =
+            FindSorafsReserveEvents::new(Some(finalized_cursor), projection.after_event, limit)
+                .execute(view)
+                .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::QueryFailed)?;
         let page_len = page.events.len();
-        apply_reserve_finalized_telemetry_event_page(
-            projection,
-            &page,
-            finalized_cursor,
-        )?;
+        apply_reserve_finalized_telemetry_event_page(projection, &page, finalized_cursor)?;
         processed = processed
             .checked_add(page_len)
             .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
@@ -716,11 +709,12 @@ fn collect_reserve_finalized_provider_metrics(
                     .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?
             || (page.has_more && page.accounts.is_empty())
             || page.has_more != page.next_after.is_some()
-            || page
-                .next_after
-                .is_some_and(|cursor| {
-                    page.accounts.last().map(|account| account.terms.provider_id) != Some(cursor)
-                })
+            || page.next_after.is_some_and(|cursor| {
+                page.accounts
+                    .last()
+                    .map(|account| account.terms.provider_id)
+                    != Some(cursor)
+            })
         {
             return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidProviderPage);
         }
@@ -746,8 +740,7 @@ fn collect_reserve_finalized_provider_metrics(
                 .checked_add(1)
                 .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
             let credit_principal = reserve_quantity_to_metric_micro_xor(&account.debt_principal)?;
-            let accrued_interest =
-                reserve_quantity_to_metric_micro_xor(&account.accrued_interest)?;
+            let accrued_interest = reserve_quantity_to_metric_micro_xor(&account.accrued_interest)?;
             let total_debt = account
                 .total_debt()
                 .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
@@ -759,14 +752,12 @@ fn collect_reserve_finalized_provider_metrics(
                 XorQuantity::zero()
             };
             let credit_shortfall = reserve_quantity_to_metric_micro_xor(&credit_shortfall)?;
-            metrics.credit_principal_micro_xor[stage] =
-                metrics.credit_principal_micro_xor[stage]
-                    .checked_add(credit_principal)
-                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
-            metrics.credit_shortfall_micro_xor[stage] =
-                metrics.credit_shortfall_micro_xor[stage]
-                    .checked_add(credit_shortfall)
-                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.credit_principal_micro_xor[stage] = metrics.credit_principal_micro_xor[stage]
+                .checked_add(credit_principal)
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.credit_shortfall_micro_xor[stage] = metrics.credit_shortfall_micro_xor[stage]
+                .checked_add(credit_shortfall)
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
             metrics.accrued_interest_micro_xor[stage] = metrics.accrued_interest_micro_xor[stage]
                 .checked_add(accrued_interest)
                 .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
@@ -801,8 +792,7 @@ fn refresh_sorafs_reserve_finalized_telemetry(
         return Ok(SorafsReserveFinalizedTelemetryRefreshV1::CatchingUp);
     }
 
-    let provider_metrics =
-        collect_reserve_finalized_provider_metrics(&view, finalized_cursor)?;
+    let provider_metrics = collect_reserve_finalized_provider_metrics(&view, finalized_cursor)?;
     if provider_metrics.pending_movements != projection.custody_counts[0]
         || provider_metrics.open_appeals != projection.open_appeals
     {
@@ -866,13 +856,10 @@ fn collect_generated_reserve_operations_in_one_finalized_view(
         .map_err(|_| ReserveGenerationErrorV1::ArithmeticOverflow)?;
     let query_limit = u32::try_from(policy.scan_batch_limit().min(query_hard_limit))
         .map_err(|_| ReserveGenerationErrorV1::ArithmeticOverflow)?;
-    let page = FindSorafsReserveProviders::new(
-        Some(finalized_cursor),
-        after_provider_id,
-        query_limit,
-    )
-    .execute(&view)
-    .map_err(|_| ReserveGenerationErrorV1::FinalizedViewUnavailable)?;
+    let page =
+        FindSorafsReserveProviders::new(Some(finalized_cursor), after_provider_id, query_limit)
+            .execute(&view)
+            .map_err(|_| ReserveGenerationErrorV1::FinalizedViewUnavailable)?;
     if page.finalized_cursor != finalized_cursor {
         return Err(ReserveGenerationErrorV1::FinalizedViewUnavailable);
     }
@@ -1222,12 +1209,10 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
                             scan.generated = scan.generated.saturating_add(1);
                         }
                         Ok(ReserveTransactionEnqueueResultV1::Existing { .. }) => {
-                            scan.generation_replayed =
-                                scan.generation_replayed.saturating_add(1);
+                            scan.generation_replayed = scan.generation_replayed.saturating_add(1);
                         }
                         Err(_) => {
-                            scan.generation_deferred =
-                                scan.generation_deferred.saturating_add(1);
+                            scan.generation_deferred = scan.generation_deferred.saturating_add(1);
                             warn!(
                                 "failed to durably enqueue generated native SoraFS reserve/rent work"
                             );
@@ -1802,8 +1787,7 @@ mod tests {
                 } else {
                     sequence
                 },
-                resulting_lifecycle_stage: (!policy_event)
-                    .then_some(ReserveLifecycleStage::Active),
+                resulting_lifecycle_stage: (!policy_event).then_some(ReserveLifecycleStage::Active),
                 authority: account(0xD1),
                 occurred_at_unix_ms: sequence.saturating_mul(1_000),
             },
@@ -1870,8 +1854,7 @@ mod tests {
             reserve_balance: XorQuantity::zero(),
             debt_principal: XorQuantity::zero(),
             accrued_interest: XorQuantity::zero(),
-            credit_cap: XorQuantity::try_from_micro(1_000_000_000)
-                .expect("provider credit cap"),
+            credit_cap: XorQuantity::try_from_micro(1_000_000_000).expect("provider credit cap"),
             lifecycle_stage: ReserveLifecycleStage::Warning,
             days_past_due: 0,
             pending_movements: 0,
@@ -1902,9 +1885,7 @@ mod tests {
 
     fn charged_periods(operation: &ReserveOperationV1) -> Option<u16> {
         match operation {
-            ReserveOperationV1::ChargeRent(instruction) => {
-                Some(*instruction.billing_periods())
-            }
+            ReserveOperationV1::ChargeRent(instruction) => Some(*instruction.billing_periods()),
             _ => None,
         }
     }
@@ -1919,24 +1900,15 @@ mod tests {
         let seven_periods = rent
             .checked_mul_u64(7)
             .expect("seven-period spendable balance");
-        let partially_affordable = plan_generated_reserve_operation(
-            &first,
-            &account,
-            &seven_periods,
-            finalized_at,
-        )
-        .expect("partially affordable generation")
-        .expect("rent work is due");
+        let partially_affordable =
+            plan_generated_reserve_operation(&first, &account, &seven_periods, finalized_at)
+                .expect("partially affordable generation")
+                .expect("rent work is due");
         assert_eq!(charged_periods(&partially_affordable), Some(7));
         assert_eq!(
-            plan_generated_reserve_operation(
-                &first,
-                &account,
-                &seven_periods,
-                finalized_at,
-            )
-            .expect("same-tip replay")
-            .expect("same operation remains due"),
+            plan_generated_reserve_operation(&first, &account, &seven_periods, finalized_at,)
+                .expect("same-tip replay")
+                .expect("same operation remains due"),
             partially_affordable,
             "same finalized inputs must generate byte-identical semantics"
         );
@@ -1974,42 +1946,29 @@ mod tests {
         let mut spendable = rent
             .checked_mul_u64(15)
             .expect("fifteen-period spendable balance");
-        let first = plan_generated_reserve_operation(
-            &policy,
-            &account,
-            &spendable,
-            finalized_at,
-        )
-        .expect("first catchup generation")
-        .expect("first catchup batch");
+        let first = plan_generated_reserve_operation(&policy, &account, &spendable, finalized_at)
+            .expect("first catchup generation")
+            .expect("first catchup batch");
         assert_eq!(
             charged_periods(&first),
             Some(RESERVE_RENT_MAX_BILLING_PERIODS_V1)
         );
 
         account.rent_charged_through_unix +=
-            u64::from(RESERVE_RENT_MAX_BILLING_PERIODS_V1)
-                * RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
+            u64::from(RESERVE_RENT_MAX_BILLING_PERIODS_V1) * RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
         account.revision += 1;
         account.updated_at_unix = finalized_at;
         account.interest_accrued_at_unix = finalized_at;
         spendable = spendable
             .checked_sub(
                 &rent
-                    .checked_mul_u64(u64::from(
-                        RESERVE_RENT_MAX_BILLING_PERIODS_V1,
-                    ))
+                    .checked_mul_u64(u64::from(RESERVE_RENT_MAX_BILLING_PERIODS_V1))
                     .expect("first catchup rent"),
             )
             .expect("remaining exact spendable balance");
-        let second = plan_generated_reserve_operation(
-            &policy,
-            &account,
-            &spendable,
-            finalized_at,
-        )
-        .expect("second catchup generation")
-        .expect("second catchup batch");
+        let second = plan_generated_reserve_operation(&policy, &account, &spendable, finalized_at)
+            .expect("second catchup generation")
+            .expect("second catchup batch");
         assert_eq!(charged_periods(&second), Some(3));
 
         let exact_account = provider_account(
@@ -2017,14 +1976,9 @@ mod tests {
             9,
             finalized_at - RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
         );
-        let exact = plan_generated_reserve_operation(
-            &policy,
-            &exact_account,
-            &rent,
-            finalized_at,
-        )
-        .expect("exact-balance generation")
-        .expect("one exact-balance period is due");
+        let exact = plan_generated_reserve_operation(&policy, &exact_account, &rent, finalized_at)
+            .expect("exact-balance generation")
+            .expect("one exact-balance period is due");
         assert_eq!(charged_periods(&exact), Some(1));
     }
 
@@ -2314,24 +2268,9 @@ mod tests {
     fn finalized_telemetry_projection_rebuilds_across_pages_without_payload_labels() {
         let finalized_cursor = cursor(3, 0xF1);
         let first_events = vec![
-            finalized_reserve_event(
-                1,
-                1,
-                0,
-                SorafsReserveLedgerEventKind::PolicyActivated,
-            ),
-            finalized_reserve_event(
-                2,
-                1,
-                1,
-                SorafsReserveLedgerEventKind::ProviderRegistered,
-            ),
-            finalized_reserve_event(
-                3,
-                2,
-                0,
-                SorafsReserveLedgerEventKind::MovementRequested,
-            ),
+            finalized_reserve_event(1, 1, 0, SorafsReserveLedgerEventKind::PolicyActivated),
+            finalized_reserve_event(2, 1, 1, SorafsReserveLedgerEventKind::ProviderRegistered),
+            finalized_reserve_event(3, 2, 0, SorafsReserveLedgerEventKind::MovementRequested),
         ];
         let first_after = first_events.last().map(|event| event.cursor());
         let first = ReserveFinalizedEventPageV1 {
@@ -2343,46 +2282,26 @@ mod tests {
         let second = ReserveFinalizedEventPageV1 {
             finalized_cursor,
             events: vec![
-                finalized_reserve_event(
-                    4,
-                    2,
-                    1,
-                    SorafsReserveLedgerEventKind::MovementApproved,
-                ),
-                finalized_reserve_event(
-                    5,
-                    3,
-                    0,
-                    SorafsReserveLedgerEventKind::AppealSubmitted,
-                ),
-                finalized_reserve_event(
-                    6,
-                    3,
-                    1,
-                    SorafsReserveLedgerEventKind::AppealRejected,
-                ),
+                finalized_reserve_event(4, 2, 1, SorafsReserveLedgerEventKind::MovementApproved),
+                finalized_reserve_event(5, 3, 0, SorafsReserveLedgerEventKind::AppealSubmitted),
+                finalized_reserve_event(6, 3, 1, SorafsReserveLedgerEventKind::AppealRejected),
             ],
             has_more: false,
             next_after: None,
         };
         let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
 
-        apply_reserve_finalized_telemetry_event_page(
-            &mut projection,
-            &first,
-            finalized_cursor,
-        )
-        .expect("first finalized event page");
+        apply_reserve_finalized_telemetry_event_page(&mut projection, &first, finalized_cursor)
+            .expect("first finalized event page");
         assert_eq!(projection.custody_counts, [1, 0, 0]);
         assert_eq!(projection.open_appeals, 0);
-        apply_reserve_finalized_telemetry_event_page(
-            &mut projection,
-            &second,
-            finalized_cursor,
-        )
-        .expect("second finalized event page");
+        apply_reserve_finalized_telemetry_event_page(&mut projection, &second, finalized_cursor)
+            .expect("second finalized event page");
 
-        assert_eq!(projection.after_event, second.events.last().map(|event| event.cursor()));
+        assert_eq!(
+            projection.after_event,
+            second.events.last().map(|event| event.cursor())
+        );
         assert_eq!(projection.custody_counts, [0, 1, 0]);
         assert_eq!(projection.reconciled_counts, [1, 0]);
         assert_eq!(projection.open_appeals, 0);
@@ -2404,11 +2323,7 @@ mod tests {
             next_after: None,
         };
         assert_eq!(
-            apply_reserve_finalized_telemetry_event_page(
-                &mut projection,
-                &gap,
-                finalized_cursor,
-            ),
+            apply_reserve_finalized_telemetry_event_page(&mut projection, &gap, finalized_cursor,),
             Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage)
         );
         assert_eq!(
@@ -2444,12 +2359,7 @@ mod tests {
     #[test]
     fn finalized_telemetry_rejects_malformed_continuation_shape() {
         let finalized_cursor = cursor(1, 0xF3);
-        let event = finalized_reserve_event(
-            1,
-            1,
-            0,
-            SorafsReserveLedgerEventKind::PolicyActivated,
-        );
+        let event = finalized_reserve_event(1, 1, 0, SorafsReserveLedgerEventKind::PolicyActivated);
         let page = ReserveFinalizedEventPageV1 {
             finalized_cursor,
             events: vec![event],
@@ -2458,11 +2368,7 @@ mod tests {
         };
         let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
         assert_eq!(
-            apply_reserve_finalized_telemetry_event_page(
-                &mut projection,
-                &page,
-                finalized_cursor,
-            ),
+            apply_reserve_finalized_telemetry_event_page(&mut projection, &page, finalized_cursor,),
             Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage)
         );
         assert_eq!(
@@ -2482,14 +2388,8 @@ mod tests {
         .expect("one nano-XOR is within the exact XOR scale");
         let one_micro = XorQuantity::try_from_micro(1).expect("one micro-XOR");
 
-        assert_eq!(
-            reserve_quantity_to_metric_micro_xor(&one_nano),
-            Ok(0)
-        );
-        assert_eq!(
-            reserve_quantity_to_metric_micro_xor(&one_micro),
-            Ok(1)
-        );
+        assert_eq!(reserve_quantity_to_metric_micro_xor(&one_nano), Ok(0));
+        assert_eq!(reserve_quantity_to_metric_micro_xor(&one_micro), Ok(1));
     }
 
     #[test]

@@ -1530,6 +1530,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one shared V1 fixture keeps canonical alias names, hash frames, instruction bytes, and report projections visibly aligned"
+    )]
     fn shared_alias_setup_v1_fixture_matches_names_hash_frames_and_report() {
         use crate::isi::alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,

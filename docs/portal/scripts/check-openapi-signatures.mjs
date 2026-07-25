@@ -7,7 +7,10 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
-import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+import {
+  validateOpenApiGeneratorProvenance,
+  validateReleaseOpenApiDocumentBytes,
+} from './lib/openapi-provenance.mjs';
 import {isAllowedSigner, loadAllowedSigners} from './lib/openapi-signers.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -204,6 +207,9 @@ export async function checkOpenApiSignatures(options = {}) {
     if (specFullPath) {
       try {
         specBuffer = await readFile(specFullPath);
+        validateReleaseOpenApiDocumentBytes(specBuffer, {
+          label: `OpenAPI spec ${specPath}`,
+        });
         computedSha256 = computeSha256Hex(specBuffer);
         specByteLength = specBuffer.byteLength;
         const expectedSha = normalizeHex(entry.sha256);
@@ -220,7 +226,9 @@ export async function checkOpenApiSignatures(options = {}) {
           );
         }
       } catch (error) {
-        entryIssues.push(`failed to read spec ${specPath}: ${error.message ?? error}`);
+        entryIssues.push(
+          `failed to read or validate spec ${specPath}: ${error.message ?? error}`,
+        );
       }
     }
 

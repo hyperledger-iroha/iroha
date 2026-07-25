@@ -318,6 +318,23 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
   );
 });
 
+test("package dist rejects unmarked Iroha hashes in validation-fee ledger bindings", () => {
+  const binding = {
+    schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
+    chainId: "iroha3-nexus",
+    genesisHash: "12".repeat(32),
+    policyChainGenesisHash: "35".repeat(32),
+    checkpoint: {
+      height: 100,
+      contextId: "57".repeat(32),
+    },
+  };
+  assert.throws(
+    () => packageExports.normalizeValidationFeeLedgerBindingV1(binding),
+    /canonical Iroha hash marker/u,
+  );
+});
+
 test("package publishes the exact general-purpose subpath inventory", () => {
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [
     ".",

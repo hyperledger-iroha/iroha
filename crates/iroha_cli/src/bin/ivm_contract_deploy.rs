@@ -245,6 +245,36 @@ struct NativeUploadTransactionPlan {
     finalize: (String, String, SignedTransaction),
 }
 
+struct TransactionSigningContext<'a> {
+    chain_id: &'a ChainId,
+    authority: &'a AccountId,
+    private_key: &'a PrivateKey,
+    transaction_ttl: Option<Duration>,
+    fee_payment: &'a FeePaymentIntent,
+    metadata: &'a Metadata,
+}
+
+impl TransactionSigningContext<'_> {
+    fn sign(
+        &self,
+        instructions: impl IntoIterator<Item = InstructionBox>,
+    ) -> Result<SignedTransaction> {
+        let mut builder = TransactionBuilder::new(
+            self.chain_id.clone(),
+            self.authority.clone(),
+            self.fee_payment.clone(),
+        );
+        if let Some(transaction_ttl) = self.transaction_ttl {
+            builder.set_ttl(transaction_ttl);
+        }
+        builder
+            .with_metadata(self.metadata.clone())
+            .with_instructions(instructions)
+            .try_sign(self.private_key)
+            .wrap_err("failed to sign instruction transaction")
+    }
+}
+
 fn native_upload_report(
     plan: &NativeUploadTransactionPlan,
     skip_register_bytes: bool,
@@ -290,12 +320,7 @@ fn deployment_transaction_sequence(
 }
 
 fn build_native_upload_transaction_plan(
-    chain_id: &ChainId,
-    authority: &AccountId,
-    private_key: &PrivateKey,
-    transaction_ttl: Option<Duration>,
-    fee_payment: &FeePaymentIntent,
-    metadata: &Metadata,
+    signing: &TransactionSigningContext<'_>,
     code_hash: Hash,
     code: &[u8],
 ) -> Result<NativeUploadTransactionPlan> {
@@ -338,15 +363,7 @@ fn build_native_upload_transaction_plan(
         } else {
             vec![InstructionBox::from(upload)]
         };
-        let tx = sign_instruction_transaction(
-            chain_id,
-            authority,
-            private_key,
-            transaction_ttl,
-            fee_payment.clone(),
-            metadata.clone(),
-            instructions,
-        )?;
+        let tx = signing.sign(instructions)?;
         if is_final {
             return Ok(NativeUploadTransactionPlan {
                 chunk_count,
@@ -418,19 +435,22 @@ mod tests {
     }
 
     #[test]
-    fn sign_instruction_transaction_checked_helper_verifies() -> Result<()> {
+    fn transaction_signing_context_checked_helper_verifies() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
+        let chain_id = ChainId::from("ivm-contract-deploy-instruction-sign-test");
+        let fee_payment = test_fee_payment();
+        let metadata = Metadata::default();
+        let signing = TransactionSigningContext {
+            chain_id: &chain_id,
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            transaction_ttl: None,
+            fee_payment: &fee_payment,
+            metadata: &metadata,
+        };
 
-        let tx = sign_instruction_transaction(
-            &ChainId::from("ivm-contract-deploy-instruction-sign-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            test_fee_payment(),
-            Metadata::default(),
-            Vec::<InstructionBox>::new(),
-        )?;
+        let tx = signing.sign(Vec::<InstructionBox>::new())?;
 
         tx.verify_signature()
             .wrap_err("verify IVM deploy instruction helper signature")?;
@@ -444,12 +464,14 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let code = vec![1, 2, 3, 4];
         let plan = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-native-register-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-native-register-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &test_fee_payment(),
+                metadata: &Metadata::default(),
+            },
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -492,12 +514,14 @@ mod tests {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
         let result = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-empty-register-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-empty-register-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &test_fee_payment(),
+                metadata: &Metadata::default(),
+            },
             Hash::new(b""),
             &[],
         );
@@ -515,12 +539,14 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let code = [0x01, 0x02, 0x03];
         let result = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-wrong-hash-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-wrong-hash-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &test_fee_payment(),
+                metadata: &Metadata::default(),
+            },
             Hash::new(b"not-the-canonical-artifact-hash"),
             &code,
         );
@@ -538,12 +564,14 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let code = vec![0x91; SMART_CONTRACT_CODE_CHUNK_BYTES];
         let plan = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-boundary-register-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-boundary-register-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &test_fee_payment(),
+                metadata: &Metadata::default(),
+            },
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -579,12 +607,14 @@ mod tests {
         let metadata =
             deployment_transaction_metadata(&contract_address, &[authority.to_string()])?;
         let plan = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-large-native-register-test"),
-            &authority,
-            key_pair.private_key(),
-            Some(Duration::from_secs(30)),
-            &test_fee_payment(),
-            &metadata,
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-large-native-register-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: Some(Duration::from_secs(30)),
+                fee_payment: &test_fee_payment(),
+                metadata: &metadata,
+            },
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -653,12 +683,14 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let code = vec![0x35; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let plan = build_native_upload_transaction_plan(
-            &ChainId::from("ivm-contract-deploy-json-test"),
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
+            &TransactionSigningContext {
+                chain_id: &ChainId::from("ivm-contract-deploy-json-test"),
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &test_fee_payment(),
+                metadata: &Metadata::default(),
+            },
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -723,29 +755,21 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let chain = ChainId::from("ivm-contract-deploy-sequence-test");
         let code = vec![0x7a; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
-        let upload = build_native_upload_transaction_plan(
-            &chain,
-            &authority,
-            key_pair.private_key(),
-            None,
-            &test_fee_payment(),
-            &Metadata::default(),
-            ivm::contract_code_hash(&code),
-            &code,
-        )?;
+        let fee_payment = test_fee_payment();
+        let metadata = Metadata::default();
+        let signing = TransactionSigningContext {
+            chain_id: &chain,
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            transaction_ttl: None,
+            fee_payment: &fee_payment,
+            metadata: &metadata,
+        };
+        let upload =
+            build_native_upload_transaction_plan(&signing, ivm::contract_code_hash(&code), &code)?;
         let mut uploads = upload.pre_stage;
         uploads.push(upload.finalize);
-        let empty_transaction = || {
-            sign_instruction_transaction(
-                &chain,
-                &authority,
-                key_pair.private_key(),
-                None,
-                test_fee_payment(),
-                Metadata::default(),
-                Vec::<InstructionBox>::new(),
-            )
-        };
+        let empty_transaction = || signing.sign(Vec::<InstructionBox>::new());
         let sequence = deployment_transaction_sequence(
             false,
             uploads,
@@ -819,16 +843,16 @@ mod tests {
         let fee_payment = test_fee_payment();
         let chain = ChainId::from("ivm-contract-deploy-metadata-test");
         let code = vec![0x44; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
-        let upload = build_native_upload_transaction_plan(
-            &chain,
-            &authority,
-            key_pair.private_key(),
-            None,
-            &fee_payment,
-            &metadata,
-            ivm::contract_code_hash(&code),
-            &code,
-        )?;
+        let signing = TransactionSigningContext {
+            chain_id: &chain,
+            authority: &authority,
+            private_key: key_pair.private_key(),
+            transaction_ttl: None,
+            fee_payment: &fee_payment,
+            metadata: &metadata,
+        };
+        let upload =
+            build_native_upload_transaction_plan(&signing, ivm::contract_code_hash(&code), &code)?;
         let mut transactions = upload
             .pre_stage
             .into_iter()
@@ -851,27 +875,14 @@ mod tests {
         }
         .try_signed(&key_pair)
         .wrap_err("sign metadata-test manifest")?;
-        transactions.push(sign_instruction_transaction(
-            &chain,
-            &authority,
-            key_pair.private_key(),
-            None,
-            fee_payment.clone(),
-            metadata.clone(),
-            [InstructionBox::from(RegisterSmartContractCode { manifest })],
-        )?);
-        transactions.push(sign_instruction_transaction(
-            &chain,
-            &authority,
-            key_pair.private_key(),
-            None,
-            fee_payment.clone(),
-            metadata.clone(),
-            [InstructionBox::from(ActivateContractInstance {
+        transactions
+            .push(signing.sign([InstructionBox::from(RegisterSmartContractCode { manifest })])?);
+        transactions.push(
+            signing.sign([InstructionBox::from(ActivateContractInstance {
                 contract_address,
                 code_hash,
-            })],
-        )?);
+            })])?,
+        );
 
         for transaction in &transactions {
             assert_eq!(transaction.metadata(), &metadata);
@@ -910,47 +921,16 @@ mod tests {
     }
 }
 
-fn sign_instruction_transaction(
-    chain_id: &ChainId,
-    authority: &AccountId,
-    private_key: &PrivateKey,
-    transaction_ttl: Option<Duration>,
-    fee_payment: FeePaymentIntent,
-    metadata: Metadata,
-    instructions: impl IntoIterator<Item = InstructionBox>,
-) -> Result<SignedTransaction> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone(), fee_payment);
-    if let Some(transaction_ttl) = transaction_ttl {
-        builder.set_ttl(transaction_ttl);
-    }
-    builder
-        .with_metadata(metadata)
-        .with_instructions(instructions)
-        .try_sign(private_key)
-        .wrap_err("failed to sign instruction transaction")
-}
-
 fn quote_and_resign_transaction(
     client: &Client,
-    draft: SignedTransaction,
+    draft: &SignedTransaction,
     requested_fee_payment: &FeePaymentIntent,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     let mut payload = draft.payload().clone();
     let quote = client
         .quote_fees(&payload)
         .wrap_err("failed to quote exact contract-deployment transaction fees")?;
-    let selection_matches = match (requested_fee_payment, &quote.intent) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    };
-    if !selection_matches {
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
             "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
         ));
@@ -1044,16 +1024,15 @@ fn main() -> Result<()> {
     // deployment.
     let tx_metadata =
         deployment_transaction_metadata(&contract_address, &args.gov_manifest_approvers)?;
-    let upload_plan = build_native_upload_transaction_plan(
-        &client.chain,
-        &authority,
-        &private_key,
+    let signing = TransactionSigningContext {
+        chain_id: &client.chain,
+        authority: &authority,
+        private_key: &private_key,
         transaction_ttl,
-        &fee_payment,
-        &tx_metadata,
-        code_hash,
-        &code,
-    )?;
+        fee_payment: &fee_payment,
+        metadata: &tx_metadata,
+    };
+    let upload_plan = build_native_upload_transaction_plan(&signing, code_hash, &code)?;
     let mut fee_quotes = Vec::new();
     let upload_plan = if args.skip_register_bytes {
         upload_plan
@@ -1066,13 +1045,13 @@ fn main() -> Result<()> {
         let mut quoted_pre_stage = Vec::with_capacity(pre_stage.len());
         for (name, slug, transaction) in pre_stage {
             let (transaction, quote) =
-                quote_and_resign_transaction(&client, transaction, &fee_payment)?;
+                quote_and_resign_transaction(&client, &transaction, &fee_payment)?;
             fee_quotes.push(quote);
             quoted_pre_stage.push((name, slug, transaction));
         }
         let (finalize_name, finalize_slug, finalize_transaction) = finalize;
         let (finalize_transaction, finalize_quote) =
-            quote_and_resign_transaction(&client, finalize_transaction, &fee_payment)?;
+            quote_and_resign_transaction(&client, &finalize_transaction, &fee_payment)?;
         fee_quotes.push(finalize_quote);
         NativeUploadTransactionPlan {
             chunk_count,
@@ -1088,19 +1067,11 @@ fn main() -> Result<()> {
     } = upload_plan;
     let mut register_plans = pre_stage;
     register_plans.push(finalize);
-    let register_manifest_tx = sign_instruction_transaction(
-        &client.chain,
-        &authority,
-        &private_key,
-        transaction_ttl,
-        fee_payment.clone(),
-        tx_metadata.clone(),
-        [InstructionBox::from(RegisterSmartContractCode {
-            manifest: manifest.clone(),
-        })],
-    )?;
+    let register_manifest_tx = signing.sign([InstructionBox::from(RegisterSmartContractCode {
+        manifest: manifest.clone(),
+    })])?;
     let (register_manifest_tx, register_manifest_quote) =
-        quote_and_resign_transaction(&client, register_manifest_tx, &fee_payment)?;
+        quote_and_resign_transaction(&client, &register_manifest_tx, &fee_payment)?;
     fee_quotes.push(register_manifest_quote);
 
     let nonce_key =
@@ -1129,17 +1100,9 @@ fn main() -> Result<()> {
             Json::new(next_nonce),
         )),
     ]);
-    let activate_tx = sign_instruction_transaction(
-        &client.chain,
-        &authority,
-        &private_key,
-        transaction_ttl,
-        fee_payment.clone(),
-        tx_metadata,
-        activate_instructions,
-    )?;
+    let activate_tx = signing.sign(activate_instructions)?;
     let (activate_tx, activate_quote) =
-        quote_and_resign_transaction(&client, activate_tx, &fee_payment)?;
+        quote_and_resign_transaction(&client, &activate_tx, &fee_payment)?;
     let activation_fee_payment = activate_quote.intent.clone();
     fee_quotes.push(activate_quote);
 

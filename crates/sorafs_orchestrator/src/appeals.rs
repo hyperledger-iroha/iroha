@@ -717,7 +717,6 @@ impl PanelRewardConfig {
     }
 
     /// Total reward for a panel size.
-    #[must_use]
     pub fn total_reward(&self, panel_size: u32) -> Result<Quantity, NumericOperationError> {
         if panel_size == 0 {
             return Ok(Quantity::zero());
@@ -1065,7 +1064,6 @@ pub struct JurorPayout {
 
 impl JurorPayout {
     /// Total payout for the juror.
-    #[must_use]
     pub fn total(&self) -> Result<Quantity, NumericOperationError> {
         self.stipend_xor.try_add(&self.bonus_xor)
     }

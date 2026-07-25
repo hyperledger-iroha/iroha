@@ -47,12 +47,12 @@ pub use moderation::{
     ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
     ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
     ModerationCorpusRegistryRecord, ModerationEvidenceViewerAccessEventRecord,
-    ModerationEvidenceViewerAccessInput,
-    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
-    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
-    ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
-    ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerSnapshot,
-    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineKeyWrapper,
+    ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
+    ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
+    ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerError,
+    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
+    ModerationEvidenceViewerSnapshot, ModerationModelRegistryError,
+    ModerationModelRegistrySnapshot, ModerationQuarantineKeyWrapper,
     ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
     ModerationQuarantineObjectPayload, ModerationQuarantineObjectRangePayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineObjectSnapshot,
@@ -335,9 +335,9 @@ use sorafs_manifest::{
     ReconciliationValidationError, ReputationScoringEvidenceV1, ReputationSnapshotEventV1,
     ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1, ReputationWeightsV1,
     SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
-    SoraFsAppealFinanceReportV1,
-    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
-    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
+    SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -364,6 +364,7 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
+pub use transparency::moderation_ballot_governance_event_source_entry;
 pub use transparency::{
     PRIVACY_AGGREGATE_MAX_POPULATIONS_V1, PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
     PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateMetricSchemaV1,
@@ -383,7 +384,6 @@ pub use transparency::{
     proof_token_issuance_from_base64, proof_token_issuance_from_frame,
     reserve_finalized_event_source_entry,
 };
-pub use transparency::moderation_ballot_governance_event_source_entry;
 
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
@@ -396,13 +396,13 @@ use crate::{
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
     moderation::{
         MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
-        ModerationModelRegistry,
-        ModerationQuarantineObjectEnvelopeV1, ModerationQuarantineObjectRuntime,
-        ModerationScreeningRuntime, moderation_quarantine_object_relative_path,
-        normalize_moderation_quarantine_object_input, open_moderation_quarantine_object,
-        open_moderation_quarantine_object_range, rewrap_moderation_quarantine_object,
-        seal_moderation_quarantine_object, validate_moderation_quarantine_key_wrapper,
-        validate_quarantine_object_envelope, validate_relative_object_path,
+        ModerationModelRegistry, ModerationQuarantineObjectEnvelopeV1,
+        ModerationQuarantineObjectRuntime, ModerationScreeningRuntime,
+        moderation_quarantine_object_relative_path, normalize_moderation_quarantine_object_input,
+        open_moderation_quarantine_object, open_moderation_quarantine_object_range,
+        rewrap_moderation_quarantine_object, seal_moderation_quarantine_object,
+        validate_moderation_quarantine_key_wrapper, validate_quarantine_object_envelope,
+        validate_relative_object_path,
     },
     potr::PotrTracker,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
@@ -1576,6 +1576,23 @@ pub enum PrivacyAggregateScheduleOutcome {
         /// Published transparency ledger cycle.
         publication: ModerationLedgerCyclePublicationV1,
     },
+}
+
+/// Complete input for publishing one test-built privacy aggregate source cycle.
+#[cfg(test)]
+struct PrivacyAggregateSourceCycleInput {
+    /// Stable identifier assigned to the published cycle.
+    cycle_id: [u8; 16],
+    /// Inclusive source-event window start, in Unix seconds.
+    cycle_start_unix: u64,
+    /// Exclusive source-event window end, in Unix seconds.
+    cycle_end_unix: u64,
+    /// Optional hash linking the cycle to its predecessor.
+    previous_block_hash: Option<[u8; 32]>,
+    /// Governed aggregation and privacy policy.
+    config: PrivacyAggregateCycleConfig,
+    /// Optional request-bound threshold-PRF input for this cycle.
+    cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
 }
 
 const PRIVACY_PUBLISH_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
@@ -7003,14 +7020,16 @@ impl NodeHandle {
     #[cfg(test)]
     fn publish_privacy_aggregate_cycle_from_source_events(
         &self,
-        cycle_id: [u8; 16],
-        cycle_start_unix: u64,
-        cycle_end_unix: u64,
-        _generated_at_unix: u64,
-        previous_block_hash: Option<[u8; 32]>,
-        config: PrivacyAggregateCycleConfig,
-        cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
+        input: PrivacyAggregateSourceCycleInput,
     ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        let PrivacyAggregateSourceCycleInput {
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            previous_block_hash,
+            config,
+            cycle_prf_input,
+        } = input;
         let events = self
             .privacy_aggregate_source_events
             .read()
@@ -12817,7 +12836,6 @@ impl NodeHandle {
     }
 
     /// Retrieve PoTR receipts matching the manifest/provider filters.
-    #[must_use]
     pub fn potr_receipts(
         &self,
         manifest_digest: &[u8; 32],
@@ -13446,26 +13464,22 @@ mod tests {
     use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
-        DagCodecId, ManifestBuilder, PinPolicy,
-        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        REPUTATION_SCORING_EVIDENCE_VERSION_V1, REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
-        REPUTATION_TRUSTED_SIGNER_VERSION_V1, ReputationDegradationFlagV1,
-        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
+        DagCodecId, ManifestBuilder, PinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
+        ReputationDegradationFlagV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+        ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
         ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
-        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
-        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1,
-        SignedReputationSnapshotV1, SoraFsAppealFinanceAccountFlowV1,
-        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
-        SoraFsAppealFinanceWeeklyRollupV1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-        SoraFsModerationBallotGovernanceEventKindV1,
-        SoraFsModerationBallotGovernanceEventV1, SoraFsModerationBallotGovernanceTallyV1,
-        SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1,
-        SorafsReconciliationReportV1, build_reputation_snapshot,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
+        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
+        SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
+        SoraFsModerationBallotGovernanceTallyV1, SoraFsModerationVoteChoiceV1,
+        SoraFsModerationVoteCountsV1, SorafsReconciliationReportV1, build_reputation_snapshot,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -17456,7 +17470,6 @@ mod tests {
                 limit: 1
             }
         ));
-
     }
 
     #[test]
@@ -19137,15 +19150,14 @@ mod tests {
             [0x5A; 32],
         );
         let publication = handle
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-2026-wk-04",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
+            .publish_privacy_aggregate_cycle_from_source_events(PrivacyAggregateSourceCycleInput {
+                cycle_id: *b"cycle-2026-wk-04",
+                cycle_start_unix: 1_800_000_000,
+                cycle_end_unix: 1_800_604_800,
+                previous_block_hash: None,
                 config,
-                Some(cycle_prf_input),
-            )
+                cycle_prf_input: Some(cycle_prf_input),
+            })
             .expect("publish aggregate cycle from source events");
 
         publication.validate().expect("publication validates");
@@ -19199,15 +19211,14 @@ mod tests {
             .expect("record source event");
 
         let err = handle
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-2026-wk-04",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-                privacy_aggregate_cycle_config(),
-                None,
-            )
+            .publish_privacy_aggregate_cycle_from_source_events(PrivacyAggregateSourceCycleInput {
+                cycle_id: *b"cycle-2026-wk-04",
+                cycle_start_unix: 1_800_000_000,
+                cycle_end_unix: 1_800_604_800,
+                previous_block_hash: None,
+                config: privacy_aggregate_cycle_config(),
+                cycle_prf_input: None,
+            })
             .expect_err("missing cycle PRF output rejected");
 
         assert!(err.to_string().contains("hidden cycle PRF output"));
@@ -22994,7 +23005,6 @@ mod tests {
             guard.push(encoded.to_vec());
             Ok(())
         }
-
     }
 
     #[derive(Debug, Default)]
@@ -23118,6 +23128,5 @@ mod tests {
             *guard += 1;
             Err(GovernancePublishError::other("simulated publish failure"))
         }
-
     }
 }

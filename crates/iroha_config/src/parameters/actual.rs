@@ -9394,8 +9394,6 @@ pub struct SorafsGateway {
     pub cdn_policy_path: Option<PathBuf>,
     /// Client-facing rate limit configuration.
     pub rate_limit: SorafsGatewayRateLimit,
-    /// Denylist bootstrap configuration.
-    pub denylist: SorafsGatewayDenylist,
     /// High-level rollout phase controlling default anonymity policy.
     pub rollout_phase: SorafsRolloutPhase,
     /// Optional staged anonymity policy override.
@@ -9420,7 +9418,6 @@ impl Default for SorafsGateway {
             site_bindings: SorafsGatewaySiteBindings::default(),
             cdn_policy_path: None,
             rate_limit: SorafsGatewayRateLimit::default(),
-            denylist: SorafsGatewayDenylist::default(),
             rollout_phase: SorafsRolloutPhase::default(),
             anonymity_policy: Some(
                 SorafsAnonymityStage::parse(defaults::sorafs::gateway::DEFAULT_ANONYMITY_POLICY)
@@ -9536,46 +9533,6 @@ impl SorafsGatewayRateLimit {
             max_requests: None,
             window: Duration::from_secs(1),
             ban: None,
-        }
-    }
-}
-
-/// Configuration for bootstrapping gateway denylists.
-#[derive(Debug, Clone)]
-pub struct SorafsGatewayDenylist {
-    /// Optional filesystem path to a JSON denylist.
-    pub path: Option<PathBuf>,
-    /// Optional filesystem path to a pack-catalog JSON document.
-    pub catalog_path: Option<PathBuf>,
-    /// Pack identifiers explicitly disabled on this node.
-    pub opt_out_packs: Vec<String>,
-    /// Additional pack identifiers explicitly enabled on this node.
-    pub extra_packs: Vec<String>,
-    /// Optional jurisdiction code used to activate matching regional packs.
-    pub jurisdiction: Option<String>,
-    /// Maximum TTL applied to standard entries when `expires_at` is omitted.
-    pub standard_ttl: Duration,
-    /// Maximum TTL applied to emergency entries.
-    pub emergency_ttl: Duration,
-    /// Review window enforced for emergency canons.
-    pub emergency_review_window: Duration,
-    /// Require governance references for permanent entries.
-    pub require_governance_reference: bool,
-}
-
-impl Default for SorafsGatewayDenylist {
-    fn default() -> Self {
-        Self {
-            path: defaults::sorafs::gateway::denylist::path(),
-            catalog_path: None,
-            opt_out_packs: Vec::new(),
-            extra_packs: Vec::new(),
-            jurisdiction: None,
-            standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
-            emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
-            emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,
-            require_governance_reference:
-                defaults::sorafs::gateway::denylist::REQUIRE_GOVERNANCE_REFERENCE,
         }
     }
 }

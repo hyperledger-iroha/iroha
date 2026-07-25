@@ -20,7 +20,7 @@ use iroha::{
         prelude::*,
         smart_contract::{ContractAddress, ContractAlias},
         transaction::{
-            Executable, FeePaymentIntent,
+            Executable, FeePaymentIntent, SignedTransaction,
             executable::{ContractArgumentRecord, ContractInvocation},
         },
     },
@@ -34,6 +34,7 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
+use iroha_torii_shared::FeeQuoteResponse;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
@@ -333,18 +334,47 @@ fn payload_digest_hex(payload: Option<&Json>) -> String {
     hex::encode(blake3::hash(payload_json.as_bytes()).as_bytes())
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-
-    let fee_payment_bytes = fs::read(&args.fee_payment_json)
-        .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
-    let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
-        .wrap_err_with(|| format!("parse {}", args.fee_payment_json.display()))?;
+fn load_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
+    let bytes = fs::read(path).wrap_err_with(|| format!("read {}", path.display()))?;
+    let fee_payment: FeePaymentIntent =
+        norito::json::from_slice(&bytes).wrap_err_with(|| format!("parse {}", path.display()))?;
     fee_payment
         .validate()
         .wrap_err("invalid fee payment intent")?;
     iroha::data_model::transaction::require_transaction_gas_limit(&fee_payment)
         .wrap_err("contract calls require a signature-bound gas limit from `/v1/fees/quote`")?;
+    Ok(fee_payment)
+}
+
+fn quote_and_sign_contract_call(
+    client: &Client,
+    executable: Executable,
+    fee_payment: &FeePaymentIntent,
+    metadata: Metadata,
+) -> Result<(SignedTransaction, FeeQuoteResponse, u64)> {
+    let mut unsigned = client
+        .try_build_transaction_payload(executable, fee_payment.clone(), metadata)
+        .wrap_err("failed to build exact contract-call payload for fee quoting")?;
+    let fee_quote = client
+        .quote_fees(&unsigned)
+        .wrap_err("failed to quote contract-call fees")?;
+    if !fee_payment.has_same_payer_and_gas_bound(&fee_quote.intent) {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
+        ));
+    }
+    unsigned.fee_payment = fee_quote.intent.clone();
+    let transaction = client
+        .try_sign_transaction_payload(unsigned)
+        .wrap_err("failed to sign exact quoted contract-call payload")?;
+    let gas_limit =
+        iroha::data_model::transaction::require_transaction_gas_limit(&fee_quote.intent)?;
+    Ok((transaction, fee_quote, gas_limit))
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let fee_payment = load_fee_payment(&args.fee_payment_json)?;
 
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
@@ -394,34 +424,8 @@ fn main() -> Result<()> {
         args.entrypoint.clone(),
         arguments,
     )?;
-    let mut unsigned = client
-        .try_build_transaction_payload(executable, fee_payment.clone(), metadata)
-        .wrap_err("failed to build exact contract-call payload for fee quoting")?;
-    let fee_quote = client
-        .quote_fees(&unsigned)
-        .wrap_err("failed to quote contract-call fees")?;
-    let selection_matches = match (&fee_payment, &fee_quote.intent) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    };
-    if !selection_matches {
-        return Err(eyre!(
-            "fee quote changed the selected payer, sponsor revision, or gas bound; refusing to sign"
-        ));
-    }
-    unsigned.fee_payment = fee_quote.intent.clone();
-    let tx = client
-        .try_sign_transaction_payload(unsigned)
-        .wrap_err("failed to sign exact quoted contract-call payload")?;
-    let gas_limit =
-        iroha::data_model::transaction::require_transaction_gas_limit(&fee_quote.intent)?;
+    let (tx, fee_quote, gas_limit) =
+        quote_and_sign_contract_call(&client, executable, &fee_payment, metadata)?;
     let tx_hash = tx.hash();
     let entrypoint_hash = tx.hash_as_entrypoint();
     client.submit_transaction_blocking(&tx)?;

@@ -142,11 +142,6 @@ pin_torii_urls = [
   "https://taira-validator-4.sora.org",
 ]
 
-[sorafs.gateway.denylist]
-catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
-opt_out_packs = []
-extra_packs = []
-
 [sorafs.gateway.untrusted_hosting]
 enabled = true
 path_gateway_redirect = true

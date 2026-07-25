@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Red-team payload helper for bundling fixtures and denylist patches."""
+"""Red-team payload helper for bundling fixtures."""
 
 from __future__ import annotations
 
@@ -9,11 +9,9 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from . import red_team_common
-
-DEFAULT_SAMPLE_PATH = Path("docs/source/sorafs_gateway_denylist_sample.json")
 
 
 def _hash_file(path: Path) -> str:
@@ -68,40 +66,6 @@ def bundle_payloads(
     return manifest_path
 
 
-def prepare_denylist_patch(
-    *,
-    scenario_id: str,
-    sample_path: Path = DEFAULT_SAMPLE_PATH,
-    entry_json: Iterable[str] = (),
-    artifacts_root: Path = red_team_common.DEFAULT_ARTIFACTS_DIR,
-) -> Path:
-    """Generate a denylist patch file for the scenario."""
-
-    if not sample_path.is_file():
-        raise FileNotFoundError(f"sample denylist file missing: {sample_path}")
-    entries = json.loads(sample_path.read_text(encoding="utf-8"))
-    for raw in entry_json:
-        additions = json.loads(raw)
-        if isinstance(additions, list):
-            entries.extend(additions)
-        else:
-            entries.append(additions)
-
-    scenario_paths = red_team_common.resolve_paths(
-        scenario_id,
-        artifacts_root=artifacts_root,
-    )
-    manifest_dir = scenario_paths.ensure_subdir("manifests")
-    patch = {
-        "scenario_id": scenario_id,
-        "generated_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "entries": entries,
-    }
-    patch_path = manifest_dir / "denylist_patch.json"
-    patch_path.write_text(json.dumps(patch, indent=2), encoding="utf-8")
-    return patch_path
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -129,30 +93,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing payload files if present.",
     )
 
-    denylist_parser = subparsers.add_parser(
-        "prepare-denylist",
-        help="Stage a denylist patch JSON for the scenario.",
-    )
-    denylist_parser.add_argument("--scenario-id", required=True)
-    denylist_parser.add_argument(
-        "--sample",
-        type=Path,
-        default=DEFAULT_SAMPLE_PATH,
-        help="Base denylist sample to copy (default: docs/source/sorafs_gateway_denylist_sample.json).",
-    )
-    denylist_parser.add_argument(
-        "--entry-json",
-        action="append",
-        default=[],
-        help="Additional JSON object/array appended to the denylist patch. Repeat as needed.",
-    )
-    denylist_parser.add_argument(
-        "--artifacts-dir",
-        type=Path,
-        default=red_team_common.DEFAULT_ARTIFACTS_DIR,
-        help="Custom artifacts directory (default: artifacts/ministry/red-team).",
-    )
-
     return parser
 
 
@@ -167,14 +107,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             overwrite=args.overwrite,
         )
         print(f"Payload manifest written to {manifest_path}")
-    elif args.command == "prepare-denylist":
-        patch_path = prepare_denylist_patch(
-            scenario_id=args.scenario_id,
-            sample_path=args.sample,
-            entry_json=args.entry_json,
-            artifacts_root=args.artifacts_dir,
-        )
-        print(f"Denylist patch written to {patch_path}")
     else:
         parser.error(f"unknown command {args.command}")
     return 0

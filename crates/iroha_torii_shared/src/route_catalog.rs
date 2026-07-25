@@ -3264,16 +3264,6 @@ pub mod sorafs {
         "/v1/sorafs/cid/{cid}",
         RouteProjections::SDK,
     );
-    /// Read the configured denylist catalog.
-    pub const DENYLIST_CATALOG: RouteDescriptor = documented_get(
-        "sorafs.denylist_catalog.read",
-        "/v1/sorafs/denylist/catalog",
-    );
-    /// Read one configured denylist pack.
-    pub const DENYLIST_PACK: RouteDescriptor = documented_get(
-        "sorafs.denylist_pack.read",
-        "/v1/sorafs/denylist/packs/{pack_id}",
-    );
     /// Read one stored manifest.
     pub const STORAGE_MANIFEST: RouteDescriptor = documented_get(
         "sorafs.storage_manifest.read",
@@ -3554,8 +3544,6 @@ pub mod sorafs {
         REPLICATION,
         STORAGE_STATE,
         CID_LOOKUP,
-        DENYLIST_CATALOG,
-        DENYLIST_PACK,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
         STORAGE_PIN,
@@ -3853,7 +3841,7 @@ pub mod application_api {
         SORACLOUD_MODEL_UPLOAD_STATUS_GET => app_sdk_get("application.soracloud_model_upload_status_get", "/v1/soracloud/model/upload/status");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST => app_post("application.soracloud_model_upload_private_execute_post", "/v1/soracloud/model/upload/private/execute");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET => app_get("application.soracloud_model_upload_private_receipts_get", "/v1/soracloud/model/upload/private/receipts");
-        SORACLOUD_HF_DEPLOY_POST => app_sdk_post("application.soracloud_hf_deploy_post", "/v1/soracloud/hf/deploy");
+        SORACLOUD_HF_DEPLOY_POST => app_post("application.soracloud_hf_deploy_post", "/v1/soracloud/hf/deploy");
         SORACLOUD_HF_STATUS_GET => app_sdk_get("application.soracloud_hf_status_get", "/v1/soracloud/hf/status");
         SORACLOUD_HF_LEASE_LEAVE_POST => app_sdk_post("application.soracloud_hf_lease_leave_post", "/v1/soracloud/hf/lease/leave");
         SORACLOUD_HF_LEASE_RENEW_POST => app_sdk_post("application.soracloud_hf_lease_renew_post", "/v1/soracloud/hf/lease/renew");
@@ -4555,8 +4543,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::REPLICATION,
     sorafs::STORAGE_STATE,
     sorafs::CID_LOOKUP,
-    sorafs::DENYLIST_CATALOG,
-    sorafs::DENYLIST_PACK,
     sorafs::STORAGE_MANIFEST,
     sorafs::STORAGE_PLAN,
     sorafs::STORAGE_PIN,

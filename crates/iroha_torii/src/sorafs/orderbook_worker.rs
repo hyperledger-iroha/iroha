@@ -567,8 +567,7 @@ fn validate_receipt_admission_context(
         if receipt.issued_at_unix - finalized_at_unix > policy_record.policy.max_clock_skew_secs {
             return ReceiptAdmissionContextV1::Conflict;
         }
-    } else if finalized_at_unix - receipt.issued_at_unix
-        > policy_record.policy.max_receipt_age_secs
+    } else if finalized_at_unix - receipt.issued_at_unix > policy_record.policy.max_receipt_age_secs
     {
         return ReceiptAdmissionContextV1::Conflict;
     }
@@ -707,8 +706,7 @@ pub(crate) fn plan_orderbook_generation(
     if !valid_finalized_cursor(snapshot.finalized_cursor)
         || snapshot.policy_record.policy.validate().is_err()
         || snapshot.policy_record.policy_digest == [0; 32]
-        || snapshot.policy_record.policy.digest().ok()
-            != Some(snapshot.policy_record.policy_digest)
+        || snapshot.policy_record.policy.digest().ok() != Some(snapshot.policy_record.policy_digest)
         || snapshot.policy_record.activated_at_unix == 0
         || snapshot.status.next_admission_sequence == 0
         || snapshot.status.next_trade_sequence == 0
@@ -722,8 +720,7 @@ pub(crate) fn plan_orderbook_generation(
     }
     if !(1..=iroha_data_model::sorafs::orderbook::ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1)
         .contains(&match_batch_limit)
-        || !(1
-            ..=iroha_data_model::sorafs::orderbook::ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1)
+        || !(1..=iroha_data_model::sorafs::orderbook::ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1)
             .contains(&maintenance_batch_limit)
     {
         return Err(OrderbookGenerationErrorV1::InvalidBounds);
@@ -927,8 +924,7 @@ mod tests {
             initial_xor_locked: XorQuantity::try_from_micro(100).expect("initial lock"),
             remaining_xor_locked: XorQuantity::try_from_micro(100).expect("remaining lock"),
             initial_fee_xor_locked: XorQuantity::try_from_micro(10).expect("initial fee lock"),
-            remaining_fee_xor_locked: XorQuantity::try_from_micro(10)
-                .expect("remaining fee lock"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10).expect("remaining fee lock"),
             status: OrderbookSettlementChannelStatusV1::Open,
             opened_at_unix: 1,
             expires_at_unix: 100,
@@ -1175,10 +1171,10 @@ mod tests {
         );
 
         let duplicate = forwarder();
-        let first = enqueue_test_operation(&duplicate, operation.clone(), &context)
-            .expect("first enqueue");
-        let replay = enqueue_test_operation(&duplicate, operation, &context)
-            .expect("idempotent replay");
+        let first =
+            enqueue_test_operation(&duplicate, operation.clone(), &context).expect("first enqueue");
+        let replay =
+            enqueue_test_operation(&duplicate, operation, &context).expect("idempotent replay");
         assert_eq!(first.operation_id(), replay.operation_id());
 
         let mut substituted = finalized;
@@ -1498,35 +1494,21 @@ mod tests {
             decode_settlement_receipt_v1(instruction.receipt_payload()).expect("decode receipt");
         let mut finalized = snapshot(&delivery, &context, context.finalized_cursor);
         finalized.finalized_at_unix = 20;
-        let mut channel = channel_for_receipt(
-            &receipt,
-            retained.authority.clone(),
-            account(&matcher),
-        );
+        let mut channel =
+            channel_for_receipt(&receipt, retained.authority.clone(), account(&matcher));
         channel.expires_at_unix = 10_000;
         finalized.settlement_channel = Some(channel.clone());
 
         assert_eq!(
-            reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
-                &delivery,
-                &retained,
-                &finalized,
-            ),
+            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &finalized,),
             OrderbookSemanticReconciliationV1::Ready(context.finalized_cursor),
         );
 
         let mut stale = finalized.clone();
-        stale.finalized_at_unix = receipt.issued_at_unix
-            + context.policy_record.policy.max_receipt_age_secs
-            + 1;
+        stale.finalized_at_unix =
+            receipt.issued_at_unix + context.policy_record.policy.max_receipt_age_secs + 1;
         assert_eq!(
-            reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
-                &delivery,
-                &retained,
-                &stale,
-            ),
+            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &stale,),
             OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),
         );
 
@@ -1548,12 +1530,7 @@ mod tests {
 
         finalized.finalized_at_unix = 0;
         assert_eq!(
-            reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
-                &delivery,
-                &retained,
-                &finalized,
-            ),
+            reconcile_orderbook_semantics(&ChainId::from(CHAIN), &delivery, &retained, &finalized,),
             OrderbookSemanticReconciliationV1::Deferred,
         );
     }
@@ -1608,10 +1585,8 @@ mod tests {
         // Independent replicas have independent durable outboxes, so both
         // distinct envelopes may exist before either observes the finalized
         // no-fill marker for this revision.
-        let (first_delivery, first_retained) =
-            retained_delivery(first_operation, &context);
-        let (second_delivery, second_retained) =
-            retained_delivery(second_operation, &context);
+        let (first_delivery, first_retained) = retained_delivery(first_operation, &context);
+        let (second_delivery, second_retained) = retained_delivery(second_operation, &context);
 
         for (delivery, retained) in [
             (&first_delivery, &first_retained),
@@ -1622,12 +1597,8 @@ mod tests {
             status.open_orders = 1;
             status.partially_filled_orders = 1;
             status.last_match_scan_book_revision = status.book_revision;
-            let semantics = reconcile_orderbook_semantics(
-                &ChainId::from(CHAIN),
-                delivery,
-                retained,
-                &sealed,
-            );
+            let semantics =
+                reconcile_orderbook_semantics(&ChainId::from(CHAIN), delivery, retained, &sealed);
             assert_eq!(
                 semantics,
                 OrderbookSemanticReconciliationV1::Conflict(context.finalized_cursor),

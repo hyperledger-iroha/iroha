@@ -1390,10 +1390,7 @@ mod tests {
             submitted_at_ms: u64::MAX,
         };
         let archive = norito::to_bytes(&reference).expect("encode golden operation reference");
-        let archive_hex = archive
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let archive_hex = hex::encode(archive);
         assert_eq!(archive_hex, EXPECTED_ARCHIVE_HEX);
     }
 
@@ -1430,10 +1427,7 @@ mod tests {
             (APPLIED_REDEEM_ARCHIVE_HEX, applied_redeem),
         ] {
             let archive = norito::to_bytes(&status).expect("encode golden operation status");
-            let archive_hex = archive
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
+            let archive_hex = hex::encode(archive);
             assert_eq!(archive_hex, expected);
         }
     }

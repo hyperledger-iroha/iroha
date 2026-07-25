@@ -11,8 +11,9 @@ use iroha_data_model::smart_contract::manifest::{ContractManifest, StateDescript
 use ivm_abi::{
     SyscallPolicy, VMError,
     metadata::{
-        EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType, HEADER_SIZE,
-        ParsedLiteralSection, ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
+        EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+        EmbeddedStateType, HEADER_SIZE, ParsedLiteralSection, ParsedProgramMetadata,
+        ProgramMetadata, contract_code_hash, mode,
     },
 };
 
@@ -96,6 +97,11 @@ impl fmt::Display for ContractArtifactError {
 impl StdError for ContractArtifactError {}
 
 /// Verify a self-describing IVM 1.1 artifact and derive its canonical manifest.
+///
+/// # Errors
+///
+/// Returns a stable admission error when metadata, the embedded contract
+/// interface, bytecode policy, or literal-table bindings are invalid.
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
@@ -154,7 +160,7 @@ fn verified_from_parts(
     let entrypoints = contract_interface
         .entrypoints
         .iter()
-        .map(|entrypoint| entrypoint.to_manifest_descriptor())
+        .map(EmbeddedEntrypointDescriptor::to_manifest_descriptor)
         .collect::<Vec<_>>();
     let manifest = ContractManifest {
         seiyaku_name: Some(contract_interface.seiyaku_name.clone()),

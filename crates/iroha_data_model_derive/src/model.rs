@@ -1,7 +1,7 @@
 use manyhow::{Emitter, emit};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{Attribute, parse_quote};
+use syn::{Attribute, Meta, Token, parse_quote, punctuated::Punctuated};
 
 /// Implementation of the `#[model]` attribute.
 pub fn impl_model(emitter: &mut Emitter, input: &syn::ItemMod) -> TokenStream {
@@ -197,29 +197,124 @@ fn process_union(
     expose_ffi(attrs, &item)
 }
 
-fn expose_ffi(mut attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
-    let mut ffi_attrs = attrs
-        .iter()
-        .filter(|&attr| attr.path().is_ident("ffi_type"));
-    if ffi_attrs.next().is_none() {
+fn expose_ffi(attrs: Vec<syn::Attribute>, item: &TokenStream) -> TokenStream {
+    let (ffi_type, attrs) = match extract_ffi_type(attrs) {
+        Ok(extracted) => extracted,
+        Err(error) => return error.into_compile_error(),
+    };
+    let Some(ffi_type) = ffi_type else {
         return quote! {
             #(#attrs)*
             #item
         };
-    }
+    };
 
-    attrs.retain(|attr| *attr != parse_quote!(#[ffi_type]));
-    let no_ffi_attrs: Vec<_> = attrs
-        .iter()
-        .filter(|&attr| !attr.path().is_ident("ffi_type"))
-        .collect();
+    let ffi_type: Option<Attribute> = match ffi_type {
+        // A bare marker opts the model item into FFI generation. It is not a
+        // valid helper attribute for the generated `FfiType` derive.
+        Meta::Path(_) => None,
+        ffi_type @ Meta::List(_) => Some(parse_quote!(#[#ffi_type])),
+        ffi_type @ Meta::NameValue(_) => {
+            return syn::Error::new_spanned(
+                ffi_type,
+                "`ffi_type` must be bare or use list-form representation arguments",
+            )
+            .into_compile_error();
+        }
+    };
 
     quote! {
-        #[cfg_attr(all(feature = "ffi_export", not(feature = "ffi_import")), derive(iroha_ffi::FfiType), iroha_ffi::ffi_export)]
-        #[cfg_attr(feature = "ffi_import", iroha_ffi::ffi_import)]
-        #(#no_ffi_attrs)*
+        #[cfg(all(not(feature = "ffi_export"), not(feature = "ffi_import")))]
+        #(#attrs)*
         #item
+
+        #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
+        #[derive(iroha_ffi::FfiType)]
+        #[iroha_ffi::ffi_export]
+        #ffi_type
+        #(#attrs)*
+        #item
+
+        #[cfg(feature = "ffi_import")]
+        iroha_ffi::ffi! {
+            #[iroha_ffi::ffi_import]
+            #ffi_type
+            #(#attrs)*
+            #item
+        }
     }
+}
+
+/// Extract the `ffi_type` helper attribute consumed by the generated
+/// `FfiType` derive.
+///
+/// Model declarations gate this helper with `cfg_attr` so it is not visible
+/// when neither FFI feature is enabled. The model macro owns that feature
+/// split, so it removes the wrapper and restores the helper only in the export
+/// and import branches.
+fn extract_ffi_type(attrs: Vec<Attribute>) -> syn::Result<(Option<Meta>, Vec<Attribute>)> {
+    let mut ffi_type = None;
+    let mut retained = Vec::with_capacity(attrs.len());
+
+    for attr in attrs {
+        if attr.path().is_ident("ffi_type") {
+            set_ffi_type(&mut ffi_type, attr.meta)?;
+            continue;
+        }
+
+        if attr.path().is_ident("cfg_attr") {
+            let nested = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+            let mut nested = nested.into_iter();
+            let Some(predicate) = nested.next() else {
+                retained.push(attr);
+                continue;
+            };
+
+            let mut remaining = Punctuated::<Meta, Token![,]>::new();
+            let mut extracted = None;
+            for meta in nested {
+                if meta.path().is_ident("ffi_type") {
+                    set_ffi_type(&mut extracted, meta)?;
+                } else {
+                    remaining.push(meta);
+                }
+            }
+
+            if let Some(extracted) = extracted {
+                let ffi_features: [Meta; 2] = [
+                    parse_quote!(any(feature = "ffi_export", feature = "ffi_import")),
+                    parse_quote!(any(feature = "ffi_import", feature = "ffi_export")),
+                ];
+                if !ffi_features.contains(&predicate) {
+                    return Err(syn::Error::new_spanned(
+                        predicate,
+                        "`ffi_type` on a model item must be gated by \
+                         `any(feature = \"ffi_export\", feature = \"ffi_import\")`",
+                    ));
+                }
+                set_ffi_type(&mut ffi_type, extracted)?;
+                if !remaining.is_empty() {
+                    retained.push(parse_quote!(#[cfg_attr(#predicate, #remaining)]));
+                }
+                continue;
+            }
+        }
+
+        retained.push(attr);
+    }
+
+    Ok((ffi_type, retained))
+}
+
+fn set_ffi_type(slot: &mut Option<Meta>, ffi_type: Meta) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(syn::Error::new_spanned(
+            ffi_type,
+            "a model item may declare `ffi_type` only once",
+        ));
+    }
+    *slot = Some(ffi_type);
+    Ok(())
 }
 
 fn ensure_doc(attrs: &mut Vec<Attribute>, default: impl AsRef<str>) {
@@ -260,7 +355,9 @@ fn ensure_field_docs(fields: &mut syn::Fields, owner: &syn::Ident, variant: Opti
 
 #[cfg(test)]
 mod tests {
-    use syn::{Attribute, Expr, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility, parse_quote};
+    use syn::{
+        Attribute, Expr, File, Item, ItemEnum, ItemStruct, ItemUnion, Lit, Visibility, parse_quote,
+    };
 
     use super::*;
 
@@ -386,7 +483,6 @@ mod tests {
     #[test]
     fn union_fields_documented_and_restricted() {
         let input: syn::DeriveInput = parse_quote! {
-            #[ffi_type]
             pub union Buffer {
                 pub first: u32,
                 second: u64,
@@ -419,5 +515,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn wrapped_ffi_type_expands_for_default_export_and_import() {
+        let input: syn::DeriveInput = parse_quote! {
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            pub struct Sample;
+        };
+
+        let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
+        assert!(
+            matches!(
+                output.items.as_slice(),
+                [Item::Struct(_), Item::Struct(_), Item::Macro(_)]
+            ),
+            "expected default, export, and import branches"
+        );
+
+        let rendered = output.to_token_stream().to_string();
+        assert!(
+            !rendered.contains("cfg_attr"),
+            "the source-only cfg_attr wrapper leaked into generated output"
+        );
+        assert_eq!(
+            rendered.matches("ffi_type").count(),
+            0,
+            "a bare marker is a sentinel and must not reach the FFI derive"
+        );
+        assert!(rendered.contains("iroha_ffi :: FfiType"));
+        assert!(rendered.contains("iroha_ffi :: ffi_export"));
+        assert!(rendered.contains("iroha_ffi :: ffi_import"));
+    }
+
+    #[test]
+    fn wrapped_ffi_type_preserves_all_representation_policies() {
+        assert_ffi_policy(
+            parse_quote! {
+                #[cfg_attr(any(feature = "ffi_import", feature = "ffi_export"), ffi_type(opaque))]
+                pub struct Opaque;
+            },
+            parse_quote!(#[ffi_type(opaque)]),
+        );
+        assert_ffi_policy(
+            parse_quote! {
+                #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(local))]
+                pub struct Local;
+            },
+            parse_quote!(#[ffi_type(local)]),
+        );
+        assert_ffi_policy(
+            parse_quote! {
+                #[cfg_attr(
+                    any(feature = "ffi_export", feature = "ffi_import"),
+                    ffi_type(unsafe { robust })
+                )]
+                pub struct Robust;
+            },
+            parse_quote!(#[ffi_type(unsafe { robust })]),
+        );
+    }
+
+    fn assert_ffi_policy(input: syn::DeriveInput, expected: Attribute) {
+        let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
+        let rendered = output.to_token_stream().to_string();
+        let expected = expected.into_token_stream().to_string();
+
+        assert_eq!(
+            rendered.matches(&expected).count(),
+            2,
+            "FFI policy `{expected}` was not preserved in export and import branches:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("cfg_attr"),
+            "the source-only cfg_attr wrapper leaked into generated output: {rendered}"
+        );
     }
 }

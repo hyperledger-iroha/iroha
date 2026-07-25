@@ -32,7 +32,7 @@ use iroha_data_model::{
     name::Name,
     nft::{Nft, NftId},
     peer::PeerId,
-    prelude::{ExposedPrivateKey, Repeats},
+    prelude::Repeats,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SubscriptionBillFor, SubscriptionBilling,
@@ -46,7 +46,7 @@ use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},
 };
-use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
 use tower::ServiceExt as _;
@@ -58,7 +58,6 @@ struct SubscriptionHarness {
     app: axum::Router,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: ChainId,
     charge_asset_id: AssetDefinitionId,
     subscription_id: NftId,
     billing_trigger_id: TriggerId,
@@ -248,7 +247,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         app: torii.api_router_for_tests(),
         state,
         queue,
-        chain_id,
         charge_asset_id,
         subscription_id,
         billing_trigger_id,
@@ -359,15 +357,11 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
 }
 
 #[tokio::test]
-async fn subscription_resume_route_rebuilds_generic_billing_schedule() {
+async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
     let body = json_object(vec![
         json_entry("authority", BOB_ID.to_string()),
-        json_entry(
-            "private_key",
-            ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
-        ),
         json_entry("charge_at_ms", 5_000_u64),
     ]);
     let body = norito::json::to_json(&body).expect("serialize resume request");
@@ -383,24 +377,50 @@ async fn subscription_resume_route_rebuilds_generic_billing_schedule() {
     )
     .await;
     assert_eq!(resume_resp.status(), StatusCode::OK);
-    assert_eq!(harness.queue.queued_len(), 1);
+    assert_eq!(harness.queue.queued_len(), 0);
     let resume_json = response_json(resume_resp).await;
-    assert_eq!(resume_json["ok"].as_bool(), Some(true));
+    assert_eq!(resume_json["version"].as_u64(), Some(1));
+    assert_eq!(resume_json["action"].as_str(), Some("resume"));
+    assert_eq!(
+        resume_json["authority"].as_str(),
+        Some(BOB_ID.to_string().as_str())
+    );
     assert_eq!(
         resume_json["subscription_id"].as_str(),
         Some(subscription_id.as_str())
     );
-
-    let expected_height = u64::try_from(harness.state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
-        &harness.state,
-        &harness.queue,
-        &harness.chain_id,
-        expected_height,
+    assert_eq!(
+        resume_json["details"]["billing_trigger_id"].as_str(),
+        Some(harness.billing_trigger_id.to_string().as_str())
     );
-    assert_eq!(applied, 1, "resume transaction should apply");
+    assert_eq!(
+        resume_json["details"]["billing_trigger_operation"].as_str(),
+        Some("replace")
+    );
+    assert_eq!(
+        resume_json["details"]["effective_charge_ms"].as_u64(),
+        Some(5_000)
+    );
+    assert_eq!(
+        resume_json["details"]["resulting_subscription"]["status"]["status"].as_str(),
+        Some("active")
+    );
+    assert_eq!(
+        resume_json["details"]["resulting_subscription"]["next_charge_ms"].as_u64(),
+        Some(5_000)
+    );
+    let instructions = resume_json["tx_instructions"]
+        .as_array()
+        .expect("draft instructions");
+    assert_eq!(instructions.len(), 3);
+    assert!(instructions.iter().all(|instruction| {
+        instruction["wire_id"].as_str().is_some()
+            && instruction["payload_hex"]
+                .as_str()
+                .is_some_and(|payload| !payload.is_empty())
+    }));
+    assert!(resume_json.get("ok").is_none());
+    assert!(resume_json.get("tx_hash_hex").is_none());
 
     let view = harness.state.view();
     let nft = view
@@ -413,17 +433,43 @@ async fn subscription_resume_route_rebuilds_generic_billing_schedule() {
         .expect("subscription metadata present")
         .try_into_any_norito()
         .expect("subscription metadata decodes");
-    assert_eq!(resumed_state.status, SubscriptionStatus::Active);
-    assert_eq!(resumed_state.failure_count, 0);
-    assert_eq!(resumed_state.next_charge_ms, 5_000);
-    assert_eq!(resumed_state.current_period_start_ms, 5_000);
-    assert_eq!(resumed_state.current_period_end_ms, 6_000);
+    assert_eq!(resumed_state.status, SubscriptionStatus::Paused);
+    assert_eq!(resumed_state.failure_count, 2);
+    assert_eq!(resumed_state.next_charge_ms, 3_000);
+    assert_eq!(resumed_state.current_period_start_ms, 1_000);
+    assert_eq!(resumed_state.current_period_end_ms, 2_000);
     assert!(
         view.world()
             .triggers()
             .time_triggers()
             .get(&harness.billing_trigger_id)
             .is_some(),
-        "resume should re-register the billing trigger"
+        "draft construction must not replace the committed billing trigger"
     );
+}
+
+#[tokio::test]
+async fn subscription_action_route_rejects_legacy_private_key_payload() {
+    let harness = build_subscription_harness(SubscriptionStatus::Paused);
+    let subscription_id = harness.subscription_id.to_string();
+    let body = norito::json::to_json(&json_object(vec![
+        json_entry("authority", BOB_ID.to_string()),
+        json_entry("private_key", "forbidden"),
+        json_entry("charge_at_ms", 5_000_u64),
+    ]))
+    .expect("serialize legacy request");
+
+    let response = call_app(
+        &harness.app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/v1/subscriptions/{subscription_id}/resume"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.queue.queued_len(), 0);
 }

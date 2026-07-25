@@ -109,6 +109,7 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
+        hf_shared_lease_max_compute_reservation_fee_v1,
     },
     sorafs::pin_registry::{PinManifestRecord, PinStatus, StorageClass},
 };
@@ -7384,7 +7385,10 @@ fn authoritative_hf_shared_lease_status_response(
     let latest_audit_event = world
         .soracloud_hf_shared_lease_audit_events()
         .iter()
-        .filter(|(_sequence, event)| event.pool_id == pool_id)
+        .filter(|(_sequence, event)| {
+            event.pool_id == pool_id
+                && account_id.is_none_or(|account_id| event.account_id == *account_id)
+        })
         .map(|(_sequence, event)| event.clone())
         .max_by_key(|event| event.sequence);
     let runtime_projection = authoritative_hf_runtime_projection(app, &source_id);
@@ -12529,6 +12533,16 @@ pub(crate) async fn handle_hf_deploy(
             Ok(resource_profile) => resource_profile,
             Err(err) => return err.into_response(),
         };
+    let max_compute_reservation_fee =
+        match hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, lease_term_ms) {
+            Ok(max_compute_reservation_fee) => max_compute_reservation_fee,
+            Err(err) => {
+                return SoracloudError::bad_request(format!(
+                    "failed to quote HF compute reservation cap: {err}"
+                ))
+                .into_response();
+            }
+        };
     let generated_bundle = build_soracloud_hf_generated_service_bundle(
         service_name.clone(),
         &source_id.to_string(),
@@ -12578,6 +12592,7 @@ pub(crate) async fn handle_hf_deploy(
             lease_asset_definition_id,
             base_fee,
             resource_profile: Some(resource_profile),
+            max_compute_reservation_fee,
             provenance: request.provenance,
         },
     ));
@@ -14216,7 +14231,7 @@ mod tests {
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 
     use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
 
@@ -21965,6 +21980,26 @@ mod tests {
                         apartment_name: Some("ops_agent".to_owned()),
                     },
                 );
+            world
+                .soracloud_hf_shared_lease_audit_events_mut_for_testing()
+                .insert(
+                    8,
+                    SoraHfSharedLeaseAuditEventV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+                        sequence: 8,
+                        action: SoraHfSharedLeaseActionV1::Join,
+                        pool_id,
+                        source_id,
+                        account_id: BOB_ID.clone(),
+                        occurred_at_ms: 11,
+                        active_member_count: 2,
+                        charged: "0.000005".parse().expect("charged amount"),
+                        refunded: Quantity::zero(),
+                        lease_expires_at_ms: lease_term_ms + 10,
+                        service_name: Some("concurrent_portal".to_owned()),
+                        apartment_name: None,
+                    },
+                );
 
             let app = mk_app_state_for_tests_with_world(world);
             let response = authoritative_hf_shared_lease_status_response(
@@ -21987,7 +22022,7 @@ mod tests {
                 response.member.as_ref().expect("member").account_id,
                 ALICE_ID.clone()
             );
-            assert_eq!(response.audit_event_count, 1);
+            assert_eq!(response.audit_event_count, 2);
             assert!(response.importer_pending);
             assert!(response.runtime_projection.is_none());
             assert_eq!(
@@ -21995,8 +22030,41 @@ mod tests {
                     .latest_audit_event
                     .as_ref()
                     .expect("audit event")
-                    .action,
-                SoraHfSharedLeaseActionV1::CreateWindow
+                    .account_id,
+                ALICE_ID.clone()
+            );
+            assert_eq!(
+                response
+                    .latest_audit_event
+                    .as_ref()
+                    .expect("audit event")
+                    .sequence,
+                7
+            );
+            let unscoped_response = authoritative_hf_shared_lease_status_response(
+                &app,
+                repo_id,
+                resolved_revision,
+                storage_class,
+                lease_term_ms,
+                None,
+            )
+            .map_err(|err| eyre::eyre!("unscoped authoritative hf status failed: {err:?}"))?;
+            assert_eq!(
+                unscoped_response
+                    .latest_audit_event
+                    .as_ref()
+                    .expect("unscoped latest audit event")
+                    .account_id,
+                BOB_ID.clone()
+            );
+            assert_eq!(
+                unscoped_response
+                    .latest_audit_event
+                    .as_ref()
+                    .expect("unscoped latest audit event")
+                    .sequence,
+                8
             );
             assert_eq!(
                 response

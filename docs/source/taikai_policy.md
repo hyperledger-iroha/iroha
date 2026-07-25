@@ -55,7 +55,7 @@ All new structs live in `iroha_data_model::sorafs::gar` and use Norito codecs.
 Issuers MUST include at least one license set whenever the manifest references
 public audiences. Moderation directives support escalation levels (e.g.,
 `Block`, `Warn`, `Quarantine`); gateways that lack a corresponding toggle must
-refuse the request and emit `SorafsGarPolicyDetail::DenylistedContent`.
+refuse the request and emit `SorafsGarPolicyDetail::GatewayComplianceDenied`.
 
 ### Validation & enforcement
 

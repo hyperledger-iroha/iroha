@@ -655,9 +655,7 @@ pub fn reserve_finalized_event_source_entry(
         }
         _ => {
             let provider_id = record.event.provider_id.ok_or_else(|| {
-                reserve_finalized_event_source_error(
-                    "provider transition must carry provider_id",
-                )
+                reserve_finalized_event_source_error("provider transition must carry provider_id")
             })?;
             validate_reserve_source_id(
                 "provider_id",
@@ -706,10 +704,7 @@ pub fn reserve_finalized_event_source_entry(
 
     let mut metadata = BTreeMap::new();
     metadata.insert("block_hash_hex".to_string(), block_hash_hex.clone());
-    metadata.insert(
-        "block_height".to_string(),
-        record.block_height.to_string(),
-    );
+    metadata.insert("block_height".to_string(), record.block_height.to_string());
     metadata.insert(
         "event_family".to_string(),
         "reserve_finalized_ledger".to_string(),
@@ -720,10 +715,7 @@ pub fn reserve_finalized_event_source_entry(
         "occurred_at_unix_ms".to_string(),
         record.event.occurred_at_unix_ms.to_string(),
     );
-    metadata.insert(
-        "policy_digest_hex".to_string(),
-        policy_digest_hex.clone(),
-    );
+    metadata.insert("policy_digest_hex".to_string(), policy_digest_hex.clone());
     metadata.insert(
         "provider_revision".to_string(),
         record.event.provider_revision.to_string(),
@@ -3025,6 +3017,14 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
         canonical_private_source_digest(cycle_start_unix, cycle_end_unix, config, events)?;
     let suppression_threshold = config.privacy.suppression_threshold.unwrap_or(0);
     let vector_sensitivity = privacy_vector_sensitivity(config)?;
+    let build_context = PopulationAggregateBuildContext {
+        cycle_start_unix,
+        cycle_end_unix,
+        config,
+        cycle_prf_input: cycle_prf_input.as_ref(),
+        vector_sensitivity,
+        private_source_digest,
+    };
     let mut aggregates = Vec::new();
     for (population, mut bucket) in groups {
         bucket.sort_by(|left, right| left.event_id.cmp(&right.event_id));
@@ -3033,12 +3033,7 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
             continue;
         }
         let aggregate = build_population_aggregate(
-            cycle_start_unix,
-            cycle_end_unix,
-            config,
-            cycle_prf_input.as_ref(),
-            vector_sensitivity,
-            private_source_digest,
+            &build_context,
             population,
             &bucket,
             below_threshold
@@ -3062,17 +3057,22 @@ struct PopulationKey {
     digest: [u8; 32],
 }
 
-fn build_population_aggregate(
+struct PopulationAggregateBuildContext<'a> {
     cycle_start_unix: u64,
     cycle_end_unix: u64,
-    config: &PrivacyAggregateCycleConfig,
-    cycle_prf_input: Option<&PrivacyCyclePrfInputV1>,
+    config: &'a PrivacyAggregateCycleConfig,
+    cycle_prf_input: Option<&'a PrivacyCyclePrfInputV1>,
     vector_sensitivity: Option<u64>,
     private_source_digest: [u8; 32],
+}
+
+fn build_population_aggregate(
+    context: &PopulationAggregateBuildContext<'_>,
     population: PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
     suppress_contributions: bool,
 ) -> Result<ModerationPrivacyAggregateV1, PrivacyAggregateWorkerError> {
+    let config = context.config;
     let metrics = if suppress_contributions {
         zero_metric_vector(&config.metrics)
     } else {
@@ -3089,11 +3089,11 @@ fn build_population_aggregate(
             let noised = apply_metric_noise(
                 value,
                 config,
-                cycle_prf_input,
-                vector_sensitivity,
+                context.cycle_prf_input,
+                context.vector_sensitivity,
                 &aggregate_id,
                 &key,
-                &private_source_digest,
+                &context.private_source_digest,
             )?;
             Ok(ModerationPrivacyAggregateMetricV1 {
                 key,
@@ -3103,16 +3103,17 @@ fn build_population_aggregate(
         })
         .collect::<Result<Vec<_>, PrivacyAggregateWorkerError>>()?;
 
-    let noise_source = cycle_prf_input
+    let noise_source = context
+        .cycle_prf_input
         .map_or(ModerationPrivacyNoiseSourceV1::SuppressionOnly, |input| {
             ModerationPrivacyNoiseSourceV1::ThresholdPrf(input.commitment())
         });
     let aggregate = ModerationPrivacyAggregateV1 {
         version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
         aggregate_id,
-        window_start_unix: cycle_start_unix,
-        window_end_unix: cycle_end_unix,
-        generated_at_unix: cycle_end_unix,
+        window_start_unix: context.cycle_start_unix,
+        window_end_unix: context.cycle_end_unix,
+        generated_at_unix: context.cycle_end_unix,
         population_label: population.label,
         population_digest: population.digest,
         privacy: config.privacy,
@@ -4016,9 +4017,8 @@ mod tests {
             event_index: 2,
             event: iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
                 kind,
-                provider_id: (!policy_activation).then(|| {
-                    iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])
-                }),
+                provider_id: (!policy_activation)
+                    .then(|| iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])),
                 operation_id: operation.then_some([0xC3; 32]),
                 policy_digest: [0xD4; 32],
                 provider_revision: if policy_activation { 0 } else { 9 },
@@ -5231,13 +5231,11 @@ mod tests {
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
-
     }
 
     #[test]
     fn finalized_reserve_event_adapter_binds_exact_committed_cursor_and_payload() {
-        let event =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let event = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         let entry =
             reserve_finalized_event_source_entry(&event).expect("finalized reserve source entry");
         let expected_block_hash = hex::encode(event.block_hash);
@@ -5259,9 +5257,7 @@ mod tests {
         assert_eq!(entry.occurred_at_unix, 1_800_000_123);
         assert_eq!(
             entry.kind,
-            ModerationLedgerEntryKindV1::Custom(
-                "sorafs_reserve_movement_approved".to_string()
-            )
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement_approved".to_string())
         );
         assert_eq!(entry.policy_digest, Some(event.event.policy_digest));
         assert_eq!(
@@ -5329,15 +5325,12 @@ mod tests {
 
     #[test]
     fn finalized_reserve_event_adapter_maps_policy_and_appeal_kinds() {
-        let policy =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        let policy = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
         let policy_entry =
             reserve_finalized_event_source_entry(&policy).expect("policy activation source");
         assert_eq!(
             policy_entry.kind,
-            ModerationLedgerEntryKindV1::Custom(
-                "sorafs_reserve_policy_activated".to_string()
-            )
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_policy_activated".to_string())
         );
         assert_eq!(
             policy_entry.subject,
@@ -5360,8 +5353,7 @@ mod tests {
 
     #[test]
     fn finalized_reserve_event_adapter_rejects_malformed_native_invariants() {
-        let base =
-            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let base = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         let mut malformed = Vec::new();
 
         let mut zero_sequence = base.clone();
@@ -5383,9 +5375,8 @@ mod tests {
         missing_provider.event.provider_id = None;
         malformed.push(missing_provider);
         let mut zero_provider = base.clone();
-        zero_provider.event.provider_id = Some(
-            iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]),
-        );
+        zero_provider.event.provider_id =
+            Some(iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]));
         malformed.push(zero_provider);
         let mut zero_revision = base.clone();
         zero_revision.event.provider_revision = 0;
@@ -5407,17 +5398,16 @@ mod tests {
 
         let mut malformed_policy =
             reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
-        malformed_policy.event.provider_id =
-            Some(iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]));
+        malformed_policy.event.provider_id = Some(
+            iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]),
+        );
         malformed.push(malformed_policy);
 
         for event in malformed {
             assert!(
                 matches!(
                     reserve_finalized_event_source_entry(&event),
-                    Err(
-                        TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent { .. }
-                    )
+                    Err(TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent { .. })
                 ),
                 "malformed event unexpectedly accepted: {event:?}"
             );

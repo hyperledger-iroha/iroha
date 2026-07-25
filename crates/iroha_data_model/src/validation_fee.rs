@@ -1790,6 +1790,10 @@ mod parliament_tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fail-closed lifecycle matrix checks missing, mismatched, and correctly enacted payout references together"
+    )]
     fn payout_policy_requires_matching_enacted_lifecycle_reference() {
         let binding = payout_binding();
         let seal = binding.lifecycle_seal().expect("lifecycle seal");

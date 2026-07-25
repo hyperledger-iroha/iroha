@@ -1260,6 +1260,40 @@ export function noritoDecodeInstruction(bytes, options = {}) {
   return JSON.parse(json);
 }
 
+/**
+ * Decode and fail closed on one first-release subscription trigger action.
+ *
+ * The native binding verifies the complete encoded action, including its
+ * syscall-only IVM program, repeat policy, filter, retry policy, and metadata.
+ * Callers must still bind the returned semantic summary to their reviewed
+ * account, subscription, trigger id, and charge time.
+ *
+ * @param {string} encodedAction
+ * @returns {object}
+ */
+export function inspectSubscriptionTriggerAction(encodedAction) {
+  if (
+    typeof encodedAction !== "string" ||
+    encodedAction.length === 0 ||
+    encodedAction.trim() !== encodedAction
+  ) {
+    throw new TypeError(
+      "inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string",
+    );
+  }
+  const native = resolveNative("inspectSubscriptionTriggerAction");
+  const payload = native.inspectSubscriptionTriggerAction(encodedAction);
+  try {
+    return JSON.parse(payload);
+  } catch (error) {
+    throw new Error(
+      `native subscription trigger inspection returned invalid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 function decodeBlockMerkleProofValue(payload, context) {
   const fields = decodeTupleFields(payload, context, ["leaf_index", "audit_path"]);
   return {

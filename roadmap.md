@@ -81,8 +81,8 @@ deployment evidence remain open. The existing local
 `/v1/sorafs/reputation/*` snapshot checkpoint is not the production committed
 journal projection.
 
-Within the four ledger-authority domains enumerated by V1-C04, active
-local-authority debt remains only in moderation.
+All four ledger-authority domains enumerated by V1-C04 now use native committed
+state as their local source of truth.
 The process-local reserve runtime, checkpoint, scheduler, mutation API, and
 obsolete routes are deleted; reserve mutations now forward exact caller-signed
 native transactions and reserve reads use authenticated finalized projections.
@@ -91,9 +91,11 @@ accounts with bounded labels and an explicit reconciled-height readiness bit.
 The competing `sorafs_node` orderbook, checkpoint, config, mutation/event API,
 and pre-release snapshot wire are also deleted. The reserve/rent and orderbook
 lanes remain open for full source validation and reviewed distributed recovery
-evidence. Process-local moderation ballot state must still be removed in favor
-of signed native transactions and rebuildable finalized-chain projections.
-Taira and Minamoto mutation remains separately authorized cutover work.
+evidence. Moderation remains open for production transaction submission,
+retry/reconciliation, notification and failover orchestration, protected-viewer
+integration, settlement, downstream publication, and four-peer evidence; its
+ballot lifecycle is already chain-authoritative and rebuildable from finalized
+events. Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
 

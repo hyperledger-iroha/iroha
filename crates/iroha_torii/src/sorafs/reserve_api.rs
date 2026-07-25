@@ -8,12 +8,7 @@
 
 #![cfg(feature = "app_api")]
 
-use std::{
-    collections::VecDeque,
-    convert::Infallible,
-    future::Future,
-    time::Duration,
-};
+use std::{collections::VecDeque, convert::Infallible, future::Future, time::Duration};
 
 use axum::{
     extract::{
@@ -27,11 +22,7 @@ use axum::{
     },
 };
 use futures::{SinkExt, StreamExt, stream};
-use iroha_core::{
-    smartcontracts::ValidSingularQuery,
-    state::StateReadOnly,
-    telemetry::Telemetry,
-};
+use iroha_core::{smartcontracts::ValidSingularQuery, state::StateReadOnly, telemetry::Telemetry};
 use iroha_data_model::{
     account::AccountId,
     isi::{
@@ -145,12 +136,9 @@ impl ReserveAnchorQueryV1 {
             "expected_finalized_height" => {
                 parse_unique_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_unique_hex(
-                &mut query.expected_finalized_block_hash,
-                key,
-                value,
-                true,
-            ),
+            "expected_finalized_block_hash_hex" => {
+                parse_unique_hex(&mut query.expected_finalized_block_hash, key, value, true)
+            }
             _ => Err(format!(
                 "unknown finalized SoraFS reserve anchor parameter `{key}`"
             )),
@@ -177,12 +165,9 @@ impl ReservePageQueryV1 {
             "expected_finalized_height" => {
                 parse_unique_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_unique_hex(
-                &mut query.expected_finalized_block_hash,
-                key,
-                value,
-                true,
-            ),
+            "expected_finalized_block_hash_hex" => {
+                parse_unique_hex(&mut query.expected_finalized_block_hash, key, value, true)
+            }
             key if key == after_parameter => {
                 parse_unique_hex(&mut query.after_id, key, value, true)
             }
@@ -229,22 +214,15 @@ impl ReserveEventQueryV1 {
             "expected_finalized_height" => {
                 parse_unique_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_unique_hex(
-                &mut query.expected_finalized_block_hash,
-                key,
-                value,
-                true,
-            ),
-            "after_sequence" => parse_unique_u64(&mut query.after_sequence, key, value),
-            "after_block_height" => {
-                parse_unique_u64(&mut query.after_block_height, key, value)
+            "expected_finalized_block_hash_hex" => {
+                parse_unique_hex(&mut query.expected_finalized_block_hash, key, value, true)
             }
+            "after_sequence" => parse_unique_u64(&mut query.after_sequence, key, value),
+            "after_block_height" => parse_unique_u64(&mut query.after_block_height, key, value),
             "after_block_hash_hex" => {
                 parse_unique_hex(&mut query.after_block_hash, key, value, true)
             }
-            "after_event_index" => {
-                parse_unique_u32(&mut query.after_event_index, key, value)
-            }
+            "after_event_index" => parse_unique_u32(&mut query.after_event_index, key, value),
             _ => Err(format!(
                 "unknown finalized SoraFS reserve event query parameter `{key}`"
             )),
@@ -544,11 +522,7 @@ fn validate_reserve_signed_transaction(
         }
         ReserveCommandRouteV1::DrawCredit => {
             let draw = one_instruction::<DrawSorafsReserveCredit>(transaction)?;
-            require_subject(
-                authority,
-                &policy.policy.operations_authority,
-                "operations",
-            )?;
+            require_subject(authority, &policy.policy.operations_authority, "operations")?;
             let account = FindSorafsReserveProviderById::new(draw.provider_id)
                 .execute(&view)
                 .map_err(reserve_query_error_response)?;
@@ -1308,9 +1282,7 @@ async fn reserve_event_websocket(
     }
 }
 
-fn reserve_sse_event(
-    event: &ReserveFinalizedEventV1,
-) -> SseEvent {
+fn reserve_sse_event(event: &ReserveFinalizedEventV1) -> SseEvent {
     match reserve_event_json(event) {
         Ok(json) => SseEvent::default()
             .event("reserve_finalized")
@@ -1320,9 +1292,7 @@ fn reserve_sse_event(
     }
 }
 
-fn reserve_event_json(
-    event: &ReserveFinalizedEventV1,
-) -> Result<String, String> {
+fn reserve_event_json(event: &ReserveFinalizedEventV1) -> Result<String, String> {
     json::to_json(event)
         .map(|json| json.to_string())
         .map_err(|error| format!("failed to encode finalized SoraFS reserve event: {error}"))
@@ -1347,21 +1317,17 @@ fn authenticate_reserve_read(
     if !state.sorafs_node.is_enabled() {
         return Err(feature_disabled());
     }
-    match crate::app_auth::verify_canonical_request(
-        &state.state,
-        headers,
-        method,
-        uri,
-        &[],
-        None,
-    ) {
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, &[], None) {
         Ok(Some(verified)) => Ok(verified.account),
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
             "SoraFS reserve reads require X-Iroha canonical request authentication",
         )),
         Err(error) => {
-            warn!(?error, "SoraFS reserve canonical read authentication rejected");
+            warn!(
+                ?error,
+                "SoraFS reserve canonical read authentication rejected"
+            );
             Err(json_error(
                 StatusCode::UNAUTHORIZED,
                 "invalid SoraFS reserve read authentication",
@@ -1484,7 +1450,10 @@ fn reserve_query_error_response(error: QueryExecutionFail) -> Response {
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
     if status.is_server_error() {
-        warn!(?error, "authoritative finalized SoraFS reserve query failed");
+        warn!(
+            ?error,
+            "authoritative finalized SoraFS reserve query failed"
+        );
     }
     json_error(status, reserve_query_public_message(&error))
 }
@@ -1546,9 +1515,9 @@ fn parse_unique_u64(target: &mut Option<u64>, name: &str, raw: &str) -> Result<(
             "SoraFS reserve query parameter `{name}` must appear once with a value"
         ));
     }
-    let value = raw
-        .parse::<u64>()
-        .map_err(|_| format!("SoraFS reserve query parameter `{name}` must be an unsigned integer"))?;
+    let value = raw.parse::<u64>().map_err(|_| {
+        format!("SoraFS reserve query parameter `{name}` must be an unsigned integer")
+    })?;
     if value.to_string() != raw {
         return Err(format!(
             "SoraFS reserve query parameter `{name}` must use canonical decimal encoding"
@@ -1564,9 +1533,9 @@ fn parse_unique_u32(target: &mut Option<u32>, name: &str, raw: &str) -> Result<(
             "SoraFS reserve query parameter `{name}` must appear once with a value"
         ));
     }
-    let value = raw
-        .parse::<u32>()
-        .map_err(|_| format!("SoraFS reserve query parameter `{name}` must be an unsigned integer"))?;
+    let value = raw.parse::<u32>().map_err(|_| {
+        format!("SoraFS reserve query parameter `{name}` must be an unsigned integer")
+    })?;
     if value.to_string() != raw {
         return Err(format!(
             "SoraFS reserve query parameter `{name}` must use canonical decimal encoding"
@@ -1626,9 +1595,9 @@ fn parse_nonzero_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
 
 fn parse_hex(raw: &str, name: &str) -> Result<[u8; 32], String> {
     if raw.len() != 64
-        || raw.bytes().any(|byte| {
-            !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte)
-        })
+        || raw
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
     {
         return Err(format!(
             "SoraFS reserve `{name}` must be 64 lowercase hexadecimal characters"
@@ -1764,11 +1733,10 @@ mod tests {
 
         let mut forbidden_metadata = Metadata::default();
         forbidden_metadata.insert("forbidden".parse().expect("metadata key"), true);
-        let metadata = signed_transaction(
-            &chain,
-            movement(ReserveMovementKindV1::TopUp),
-            |builder| builder.with_metadata(forbidden_metadata),
-        );
+        let metadata =
+            signed_transaction(&chain, movement(ReserveMovementKindV1::TopUp), |builder| {
+                builder.with_metadata(forbidden_metadata)
+            });
         assert_eq!(
             validate_reserve_signed_envelope_and_route(
                 &chain,
@@ -1803,7 +1771,9 @@ mod tests {
     #[test]
     fn finalized_query_parser_rejects_duplicates_partial_cursors_and_noncanonical_hex() {
         assert!(ReserveAnchorQueryV1::parse(Some("limit=1")).is_err());
-        assert!(ReservePageQueryV1::parse(Some("limit=1&limit=2"), "after_provider_id_hex").is_err());
+        assert!(
+            ReservePageQueryV1::parse(Some("limit=1&limit=2"), "after_provider_id_hex").is_err()
+        );
         assert!(
             ReservePageQueryV1::parse(Some("expected_finalized_height=1"), "after_provider_id_hex")
                 .is_err()

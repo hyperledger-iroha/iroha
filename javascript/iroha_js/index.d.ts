@@ -13933,6 +13933,18 @@ export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: { parseJson?: boolean },
 ): JsonValue;
+export interface SubscriptionTriggerActionSummary {
+  version: 1;
+  kind: "billing" | "usage";
+  authority: string;
+  max_cycles: string;
+  charge_at_ms?: number;
+  subscription_id?: string;
+  trigger_id?: string;
+}
+export function inspectSubscriptionTriggerAction(
+  encodedAction: string,
+): SubscriptionTriggerActionSummary;
 
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.

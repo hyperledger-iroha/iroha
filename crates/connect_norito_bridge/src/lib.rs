@@ -17697,15 +17697,27 @@ mod kagemusha_bridge_tests {
 
     use super::*;
 
+    #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
+    const CURRENT_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+    // The runtime alias is exactly `sbd#cbsi`; offline wire objects carry its typed ID.
+    const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
     /// Live phase channel inherited from the Kagemusha resource supervisor.
     #[derive(Debug)]
     struct KagemushaV4GuardChannel {
+        #[cfg_attr(
+            not(feature = "privacy-production-enabled"),
+            expect(
+                dead_code,
+                reason = "default-build tests validate guard admission; production tests write phases"
+            )
+        )]
         channel: std::fs::File,
     }
 
     impl KagemushaV4GuardChannel {
+        #[cfg(feature = "privacy-production-enabled")]
         fn require(initial_phase: &str) -> Result<Self, String> {
             let descriptor = std::env::var_os(KAGEMUSHA_V4_GUARD_FD_ENV);
             let mut guard = Self::from_descriptor_value(descriptor.as_deref()).map_err(|error| {
@@ -17782,6 +17794,7 @@ mod kagemusha_bridge_tests {
             ))
         }
 
+        #[cfg(feature = "privacy-production-enabled")]
         fn write_phase(&mut self, phase: &str) -> std::io::Result<()> {
             use std::io::Write as _;
 
@@ -17800,6 +17813,7 @@ mod kagemusha_bridge_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn raw_production_acceptance_without_guard_fd_is_rejected() {
         let error = KagemushaV4GuardChannel::from_descriptor_value(None)
@@ -17811,6 +17825,16 @@ mod kagemusha_bridge_tests {
         )))
         .expect_err("malformed supervisor descriptors must be rejected");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn raw_production_acceptance_requires_a_posix_host() {
+        for descriptor in [None, Some(std::ffi::OsStr::new("not-a-descriptor"))] {
+            let error = KagemushaV4GuardChannel::from_descriptor_value(descriptor)
+                .expect_err("resource supervision must reject non-POSIX hosts");
+            assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        }
     }
 
     #[test]
@@ -18707,12 +18731,14 @@ mod kagemusha_bridge_tests {
             OfflineRecipientReceiveOfferV2, OfflineRecipientRegistrationLineage,
         };
 
-        let base = redemption_change_prepare_request_v4();
-        let sbd_asset = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        let chain_id = CURRENT_TAIRA_CHAIN_ID
+            .parse::<ChainId>()
+            .expect("current Taira chain id");
+        let sbd_asset = CBSI_SBD_ASSET_DEFINITION_ID
             .parse::<AssetDefinitionId>()
             .expect("canonical SBD asset definition");
         let request = peer_split_recipient_request_for_asset_v4(
-            &base.bundle.statement.chain_id,
+            &chain_id,
             &sbd_asset,
             KagemushaScaledAmountV2::new(625, 2).expect("receiver-offer amount"),
             0xE1,
@@ -18736,7 +18762,7 @@ mod kagemusha_bridge_tests {
                     current_policy_hash: policy_hash,
                     admission_height: 1,
                     admission_transaction_hash: Hash::new(b"receiver-offer admission tx"),
-                    public_key: request.receiver_public_key().clone(),
+                    public_key: *request.receiver_public_key(),
                     expires_at_ms: first_time_ms + 10 * 60 * 1_000,
                     account_exists: true,
                     asset_definition_exists: true,
@@ -18907,8 +18933,12 @@ mod kagemusha_bridge_tests {
         };
 
         let one = realistic_recipient_receive_offer_v2(1);
+        assert_eq!(one.request.chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
+        assert_eq!(one.request.asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
+        assert_eq!(one.lineage.selector.chain_id, one.request.chain_id);
+        assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 14_005);
+        assert_eq!(one_bytes.len(), 12_363);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -18968,11 +18998,11 @@ mod kagemusha_bridge_tests {
         let publisher_key_pair = receiver_offer_publisher_key_pair_v1();
         let publisher_public_key = publisher_key_pair.public_key().to_bytes().1;
         assert_eq!(
-            hex::encode(&publisher_public_key),
+            hex::encode(publisher_public_key),
             "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0"
         );
         assert_eq!(
-            b64gp::STANDARD.encode(&publisher_public_key),
+            b64gp::STANDARD.encode(publisher_public_key),
             "DXVQdU4IAKXSN+71gmA1dmubPloVhoqUCrKJlYeI47A="
         );
         assert_eq!(
@@ -19003,7 +19033,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            14_089
+            12_447
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES
@@ -20641,7 +20671,11 @@ mod kagemusha_bridge_tests {
     #[cfg(not(feature = "privacy-production-enabled"))]
     #[test]
     fn recursive_spend_v4_default_build_is_fail_closed_before_artifact_admission() {
-        assert!(!iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE);
+        const {
+            if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
+                panic!("default bridge must compile without the production proof backend");
+            }
+        }
         assert_eq!(
             require_kagemusha_recursive_spend_production_promotion_v4()
                 .expect_err("default bridge must not promote production")
@@ -20929,7 +20963,8 @@ mod kagemusha_bridge_tests {
         let fresh_recipient_opening = peer_split_recipient_opening_for_request_seed_v4(0xE2);
         let chain_id = receiver_offer.lineage.selector.chain_id.clone();
         let asset = receiver_offer.lineage.selector.asset.clone();
-        assert_eq!(asset.to_string(), "7ZepsJTHCVLKsrFFNZGSRGZgvBhv");
+        assert_eq!(chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
+        assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
         assert_eq!(fresh_recipient_request.asset, asset);
         let (topup_roster, topup_signing_keys) =
             production_topup_finality_roster_v2(&chain_id, generation);

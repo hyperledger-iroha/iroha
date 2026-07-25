@@ -25864,10 +25864,110 @@ def test_gateway_compliance_canary_builder_is_checked_in() -> None:
     assert "--kind enforcement_probe" in enforcement_example
     assert "--route-body-blake3-hex" in enforcement_example
     assert "--kind observability" in observability_example
-    assert "--metric sorafs_gateway_policy_denials_total" in observability_example
+    for metric_name in (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_serving_decisions_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    ):
+        assert f"--metric {metric_name}" in observability_example
     assert "build_sorafs_gateway_compliance_canary.py" in docs
     assert "payload-free full-surface canary builder" in docs
     assert "--route-body-blake3-hex" in docs
+
+
+def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None:
+    metrics_source = read(TELEMETRY_METRICS_RS)
+    serving_source = read(TORII_SORAFS_API_RS)
+    checker = read(SCRIPTS_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py")
+    example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_compliance_observability_canary.args.example"
+    )
+    dashboard = read(
+        DASHBOARDS_DIR / "grafana" / "sorafs_gateway_compliance.json"
+    )
+    alerts = read(
+        DASHBOARDS_DIR / "alerts" / "sorafs_gateway_compliance_rules.yml"
+    )
+    alert_tests = read(
+        DASHBOARDS_DIR
+        / "alerts"
+        / "tests"
+        / "sorafs_gateway_compliance_rules.test.yml"
+    )
+    docs = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
+
+    metric_names = (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_serving_decisions_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    )
+    for metric_name in metric_names:
+        assert f'"{metric_name}"' in metrics_source
+        assert f'"{metric_name}"' in checker
+        assert f"--metric {metric_name}" in example
+        assert metric_name in dashboard
+        assert metric_name in docs
+
+    for metric_name in (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    ):
+        assert metric_name in alerts
+        assert metric_name in alert_tests
+
+    for legacy_name in (
+        "sorafs_gateway_policy_denials_total",
+        "sorafs_gateway_denylist_reload_total",
+        "sorafs_gateway_denylist_reload_latency_ms",
+        "sorafs_gateway_honey_audit_failures_total",
+        "sorafs_gateway_compliance_override_total",
+    ):
+        assert legacy_name not in checker
+        assert legacy_name not in example
+        assert legacy_name not in docs
+
+    assert "SORAFS_GATEWAY_COMPLIANCE_OPERATION_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_REQUEST_OUTCOME_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_SUBJECT_KIND_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_DECISION_SOURCE_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_FAILURE_SURFACE_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_FAILURE_CLASS_LABELS" in metrics_source
+    assert "attacker-controlled" in metrics_source
+    metric_constructor = metrics_source[
+        metrics_source.index(
+            "let torii_sorafs_gateway_compliance_requests_total"
+        ) : metrics_source.index(
+            "let torii_sorafs_hedging_xor_usd_reference_price_micro_usd"
+        )
+    ]
+    for forbidden_label in (
+        '"provider_id"',
+        '"manifest"',
+        '"manifest_digest"',
+        '"cid"',
+        '"rule_id"',
+        '"feed_id"',
+        '"subject"',
+    ):
+        assert forbidden_label not in metric_constructor
+    assert (
+        "record_sorafs_gateway_compliance_serving_decision(" in serving_source
+    )
+    assert "record_sorafs_gateway_compliance_failure(\"serving\", class)" in serving_source
+    assert "mark_sorafs_gateway_compliance_unready()" in serving_source
+    assert "gateway_compliance_subject_kind_label(kind)" in serving_source
+    assert "gateway_compliance_serving_error_class(&error)" in serving_source
 
 
 UNSHIPPED_GATEWAY_COMPLIANCE_ROUTE_PATTERNS = (

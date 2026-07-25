@@ -12,7 +12,7 @@ public sealed class ToriiIntegrationSmokeTests
     [Fact]
     public async Task OptionalReadTreatsNotFoundAsUnavailable()
     {
-        var result = await TryGetOptionalReadAsync<ToriiSoraFsDenylistCatalogResponse>(
+        var result = await TryGetOptionalReadAsync<ToriiSoraFsCidLookupResponse>(
             () => throw new ToriiApiException(
                 HttpStatusCode.NotFound,
                 new Uri("https://torii.example/v1/optional"),
@@ -135,20 +135,6 @@ public sealed class ToriiIntegrationSmokeTests
         var supportedExitClasses = Assert.IsAssignableFrom<IReadOnlyList<string>>(vpnProfile.SupportedExitClasses);
         Assert.True(supportedExitClasses.Count >= 0);
         Assert.True(vpnProfile.LeaseSeconds > 0 || !vpnProfile.Available);
-
-        var denylistCatalog = await TryGetOptionalReadAsync<ToriiSoraFsDenylistCatalogResponse>(
-            () => client.GetSoraFsDenylistCatalogAsync());
-        if (denylistCatalog is not null)
-        {
-            Assert.True(denylistCatalog.Version >= 1);
-            Assert.True(denylistCatalog.Packs.Count >= 0);
-
-            if (denylistCatalog.Packs.Count > 0)
-            {
-                var denylistPack = await client.GetSoraFsDenylistPackAsync(denylistCatalog.Packs[0].PackId, cancellationToken: TestContext.Current.CancellationToken);
-                Assert.Equal(denylistCatalog.Packs[0].PackId, denylistPack.PackId);
-            }
-        }
 
         var bindings = await client.GetUaidBindingsAsync(SmokeUaidLiteral, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SmokeUaidLiteral, bindings.Uaid);
