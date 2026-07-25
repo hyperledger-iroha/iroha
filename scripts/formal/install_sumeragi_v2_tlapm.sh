@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly TLAPM_VERSION="1.6.0-pre"
-readonly TLAPM_COMMIT="763bf3c1826d77a4cf206f43d5aa16775da1da33"
+readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 readonly RELEASE_ASSET_API_BASE="https://api.github.com/repos/tlaplus/tlapm/releases/assets"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -18,18 +18,18 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
     readonly PLATFORM="x86_64-linux-gnu"
     # The rolling release workflow uploaded this object for TLAPM_COMMIT and
-    # recorded its ID and digest in GitHub Actions run 29056595644. Address
-    # the object, not the mutable rolling tag and name.
-    readonly RELEASE_ASSET_ID="471854382"
-    readonly ARCHIVE_SHA256="28db02bafd7c899befb696a66812e19a6d2704688f78668cc127cbe4951de8d2"
+    # recorded its ID and digest in GitHub Actions run 29682668751, job
+    # 88181482518. Address the object, not the mutable rolling tag and name.
+    readonly RELEASE_ASSET_ID="482292328"
+    readonly ARCHIVE_SHA256="a686da5dc31892edcd02f25bb14061427e29e16317002d43c5b5be970d1d5daf"
     ;;
   Darwin-arm64)
     readonly PLATFORM="arm64-darwin"
     # The rolling release workflow uploaded this object for TLAPM_COMMIT and
-    # recorded its ID and digest in GitHub Actions run 29056595644. Address
-    # the object, not the mutable rolling tag and name.
-    readonly RELEASE_ASSET_ID="471855324"
-    readonly ARCHIVE_SHA256="1dddf866712a826f513124a035a7b53278f28c0fc01c749dacb2901f6445cdd2"
+    # recorded its ID and digest in GitHub Actions run 29682668751, job
+    # 88181482538. Address the object, not the mutable rolling tag and name.
+    readonly RELEASE_ASSET_ID="482297997"
+    readonly ARCHIVE_SHA256="3ca4c39613e58b90e46a385ee61e2c7f17375c19854ea1a35e056d6eb902071c"
     ;;
   *)
     echo "unsupported TLAPM host: $(uname -s)-$(uname -m)" >&2

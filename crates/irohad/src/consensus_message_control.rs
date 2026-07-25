@@ -1451,7 +1451,6 @@ fn read_stable_private_file_after_open(
     }
     let opened_after = file.metadata().map_err(ControlError::Io)?;
     let named_after = fs::symlink_metadata(path).map_err(ControlError::Io)?;
-    validate_private_file(&opened_after)?;
     validate_private_file(&named_after)?;
     if !same_file(&opened_before, &opened_after)
         || !same_file(&opened_after, &named_after)
@@ -1461,6 +1460,7 @@ fn read_stable_private_file_after_open(
     {
         return Err(ControlError::FileIdentityChanged);
     }
+    validate_private_file(&opened_after)?;
     Ok(bytes)
 }
 
@@ -2407,6 +2407,9 @@ mod tests {
             fs::rename(&replacement, &command).expect("atomically replace command");
         })
         .expect_err("an atomic pathname replacement must be retried");
-        assert!(matches!(error, ControlError::FileIdentityChanged));
+        assert!(
+            matches!(error, ControlError::FileIdentityChanged),
+            "safe replacement must be retryable identity churn, got {error:?}"
+        );
     }
 }

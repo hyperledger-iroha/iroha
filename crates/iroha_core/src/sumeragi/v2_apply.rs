@@ -1588,6 +1588,7 @@ impl BodyValidationError for V2ApplyError {
 mod tests {
     use std::{
         borrow::Cow,
+        collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
     };
@@ -1606,12 +1607,12 @@ mod tests {
             },
             consensus_v2 as wire,
         },
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
         isi::{Log, SetParameter},
         merge::{
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
         },
-        nexus::{DataSpaceId, LaneId},
+        nexus::{DataSpaceId, LaneId, LaneStorageProfile, LaneVisibility},
         parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
         transaction::{
@@ -1627,7 +1628,9 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
-        governance::manifest::LaneManifestRegistry,
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         lane_consensus::LaneExecutablePayloadV1,
         query::store::LiveQueryStore,
         queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
@@ -1683,6 +1686,99 @@ mod tests {
         kura: Arc<Kura>,
         body_root: tempfile::TempDir,
         genesis_key: KeyPair,
+    }
+
+    fn install_fixture_validator_authority(
+        state: &State,
+        context: &wire::HeightContext,
+        validator_set_pops: &[Vec<u8>],
+    ) {
+        assert_eq!(
+            context.roster.len(),
+            validator_set_pops.len(),
+            "fixture roster and validator PoPs must remain positionally aligned"
+        );
+
+        let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            for validator in &context.roster {
+                if !peers.iter().any(|peer| peer == &validator.validator) {
+                    peers.push(validator.validator.clone());
+                }
+            }
+            peers.apply();
+        }
+        for (validator, pop) in context.roster.iter().zip(validator_set_pops) {
+            let public_key = validator.validator.public_key().clone();
+            let id = crate::state::derive_validator_key_id(&public_key);
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key,
+                pop: Some(pop.clone()),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block
+                .consensus_keys
+                .insert(id.clone(), record.clone());
+            world_block
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id]);
+        }
+        world_block.commit();
+
+        let validators = context
+            .roster
+            .iter()
+            .map(|validator| AccountId::new(validator.validator.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_bindings = validators
+            .iter()
+            .zip(&context.roster)
+            .map(|(validator, power)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: power.validator.clone(),
+                torii_url: None,
+            })
+            .collect();
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("sumeragi-v2-apply-fixture".to_owned()),
+            manifest_path: Some(std::path::PathBuf::from(
+                "/tmp/sumeragi-v2-apply-fixture-manifest.json",
+            )),
+            governance_rules: Some(GovernanceRules {
+                validators,
+                validator_bindings,
+                ..GovernanceRules::default()
+            }),
+            privacy_commitments: Vec::new(),
+        };
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(LaneId::SINGLE, status)]),
+        )));
+
+        let mut expected = context
+            .roster
+            .iter()
+            .map(|validator| validator.validator.clone())
+            .collect::<Vec<_>>();
+        expected.sort();
+        let mut actual =
+            state.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, context.height);
+        actual.sort();
+        assert_eq!(
+            actual, expected,
+            "fixture must expose every authenticated validator as lane authority"
+        );
     }
 
     impl ApplyFixture {
@@ -1746,11 +1842,14 @@ mod tests {
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
             ));
-            let nexus = state.nexus_snapshot();
-            let lane_manifests = Arc::new(
-                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-            );
-            state.install_lane_manifests(&lane_manifests);
+            let validator_set_pops = keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("fixture validator PoP")
+                })
+                .collect::<Vec<_>>();
+            install_fixture_validator_authority(&state, &context, &validator_set_pops);
             let mut commit_topology = state.commit_topology.block();
             commit_topology.clear();
             for validator in &context.roster {
@@ -1770,12 +1869,7 @@ mod tests {
                 Duration::from_secs(1),
                 transaction_authority.clone(),
                 events_sender,
-                keys.iter()
-                    .map(|key| {
-                        iroha_crypto::bls_normal_pop_prove(key.private_key())
-                            .expect("fixture validator PoP")
-                    })
-                    .collect(),
+                validator_set_pops,
             );
 
             let round = wire::ConsensusRound {
@@ -1981,11 +2075,11 @@ mod tests {
                 LiveQueryStore::start_test(),
                 self.service.chain_id.clone(),
             ));
-            let nexus = state.nexus_snapshot();
-            let lane_manifests = Arc::new(
-                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            install_fixture_validator_authority(
+                &state,
+                &self.context,
+                &self.service.validator_set_pops,
             );
-            state.install_lane_manifests(&lane_manifests);
             let mut commit_topology = state.commit_topology.block();
             commit_topology.clear();
             for validator in &self.context.roster {
@@ -2575,12 +2669,38 @@ mod tests {
         TransactionEntrypoint,
     ) {
         let entrypoint = TransactionEntrypoint::External(transaction.clone());
-        queue
-            .push_with_lane_with_state(
-                AcceptedTransaction::new_unchecked(Cow::Owned(transaction)),
-                state,
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+        let routing_plan = queue
+            .route_plan_with_state(&accepted, state)
+            .expect("resolve reservation fixture route");
+        let admission_context = queue
+            .plan_admission_context_with_state(state, &routing_plan)
+            .expect("capture reservation fixture admission context");
+        let request_identity = Hash::new(
+            format!(
+                "sumeragi-v2-apply-reservation:{}",
+                accepted.hash_as_entrypoint()
             )
-            .expect("enqueue reservation fixture transaction");
+            .as_bytes(),
+        );
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.chain_id_ref(),
+            request_identity,
+            accepted.entrypoint(),
+            &routing_plan,
+            admission_context,
+            queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("build reservation fixture global admission binding");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                accepted,
+                state,
+                routing_plan,
+                &binding,
+            )
+            .expect("durably enqueue globally bound reservation fixture transaction");
+        install_fixture_queue_plan_registry_value(state, &binding);
         let scope = LaneQueueReservationScopeV1 {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -2602,6 +2722,31 @@ mod tests {
             .expect("reserve exact fixture transaction");
         assert_eq!(reserved.len(), 1);
         (*reserved[0].key(), entrypoint)
+    }
+
+    fn install_fixture_queue_plan_registry_value(
+        state: &State,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) {
+        let registry_key = binding.registry_key();
+        let marker_key = format!(
+            "queue_plan_admission_v2_{}_{}",
+            hex::encode(registry_key.chain_id_digest.as_ref()),
+            hex::encode(registry_key.entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .expect("reservation fixture registry marker key");
+        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash: binding.canonical_hash(),
+        };
+        let marker_payload =
+            norito::to_bytes(&marker_value).expect("encode reservation fixture registry marker");
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(marker_key, marker_payload);
+        world.commit();
     }
 
     fn reserve_autonomous_crash_batch(
@@ -2673,12 +2818,37 @@ mod tests {
         proposal.proposal_hash = proposal.computed_proposal_hash();
 
         for transaction in &transactions {
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
+            let routing_plan = queue
+                .route_plan_with_state(&accepted, fixture.state.as_ref())
+                .expect("resolve autonomous crash reservation route");
+            let admission_context = queue
+                .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
+                .expect("capture autonomous crash admission context");
+            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                fixture.state.chain_id_ref(),
+                Hash::new(
+                    format!(
+                        "sumeragi-v2-autonomous-crash-reservation:{}",
+                        accepted.hash_as_entrypoint()
+                    )
+                    .as_bytes(),
+                ),
+                accepted.entrypoint(),
+                &routing_plan,
+                admission_context,
+                queue.queue_plan_admission_timestamp_ms(),
+            )
+            .expect("build autonomous crash global admission binding");
             queue
-                .push_with_lane_with_state(
-                    AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone())),
+                .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                    accepted,
                     fixture.state.as_ref(),
+                    routing_plan,
+                    &binding,
                 )
-                .expect("enqueue autonomous crash reservation transaction");
+                .expect("durably enqueue autonomous crash reservation transaction");
+            install_fixture_queue_plan_registry_value(fixture.state.as_ref(), &binding);
         }
         let scope = LaneQueueReservationScopeV1 {
             lane_id: proposal.descriptor.lane_id,
@@ -2885,6 +3055,13 @@ mod tests {
             let queue = Queue::from_config(QueueConfig::default(), events_sender);
             let journal_dir = tempfile::tempdir().expect("reservation journal directory");
             queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install queue-plan journal");
+            queue
                 .install_lane_reservation_journal(
                     journal_dir.path().join("lane-reservations.norito"),
                     1024 * 1024,
@@ -2957,6 +3134,13 @@ mod tests {
         let queue = Queue::from_config(QueueConfig::default(), events_sender);
         let journal_dir = tempfile::tempdir().expect("reservation journal directory");
         queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install queue-plan journal");
+        queue
             .install_lane_reservation_journal(
                 journal_dir.path().join("lane-reservations.norito"),
                 1024 * 1024,
@@ -3011,6 +3195,13 @@ mod tests {
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
         let queue = Queue::from_config(QueueConfig::default(), events_sender);
         let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+        queue
+            .install_plan_journal(
+                journal_dir.path().join("queue-plans.norito"),
+                1024 * 1024,
+                true,
+            )
+            .expect("install queue-plan journal");
         queue
             .install_lane_reservation_journal(
                 journal_dir.path().join("lane-reservations.norito"),
@@ -3071,6 +3262,13 @@ mod tests {
             let journal_dir = tempfile::tempdir().expect("reservation journal directory");
             let journal_path = journal_dir.path().join("lane-reservations.norito");
             let first_queue = Queue::from_config(QueueConfig::default(), events_sender.clone());
+            first_queue
+                .install_plan_journal(
+                    journal_dir.path().join("queue-plans.norito"),
+                    1024 * 1024,
+                    true,
+                )
+                .expect("install first-process queue-plan journal");
             first_queue
                 .install_lane_reservation_journal(&journal_path, 1024 * 1024)
                 .expect("install first-process reservation journal");
@@ -3603,6 +3801,7 @@ mod tests {
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let mut certificate = fixture.task.certificate().clone();
             certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
+            certificate.proposal_round = certificate.round;
             let preimage = wire::Vote {
                 round: certificate.round,
                 proposal_round: certificate.proposal_round,
@@ -3637,14 +3836,42 @@ mod tests {
                 fixture.task.tag().generation(),
             );
             let mut store = fixture.reopen_body_store();
-            let locked_origin_receipt = fixture.task.validated_receipt().clone();
+            let canonical_wire = fixture
+                .body
+                .encode_wire()
+                .expect("encode unchanged locked body");
+            let reproposal_manifest = wire::PayloadManifest::derive(
+                &fixture.context,
+                later_round,
+                fixture.task.subject(),
+                u64::try_from(canonical_wire.len()).expect("body length"),
+                std::slice::from_ref(&canonical_wire),
+            )
+            .expect("derive later-round manifest for unchanged locked body");
+            let durable = store
+                .store(reproposal_manifest, canonical_wire.clone())
+                .expect("persist later-round manifest for unchanged locked body");
+            let reproposal_receipt = store
+                .validate(&durable, |candidate| {
+                    assert_eq!(
+                        candidate
+                            .encode_wire()
+                            .expect("encode reproposed candidate"),
+                        canonical_wire,
+                        "reproposal must retain the exact canonical locked body bytes"
+                    );
+                    fixture
+                        .service
+                        .validate_candidate(&fixture.context, candidate)
+                })
+                .expect("validate unchanged body under the later proposal round");
             assert_eq!(
-                locked_origin_receipt.durable().round(),
+                reproposal_receipt.durable().round(),
                 certificate.proposal_round,
-                "the durable body remains bound to the immutable proposal origin"
+                "the durable receipt must bind the unchanged body to its later reproposal round"
             );
             assert_eq!(
-                locked_origin_receipt.execution_commitment(),
+                reproposal_receipt.execution_commitment(),
                 fixture.task.validated_receipt().execution_commitment(),
                 "view rotation must not change deterministic execution"
             );
@@ -3653,7 +3880,7 @@ mod tests {
                 later_tag,
                 fixture.task.subject(),
                 certificate,
-                locked_origin_receipt,
+                reproposal_receipt,
             );
             fixture.task = task;
 

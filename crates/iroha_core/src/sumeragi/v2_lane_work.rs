@@ -115,12 +115,12 @@ use crate::{
 };
 
 #[cfg(test)]
-use crate::queue::{RouteLeg, RouteLegRole};
-#[cfg(test)]
 use crate::native_amx::{
-    MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD,
-    MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+    MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD,
+    MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
 };
+#[cfg(test)]
+use crate::queue::{RouteLeg, RouteLegRole};
 
 // Keep compact-QC preflight at least as strict as State's full-entry admission
 // before allocating transport. These are first-release protocol caps, not
@@ -13402,7 +13402,8 @@ pub(super) mod tests {
     fn native_amx_adapter_opens_with_bounded_production_like_limits() {
         assert!(sumeragi_v2_validator_storage_supported());
 
-        let limits = limits_with_native_capacity(4_096);
+        let record_capacity = 4_096;
+        let limits = limits_with_native_capacity(record_capacity);
         let (adapter, _) = fixture_at_height_inner_with_limits(
             wire::ConsensusMode::Permissioned,
             9,
@@ -13415,7 +13416,7 @@ pub(super) mod tests {
                 .as_ref()
                 .expect("BLS validator has a durable Native AMX guard")
                 .max_records_for_test(),
-            MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+            record_capacity,
         );
     }
 
@@ -15211,6 +15212,7 @@ pub(super) mod tests {
             adapter.insert_lane_qc(lane_qc_for_phase(&proposal, &keys, CertPhase::Commit), 0,),
             V2LaneIngressOutcome::Inserted
         );
+        adapter.collect_committed_lane_sessions();
         assert!(
             !adapter
                 .kura
@@ -15743,7 +15745,8 @@ pub(super) mod tests {
 
     #[test]
     fn recovered_autonomous_certificate_repairs_ready_before_certified_publication() {
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (mut adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
         let entrypoint = block
             .external_entrypoints_cloned()
@@ -15933,7 +15936,8 @@ pub(super) mod tests {
             );
         }
 
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (mut adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
         adapter
             .kura
@@ -17232,7 +17236,11 @@ pub(super) mod tests {
 
         let header = BlockHeader::new(
             NonZeroU64::new(adapter.context.height).expect("non-zero fixture height"),
-            None,
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
             None,
             None,
             1,
@@ -20766,6 +20774,7 @@ pub(super) mod tests {
         *sibling_requested_marker = Box::new(sibling_marker);
         let sibling_request_hash = HashOf::new(&sibling_request);
         assert_ne!(sibling_request_hash, HashOf::new(&recovery_request));
+        adapter.limits.effect_capacity = fixture_capacity;
         assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
             peer: target.clone(),
             message: BlockMessage::LaneHistoricalRecoveryRequest(
@@ -22295,6 +22304,13 @@ pub(super) mod tests {
         queue
             .install_lane_reservation_journal(journal_path, 1024 * 1024)
             .expect("install autonomous queue reservation journal");
+        let plan_journal_path = journal_path.with_extension("plans.norito");
+        queue
+            .install_plan_journal(&plan_journal_path, 1024 * 1024, true)
+            .expect("install autonomous queue plan journal");
+        queue
+            .replay_plan_journal(adapter.state.as_ref())
+            .expect("replay autonomous queue plan journal");
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .expect("install autonomous production queue");
@@ -22320,25 +22336,81 @@ pub(super) mod tests {
                     AccountId::new(key.public_key().clone()),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    format!("autonomous lane fixture {index}"),
+                )])
                 .sign(key.private_key());
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                     std::borrow::Cow::Owned(transaction),
                 );
                 let entrypoint = accepted.entrypoint().clone();
+                let routing_plan = queue
+                    .route_plan_with_state(&accepted, adapter.state.as_ref())
+                    .expect("resolve autonomous fixture routing plan");
                 assert_eq!(
-                    queue
-                        .route_plan_for_gossip_with_state(&accepted, adapter.state.as_ref())
-                        .expect("autonomous fixture route remains resolvable")
-                        .coordinator_route(),
+                    routing_plan.coordinator_route(),
                     RoutingDecision::new(lane_id, dataspace_id),
                     "the exact committed Nexus generation must retain the autonomous test router"
                 );
+                let admission_context = queue
+                    .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
+                    .expect("capture autonomous fixture admission context");
+                let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+                    adapter.state.chain_id_ref(),
+                    Hash::new(
+                        format!(
+                            "sumeragi-v2-lane-work-autonomous:{}",
+                            accepted.hash_as_entrypoint()
+                        )
+                        .as_bytes(),
+                    ),
+                    accepted.entrypoint(),
+                    &routing_plan,
+                    admission_context,
+                    queue.queue_plan_admission_timestamp_ms(),
+                )
+                .expect("build autonomous fixture global admission binding");
                 queue
-                    .push_with_lane_with_state(accepted, adapter.state.as_ref())
-                    .expect("enqueue autonomous lane transaction");
+                    .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                        accepted,
+                        adapter.state.as_ref(),
+                        routing_plan,
+                        &binding,
+                    )
+                    .expect("durably enqueue globally bound autonomous lane transaction");
+                install_autonomous_fixture_queue_plan_registry_value(
+                    adapter.state.as_ref(),
+                    &binding,
+                );
                 entrypoint
             })
             .collect()
+    }
+
+    fn install_autonomous_fixture_queue_plan_registry_value(
+        state: &State,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    ) {
+        let registry_key = binding.registry_key();
+        let marker_key = format!(
+            "queue_plan_admission_v2_{}_{}",
+            hex::encode(registry_key.chain_id_digest.as_ref()),
+            hex::encode(registry_key.entrypoint_hash.as_ref()),
+        )
+        .parse()
+        .expect("autonomous fixture registry marker key");
+        let marker_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            binding_hash: binding.canonical_hash(),
+        };
+        let marker_payload =
+            norito::to_bytes(&marker_value).expect("encode autonomous fixture registry marker");
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(marker_key, marker_payload);
+        world.commit();
     }
 
     fn autonomous_test_candidate_limits(
@@ -22633,7 +22705,15 @@ pub(super) mod tests {
         adapter
             .schedule_autonomous_lane_production(
                 0,
-                autonomous_test_candidate_limits_with_payload(2, 2, 2),
+                autonomous_test_candidate_limits_with_payload(
+                    2,
+                    adapter
+                        .limits
+                        .autonomous_carrier_headroom_bytes
+                        .get()
+                        .saturating_add(2),
+                    2,
+                ),
             )
             .expect("run byte-bounded autonomous producer tick");
         assert!(
@@ -24917,10 +24997,20 @@ pub(super) mod tests {
         }
         std::fs::write(&pending_dir, b"temporarily block pending sidecar directory")
             .expect("install transient Kura obstruction");
-        assert!(matches!(
-            adapter.schedule_retransmission(),
-            Err(V2LaneWorkError::Persistence(_))
-        ));
+        let output_guard = Arc::clone(&adapter.output_guard);
+        let publication = {
+            let operation = output_guard
+                .begin_fail_stop_operation()
+                .expect("fixture output admission remains open");
+            match adapter.try_commit_merge(key) {
+                Ok(()) => {
+                    operation.complete();
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        };
+        assert!(matches!(publication, Err(V2LaneWorkError::Persistence(_))));
         assert!(
             adapter.merge_entries.contains_key(&key),
             "failed Kura publication must retain the complete quorum"
