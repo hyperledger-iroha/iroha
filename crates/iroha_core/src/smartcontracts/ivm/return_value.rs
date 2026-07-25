@@ -1873,9 +1873,14 @@ mod tests {
         EntrypointValueTypeV1 { nodes }
     }
 
-    fn nested_tuple_schema(levels: usize) -> EntrypointValueTypeV1 {
+    fn nested_product_schema(levels: usize) -> EntrypointValueTypeV1 {
         let mut nodes = Vec::with_capacity(levels.saturating_add(1));
-        nodes.extend((0..levels).map(|_| EntrypointValueTypeNodeV1::Tuple(1)));
+        nodes.extend((0..levels).map(|_| {
+            EntrypointValueTypeNodeV1::Struct(EntrypointStructTypeNodeV1 {
+                name: "Layer".to_owned(),
+                fields: vec!["value".to_owned()],
+            })
+        }));
         nodes.push(EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int));
         EntrypointValueTypeV1 { nodes }
     }
@@ -2031,17 +2036,17 @@ mod tests {
         let levels = MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1;
         let mut vm = IVM::new(10_000);
 
-        let tuple_schema = nested_tuple_schema(levels);
-        assert!(tuple_schema.validate());
+        let product_schema = nested_product_schema(levels);
+        assert!(product_schema.validate());
         let seven = input_int(&mut vm, 7);
         vm.set_register(FIRST_RETURN_REGISTER, seven);
-        let tuple_record = collect_entrypoint_return_record(
+        let product_record = collect_entrypoint_return_record(
             &vm,
-            &tuple_schema,
+            &product_schema,
             MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
         )
         .expect("collect the maximum-depth product without native recursion");
-        assert_eq!(tuple_record.atoms, vec![int_atom(7)]);
+        assert_eq!(product_record.atoms, vec![int_atom(7)]);
 
         let list_schema = nested_list_schema(levels);
         assert!(list_schema.validate());

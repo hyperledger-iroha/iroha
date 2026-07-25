@@ -29294,7 +29294,8 @@ fn validate_queue_plan_synced_acceptance(
     }
     if receipt.payload.entrypoint_hash != expected.entrypoint_hash {
         return Err(
-            "submission receipt entrypoint hash does not match the submitted transaction".to_owned(),
+            "submission receipt entrypoint hash does not match the submitted transaction"
+                .to_owned(),
         );
     }
     if receipt.payload.signed_transaction_hash != expected.signed_transaction_hash {
@@ -29332,8 +29333,7 @@ fn queue_plan_synced_snapshot_to_response(
     });
 
     if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
-        let status =
-            StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
+        let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
         if status.is_success()
             && let Err(reason) = validate_queue_plan_synced_acceptance(&snapshot, expected)
         {
@@ -29912,8 +29912,7 @@ where
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
-    let queue_plan_synced_expectation =
-        queue_plan_synced_acceptance_expectation(&request.request);
+    let queue_plan_synced_expectation = queue_plan_synced_acceptance_expectation(&request.request);
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
@@ -29939,9 +29938,7 @@ where
         match outcome {
             Ok(snapshot) => {
                 let mut response = match queue_plan_synced_expectation.as_ref() {
-                    Some(expected) => {
-                        queue_plan_synced_snapshot_to_response(snapshot, expected)
-                    }
+                    Some(expected) => queue_plan_synced_snapshot_to_response(snapshot, expected),
                     None => torii_proxy_snapshot_to_response(snapshot),
                 };
                 let status = response.status();
@@ -80050,6 +80047,7 @@ mod tests {
         time::Duration,
     };
 
+    use super::*;
     use axum::{
         extract::State,
         http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
@@ -80100,7 +80098,6 @@ mod tests {
     #[cfg(feature = "app_api")]
     use jsonwebtoken::EncodingKey;
     use nonzero_ext::nonzero;
-    use super::*;
 
     fn proof_json_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();

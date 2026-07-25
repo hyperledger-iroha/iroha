@@ -75,10 +75,10 @@ use iroha_data_model::{
         Instruction, InstructionBox,
         escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
         sorafs::{
-            ApplySorafsRepairTaskAction, CancelSorafsOrderbookOrder,
-            FinalizeSorafsModerationCase, RecordSorafsOrderbookSettlementReceipt,
-            SorafsRepairTaskActionV1, SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
-            SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+            ApplySorafsRepairTaskAction, CancelSorafsOrderbookOrder, FinalizeSorafsModerationCase,
+            RecordSorafsOrderbookSettlementReceipt, SorafsRepairTaskActionV1,
+            SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal,
+            SubmitSorafsRepairTask,
         },
     },
     permission::Permission,
@@ -104,6 +104,11 @@ use iroha_data_model::{
             SoraFsModerationBallotCommitV1, SoraFsModerationBallotContextV1,
             SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
+        moderation_ledger::{
+            REPAIR_QUERY_MAX_ITEMS_V1, RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
+            RepairFinalizedEventPageV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
+            RepairLedgerTaskPageV1,
+        },
         orderbook::{
             ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookFinalizedCursorV1,
             OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1,
@@ -119,11 +124,6 @@ use iroha_data_model::{
         reserve::{
             ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage,
             ReserveQuote,
-        },
-        moderation_ledger::{
-            REPAIR_QUERY_MAX_ITEMS_V1, RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
-            RepairFinalizedEventPageV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
-            RepairLedgerTaskPageV1,
         },
         transparency::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
@@ -3335,11 +3335,9 @@ impl FinalizedRepairAnchorQuery {
             "expected_finalized_height" => {
                 parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_repair_query_string(
-                &mut query.expected_finalized_block_hash_hex,
-                key,
-                value,
-            ),
+            "expected_finalized_block_hash_hex" => {
+                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
+            }
             _ => Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("unknown finalized SoraFS repair query parameter `{key}`"),
@@ -3371,11 +3369,9 @@ impl FinalizedRepairTaskQuery {
             "expected_finalized_height" => {
                 parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_repair_query_string(
-                &mut query.expected_finalized_block_hash_hex,
-                key,
-                value,
-            ),
+            "expected_finalized_block_hash_hex" => {
+                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
+            }
             "after_task_id_hex" => {
                 parse_repair_query_string(&mut query.after_task_id_hex, key, value)
             }
@@ -3428,11 +3424,9 @@ impl FinalizedRepairEventQuery {
             "expected_finalized_height" => {
                 parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
             }
-            "expected_finalized_block_hash_hex" => parse_repair_query_string(
-                &mut query.expected_finalized_block_hash_hex,
-                key,
-                value,
-            ),
+            "expected_finalized_block_hash_hex" => {
+                parse_repair_query_string(&mut query.expected_finalized_block_hash_hex, key, value)
+            }
             "after_sequence" => parse_repair_query_u64(&mut query.after_sequence, key, value),
             "after_block_height" => {
                 parse_repair_query_u64(&mut query.after_block_height, key, value)
@@ -3440,9 +3434,7 @@ impl FinalizedRepairEventQuery {
             "after_block_hash_hex" => {
                 parse_repair_query_string(&mut query.after_block_hash_hex, key, value)
             }
-            "after_event_index" => {
-                parse_repair_query_u32(&mut query.after_event_index, key, value)
-            }
+            "after_event_index" => parse_repair_query_u32(&mut query.after_event_index, key, value),
             _ => Err(ResponseError::from(json_error(
                 StatusCode::BAD_REQUEST,
                 format!("unknown finalized SoraFS repair-event query parameter `{key}`"),
@@ -3541,11 +3533,7 @@ fn parse_repair_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> Ap
     Ok(())
 }
 
-fn parse_repair_query_string(
-    target: &mut Option<String>,
-    name: &str,
-    raw: &str,
-) -> ApiResult<()> {
+fn parse_repair_query_string(target: &mut Option<String>, name: &str, raw: &str) -> ApiResult<()> {
     if target.is_some() || raw.is_empty() {
         return Err(ResponseError::from(json_error(
             StatusCode::BAD_REQUEST,
@@ -3591,9 +3579,7 @@ fn validate_repair_cursor_pair(
     Ok(())
 }
 
-fn validate_repair_event_cursor_parts(
-    query: &FinalizedRepairEventQuery,
-) -> Result<(), Response> {
+fn validate_repair_event_cursor_parts(query: &FinalizedRepairEventQuery) -> Result<(), Response> {
     let present = [
         query.after_sequence.is_some(),
         query.after_block_height.is_some(),
@@ -13766,7 +13752,8 @@ pub(crate) async fn handle_get_sorafs_repair_tasks(
         Err(response) => return response,
     };
     let state_view = state.state.query_view();
-    let page = match FindSorafsRepairTasks::new(expected, after, query.limit()).execute(&state_view) {
+    let page = match FindSorafsRepairTasks::new(expected, after, query.limit()).execute(&state_view)
+    {
         Ok(page) => page,
         Err(error) => return repair_finalized_query_error_response(error),
     };
@@ -13784,9 +13771,7 @@ pub(crate) async fn handle_get_sorafs_repair_task(
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs repair API is not enabled on this node");
     }
-    if let Err(error) =
-        sorafs_manifest::repair::RepairTicketId(ticket_id.clone()).validate()
-    {
+    if let Err(error) = sorafs_manifest::repair::RepairTicketId(ticket_id.clone()).validate() {
         return json_error(
             StatusCode::BAD_REQUEST,
             format!("invalid SoraFS repair ticket identifier: {error}"),
@@ -13832,10 +13817,11 @@ pub(crate) async fn handle_get_sorafs_repair_events(
         Err(response) => return response,
     };
     let state_view = state.state.query_view();
-    let page = match FindSorafsRepairEvents::new(expected, after, query.limit()).execute(&state_view) {
-        Ok(page) => page,
-        Err(error) => return repair_finalized_query_error_response(error),
-    };
+    let page =
+        match FindSorafsRepairEvents::new(expected, after, query.limit()).execute(&state_view) {
+            Ok(page) => page,
+            Err(error) => return repair_finalized_query_error_response(error),
+        };
     let etag = match repair_finalized_events_etag(&page) {
         Ok(etag) => etag,
         Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -21853,8 +21839,9 @@ fn repair_finalized_event_page_json(page: &RepairFinalizedEventPageV1) -> Result
         json_entry("source", "finalized_chain"),
         json_entry(
             "events",
-            json::to_value(page)
-                .map_err(|error| format!("failed to encode finalized repair event page: {error}"))?,
+            json::to_value(page).map_err(|error| {
+                format!("failed to encode finalized repair event page: {error}")
+            })?,
         ),
     ]))
 }
@@ -41245,10 +41232,12 @@ mod advert_tests {
         let oversized_limit = format!("limit={}", REPAIR_QUERY_MAX_ITEMS_V1 + 1);
         assert!(FinalizedRepairTaskQuery::parse(Some(&oversized_limit)).is_err());
         assert!(FinalizedRepairTaskQuery::parse(Some("limit=1&limit=2")).is_err());
-        assert!(FinalizedRepairTaskQuery::parse(Some(
-            "after_task_id_hex=0000000000000000000000000000000000000000000000000000000000000000"
-        ))
-        .is_err());
+        assert!(
+            FinalizedRepairTaskQuery::parse(Some(
+                "after_task_id_hex=0000000000000000000000000000000000000000000000000000000000000000"
+            ))
+            .is_err()
+        );
 
         assert!(
             FinalizedRepairEventQuery::parse(Some("after_sequence=2&after_block_height=7"))
@@ -41273,8 +41262,7 @@ mod advert_tests {
     #[test]
     fn repair_command_contract_requires_one_route_exact_native_instruction() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let report: InstructionBox =
-            SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]).into();
+        let report: InstructionBox = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]).into();
         let multiple = TransactionBuilder::new(
             app.chain_id.as_ref().clone(),
             auth.provider.account.clone(),
@@ -41289,12 +41277,10 @@ mod advert_tests {
         let claim: InstructionBox = ApplySorafsRepairTaskAction::new(
             "REP-ROUTE-1".to_owned(),
             1,
-            SorafsRepairTaskActionV1::Claim(
-                iroha_data_model::isi::sorafs::SorafsRepairClaimV1 {
-                    lease_duration_ms: 60_000,
-                    idempotency_key: "claim-route-1".to_owned(),
-                },
-            ),
+            SorafsRepairTaskActionV1::Claim(iroha_data_model::isi::sorafs::SorafsRepairClaimV1 {
+                lease_duration_ms: 60_000,
+                idempotency_key: "claim-route-1".to_owned(),
+            }),
         )
         .into();
         let transaction = TransactionBuilder::new(

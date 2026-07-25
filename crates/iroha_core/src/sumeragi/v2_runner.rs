@@ -4121,9 +4121,9 @@ mod tests {
                     message.as_ref(),
                     CertifiedMergeSidecarMessage::Chunk(_)
                 ));
-                assert!(
-                    Arc::ptr_eq(&message, &first_message),
-                    "reconnect must preserve the exact cached chunk carrier"
+                assert_eq!(
+                    message, first_message,
+                    "reconnect must preserve the exact current chunk even when its bounded transport cache was rematerialized"
                 );
                 assert!(
                     reply_routes

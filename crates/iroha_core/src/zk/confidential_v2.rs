@@ -1,12 +1,6 @@
 use blake3::Hasher as Blake3Hasher;
 use iroha_data_model::proof::VerifyingKeyBox;
 
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-use halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
-    plonk::{ConstraintSystem, Error as PlonkError, Selector},
-    poly::Rotation,
-};
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::{
     halo2curves::{
@@ -1002,17 +996,6 @@ fn scalar_from_u128(amount: u128) -> Scalar {
     Scalar::from_repr(repr).expect("u128 always fits inside Pasta Fp")
 }
 
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-fn poseidon_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
-    let lhs = lhs + Scalar::from(7u64);
-    let rhs = rhs + Scalar::from(13u64);
-    let lhs_sq = lhs * lhs;
-    let lhs_fourth = lhs_sq * lhs_sq;
-    let rhs_sq = rhs * rhs;
-    let rhs_fourth = rhs_sq * rhs_sq;
-    Scalar::from(2u64) * (lhs_fourth * lhs) + Scalar::from(3u64) * (rhs_fourth * rhs)
-}
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) type ConfidentialPoseidonSpecV3<F> =
     halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec<
@@ -1141,18 +1124,6 @@ pub(super) mod confidential_relation_gadget {
         poseidon::hasher::PoseidonHasher,
         utils::BigPrimeField,
     };
-    #[cfg(test)]
-    use halo2_proofs::{
-        circuit::{Region, Value},
-        halo2curves::ff::Field,
-        plonk::{Advice, Column, ConstraintSystem, Error, Expression, Selector},
-        poly::Rotation,
-    };
-
-    #[cfg(test)]
-    const U128_RANGE_ROWS: usize = 8;
-    #[cfg(test)]
-    const U128_RANGE_BITS_PER_ROW: usize = 16;
 
     /// Shared secure Poseidon gadget for confidential and recursive relations.
     pub(in crate::zk) struct ConfidentialPoseidonChipV3<F: BigPrimeField> {
@@ -1190,162 +1161,15 @@ pub(super) mod confidential_relation_gadget {
             self.hasher.hash_fix_len_array(ctx, range.gate(), &preimage)
         }
     }
-
-    #[derive(Clone, Debug)]
-    /// Reusable bit-decomposition gadget constraining one exact `u128` value.
-    #[cfg(test)]
-    pub(in crate::zk) struct U128RangeConfig {
-        value: Column<Advice>,
-        bits: [Column<Advice>; U128_RANGE_BITS_PER_ROW],
-        selector: Selector,
-    }
-
-    #[cfg(test)]
-    impl U128RangeConfig {
-        /// Allocate the fixed 128-bit decomposition columns and constraints.
-        pub(super) fn configure<F>(meta: &mut ConstraintSystem<F>) -> Self
-        where
-            F: Field + From<u64>,
-        {
-            let value = meta.advice_column();
-            let bits = std::array::from_fn(|_| meta.advice_column());
-            let selector = meta.selector();
-            meta.create_gate("confidential_u128_range", |meta| {
-                let enabled = meta.query_selector(selector);
-                let value_expression = meta.query_advice(value, Rotation::cur());
-                let one = Expression::Constant(F::ONE);
-                let mut coefficient = F::ONE;
-                let mut reconstructed = Expression::Constant(F::ZERO);
-                let mut constraints = Vec::with_capacity(129);
-                for row in 0..U128_RANGE_ROWS {
-                    for bit_column in bits {
-                        let bit = meta.query_advice(
-                            bit_column,
-                            Rotation(i32::try_from(row).expect("u128 range rotation fits i32")),
-                        );
-                        constraints
-                            .push(enabled.clone() * bit.clone() * (bit.clone() - one.clone()));
-                        reconstructed = reconstructed + Expression::Constant(coefficient) * bit;
-                        coefficient = coefficient + coefficient;
-                    }
-                }
-                constraints.push(enabled * (value_expression - reconstructed));
-                constraints
-            });
-            Self {
-                value,
-                bits,
-                selector,
-            }
-        }
-
-        /// Query the packed range-checked value at a fixed region offset.
-        pub(super) fn query_value_at<F>(
-            &self,
-            meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
-            offset: usize,
-        ) -> Expression<F>
-        where
-            F: Field,
-        {
-            meta.query_advice(
-                self.value,
-                Rotation(i32::try_from(offset).expect("u128 range offset fits i32")),
-            )
-        }
-
-        /// Assign one optional witness and all 128 canonical bits.
-        pub(super) fn assign<F>(
-            &self,
-            region: &mut Region<'_, F>,
-            offset: usize,
-            value: Option<u128>,
-        ) -> Result<(), Error>
-        where
-            F: Field + From<u64>,
-        {
-            self.selector.enable(region, offset)?;
-            let field_value = value.map(|value| {
-                let low = F::from(value as u64);
-                let high = F::from((value >> 64) as u64);
-                let mut two_pow_64 = F::ONE;
-                for _ in 0..64 {
-                    two_pow_64 = two_pow_64 + two_pow_64;
-                }
-                low + high * two_pow_64
-            });
-            super::super::assign_advice_compat(
-                region,
-                || "u128_range_value",
-                self.value,
-                offset,
-                || field_value.map_or(Value::unknown(), Value::known),
-            )?;
-            for row in 0..U128_RANGE_ROWS {
-                for (column_index, column) in self.bits.iter().copied().enumerate() {
-                    let bit_index = row * U128_RANGE_BITS_PER_ROW + column_index;
-                    let bit = value.map(|value| F::from(((value >> bit_index) & 1) as u64));
-                    super::super::assign_advice_compat(
-                        region,
-                        || "u128_range_bit",
-                        column,
-                        offset + row,
-                        || bit.map_or(Value::unknown(), Value::known),
-                    )?;
-                }
-            }
-            Ok(())
-        }
-    }
-
-    /// Return the retired two-input polynomial expression.
-    ///
-    /// This remains only while call sites migrate atomically to the pinned
-    /// secure Poseidon chip; it must not back a production release.
-    #[cfg(test)]
-    pub(super) fn poseidon_pair_expression<F>(
-        lhs: Expression<F>,
-        rhs: Expression<F>,
-    ) -> Expression<F>
-    where
-        F: Field + From<u64>,
-    {
-        let lhs = lhs + Expression::Constant(F::from(7u64));
-        let rhs = rhs + Expression::Constant(F::from(13u64));
-        let lhs_sq = lhs.clone() * lhs.clone();
-        let lhs_fourth = lhs_sq.clone() * lhs_sq;
-        let rhs_sq = rhs.clone() * rhs.clone();
-        let rhs_fourth = rhs_sq.clone() * rhs_sq;
-        Expression::Constant(F::from(2u64)) * (lhs_fourth * lhs)
-            + Expression::Constant(F::from(3u64)) * (rhs_fourth * rhs)
-    }
-
-    /// Return the retired direction-selected Merkle-parent expression.
-    #[cfg(test)]
-    pub(super) fn merkle_parent_expression<F>(
-        node: Expression<F>,
-        sibling: Expression<F>,
-        direction: Expression<F>,
-    ) -> Expression<F>
-    where
-        F: Field + From<u64>,
-    {
-        let one = Expression::Constant(F::ONE);
-        let forward = poseidon_pair_expression(node.clone(), sibling.clone());
-        let reverse = poseidon_pair_expression(sibling, node);
-        (one - direction.clone()) * forward + direction * reverse
-    }
 }
 
 /// Secure-permutation confidential relations built entirely in one constrained
 /// `halo2-base` execution trace.
 ///
-/// The legacy manual circuits below are intentionally not reused here: mixing
-/// their advice cells with a virtual-region hash gadget would leave the bridge
-/// between the two regions unconstrained.  Every value consumed by this
-/// relation, including public instances, range checks, presence flags, note
-/// openings, nullifiers, and Merkle paths, is therefore an `AssignedValue` in
-/// the same copy-constraint graph.
+/// Every value consumed by this relation, including public instances, range
+/// checks, presence flags, note openings, nullifiers, and Merkle paths, is an
+/// `AssignedValue` in the same copy-constraint graph. This avoids unconstrained
+/// bridges between advice cells and virtual-region hashes.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(in crate::zk) mod secure_relation_v3 {
     use halo2_base::{
@@ -1788,11 +1612,14 @@ pub(in crate::zk) mod secure_relation_v3 {
                 Scalar::ZERO
             })
         });
-        for (rho, present) in rho.iter().copied().zip(rho_present) {
-            if present {
-                assert_nonzero(ctx, &range, rho);
-            }
-        }
+        // Keep the circuit shape independent of whether a proving witness is
+        // present. Key generation configures the circuit without a witness,
+        // so conditionally omitting these constraints produces a different
+        // advice layout at proving time.
+        assert_nonzero(ctx, &range, rho[0]);
+        constrain_optional_nonzero(ctx, &range, rho[1], present_input_1);
+        assert_nonzero(ctx, &range, rho[2]);
+        constrain_optional_nonzero(ctx, &range, rho[3], present_output_1);
         let spend = ctx.load_witness(match witness {
             Some(value) => canonical_nonzero_scalar(value.spend_scalar, "transfer spend scalar")
                 .expect("validated transfer spend scalar"),
@@ -1828,11 +1655,11 @@ pub(in crate::zk) mod secure_relation_v3 {
                 .expect("validated transfer chain tag"),
             None => Scalar::ZERO,
         });
-        if witness.is_some() {
-            for value in [spend, diversifiers[0], output_owners[0], asset, chain] {
-                assert_nonzero(ctx, &range, value);
-            }
+        for value in [spend, diversifiers[0], output_owners[0], asset, chain] {
+            assert_nonzero(ctx, &range, value);
         }
+        constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
+        constrain_optional_nonzero(ctx, &range, output_owners[1], present_output_1);
 
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
         let input_owners = diversifiers.map(|diversifier| {
@@ -2017,10 +1844,8 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.map_or([0; 32], |value| value.operation_tag),
             "Kagemusha top-up operation tag",
         ));
-        if witness.is_some() {
-            for value in [rho, spend, diversifier, asset, chain, payer, operation] {
-                assert_nonzero(ctx, &range, value);
-            }
+        for value in [rho, spend, diversifier, asset, chain, payer, operation] {
+            assert_nonzero(ctx, &range, value);
         }
 
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
@@ -2145,6 +1970,19 @@ pub(in crate::zk) mod secure_relation_v3 {
         let bindings = assign_kagemusha_topup_shield_v3::<DEPTH>(builder.main(0), &range, witness)?;
         builder.assigned_instances = bindings.map(|value| vec![value]).to_vec();
         builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        // `halo2-base` estimates packed advice columns from the raw cell
+        // count. This relation crosses a gate-enabled column boundary, where
+        // the required overlap cell makes that estimate one column short.
+        // Reserve the deterministic packing margin in both keygen and proving
+        // layouts.
+        let first_phase = builder
+            .config_params
+            .num_advice_per_phase
+            .first_mut()
+            .expect("top-up relation always uses the first advice phase");
+        *first_phase = first_phase
+            .checked_add(1)
+            .expect("top-up advice-column packing margin must fit usize");
         Ok(builder)
     }
 
@@ -2217,15 +2055,8 @@ pub(in crate::zk) mod secure_relation_v3 {
                 Scalar::ZERO
             })
         });
-        if !matches!(
-            witness,
-            UnshieldWitnessRef::Full(None) | UnshieldWitnessRef::Change(None)
-        ) {
-            assert_nonzero(ctx, &range, input_rho[0]);
-            if include_input_1 {
-                assert_nonzero(ctx, &range, input_rho[1]);
-            }
-        }
+        assert_nonzero(ctx, &range, input_rho[0]);
+        constrain_optional_nonzero(ctx, &range, input_rho[1], present_input_1);
 
         let (spend_bytes, diversifier_bytes, asset_bytes, chain_bytes) = match witness {
             UnshieldWitnessRef::Full(Some(value)) => (
@@ -2259,14 +2090,10 @@ pub(in crate::zk) mod secure_relation_v3 {
             .map(|bytes| ctx.load_witness(decode(bytes, "validated unshield diversifier")));
         let asset = ctx.load_witness(decode(asset_bytes, "validated unshield asset tag"));
         let chain = ctx.load_witness(decode(chain_bytes, "validated unshield chain tag"));
-        if !matches!(
-            witness,
-            UnshieldWitnessRef::Full(None) | UnshieldWitnessRef::Change(None)
-        ) {
-            for value in [spend, diversifiers[0], asset, chain] {
-                assert_nonzero(ctx, &range, value);
-            }
+        for value in [spend, diversifiers[0], asset, chain] {
+            assert_nonzero(ctx, &range, value);
         }
+        constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
 
         let poseidon = confidential_relation_gadget::ConfidentialPoseidonChipV3::new(ctx, &range);
         let input_owners = diversifiers.map(|diversifier| {
@@ -3494,6 +3321,97 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
 
         #[test]
+        fn secure_relation_layouts_are_witness_independent() {
+            fn assert_same_shape(
+                label: &str,
+                witness_free: &BaseCircuitBuilder<Scalar>,
+                populated: &BaseCircuitBuilder<Scalar>,
+            ) {
+                let witness_free_stats = witness_free.statistics();
+                let populated_stats = populated.statistics();
+                assert_eq!(
+                    witness_free_stats.gate.total_advice_per_phase,
+                    populated_stats.gate.total_advice_per_phase,
+                    "{label} gate advice shape"
+                );
+                assert_eq!(
+                    witness_free_stats.total_lookup_advice_per_phase,
+                    populated_stats.total_lookup_advice_per_phase,
+                    "{label} lookup advice shape"
+                );
+                assert_eq!(
+                    witness_free.config_params.num_advice_per_phase,
+                    populated.config_params.num_advice_per_phase,
+                    "{label} gate column shape"
+                );
+                assert_eq!(
+                    witness_free.config_params.num_lookup_advice_per_phase,
+                    populated.config_params.num_lookup_advice_per_phase,
+                    "{label} lookup column shape"
+                );
+                assert_eq!(
+                    witness_free.config_params.num_instance_columns,
+                    populated.config_params.num_instance_columns,
+                    "{label} instance column shape"
+                );
+            }
+
+            const TRANSFER_K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
+            let transfer_empty = transfer_builder::<2>(None, TRANSFER_K).expect("empty transfer");
+            for include_input_1 in [false, true] {
+                for include_output_1 in [false, true] {
+                    let witness = sample_witness_shape(include_input_1, include_output_1);
+                    let populated = transfer_builder::<2>(Some(&witness), TRANSFER_K)
+                        .expect("populated transfer");
+                    assert_same_shape("transfer", &transfer_empty, &populated);
+                }
+            }
+
+            const TOPUP_K: usize = super::super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K as usize;
+            let topup_empty = topup_builder::<2>(None, TOPUP_K).expect("empty top-up");
+            let topup_witness = sample_topup_witness();
+            let topup_populated =
+                topup_builder::<2>(Some(&topup_witness), TOPUP_K).expect("populated top-up");
+            assert_same_shape("top-up", &topup_empty, &topup_populated);
+
+            const FULL_UNSHIELD_K: usize = super::super::CONFIDENTIAL_UNSHIELD_V2_IPA_K as usize;
+            let full_empty = unshield_builder::<2>(UnshieldWitnessRef::Full(None), FULL_UNSHIELD_K)
+                .expect("empty full unshield");
+            let full_witness = sample_full_unshield_witness();
+            let full_populated = unshield_builder::<2>(
+                UnshieldWitnessRef::Full(Some(&full_witness)),
+                FULL_UNSHIELD_K,
+            )
+            .expect("populated full unshield");
+            assert_same_shape("full unshield", &full_empty, &full_populated);
+
+            const CHANGE_UNSHIELD_K: usize = super::super::CONFIDENTIAL_UNSHIELD_V3_IPA_K as usize;
+            let change_empty =
+                unshield_builder::<2>(UnshieldWitnessRef::Change(None), CHANGE_UNSHIELD_K)
+                    .expect("empty change unshield");
+            let mut change_witness = sample_change_unshield_witness();
+            let change_populated = unshield_builder::<2>(
+                UnshieldWitnessRef::Change(Some(&change_witness)),
+                CHANGE_UNSHIELD_K,
+            )
+            .expect("populated change unshield");
+            assert_same_shape("change unshield", &change_empty, &change_populated);
+            change_witness.include_output_0 = false;
+            change_witness.output_0_amount = 0;
+            change_witness.output_0_rho = [0; 32];
+            let terminal_populated = unshield_builder::<2>(
+                UnshieldWitnessRef::Change(Some(&change_witness)),
+                CHANGE_UNSHIELD_K,
+            )
+            .expect("terminal change unshield");
+            assert_same_shape(
+                "terminal change unshield",
+                &change_empty,
+                &terminal_populated,
+            );
+        }
+
+        #[test]
         fn secure_full_unshield_relation_binds_every_public_column() {
             const K: usize = super::super::CONFIDENTIAL_UNSHIELD_V2_IPA_K as usize;
             let witness = sample_full_unshield_witness();
@@ -4550,717 +4468,6 @@ impl Drop for ConfidentialTransferWitnessV2 {
     }
 }
 
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-#[derive(Clone, Default)]
-/// Confidential transfer circuit shared by standalone proving and Kagemusha.
-pub(super) struct ConfidentialTransferCircuitV2<const DEPTH: usize> {
-    witness: Option<ConfidentialTransferWitnessV2>,
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Zeroize for ConfidentialTransferCircuitV2<DEPTH> {
-    fn zeroize(&mut self) {
-        if let Some(witness) = &mut self.witness {
-            witness.zeroize();
-        }
-        self.witness = None;
-    }
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Drop for ConfidentialTransferCircuitV2<DEPTH> {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH> {
-    type Config = (
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // include_input_1
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // include_output_1
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_amount
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_amount
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_amount
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_amount
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_rho
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_rho
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_rho
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_rho
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // spend_scalar
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_diversifier
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_diversifier
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_0_owner_tag
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // output_1_owner_tag
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_0_derived_owner_tag
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // input_1_derived_owner_tag
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 4], // note_owner_asset
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 4], // note_rho_owner_asset
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_asset_chain
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_0_rho_asset_chain
-        halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // nullifier_1_rho_asset_chain
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH],
-        [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 9],
-        confidential_relation_gadget::U128RangeConfig,
-        Selector,
-    );
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        let include_input_1 = meta.advice_column();
-        let include_output_1 = meta.advice_column();
-        let input_0_amount = meta.advice_column();
-        let input_1_amount = meta.advice_column();
-        let output_0_amount = meta.advice_column();
-        let output_1_amount = meta.advice_column();
-        let input_0_rho = meta.advice_column();
-        let input_1_rho = meta.advice_column();
-        let output_0_rho = meta.advice_column();
-        let output_1_rho = meta.advice_column();
-        let spend_scalar = meta.advice_column();
-        let input_0_diversifier = meta.advice_column();
-        let input_1_diversifier = meta.advice_column();
-        let output_0_owner_tag = meta.advice_column();
-        let output_1_owner_tag = meta.advice_column();
-        let input_0_derived_owner_tag = meta.advice_column();
-        let input_1_derived_owner_tag = meta.advice_column();
-        let note_owner_asset = std::array::from_fn(|_| meta.advice_column());
-        let note_rho_owner_asset = std::array::from_fn(|_| meta.advice_column());
-        let nullifier_asset_chain = meta.advice_column();
-        let nullifier_0_rho_asset_chain = meta.advice_column();
-        let nullifier_1_rho_asset_chain = meta.advice_column();
-        let input_0_siblings = std::array::from_fn(|_| meta.advice_column());
-        let input_0_directions = std::array::from_fn(|_| meta.advice_column());
-        let input_0_witness_nodes = std::array::from_fn(|_| meta.advice_column());
-        let input_1_siblings = std::array::from_fn(|_| meta.advice_column());
-        let input_1_directions = std::array::from_fn(|_| meta.advice_column());
-        let input_1_witness_nodes = std::array::from_fn(|_| meta.advice_column());
-        let instances = std::array::from_fn(|_| meta.instance_column());
-        let amount_range = confidential_relation_gadget::U128RangeConfig::configure(meta);
-        let selector = meta.selector();
-        let amount_range_gate = amount_range.clone();
-        meta.create_gate("confidential_transfer_v2", |meta| {
-            let enabled = meta.query_selector(selector);
-            let in1_present = meta.query_advice(include_input_1, Rotation::cur());
-            let out1_present = meta.query_advice(include_output_1, Rotation::cur());
-            let in0_amt = meta.query_advice(input_0_amount, Rotation::cur());
-            let in1_amt = meta.query_advice(input_1_amount, Rotation::cur());
-            let out0_amt = meta.query_advice(output_0_amount, Rotation::cur());
-            let out1_amt = meta.query_advice(output_1_amount, Rotation::cur());
-            let in0_rho = meta.query_advice(input_0_rho, Rotation::cur());
-            let in1_rho = meta.query_advice(input_1_rho, Rotation::cur());
-            let out0_rho = meta.query_advice(output_0_rho, Rotation::cur());
-            let out1_rho = meta.query_advice(output_1_rho, Rotation::cur());
-            let sk = meta.query_advice(spend_scalar, Rotation::cur());
-            let in0_diversifier = meta.query_advice(input_0_diversifier, Rotation::cur());
-            let in1_diversifier = meta.query_advice(input_1_diversifier, Rotation::cur());
-            let out0_owner = meta.query_advice(output_0_owner_tag, Rotation::cur());
-            let out1_owner = meta.query_advice(output_1_owner_tag, Rotation::cur());
-            let in0_owner = meta.query_advice(input_0_derived_owner_tag, Rotation::cur());
-            let in1_owner = meta.query_advice(input_1_derived_owner_tag, Rotation::cur());
-            let note_owner_asset_exprs = note_owner_asset
-                .iter()
-                .map(|column| meta.query_advice(*column, Rotation::cur()))
-                .collect::<Vec<_>>();
-            let note_rho_owner_asset_exprs = note_rho_owner_asset
-                .iter()
-                .map(|column| meta.query_advice(*column, Rotation::cur()))
-                .collect::<Vec<_>>();
-            let asset_chain_expr = meta.query_advice(nullifier_asset_chain, Rotation::cur());
-            let nf0_rho_asset_chain =
-                meta.query_advice(nullifier_0_rho_asset_chain, Rotation::cur());
-            let nf1_rho_asset_chain =
-                meta.query_advice(nullifier_1_rho_asset_chain, Rotation::cur());
-            let cm_in0 = meta.query_instance(instances[0], Rotation::cur());
-            let cm_in1 = meta.query_instance(instances[1], Rotation::cur());
-            let nf0 = meta.query_instance(instances[2], Rotation::cur());
-            let nf1 = meta.query_instance(instances[3], Rotation::cur());
-            let cm_out0 = meta.query_instance(instances[4], Rotation::cur());
-            let cm_out1 = meta.query_instance(instances[5], Rotation::cur());
-            let root = meta.query_instance(instances[6], Rotation::cur());
-            let asset_tag = meta.query_instance(instances[7], Rotation::cur());
-            let chain_tag = meta.query_instance(instances[8], Rotation::cur());
-            let one = halo2_proofs::plonk::Expression::Constant(Scalar::ONE);
-            let zero = halo2_proofs::plonk::Expression::Constant(Scalar::ZERO);
-            let poseidon_pair_expr =
-                |lhs, rhs| confidential_relation_gadget::poseidon_pair_expression(lhs, rhs);
-            let in0_commit_expr =
-                poseidon_pair_expr(in0_amt.clone(), note_rho_owner_asset_exprs[0].clone());
-            let in1_commit_raw =
-                poseidon_pair_expr(in1_amt.clone(), note_rho_owner_asset_exprs[1].clone());
-            let out0_commit_expr =
-                poseidon_pair_expr(out0_amt.clone(), note_rho_owner_asset_exprs[2].clone());
-            let out1_commit_raw =
-                poseidon_pair_expr(out1_amt.clone(), note_rho_owner_asset_exprs[3].clone());
-            let nf0_expr = poseidon_pair_expr(sk.clone(), nf0_rho_asset_chain.clone());
-            let nf1_raw = poseidon_pair_expr(sk.clone(), nf1_rho_asset_chain.clone());
-            let mut constraints = vec![
-                enabled.clone() * (in0_amt.clone() - amount_range_gate.query_value_at(meta, 0)),
-                enabled.clone() * (in1_amt.clone() - amount_range_gate.query_value_at(meta, 8)),
-                enabled.clone() * (out0_amt.clone() - amount_range_gate.query_value_at(meta, 16)),
-                enabled.clone() * (out1_amt.clone() - amount_range_gate.query_value_at(meta, 24)),
-                enabled.clone() * in1_present.clone() * (in1_present.clone() - one.clone()),
-                enabled.clone() * out1_present.clone() * (out1_present.clone() - one.clone()),
-                enabled.clone()
-                    * (in0_amt.clone() + in1_present.clone() * in1_amt.clone()
-                        - (out0_amt.clone() + out1_present.clone() * out1_amt.clone())),
-                enabled.clone()
-                    * (in0_owner.clone() - poseidon_pair_expr(sk.clone(), in0_diversifier)),
-                enabled.clone()
-                    * (in1_owner.clone() - poseidon_pair_expr(sk.clone(), in1_diversifier)),
-                enabled.clone()
-                    * (note_owner_asset_exprs[0].clone()
-                        - poseidon_pair_expr(in0_owner.clone(), asset_tag.clone())),
-                enabled.clone()
-                    * (note_owner_asset_exprs[1].clone()
-                        - poseidon_pair_expr(in1_owner.clone(), asset_tag.clone())),
-                enabled.clone()
-                    * (note_owner_asset_exprs[2].clone()
-                        - poseidon_pair_expr(out0_owner, asset_tag.clone())),
-                enabled.clone()
-                    * (note_owner_asset_exprs[3].clone()
-                        - poseidon_pair_expr(out1_owner, asset_tag.clone())),
-                enabled.clone()
-                    * (note_rho_owner_asset_exprs[0].clone()
-                        - poseidon_pair_expr(in0_rho.clone(), note_owner_asset_exprs[0].clone())),
-                enabled.clone()
-                    * (note_rho_owner_asset_exprs[1].clone()
-                        - poseidon_pair_expr(in1_rho.clone(), note_owner_asset_exprs[1].clone())),
-                enabled.clone()
-                    * (note_rho_owner_asset_exprs[2].clone()
-                        - poseidon_pair_expr(out0_rho, note_owner_asset_exprs[2].clone())),
-                enabled.clone()
-                    * (note_rho_owner_asset_exprs[3].clone()
-                        - poseidon_pair_expr(out1_rho, note_owner_asset_exprs[3].clone())),
-                enabled.clone()
-                    * (asset_chain_expr.clone()
-                        - poseidon_pair_expr(asset_tag.clone(), chain_tag.clone())),
-                enabled.clone()
-                    * (nf0_rho_asset_chain.clone()
-                        - poseidon_pair_expr(in0_rho.clone(), asset_chain_expr.clone())),
-                enabled.clone()
-                    * (nf1_rho_asset_chain.clone()
-                        - poseidon_pair_expr(in1_rho.clone(), asset_chain_expr)),
-                enabled.clone() * (in0_commit_expr.clone() - cm_in0.clone()),
-                enabled.clone() * (cm_in1.clone() - in1_present.clone() * in1_commit_raw),
-                enabled.clone() * (out0_commit_expr - cm_out0.clone()),
-                enabled.clone() * (cm_out1.clone() - out1_present.clone() * out1_commit_raw),
-                enabled.clone() * (nf0_expr - nf0.clone()),
-                enabled.clone() * (nf1.clone() - in1_present.clone() * nf1_raw),
-            ];
-            let mut input_0_prev = cm_in0;
-            for i in 0..DEPTH {
-                let sibling = meta.query_advice(input_0_siblings[i], Rotation::cur());
-                let direction = meta.query_advice(input_0_directions[i], Rotation::cur());
-                let witness = meta.query_advice(input_0_witness_nodes[i], Rotation::cur());
-                constraints
-                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
-                constraints.push(
-                    enabled.clone()
-                        * (witness.clone()
-                            - confidential_relation_gadget::merkle_parent_expression(
-                                input_0_prev.clone(),
-                                sibling,
-                                direction,
-                            )),
-                );
-                input_0_prev = witness;
-            }
-            constraints.push(enabled.clone() * (input_0_prev - root.clone()));
-            let mut input_1_prev = cm_in1;
-            for i in 0..DEPTH {
-                let sibling = meta.query_advice(input_1_siblings[i], Rotation::cur());
-                let direction = meta.query_advice(input_1_directions[i], Rotation::cur());
-                let witness = meta.query_advice(input_1_witness_nodes[i], Rotation::cur());
-                constraints
-                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
-                constraints.push(
-                    enabled.clone()
-                        * (witness.clone()
-                            - confidential_relation_gadget::merkle_parent_expression(
-                                input_1_prev.clone(),
-                                sibling,
-                                direction,
-                            )),
-                );
-                input_1_prev = witness;
-            }
-            constraints.push(enabled * (input_1_prev - root));
-            constraints.push(zero);
-            constraints
-        });
-        (
-            include_input_1,
-            include_output_1,
-            input_0_amount,
-            input_1_amount,
-            output_0_amount,
-            output_1_amount,
-            input_0_rho,
-            input_1_rho,
-            output_0_rho,
-            output_1_rho,
-            spend_scalar,
-            input_0_diversifier,
-            input_1_diversifier,
-            output_0_owner_tag,
-            output_1_owner_tag,
-            input_0_derived_owner_tag,
-            input_1_derived_owner_tag,
-            note_owner_asset,
-            note_rho_owner_asset,
-            nullifier_asset_chain,
-            nullifier_0_rho_asset_chain,
-            nullifier_1_rho_asset_chain,
-            input_0_siblings,
-            input_0_directions,
-            input_0_witness_nodes,
-            input_1_siblings,
-            input_1_directions,
-            input_1_witness_nodes,
-            instances,
-            amount_range,
-            selector,
-        )
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn synthesize(
-        &self,
-        cfg: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        let (
-            include_input_1,
-            include_output_1,
-            input_0_amount,
-            input_1_amount,
-            output_0_amount,
-            output_1_amount,
-            input_0_rho,
-            input_1_rho,
-            output_0_rho,
-            output_1_rho,
-            spend_scalar,
-            input_0_diversifier,
-            input_1_diversifier,
-            output_0_owner_tag,
-            output_1_owner_tag,
-            input_0_derived_owner_tag,
-            input_1_derived_owner_tag,
-            note_owner_asset,
-            note_rho_owner_asset,
-            nullifier_asset_chain,
-            nullifier_0_rho_asset_chain,
-            nullifier_1_rho_asset_chain,
-            input_0_siblings,
-            input_0_directions,
-            input_0_witness_nodes,
-            input_1_siblings,
-            input_1_directions,
-            input_1_witness_nodes,
-            _instances,
-            amount_range,
-            selector,
-        ) = cfg;
-        let witness = self.witness.clone();
-        layouter.assign_region(
-            || "confidential_transfer_v2",
-            |mut region| {
-                selector.enable(&mut region, 0)?;
-                amount_range.assign(
-                    &mut region,
-                    0,
-                    witness.as_ref().map(|value| value.input_0_amount),
-                )?;
-                amount_range.assign(
-                    &mut region,
-                    8,
-                    witness.as_ref().map(|value| value.input_1_amount),
-                )?;
-                amount_range.assign(
-                    &mut region,
-                    16,
-                    witness.as_ref().map(|value| value.output_0_amount),
-                )?;
-                amount_range.assign(
-                    &mut region,
-                    24,
-                    witness.as_ref().map(|value| value.output_1_amount),
-                )?;
-                let scalar_or_unknown = |value: Option<[u8; 32]>| {
-                    value
-                        .and_then(scalar_from_repr)
-                        .map_or(Value::unknown(), Value::known)
-                };
-                let amount_or_unknown = |value: Option<u128>| {
-                    value
-                        .map(scalar_from_u128)
-                        .map_or(Value::unknown(), Value::known)
-                };
-                let bool_or_unknown = |value: Option<bool>| {
-                    value
-                        .map(|flag| if flag { Scalar::ONE } else { Scalar::ZERO })
-                        .map_or(Value::unknown(), Value::known)
-                };
-                let poseidon_bytes = |lhs: [u8; 32], rhs: [u8; 32]| {
-                    let lhs = scalar_from_repr(lhs)?;
-                    let rhs = scalar_from_repr(rhs)?;
-                    Some(scalar_to_repr_bytes(poseidon_pair(lhs, rhs)))
-                };
-                let rho_scalar_bytes = |rho: [u8; 32]| {
-                    scalar_to_repr_bytes(hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&rho]))
-                };
-                let derived_owner_tag =
-                    |value: &ConfidentialTransferWitnessV2, diversifier: [u8; 32]| {
-                        poseidon_bytes(value.spend_scalar, diversifier)
-                    };
-                let owner_tag_for_note =
-                    |value: &ConfidentialTransferWitnessV2, index: usize| match index {
-                        0 => derived_owner_tag(value, value.input_0_diversifier),
-                        1 => derived_owner_tag(value, value.input_1_diversifier),
-                        2 => Some(value.output_0_owner_tag),
-                        3 => Some(value.output_1_owner_tag),
-                        _ => None,
-                    };
-                let rho_for_note =
-                    |value: &ConfidentialTransferWitnessV2, index: usize| -> Option<[u8; 32]> {
-                        match index {
-                            0 => Some(value.input_0_rho),
-                            1 => Some(value.input_1_rho),
-                            2 => Some(value.output_0_rho),
-                            3 => Some(value.output_1_rho),
-                            _ => None,
-                        }
-                    };
-                let note_owner_asset_value =
-                    |value: &ConfidentialTransferWitnessV2, index: usize| {
-                        poseidon_bytes(owner_tag_for_note(value, index)?, value.asset_tag)
-                    };
-                let note_rho_owner_asset_value =
-                    |value: &ConfidentialTransferWitnessV2, index: usize| {
-                        poseidon_bytes(
-                            rho_scalar_bytes(rho_for_note(value, index)?),
-                            note_owner_asset_value(value, index)?,
-                        )
-                    };
-                let nullifier_asset_chain_value = |value: &ConfidentialTransferWitnessV2| {
-                    poseidon_bytes(value.asset_tag, value.chain_tag)
-                };
-                super::assign_advice_compat(
-                    &mut region,
-                    || "include_input_1",
-                    include_input_1,
-                    0,
-                    || bool_or_unknown(witness.as_ref().map(|value| value.include_input_1)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "include_output_1",
-                    include_output_1,
-                    0,
-                    || bool_or_unknown(witness.as_ref().map(|value| value.include_output_1)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_0_amount",
-                    input_0_amount,
-                    0,
-                    || amount_or_unknown(witness.as_ref().map(|value| value.input_0_amount)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_1_amount",
-                    input_1_amount,
-                    0,
-                    || amount_or_unknown(witness.as_ref().map(|value| value.input_1_amount)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_0_amount",
-                    output_0_amount,
-                    0,
-                    || amount_or_unknown(witness.as_ref().map(|value| value.output_0_amount)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_1_amount",
-                    output_1_amount,
-                    0,
-                    || amount_or_unknown(witness.as_ref().map(|value| value.output_1_amount)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_0_rho",
-                    input_0_rho,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().map(|value| {
-                            scalar_to_repr_bytes(hash_to_scalar(
-                                b"iroha.confidential.v2.note_rho",
-                                &[&value.input_0_rho],
-                            ))
-                        }))
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_1_rho",
-                    input_1_rho,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().map(|value| {
-                            scalar_to_repr_bytes(hash_to_scalar(
-                                b"iroha.confidential.v2.note_rho",
-                                &[&value.input_1_rho],
-                            ))
-                        }))
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_0_rho",
-                    output_0_rho,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().map(|value| {
-                            scalar_to_repr_bytes(hash_to_scalar(
-                                b"iroha.confidential.v2.note_rho",
-                                &[&value.output_0_rho],
-                            ))
-                        }))
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_1_rho",
-                    output_1_rho,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().map(|value| {
-                            scalar_to_repr_bytes(hash_to_scalar(
-                                b"iroha.confidential.v2.note_rho",
-                                &[&value.output_1_rho],
-                            ))
-                        }))
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "spend_scalar",
-                    spend_scalar,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().map(|value| value.spend_scalar)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_0_diversifier",
-                    input_0_diversifier,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_0_diversifier)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_1_diversifier",
-                    input_1_diversifier,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().map(|value| value.input_1_diversifier)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_0_owner_tag",
-                    output_0_owner_tag,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().map(|value| value.output_0_owner_tag)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "output_1_owner_tag",
-                    output_1_owner_tag,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().map(|value| value.output_1_owner_tag)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_0_derived_owner_tag",
-                    input_0_derived_owner_tag,
-                    0,
-                    || {
-                        scalar_or_unknown(
-                            witness.as_ref().and_then(|value| {
-                                derived_owner_tag(value, value.input_0_diversifier)
-                            }),
-                        )
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "input_1_derived_owner_tag",
-                    input_1_derived_owner_tag,
-                    0,
-                    || {
-                        scalar_or_unknown(
-                            witness.as_ref().and_then(|value| {
-                                derived_owner_tag(value, value.input_1_diversifier)
-                            }),
-                        )
-                    },
-                )?;
-                for note_index in 0..4 {
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("note_owner_asset_{note_index}"),
-                        note_owner_asset[note_index],
-                        0,
-                        || {
-                            scalar_or_unknown(
-                                witness
-                                    .as_ref()
-                                    .and_then(|value| note_owner_asset_value(value, note_index)),
-                            )
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("note_rho_owner_asset_{note_index}"),
-                        note_rho_owner_asset[note_index],
-                        0,
-                        || {
-                            scalar_or_unknown(
-                                witness.as_ref().and_then(|value| {
-                                    note_rho_owner_asset_value(value, note_index)
-                                }),
-                            )
-                        },
-                    )?;
-                }
-                super::assign_advice_compat(
-                    &mut region,
-                    || "nullifier_asset_chain",
-                    nullifier_asset_chain,
-                    0,
-                    || scalar_or_unknown(witness.as_ref().and_then(nullifier_asset_chain_value)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "nullifier_0_rho_asset_chain",
-                    nullifier_0_rho_asset_chain,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| {
-                            poseidon_bytes(
-                                rho_scalar_bytes(value.input_0_rho),
-                                nullifier_asset_chain_value(value)?,
-                            )
-                        }))
-                    },
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "nullifier_1_rho_asset_chain",
-                    nullifier_1_rho_asset_chain,
-                    0,
-                    || {
-                        scalar_or_unknown(witness.as_ref().and_then(|value| {
-                            poseidon_bytes(
-                                rho_scalar_bytes(value.input_1_rho),
-                                nullifier_asset_chain_value(value)?,
-                            )
-                        }))
-                    },
-                )?;
-                for index in 0..DEPTH {
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_0_sibling_{index}"),
-                        input_0_siblings[index],
-                        0,
-                        || {
-                            scalar_or_unknown(
-                                witness.as_ref().and_then(|value| {
-                                    value.input_0_path.siblings.get(index).copied()
-                                }),
-                            )
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_0_direction_{index}"),
-                        input_0_directions[index],
-                        0,
-                        || {
-                            witness
-                                .as_ref()
-                                .and_then(|value| value.input_0_path.directions.get(index).copied())
-                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                                .map_or(Value::unknown(), Value::known)
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_0_witness_{index}"),
-                        input_0_witness_nodes[index],
-                        0,
-                        || {
-                            scalar_or_unknown(witness.as_ref().and_then(|value| {
-                                value.input_0_path.witness_nodes.get(index).copied()
-                            }))
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_1_sibling_{index}"),
-                        input_1_siblings[index],
-                        0,
-                        || {
-                            scalar_or_unknown(
-                                witness.as_ref().and_then(|value| {
-                                    value.input_1_path.siblings.get(index).copied()
-                                }),
-                            )
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_1_direction_{index}"),
-                        input_1_directions[index],
-                        0,
-                        || {
-                            witness
-                                .as_ref()
-                                .and_then(|value| value.input_1_path.directions.get(index).copied())
-                                .map(|flag| if flag == 0 { Scalar::ZERO } else { Scalar::ONE })
-                                .map_or(Value::unknown(), Value::known)
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("input_1_witness_{index}"),
-                        input_1_witness_nodes[index],
-                        0,
-                        || {
-                            scalar_or_unknown(witness.as_ref().and_then(|value| {
-                                value.input_1_path.witness_nodes.get(index).copied()
-                            }))
-                        },
-                    )?;
-                }
-                Ok(())
-            },
-        )
-    }
-}
-
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 /// Secret opening and empty-leaf path consumed by the secure top-up gadget
@@ -5302,531 +4509,6 @@ impl Zeroize for KagemushaTopUpShieldWitnessV2 {
 impl Drop for KagemushaTopUpShieldWitnessV2 {
     fn drop(&mut self) {
         self.zeroize();
-    }
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-#[derive(Clone, Default)]
-struct KagemushaTopUpShieldCircuitV2<const DEPTH: usize> {
-    witness: Option<KagemushaTopUpShieldWitnessV2>,
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Zeroize for KagemushaTopUpShieldCircuitV2<DEPTH> {
-    fn zeroize(&mut self) {
-        if let Some(witness) = &mut self.witness {
-            witness.zeroize();
-        }
-        self.witness = None;
-    }
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Drop for KagemushaTopUpShieldCircuitV2<DEPTH> {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-#[derive(Clone)]
-struct KagemushaTopUpShieldConfigV2 {
-    amount_range: confidential_relation_gadget::U128RangeConfig,
-    amount: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    amount_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    output_commitment_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    spend_nullifier_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    note_field_difference_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    initial_root_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    finalized_root_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    root_difference_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    asset_scale: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    leaf_index: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    rho: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    spend_scalar: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    diversifier: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    owner_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    owner_asset: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    rho_owner_asset: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    asset_chain: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    rho_asset_chain: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    payer_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    operation_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    siblings: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
-    directions: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
-    zero_nodes: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
-    output_nodes: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
-    index_quotients: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
-    selector: Selector,
-}
-
-#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
-impl<const DEPTH: usize> Circuit<Scalar> for KagemushaTopUpShieldCircuitV2<DEPTH> {
-    type Config = KagemushaTopUpShieldConfigV2;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self::default()
-    }
-
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-        let amount_range = confidential_relation_gadget::U128RangeConfig::configure(meta);
-        let amount = meta.advice_column();
-        let amount_inverse = meta.advice_column();
-        let output_commitment_inverse = meta.advice_column();
-        let spend_nullifier_inverse = meta.advice_column();
-        let note_field_difference_inverse = meta.advice_column();
-        let initial_root_inverse = meta.advice_column();
-        let finalized_root_inverse = meta.advice_column();
-        let root_difference_inverse = meta.advice_column();
-        let asset_scale = meta.advice_column();
-        let leaf_index = meta.advice_column();
-        let rho = meta.advice_column();
-        let spend_scalar = meta.advice_column();
-        let diversifier = meta.advice_column();
-        let owner_tag = meta.advice_column();
-        let owner_asset = meta.advice_column();
-        let rho_owner_asset = meta.advice_column();
-        let asset_chain = meta.advice_column();
-        let rho_asset_chain = meta.advice_column();
-        let payer_tag = meta.advice_column();
-        let operation_tag = meta.advice_column();
-        let siblings = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
-        let directions = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
-        let zero_nodes = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
-        let output_nodes = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
-        let index_quotients = (0..=DEPTH)
-            .map(|_| meta.advice_column())
-            .collect::<Vec<_>>();
-        let instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 11] =
-            std::array::from_fn(|_| meta.instance_column());
-        let selector = meta.selector();
-
-        let gate_siblings = siblings.clone();
-        let gate_directions = directions.clone();
-        let gate_zero_nodes = zero_nodes.clone();
-        let gate_output_nodes = output_nodes.clone();
-        let gate_index_quotients = index_quotients.clone();
-        let gate_amount_range = amount_range.clone();
-        meta.create_gate("kagemusha_topup_shield_v2", move |meta| {
-            let enabled = meta.query_selector(selector);
-            let amount_value = meta.query_advice(amount, Rotation::cur());
-            let amount_inverse_value = meta.query_advice(amount_inverse, Rotation::cur());
-            let output_commitment_inverse_value =
-                meta.query_advice(output_commitment_inverse, Rotation::cur());
-            let spend_nullifier_inverse_value =
-                meta.query_advice(spend_nullifier_inverse, Rotation::cur());
-            let note_field_difference_inverse_value =
-                meta.query_advice(note_field_difference_inverse, Rotation::cur());
-            let initial_root_inverse_value =
-                meta.query_advice(initial_root_inverse, Rotation::cur());
-            let finalized_root_inverse_value =
-                meta.query_advice(finalized_root_inverse, Rotation::cur());
-            let root_difference_inverse_value =
-                meta.query_advice(root_difference_inverse, Rotation::cur());
-            let scale_value = meta.query_advice(asset_scale, Rotation::cur());
-            let leaf_index_value = meta.query_advice(leaf_index, Rotation::cur());
-            let rho_value = meta.query_advice(rho, Rotation::cur());
-            let spend_value = meta.query_advice(spend_scalar, Rotation::cur());
-            let diversifier_value = meta.query_advice(diversifier, Rotation::cur());
-            let owner_value = meta.query_advice(owner_tag, Rotation::cur());
-            let owner_asset_value = meta.query_advice(owner_asset, Rotation::cur());
-            let rho_owner_asset_value = meta.query_advice(rho_owner_asset, Rotation::cur());
-            let asset_chain_value = meta.query_advice(asset_chain, Rotation::cur());
-            let rho_asset_chain_value = meta.query_advice(rho_asset_chain, Rotation::cur());
-            let payer_value = meta.query_advice(payer_tag, Rotation::cur());
-            let operation_value = meta.query_advice(operation_tag, Rotation::cur());
-            let public = instances.map(|column| meta.query_instance(column, Rotation::cur()));
-            let one = halo2_proofs::plonk::Expression::Constant(Scalar::ONE);
-            let two = halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64));
-            let poseidon =
-                |lhs, rhs| confidential_relation_gadget::poseidon_pair_expression(lhs, rhs);
-
-            let mut constraints = vec![
-                enabled.clone()
-                    * (amount_value.clone() - gate_amount_range.query_value_at(meta, 0)),
-                enabled.clone() * (amount_value.clone() * amount_inverse_value - one.clone()),
-                enabled.clone()
-                    * (public[0].clone() * output_commitment_inverse_value - one.clone()),
-                enabled.clone() * (public[1].clone() * spend_nullifier_inverse_value - one.clone()),
-                enabled.clone()
-                    * ((public[0].clone() - public[1].clone())
-                        * note_field_difference_inverse_value
-                        - one.clone()),
-                enabled.clone() * (public[2].clone() * initial_root_inverse_value - one.clone()),
-                enabled.clone() * (public[3].clone() * finalized_root_inverse_value - one.clone()),
-                enabled.clone()
-                    * ((public[3].clone() - public[2].clone()) * root_difference_inverse_value
-                        - one.clone()),
-                enabled.clone() * (amount_value.clone() - public[4].clone()),
-                enabled.clone() * (scale_value - public[5].clone()),
-                enabled.clone() * (leaf_index_value - public[6].clone()),
-                enabled.clone() * (payer_value - public[9].clone()),
-                enabled.clone() * (operation_value - public[10].clone()),
-                enabled.clone()
-                    * (owner_value.clone() - poseidon(spend_value.clone(), diversifier_value)),
-                enabled.clone()
-                    * (owner_asset_value.clone() - poseidon(owner_value, public[7].clone())),
-                enabled.clone()
-                    * (rho_owner_asset_value.clone()
-                        - poseidon(rho_value.clone(), owner_asset_value)),
-                enabled.clone()
-                    * (public[0].clone() - poseidon(amount_value, rho_owner_asset_value)),
-                enabled.clone()
-                    * (asset_chain_value.clone() - poseidon(public[7].clone(), public[8].clone())),
-                enabled.clone()
-                    * (rho_asset_chain_value.clone() - poseidon(rho_value, asset_chain_value)),
-                enabled.clone()
-                    * (public[1].clone() - poseidon(spend_value, rho_asset_chain_value)),
-                enabled.clone()
-                    * (meta.query_advice(gate_index_quotients[0], Rotation::cur())
-                        - public[6].clone()),
-            ];
-
-            let mut zero_previous = halo2_proofs::plonk::Expression::Constant(Scalar::ZERO);
-            let mut output_previous = public[0].clone();
-            for level in 0..DEPTH {
-                let sibling = meta.query_advice(gate_siblings[level], Rotation::cur());
-                let direction = meta.query_advice(gate_directions[level], Rotation::cur());
-                let zero_node = meta.query_advice(gate_zero_nodes[level], Rotation::cur());
-                let output_node = meta.query_advice(gate_output_nodes[level], Rotation::cur());
-                let index_current = meta.query_advice(gate_index_quotients[level], Rotation::cur());
-                let index_next =
-                    meta.query_advice(gate_index_quotients[level + 1], Rotation::cur());
-                constraints
-                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
-                constraints.push(
-                    enabled.clone()
-                        * (index_current - direction.clone() - two.clone() * index_next),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (zero_node.clone()
-                            - confidential_relation_gadget::merkle_parent_expression(
-                                zero_previous.clone(),
-                                sibling.clone(),
-                                direction.clone(),
-                            )),
-                );
-                constraints.push(
-                    enabled.clone()
-                        * (output_node.clone()
-                            - confidential_relation_gadget::merkle_parent_expression(
-                                output_previous.clone(),
-                                sibling,
-                                direction,
-                            )),
-                );
-                zero_previous = zero_node;
-                output_previous = output_node;
-            }
-            constraints.push(
-                enabled.clone() * meta.query_advice(gate_index_quotients[DEPTH], Rotation::cur()),
-            );
-            constraints.push(enabled.clone() * (zero_previous - public[2].clone()));
-            constraints.push(enabled * (output_previous - public[3].clone()));
-            constraints
-        });
-
-        KagemushaTopUpShieldConfigV2 {
-            amount_range,
-            amount,
-            amount_inverse,
-            output_commitment_inverse,
-            spend_nullifier_inverse,
-            note_field_difference_inverse,
-            initial_root_inverse,
-            finalized_root_inverse,
-            root_difference_inverse,
-            asset_scale,
-            leaf_index,
-            rho,
-            spend_scalar,
-            diversifier,
-            owner_tag,
-            owner_asset,
-            rho_owner_asset,
-            asset_chain,
-            rho_asset_chain,
-            payer_tag,
-            operation_tag,
-            siblings,
-            directions,
-            zero_nodes,
-            output_nodes,
-            index_quotients,
-            selector,
-        }
-    }
-
-    fn synthesize(
-        &self,
-        config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
-    ) -> Result<(), PlonkError> {
-        let witness = self.witness.clone();
-        layouter.assign_region(
-            || "kagemusha_topup_shield_v2",
-            |mut region| {
-                config.selector.enable(&mut region, 0)?;
-                config.amount_range.assign(
-                    &mut region,
-                    0,
-                    witness.as_ref().map(|value| value.amount),
-                )?;
-                let scalar_value = |value: Option<[u8; 32]>| {
-                    value
-                        .and_then(scalar_from_repr)
-                        .map_or(Value::unknown(), Value::known)
-                };
-                let amount_value = witness.as_ref().map(|value| scalar_from_u128(value.amount));
-                let rho_value = witness
-                    .as_ref()
-                    .map(|value| hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&value.rho]));
-                let owner_value = witness.as_ref().and_then(|value| {
-                    Some(poseidon_pair(
-                        scalar_from_repr(value.spend_scalar)?,
-                        scalar_from_repr(value.diversifier)?,
-                    ))
-                });
-                let owner_asset_value = witness.as_ref().and_then(|value| {
-                    Some(poseidon_pair(
-                        owner_value?,
-                        scalar_from_repr(value.asset_tag)?,
-                    ))
-                });
-                let rho_owner_asset_value = witness
-                    .as_ref()
-                    .and_then(|_| Some(poseidon_pair(rho_value?, owner_asset_value?)));
-                let asset_chain_value = witness.as_ref().and_then(|value| {
-                    Some(poseidon_pair(
-                        scalar_from_repr(value.asset_tag)?,
-                        scalar_from_repr(value.chain_tag)?,
-                    ))
-                });
-                let rho_asset_chain_value = witness
-                    .as_ref()
-                    .and_then(|_| Some(poseidon_pair(rho_value?, asset_chain_value?)));
-                let output_commitment_value = witness
-                    .as_ref()
-                    .and_then(|_| Some(poseidon_pair(amount_value?, rho_owner_asset_value?)));
-                let spend_nullifier_value = witness.as_ref().and_then(|value| {
-                    Some(poseidon_pair(
-                        scalar_from_repr(value.spend_scalar)?,
-                        rho_asset_chain_value?,
-                    ))
-                });
-                let note_field_difference_value = witness
-                    .as_ref()
-                    .and_then(|_| Some(output_commitment_value? - spend_nullifier_value?));
-                let initial_root_value = witness
-                    .as_ref()
-                    .and_then(|value| scalar_from_repr(value.zero_path.root));
-                let finalized_root_value = witness.as_ref().and_then(|value| {
-                    value
-                        .output_nodes
-                        .last()
-                        .copied()
-                        .and_then(scalar_from_repr)
-                });
-                let root_difference_value = witness
-                    .as_ref()
-                    .and_then(|_| Some(finalized_root_value? - initial_root_value?));
-                let inverse =
-                    |value: Option<Scalar>| value.and_then(|value| Option::from(value.invert()));
-                let assign_scalar = |region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
-                                     label: &'static str,
-                                     column,
-                                     value: Option<Scalar>|
-                 -> Result<(), PlonkError> {
-                    super::assign_advice_compat(
-                        region,
-                        || label,
-                        column,
-                        0,
-                        || value.map_or(Value::unknown(), Value::known),
-                    )
-                    .map(|_| ())
-                };
-                assign_scalar(&mut region, "amount", config.amount, amount_value)?;
-                assign_scalar(
-                    &mut region,
-                    "amount_inverse",
-                    config.amount_inverse,
-                    inverse(amount_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "output_commitment_inverse",
-                    config.output_commitment_inverse,
-                    inverse(output_commitment_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "spend_nullifier_inverse",
-                    config.spend_nullifier_inverse,
-                    inverse(spend_nullifier_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "note_field_difference_inverse",
-                    config.note_field_difference_inverse,
-                    inverse(note_field_difference_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "initial_root_inverse",
-                    config.initial_root_inverse,
-                    inverse(initial_root_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "finalized_root_inverse",
-                    config.finalized_root_inverse,
-                    inverse(finalized_root_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "root_difference_inverse",
-                    config.root_difference_inverse,
-                    inverse(root_difference_value),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "asset_scale",
-                    config.asset_scale,
-                    witness
-                        .as_ref()
-                        .map(|value| Scalar::from(u64::from(value.asset_scale))),
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "leaf_index",
-                    config.leaf_index,
-                    witness
-                        .as_ref()
-                        .map(|value| Scalar::from(u64::from(value.leaf_index))),
-                )?;
-                assign_scalar(&mut region, "rho", config.rho, rho_value)?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "spend_scalar",
-                    config.spend_scalar,
-                    0,
-                    || scalar_value(witness.as_ref().map(|value| value.spend_scalar)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "diversifier",
-                    config.diversifier,
-                    0,
-                    || scalar_value(witness.as_ref().map(|value| value.diversifier)),
-                )?;
-                assign_scalar(&mut region, "owner_tag", config.owner_tag, owner_value)?;
-                assign_scalar(
-                    &mut region,
-                    "owner_asset",
-                    config.owner_asset,
-                    owner_asset_value,
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "rho_owner_asset",
-                    config.rho_owner_asset,
-                    rho_owner_asset_value,
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "asset_chain",
-                    config.asset_chain,
-                    asset_chain_value,
-                )?;
-                assign_scalar(
-                    &mut region,
-                    "rho_asset_chain",
-                    config.rho_asset_chain,
-                    rho_asset_chain_value,
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "payer_tag",
-                    config.payer_tag,
-                    0,
-                    || scalar_value(witness.as_ref().map(|value| value.payer_tag)),
-                )?;
-                super::assign_advice_compat(
-                    &mut region,
-                    || "operation_tag",
-                    config.operation_tag,
-                    0,
-                    || scalar_value(witness.as_ref().map(|value| value.operation_tag)),
-                )?;
-
-                for level in 0..DEPTH {
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("sibling_{level}"),
-                        config.siblings[level],
-                        0,
-                        || {
-                            scalar_value(
-                                witness
-                                    .as_ref()
-                                    .and_then(|value| value.zero_path.siblings.get(level).copied()),
-                            )
-                        },
-                    )?;
-                    assign_scalar(
-                        &mut region,
-                        "direction",
-                        config.directions[level],
-                        witness.as_ref().and_then(|value| {
-                            value
-                                .zero_path
-                                .directions
-                                .get(level)
-                                .map(|direction| Scalar::from(u64::from(*direction)))
-                        }),
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("zero_node_{level}"),
-                        config.zero_nodes[level],
-                        0,
-                        || {
-                            scalar_value(witness.as_ref().and_then(|value| {
-                                value.zero_path.witness_nodes.get(level).copied()
-                            }))
-                        },
-                    )?;
-                    super::assign_advice_compat(
-                        &mut region,
-                        || format!("output_node_{level}"),
-                        config.output_nodes[level],
-                        0,
-                        || {
-                            scalar_value(
-                                witness
-                                    .as_ref()
-                                    .and_then(|value| value.output_nodes.get(level).copied()),
-                            )
-                        },
-                    )?;
-                }
-                for level in 0..=DEPTH {
-                    assign_scalar(
-                        &mut region,
-                        "index_quotient",
-                        config.index_quotients[level],
-                        witness
-                            .as_ref()
-                            .map(|value| Scalar::from(u64::from(value.leaf_index >> level))),
-                    )?;
-                }
-                Ok(())
-            },
-        )
     }
 }
 
@@ -9111,11 +7793,11 @@ mod tests {
             output_0_rho: output_rho,
             output_1_rho: [0u8; 32],
             spend_scalar: super::scalar_to_repr_bytes(super::hash_to_scalar(
-                b"iroha.confidential.v2.spend_scalar",
+                b"iroha.confidential.v3.spend_scalar",
                 &[&spend_key],
             )),
             input_0_diversifier: input_diversifier,
-            input_1_diversifier: super::default_confidential_diversifier_v2(),
+            input_1_diversifier: [0u8; 32],
             output_0_owner_tag: output_owner_tag,
             output_1_owner_tag: [0u8; 32],
             asset_tag,
@@ -9123,7 +7805,9 @@ mod tests {
             input_0_path: input_path,
             input_1_path: empty_path,
         };
-        let circuit = super::ConfidentialTransferCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }> {
+        let circuit = super::secure_relation_v3::ConfidentialTransferCircuitV3::<
+            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
+        > {
             witness: Some(witness),
         };
         let instance_columns = vec![
@@ -9179,8 +7863,9 @@ mod tests {
         let wrong_cid_key = super::build_confidential_v2_vk_box(
             super::CONFIDENTIAL_TRANSFER_V2_IPA_K,
             super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
-            &super::ConfidentialTransferCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>::default(
-            ),
+            &super::secure_relation_v3::ConfidentialTransferCircuitV3::<
+                { super::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
         )
         .expect("transfer-shaped verifier key with wrong CID1");
         assert_ne!(
@@ -9264,7 +7949,7 @@ mod tests {
 
         let mut tree_commitments = Vec::new();
         tree_commitments.push(input_0_commitment);
-        tree_commitments.push([0x99_u8; 32]);
+        tree_commitments.push(super::scalar_to_repr_bytes(super::Scalar::from(0x99_u64)));
         tree_commitments.push(input_1_commitment);
         let root_hint =
             super::compute_confidential_root_v2(&tree_commitments).expect("confidential root");
@@ -9536,11 +8221,13 @@ mod tests {
                 .expect("inner proof and instances");
         assert_eq!(columns.len(), 11);
         let spend_scalar =
-            super::hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[&spend_key]);
+            super::hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[&spend_key]);
         let output_nodes =
             super::kagemusha_topup_output_path_nodes_v2(result.output_commitment, &zero_path)
                 .expect("output path nodes");
-        let circuit = super::KagemushaTopUpShieldCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }> {
+        let circuit = super::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
+            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
+        > {
             witness: Some(super::KagemushaTopUpShieldWitnessV2 {
                 amount: atomic_amount,
                 asset_scale,

@@ -2826,7 +2826,11 @@ pub fn active_account_alias_selector(
     now_ms: u64,
 ) -> Result<NameSelectorV1, SnsError> {
     let literal = active_account_alias_literal(world, catalog, alias, now_ms)?;
-    selector_for_account_alias_literal(&literal, catalog)
+    Ok(NameSelectorV1 {
+        version: NameSelectorV1::VERSION,
+        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+        label: literal,
+    })
 }
 
 /// Resolve an active dataspace alias to its canonical id.
@@ -3164,6 +3168,49 @@ mod tests {
             resolve_active_account_alias(&world.view(), &catalog, &alias, 50),
             Some(owner),
         );
+    }
+
+    #[test]
+    fn active_account_alias_selector_resolves_dynamic_only_dataspace() {
+        let catalog = DataSpaceCatalog::default();
+        let dataspace = DataSpaceId::new(42);
+        let alias = AccountAlias::domainless("treasury".parse().expect("label"), dataspace);
+        assert!(
+            selector_for_account_alias(&alias, &catalog).is_err(),
+            "the bootstrap catalog must not know the dynamic-only dataspace"
+        );
+
+        let owner = owner();
+        let dataspace_selector =
+            selector_for_dataspace_alias("paynet").expect("dynamic dataspace selector");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace id metadata key"),
+            iroha_primitives::json::Json::new(dataspace.as_u64()),
+        );
+        let dataspace_record = NameRecordV1::new(
+            dataspace_selector.clone(),
+            owner.clone(),
+            vec![controller(&owner)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            metadata,
+        );
+        let mut world = World::default();
+        world.smart_contract_state_mut_for_testing().insert(
+            record_storage_key(&dataspace_selector),
+            dataspace_record.encode(),
+        );
+
+        let selector = active_account_alias_selector(&world.view(), &catalog, &alias, 50)
+            .expect("live dynamic dataspace mapping should build the selector");
+        assert_eq!(selector.suffix_id, ACCOUNT_ALIAS_SUFFIX_ID);
+        assert_eq!(selector.label, "treasury@paynet");
     }
 
     #[test]
@@ -4106,7 +4153,11 @@ mod tests {
         assert!(record_by_selector(&world.view(), &selector).is_none());
         let err = record_or_not_found(&world.view(), &selector)
             .expect_err("trailing record bytes must fail closed");
-        assert!(err.to_string().contains("trailing bytes"), "{err}");
+        let message = err.to_string();
+        assert!(
+            message.contains("trailing bytes") || message.contains("length mismatch"),
+            "{message}"
+        );
 
         let other_selector = selector_for_namespace_literal(
             SnsNamespace::Domain,

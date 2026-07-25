@@ -122,9 +122,20 @@ pub struct QueryLimits {
 pub enum QueryCountMode {
     /// Compute exact totals and remaining item counts.
     Exact,
-    /// Stop once enough items are available to answer the requested page and `has_more`.
+    /// Avoid an exact total. Ephemeral queries stop after the requested page
+    /// and `has_more`; stored cursors may additionally retain a hard-bounded
+    /// immutable tail so later pages cannot observe newer state.
     Bounded,
 }
+
+/// Maximum number of raw values retained by one generic stored cursor.
+///
+/// Generic world-state iterators borrow an MVCC view and cannot outlive the
+/// request. Retaining a bounded tail gives continuations snapshot semantics
+/// without allowing one cursor to clone an unbounded state surface.
+const MAX_STORED_QUERY_RETAINED_ITEMS: usize = 4_096;
+/// Maximum canonical payload bytes retained by one generic stored cursor.
+const MAX_STORED_QUERY_RETAINED_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Deterministic work budget for an ephemeral query.
 ///
@@ -2757,7 +2768,7 @@ fn prepare_stored_unsorted_bounded_start<I>(
 ) -> Result<PreparedQueryStart, Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
@@ -2796,10 +2807,27 @@ where
 
     let first_cursor = NonZeroU64::new(u64::try_from(batch_len).unwrap_or(u64::MAX))
         .expect("stored bounded continuation requires a non-empty first batch");
-    let deferred_values: Vec<_> = match remaining_limit {
-        Some(remaining_limit) => iter.take(remaining_limit).collect(),
-        None => iter.collect(),
-    };
+    let requested_tail = remaining_limit.unwrap_or(usize::MAX);
+    let retained_item_limit = requested_tail.min(MAX_STORED_QUERY_RETAINED_ITEMS);
+    let must_detect_item_overflow = requested_tail > retained_item_limit;
+    let mut deferred_values = Vec::with_capacity(retained_item_limit.min(1_024));
+    let mut retained_bytes = 0_u64;
+    while deferred_values.len() < retained_item_limit {
+        let Some(value) = iter.next() else {
+            break;
+        };
+        let remaining_bytes = MAX_STORED_QUERY_RETAINED_BYTES.saturating_sub(retained_bytes);
+        let value_bytes = match bounded_bare_encoded_len(&value, remaining_bytes) {
+            Ok(bytes) => bytes,
+            Err(Error::GasBudgetExceeded) => return Err(Error::CapacityLimit),
+            Err(error) => return Err(error),
+        };
+        retained_bytes = retained_bytes.saturating_add(value_bytes);
+        deferred_values.push(value);
+    }
+    if must_detect_item_overflow && iter.next().is_some() {
+        return Err(Error::CapacityLimit);
+    }
     let deferred_continuation = DeferredQueryContinuation::new(first_cursor, None, move || {
         ErasedQueryIterator::new_streaming_with_cursor(
             deferred_values.into_iter(),
@@ -2816,6 +2844,7 @@ where
     })
 }
 
+#[cfg(test)]
 fn collect_unsorted_bounded_page<I>(
     iter: I,
     selector: SelectorTuple<I::Item>,
@@ -2871,6 +2900,7 @@ where
     Ok((first_batch, batch_len, has_more))
 }
 
+#[cfg(test)]
 fn prepare_stored_unsorted_bounded_replay_start<I, Q>(
     iter: I,
     query: Q,
@@ -2934,7 +2964,7 @@ fn handle_iter_start_stored<I>(
 ) -> Result<QueryOutput, Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
@@ -2955,39 +2985,29 @@ where
 #[allow(clippy::too_many_arguments)]
 fn handle_iter_start_stored_replayable<I, Q>(
     iter: I,
-    query: Q,
-    predicate: CompoundPredicate<I::Item>,
+    _query: Q,
+    _predicate: CompoundPredicate<I::Item>,
     selector: SelectorTuple<I::Item>,
     params: &QueryParams,
     limits: QueryLimits,
     live_query_store: &LiveQueryStoreHandle,
     authority: &AccountId,
     gas_budget: Option<u64>,
-    replay_state: Option<Weak<State>>,
+    _replay_state: Option<Weak<State>>,
 ) -> Result<QueryOutput, Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
     Q: ValidQuery<Item = I::Item> + Clone + Send + Sync + 'static,
 {
-    if params.sorting.sort_by_metadata_key.is_none()
-        && limits.count_mode == QueryCountMode::Bounded
-        && let Some(replay_state) = replay_state
-    {
-        let prepared = prepare_stored_unsorted_bounded_replay_start(
-            iter,
-            query,
-            predicate,
-            selector,
-            params,
-            limits,
-            replay_state,
-        )?;
-        return live_query_store.handle_iter_start_paged_prepared(prepared, authority, gas_budget);
-    }
-
+    // A live `State` handle is not an immutable query snapshot: replaying a
+    // generic continuation through it can observe later commits, and a weak
+    // handle expires when the request owner drops its `Arc`. Keep generic
+    // cursors snapshot-consistent by owning their deferred values. Transaction
+    // history has a separate, fixed-anchor replay path in
+    // `try_handle_find_transactions_stored`.
     handle_iter_start_stored(
         iter,
         selector,
@@ -3890,6 +3910,7 @@ impl ValidQueryRequest {
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
+                        + NoritoSerialize
                         + Send
                         + Sync
                         + 'static,
@@ -6938,13 +6959,41 @@ mod tests {
             Json::new("x".repeat(128 * 1024)),
         );
         let account = Account::new(account_id.clone())
-            .with_label(Some(alias.clone()))
             .with_metadata(metadata)
             .build(&account_id);
         let mut world = World::with([], [account], []);
+        let selector = crate::sns::selector_for_account_alias(
+            &alias,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
+        )
+        .expect("SNS selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
         world
             .account_aliases
             .insert(alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                alias.clone(),
+                account_id.clone(),
+            ),
+        );
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -6964,11 +7013,25 @@ mod tests {
     fn singular_alias_preflight_never_falls_back_to_a_world_scan() {
         let alias = root_account_alias("unindexed-alias");
         let account_id = ALICE_ID.clone();
-        let account = Account::new(account_id.clone())
-            .with_label(Some(alias.clone()))
-            .build(&account_id);
+        let account = Account::new(account_id.clone()).build(&account_id);
+        let world = World::with([], [account], []);
+        let (replacement_id, replacement_value) = iroha_data_model::IntoKeyValue::into_key_value(
+            Account::new(account_id.clone())
+                .with_label(Some(alias.clone()))
+                .build(&account_id),
+        );
+        let mut block = world.block();
+        {
+            let mut transaction = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            transaction.insert_account_for_testing(replacement_id, replacement_value);
+            transaction.apply();
+        }
+        block.commit();
         let state = State::new_for_testing(
-            World::with([], [account], []),
+            world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
@@ -7569,6 +7632,69 @@ mod tests {
             expected_ids.len(),
             "continuations should not revisit the source iterator"
         );
+    }
+
+    #[tokio::test]
+    async fn stored_unsorted_bounded_cursor_rejects_tail_above_hard_item_bound() {
+        use iroha_data_model::{
+            domain::Domain,
+            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        };
+        use nonzero_ext::nonzero;
+
+        let domain =
+            Domain::new(DomainId::try_new("bounded", "universal").unwrap()).build(&ALICE_ID);
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+
+        let result = prepare_stored_unsorted_bounded_start(
+            std::iter::repeat_n(domain, MAX_STORED_QUERY_RETAINED_ITEMS.saturating_add(2)),
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::new(1).with_count_mode(QueryCountMode::Bounded),
+        );
+        let error = match result {
+            Ok(_) => panic!("a generic cursor must not retain an unbounded state tail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, Error::CapacityLimit);
+    }
+
+    #[tokio::test]
+    async fn stored_unsorted_bounded_cursor_rejects_tail_above_hard_byte_bound() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
+        use nonzero_ext::nonzero;
+
+        let first = domain_with_query_payload("bounded-first", 8, 0);
+        let oversized = domain_with_query_payload(
+            "bounded-oversized",
+            usize::try_from(MAX_STORED_QUERY_RETAINED_BYTES)
+                .expect("retained-byte bound fits usize")
+                .saturating_add(1),
+            1,
+        );
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+
+        let result = prepare_stored_unsorted_bounded_start(
+            [first, oversized].into_iter(),
+            SelectorTuple::<Domain>::default(),
+            &params,
+            QueryLimits::new(1).with_count_mode(QueryCountMode::Bounded),
+        );
+        let error = match result {
+            Ok(_) => panic!("a generic cursor must not retain an oversized state tail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, Error::CapacityLimit);
     }
 
     #[tokio::test]
@@ -10594,7 +10720,9 @@ mod tests {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
 
         let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
-        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 2;
+        // A one-item continuation replays its current two-entry carrier and
+        // probes the next two-entry carrier to establish `has_more`.
+        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 4;
         let state = Arc::new(fixture.sandbox.state);
         let state_view = state.view();
         let query_handle = state_view.query_handle().clone();
@@ -10622,7 +10750,7 @@ mod tests {
             panic!("expected iterable transaction output");
         };
         let original_cursor = first.continue_cursor.expect("stored continuation");
-        assert_eq!(original_cursor.gas_budget, Some(2));
+        assert_eq!(original_cursor.gas_budget, Some(4));
 
         let mut underfunded = original_cursor.clone();
         underfunded.gas_budget = Some(1);
@@ -10984,7 +11112,7 @@ mod tests {
         let txs = ValidQuery::execute(
             FindTransactions,
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
-                p.equals("block_hash", block_hash)
+                p.equals("block_hash", block_hash.to_string())
             }),
             &state_view,
         )?
@@ -11004,7 +11132,7 @@ mod tests {
         let missing = ValidQuery::execute(
             FindTransactions,
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
-                p.equals("block_hash", unknown_hash)
+                p.equals("block_hash", unknown_hash.to_string())
             }),
             &state_view,
         )?
@@ -11043,7 +11171,7 @@ mod tests {
         let txs = ValidQuery::execute(
             FindTransactions,
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
-                p.equals("entrypoint_hash", entrypoint_hash)
+                p.equals("entrypoint_hash", entrypoint_hash.to_string())
             }),
             &state_view,
         )?
@@ -11073,7 +11201,7 @@ mod tests {
         let missing = ValidQuery::execute(
             FindTransactions,
             CompoundPredicate::<iroha_data_model::query::CommittedTransaction>::build(|p| {
-                p.equals("entrypoint_hash", unknown_hash)
+                p.equals("entrypoint_hash", unknown_hash.to_string())
             }),
             &state_view,
         )?

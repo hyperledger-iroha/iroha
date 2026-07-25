@@ -136,8 +136,8 @@ pub use sorafs::{
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
-    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_movement_by_id,
-    visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_policy,
+    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_events,
+    visit_find_sorafs_reserve_movement_by_id, visit_find_sorafs_reserve_policy,
     visit_find_sorafs_reserve_provider_by_id,
 };
 /// Re-export staking visitor helpers used by the default executor.
@@ -1853,8 +1853,8 @@ pub mod sorafs {
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
-        FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
+        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -6391,10 +6391,7 @@ mod sorafs_permission_tests {
             None,
             10,
         );
-        assert_denied_without_permission(
-            query,
-            sorafs::visit_find_sorafs_reserve_events,
-        );
+        assert_denied_without_permission(query, sorafs::visit_find_sorafs_reserve_events);
         assert_allowed_with_permission(
             query,
             PermissionObject::from(CanSetSorafsReservePolicy),

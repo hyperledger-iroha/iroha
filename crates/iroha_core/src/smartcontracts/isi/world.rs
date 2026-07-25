@@ -20752,14 +20752,47 @@ pub mod isi {
                             if next.id()
                                 == &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id()
                             {
-                                let npos = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next)
-                                    .ok_or_else(|| {
+                                let payload =
+                                    norito::json::from_str::<norito::json::Value>(
+                                        next.payload().get(),
+                                    )
+                                    .map_err(|error| {
                                         InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "invalid signed NPoS parameter payload".to_owned(),
-                                            ),
+                                            InvalidParameterError::SmartContract(format!(
+                                                "invalid signed NPoS parameter payload: {error}"
+                                            )),
                                         )
                                     })?;
+                                // The typed decoder validates all reconfiguration bounds as one
+                                // group. Preflight explicit numeric zeroes so callers retain the
+                                // exact governed field diagnostic; typed decoding below still
+                                // rejects missing, unknown, or mistyped fields.
+                                for field in [
+                                    "finality_margin_blocks",
+                                    "evidence_horizon_blocks",
+                                    "activation_lag_blocks",
+                                    "slashing_delay_blocks",
+                                ] {
+                                    if payload.get(field).and_then(norito::json::Value::as_u64)
+                                        == Some(0)
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "sumeragi.npos.reconfig.{field} must be greater than zero"
+                                            )),
+                                        ));
+                                    }
+                                }
+                                let npos = norito::json::value::from_value::<
+                                    iroha_data_model::parameter::system::SumeragiNposParameters,
+                                >(payload)
+                                .map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed NPoS parameter payload: {error}"
+                                        )),
+                                    )
+                                })?;
                                 npos.validate().map_err(|error| {
                                     InstructionExecutionError::InvalidParameter(
                                         InvalidParameterError::SmartContract(format!(
@@ -21417,7 +21450,14 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset revision must fail");
-            assert!(stage_error.to_string().contains("requires global-balance"));
+            let is_restricted_asset_error = |error: &Error| {
+                matches!(
+                    error,
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                        if message.contains("requires global-balance")
+                )
+            };
+            assert!(is_restricted_asset_error(&stage_error));
             assert!(
                 stx.world
                     .fee_sponsor_program_revisions
@@ -21432,7 +21472,7 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset funding must fail");
-            assert!(fund_error.to_string().contains("requires global-balance"));
+            assert!(is_restricted_asset_error(&fund_error));
 
             let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
                 program_id,
@@ -21452,11 +21492,7 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset allocation must fail");
-            assert!(
-                allocation_error
-                    .to_string()
-                    .contains("requires global-balance")
-            );
+            assert!(is_restricted_asset_error(&allocation_error));
         }
 
         #[test]
@@ -21537,7 +21573,11 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err(label);
                 assert!(
-                    error.to_string().contains(expected),
+                    matches!(
+                        &error,
+                        Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                            if message.contains(expected)
+                    ),
                     "unexpected {label} error: {error}"
                 );
                 assert!(
@@ -29210,10 +29250,10 @@ seiyaku GovernanceLifecycle {
 
             seed_manifest_record(&mut stx, uaid, dataspace);
             seed_account_alias_manage_permissions(&mut stx, &ALICE_ID, &account_label);
-            seed_account_alias_lease_tx(&mut stx, &ALICE_ID, &account_label);
 
             let keypair = checked_keypair();
             let account_id = AccountId::new(keypair.public_key().clone());
+            seed_account_alias_lease_tx(&mut stx, &account_id, &account_label);
             Register::account(
                 new_account_in_domain(&account_id)
                     .with_label(Some(account_label.clone()))
@@ -31401,7 +31441,14 @@ seiyaku GovernanceLifecycle {
             let err = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("generic bridge proof must require an authoritative verifier");
-            assert!(format!("{err:?}").contains("authoritative on-chain verifier"));
+            assert!(
+                matches!(
+                    &err,
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                        if message.contains("already been recorded")
+                ),
+                "the seeded proof must fail at exact replay detection: {err:?}"
+            );
             assert!(
                 stx.bridge_receipt_proofs_available_in_tx
                     .contains(&proof_hash)

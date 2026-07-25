@@ -2011,16 +2011,14 @@ mod tests {
         ));
         let payload = norito::to_bytes(&frame).expect("encode large canonical frame payload");
         let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
-        let exact_limits =
-            QueuePlanJournalLimits::new(1, payload_len, TEST_MAX_BYTES, 1);
+        let exact_limits = QueuePlanJournalLimits::new(1, payload_len, TEST_MAX_BYTES, 1);
 
         assert_eq!(
             decode_frame(&payload, exact_limits).expect("decode at exact configured wire limit"),
             frame
         );
 
-        let one_byte_under =
-            QueuePlanJournalLimits::new(1, payload_len - 1, TEST_MAX_BYTES, 1);
+        let one_byte_under = QueuePlanJournalLimits::new(1, payload_len - 1, TEST_MAX_BYTES, 1);
         let error = decode_frame(&payload, one_byte_under)
             .expect_err("one byte above the configured frame limit must fail before decode");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);

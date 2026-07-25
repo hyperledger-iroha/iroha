@@ -1400,6 +1400,7 @@ mod tests {
         let mut second = request;
         second.round.view += 1;
         second.certificate.round = second.round;
+        second.certificate.proposal_round = second.round;
         second.signature =
             Signature::new(fixture.observer.private_key(), &second.signature_preimage())
                 .payload()
@@ -1483,6 +1484,7 @@ mod tests {
         let mut second = request;
         second.round.view += 1;
         second.certificate.round = second.round;
+        second.certificate.proposal_round = second.round;
         second.signature =
             Signature::new(fixture.observer.private_key(), &second.signature_preimage())
                 .payload()

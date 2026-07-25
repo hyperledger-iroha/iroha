@@ -7,7 +7,7 @@ Response (first release; single policy V1)
 ```json
 {
   "policy": "V1",
-  "abi_hash_hex": "1daac4a4c98904194fb294638d2d62c9b35c658b31d319f0e92b10d0ce9b7883"
+  "abi_hash_hex": "2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1"
 }
 ```
 

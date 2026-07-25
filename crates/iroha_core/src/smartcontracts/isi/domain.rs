@@ -3685,7 +3685,7 @@ mod tests {
             SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestRevoked,
         },
         isi::{
-            alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias},
+            alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{InstructionExecutionError, InvalidParameterError},
         },
         metadata::Metadata,
@@ -3740,6 +3740,16 @@ mod tests {
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("domain ISI fixture key generation for requested algorithm should succeed")
+    }
+
+    fn instruction_error_contains(error: &InstructionExecutionError, expected: &str) -> bool {
+        match error {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message.contains(expected),
+            InstructionExecutionError::InvariantViolation(message) => message.contains(expected),
+            _ => false,
+        }
     }
 
     #[test]
@@ -4324,6 +4334,13 @@ mod tests {
         let dataspace_key = crate::sns::record_storage_key(&dataspace_selector);
         if tx.world.smart_contract_state.get(&dataspace_key).is_none() {
             let address = AccountAddress::from_account_id(owner).expect("account address");
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+                    .parse()
+                    .expect("static dataspace metadata key"),
+                Json::new(alias.dataspace.as_u64()),
+            );
             let record = NameRecordV1::new(
                 dataspace_selector,
                 owner.clone(),
@@ -4333,7 +4350,7 @@ mod tests {
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,
-                Metadata::default(),
+                metadata,
             );
             tx.world
                 .smart_contract_state
@@ -4410,6 +4427,9 @@ mod tests {
         owner: &AccountId,
         alias: &AccountAlias,
     ) {
+        // Seed the active parent dataspace/domain records first, then replace only
+        // the account-alias leaf with an expired lifecycle fixture.
+        seed_account_alias_lease_record(tx, owner, alias);
         let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
             .expect("selector");
         let address = AccountAddress::from_account_id(owner).expect("account address");
@@ -4517,7 +4537,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &account_id, &account_label);
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease_record(&mut tx, &account_id, &account_label);
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with label");
@@ -4569,7 +4590,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &account_id, &account_label);
+        seed_account_alias_manage_permissions(&mut tx, &authority, &account_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &account_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
@@ -4624,7 +4646,6 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-        seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
@@ -4633,7 +4654,7 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &account_id, &account_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &account_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label)))
             .execute(&authority, &mut tx)
             .expect("register account with label");
@@ -4675,7 +4696,7 @@ mod tests {
             .expect_err("alias lease should be required");
 
         assert!(
-            err.to_string().contains("active SNS lease"),
+            instruction_error_contains(&err, "active SNS lease"),
             "unexpected error: {err}"
         );
     }
@@ -4703,7 +4724,7 @@ mod tests {
                 .expect_err("another account's lease must not authorize registration");
 
         assert!(
-            err.to_string().contains("owned by another account"),
+            instruction_error_contains(&err, "owned by another account"),
             "unexpected error: {err}"
         );
         assert!(tx.world.account(&account_id).is_err());
@@ -4728,7 +4749,7 @@ mod tests {
                     .execute(&authority, &mut tx)
                     .expect_err("retail aliases must require an SNS lease");
             assert!(
-                err.to_string().contains("active SNS lease"),
+                instruction_error_contains(&err, "active SNS lease"),
                 "unexpected error for {alias:?}: {err}"
             );
             assert!(tx.world.account_aliases.get(&alias).is_none());
@@ -4751,8 +4772,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &account_id, &old_label);
-        seed_account_alias_lease(&mut tx, &account_id, &new_label);
+        seed_account_alias_manage_permissions(&mut tx, &authority, &old_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &old_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &new_label);
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with initial label");
@@ -4799,6 +4821,7 @@ mod tests {
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
@@ -4809,7 +4832,8 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
-        seed_account_alias_lease(&mut tx, &account_id, &label);
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease_record(&mut tx, &account_id, &label);
 
         CasTestPrimaryAccountAlias {
             account: account_id.clone(),
@@ -4853,7 +4877,8 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &account_id, &label);
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease_record(&mut tx, &account_id, &label);
 
         let error = CasTestPrimaryAccountAlias {
             account: account_id.clone(),
@@ -4862,7 +4887,7 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect_err("declarative setup must not reclaim a non-empty binding");
-        assert!(error.to_string().contains("alias.binding.conflict"));
+        assert!(instruction_error_contains(&error, "alias.binding.conflict"));
 
         assert_eq!(
             tx.world.account_aliases.get(&label),
@@ -4899,16 +4924,16 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account");
 
-        let err = EnsureTestAccountAliasBinding {
-            account: account_id,
-            alias: Some(alias),
-            lease_expiry_ms: None,
-        }
+        let err = RebindAccountAlias::new(
+            resolved_account_alias(&tx, &alias),
+            account_id.clone(),
+            account_id,
+        )
         .execute(&authority, &mut tx)
         .expect_err("alias lease should be required");
 
         assert!(
-            err.to_string().contains("active SNS lease"),
+            instruction_error_contains(&err, "not found"),
             "unexpected error: {err}"
         );
     }
@@ -4950,7 +4975,7 @@ mod tests {
             .expect_err("another account's lease must not authorize a primary alias"),
         ] {
             assert!(
-                err.to_string().contains("owned by another account"),
+                instruction_error_contains(&err, "alias.owner.conflict"),
                 "unexpected error: {err}"
             );
         }
@@ -4991,25 +5016,45 @@ mod tests {
         seed_expired_account_alias_lease_record(&mut tx, &existing_id, &binding_alias);
         seed_expired_account_alias_lease_record(&mut tx, &existing_id, &primary_alias);
 
-        let errors = [
-            Register::account(
-                Account::new(registration_id.clone()).with_label(Some(registration_alias.clone())),
-            )
-            .execute(&authority, &mut tx)
-            .expect_err("replay must not bypass an expired registration lease"),
+        let registration_err = Register::account(
+            Account::new(registration_id.clone()).with_label(Some(registration_alias.clone())),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("replay must not bypass an expired registration lease");
+        assert!(
+            instruction_error_contains(&registration_err, "active SNS lease"),
+            "unexpected registration error: {registration_err}"
+        );
+
+        let binding_err =
             EnsureTestAccountAliasBinding::bind(existing_id.clone(), binding_alias.clone(), None)
                 .execute(&authority, &mut tx)
-                .expect_err("replay must not bypass an expired binding lease"),
+                .expect_err("replay must not bypass an expired binding lease");
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            binding_message,
+        )) = &binding_err
+        else {
+            panic!("unexpected expired-binding error: {binding_err:?}");
+        };
+        assert!(
+            binding_message.contains("alias.lifecycle.conflict"),
+            "unexpected expired-binding payload: {binding_message}"
+        );
+
+        let primary_err =
             CasTestPrimaryAccountAlias::bind(existing_id.clone(), primary_alias.clone(), None)
                 .execute(&authority, &mut tx)
-                .expect_err("replay must not bypass an expired primary-alias lease"),
-        ];
-        for err in errors {
-            assert!(
-                err.to_string().contains("active SNS lease"),
-                "unexpected error: {err}"
-            );
-        }
+                .expect_err("replay must not bypass an expired primary-alias lease");
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            primary_message,
+        )) = &primary_err
+        else {
+            panic!("unexpected expired-primary error: {primary_err:?}");
+        };
+        assert!(
+            primary_message.contains("alias.lifecycle.conflict"),
+            "unexpected expired-primary payload: {primary_message}"
+        );
         assert!(tx.world.account(&registration_id).is_err());
         assert!(tx.world.account_aliases.get(&registration_alias).is_none());
         assert!(tx.world.account_aliases.get(&binding_alias).is_none());
@@ -5111,15 +5156,15 @@ mod tests {
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
-        let err = EnsureTestAccountAliasBinding {
-            account: account_id.clone(),
-            alias: Some(alias.clone()),
-            lease_expiry_ms: None,
-        }
+        let err = RebindAccountAlias::new(
+            resolved_account_alias(&tx, &alias),
+            account_id.clone(),
+            account_id.clone(),
+        )
         .execute(&authority, &mut tx)
         .expect_err("retail alias binding must require an SNS lease");
         assert!(
-            err.to_string().contains("active SNS lease"),
+            instruction_error_contains(&err, "not found"),
             "unexpected error: {err}"
         );
         assert!(tx.world.account_aliases.get(&alias).is_none());
@@ -5154,16 +5199,17 @@ mod tests {
             alias.clone(),
             AccountRekeyRecord::new(alias.clone(), current_account_id.clone()),
         );
+        seed_account_alias_lease_record(&mut tx, &replacement_account_id, &alias);
 
-        let err = EnsureTestAccountAliasBinding {
-            account: replacement_account_id.clone(),
-            alias: Some(alias.clone()),
-            lease_expiry_ms: None,
-        }
+        let err = RebindAccountAlias::new(
+            resolved_account_alias(&tx, &alias),
+            current_account_id.clone(),
+            replacement_account_id.clone(),
+        )
         .execute(&current_account_id, &mut tx)
         .expect_err("alias ownership must not bypass exact domain permission");
         assert!(
-            err.to_string().contains("not permitted"),
+            instruction_error_contains(&err, "exact management permission"),
             "unexpected error: {err}"
         );
         assert_eq!(
@@ -5178,12 +5224,11 @@ mod tests {
                 scope: AccountAliasPermissionScope::Domain(hbl),
             }),
         );
-        seed_account_alias_lease(&mut tx, &replacement_account_id, &alias);
-        EnsureTestAccountAliasBinding {
-            account: replacement_account_id.clone(),
-            alias: Some(alias.clone()),
-            lease_expiry_ms: None,
-        }
+        RebindAccountAlias::new(
+            resolved_account_alias(&tx, &alias),
+            current_account_id.clone(),
+            replacement_account_id.clone(),
+        )
         .execute(&current_account_id, &mut tx)
         .expect("exact domain permission should authorize the alias mutation");
 
@@ -5223,13 +5268,28 @@ mod tests {
             retail,
             "customerubl".parse::<Name>().expect("UBL alias label"),
         );
+        let hbl_secondary_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "secondaryhbl"
+                .parse::<Name>()
+                .expect("secondary HBL alias label"),
+        );
         let domainless_alias =
             AccountAlias::domainless("retailroot".parse::<Name>().expect("root alias"), retail);
         let target = AccountId::new(checked_keypair().public_key().clone());
-        Register::account(Account::new(target.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register alias target");
-        for alias in [&hbl_alias, &ubl_alias, &domainless_alias] {
+        let replacement = AccountId::new(checked_keypair().public_key().clone());
+        for account in [&target, &replacement] {
+            Register::account(Account::new(account.clone()))
+                .execute(&authority, &mut tx)
+                .expect("register alias target");
+        }
+        for alias in [
+            &hbl_alias,
+            &ubl_alias,
+            &hbl_secondary_alias,
+            &domainless_alias,
+        ] {
             seed_account_alias_lease_record(&mut tx, &target, alias);
         }
 
@@ -5257,7 +5317,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect_err("HBL domain permission must not authorize another alias scope");
             assert!(
-                err.to_string().contains("not permitted"),
+                instruction_error_contains(&err, "alias.setup.authority_forbidden"),
                 "unexpected cross-scope error: {err}"
             );
             assert!(
@@ -5272,17 +5332,21 @@ mod tests {
             ubl_alias.clone(),
             AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
         );
-        let err = EnsureTestAccountAliasBinding::clear(target.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("HBL authority must not clear a UBL secondary alias");
+        let err = RebindAccountAlias::new(
+            resolved_account_alias(&tx, &ubl_alias),
+            target.clone(),
+            replacement,
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("HBL authority must not rebind a UBL secondary alias");
         assert!(
-            err.to_string().contains("not permitted"),
-            "unexpected secondary-clear error: {err}"
+            instruction_error_contains(&err, "exact management permission"),
+            "unexpected secondary-rebind error: {err}"
         );
         assert_eq!(
             tx.world.account_aliases.get(&hbl_alias),
             Some(&target),
-            "secondary clear must preflight every alias before mutating"
+            "secondary rebind must preflight every alias before mutating"
         );
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
         tx.world.remove_account_alias_binding(&ubl_alias);
@@ -5300,7 +5364,7 @@ mod tests {
             }),
         );
 
-        for forbidden_alias in [&hbl_alias, &ubl_alias] {
+        for forbidden_alias in [&hbl_secondary_alias, &ubl_alias] {
             let err = EnsureTestAccountAliasBinding {
                 account: target.clone(),
                 alias: Some(forbidden_alias.clone()),
@@ -5309,7 +5373,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect_err("dataspace permission must not authorize a domainful FI alias");
             assert!(
-                err.to_string().contains("not permitted"),
+                instruction_error_contains(&err, "alias.setup.authority_forbidden"),
                 "unexpected domainful-alias error: {err}"
             );
         }
@@ -5326,6 +5390,7 @@ mod tests {
             Some(&target)
         );
         assert_eq!(tx.world.account_aliases.get(&hbl_alias), Some(&target));
+        assert!(tx.world.account_aliases.get(&hbl_secondary_alias).is_none());
         assert!(tx.world.account_aliases.get(&ubl_alias).is_none());
     }
 
@@ -5405,6 +5470,7 @@ mod tests {
             ubl_home_alias.clone(),
             AccountRekeyRecord::new(ubl_home_alias.clone(), ubl_account.clone()),
         );
+        seed_account_alias_lease_record(&mut tx, &ubl_account, &ubl_home_alias);
 
         let err = EnsureTestAccountAliasBinding {
             account: ubl_account.clone(),
@@ -5414,7 +5480,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("HBL must not add a secondary alias to a UBL-home account");
         assert!(
-            err.to_string().contains("jointly-authorized migration"),
+            instruction_error_contains(&err, "jointly-authorized migration"),
             "unexpected cross-FI secondary-binding error: {err}"
         );
         assert!(
@@ -5433,7 +5499,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("HBL must not repoint an existing alias to a UBL-home account");
         assert!(
-            err.to_string().contains("jointly-authorized migration"),
+            instruction_error_contains(&err, "alias.owner.conflict"),
             "unexpected cross-FI repoint error: {err}"
         );
         assert_eq!(
@@ -5459,7 +5525,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("repointing must not strand the previous account without an FI home");
         assert!(
-            err.to_string().contains("last SBP retail FI home"),
+            instruction_error_contains(&err, "alias.owner.conflict"),
             "unexpected last-home repoint error: {err}"
         );
         assert_eq!(
@@ -5663,7 +5729,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("HBL permission must not remove an existing UBL primary alias");
         assert!(
-            err.to_string().contains("replace the existing primary"),
+            instruction_error_contains(&err, "jointly-authorized migration"),
             "unexpected primary-replacement error: {err}"
         );
         assert_eq!(
@@ -5681,7 +5747,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("HBL permission must not clear an existing UBL primary alias");
         assert!(
-            err.to_string().contains("clear this primary"),
+            instruction_error_contains(&err, "exact management permission"),
             "unexpected primary-clear error: {err}"
         );
         assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
@@ -5703,7 +5769,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("cross-FI primary migration requires an explicit joint instruction");
         assert!(
-            err.to_string().contains("jointly-authorized migration"),
+            instruction_error_contains(&err, "jointly-authorized migration"),
             "unexpected cross-FI primary migration error: {err}"
         );
         assert_eq!(
@@ -5731,15 +5797,15 @@ mod tests {
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
-        let err = CasTestPrimaryAccountAlias {
-            account: account_id.clone(),
-            alias: Some(alias.clone()),
-            lease_expiry_ms: None,
-        }
+        let err = CompareAndSetPrimaryAccountAlias::new(
+            account_id.clone(),
+            None,
+            Some(resolved_account_alias(&tx, &alias)),
+        )
         .execute(&authority, &mut tx)
         .expect_err("retail primary alias must require an SNS lease");
         assert!(
-            err.to_string().contains("active SNS lease"),
+            instruction_error_contains(&err, "not found"),
             "unexpected error: {err}"
         );
         assert!(tx.world.account_aliases.get(&alias).is_none());
@@ -5874,6 +5940,7 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
         seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
+        seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -5899,7 +5966,7 @@ mod tests {
         .execute(&registrar, &mut tx)
         .expect_err("registrar must use an explicit CAS rebind operation");
         assert!(
-            error.to_string().contains("alias.binding.conflict"),
+            instruction_error_contains(&error, "alias.binding.conflict"),
             "unexpected error: {error}"
         );
 
@@ -5968,6 +6035,7 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
         seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
+        seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -5992,7 +6060,7 @@ mod tests {
         }
         .execute(&registrar, &mut tx)
         .expect_err("global registrar must use an explicit CAS rebind operation");
-        assert!(error.to_string().contains("alias.binding.conflict"));
+        assert!(instruction_error_contains(&error, "alias.binding.conflict"));
 
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -6123,8 +6191,8 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &account_id, &primary_label);
-        seed_account_alias_lease(&mut tx, &account_id, &bound_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &primary_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &bound_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register account with primary label");
@@ -6172,9 +6240,9 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &account_id, &primary_label);
-        seed_account_alias_lease(&mut tx, &account_id, &root_alias);
-        seed_account_alias_lease(&mut tx, &account_id, &domain_alias);
+        seed_account_alias_lease_record(&mut tx, &account_id, &primary_label);
+        seed_account_alias_lease_record(&mut tx, &account_id, &root_alias);
+        seed_account_alias_lease_record(&mut tx, &account_id, &domain_alias);
         Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register account with primary label");
@@ -6196,11 +6264,10 @@ mod tests {
         let error = EnsureTestAccountAliasBinding::clear(account_id.clone())
             .execute(&authority, &mut tx)
             .expect_err("broad secondary-alias clearing is not a lifecycle CAS operation");
-        assert!(
-            error
-                .to_string()
-                .contains("broad alias clearing was removed")
-        );
+        assert!(instruction_error_contains(
+            &error,
+            "broad alias clearing was removed"
+        ));
 
         assert_eq!(
             tx.world.account_aliases.get(&primary_label),
@@ -6258,7 +6325,8 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &account_id, &alias);
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease_record(&mut tx, &account_id, &alias);
 
         let error = EnsureTestAccountAliasBinding {
             account: account_id.clone(),
@@ -6267,7 +6335,7 @@ mod tests {
         }
         .execute(&authority, &mut tx)
         .expect_err("declarative setup must reject stale non-empty binding drift");
-        assert!(error.to_string().contains("alias.binding.conflict"));
+        assert!(instruction_error_contains(&error, "alias.binding.conflict"));
 
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -6391,6 +6459,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -6416,8 +6485,8 @@ mod tests {
         .expect_err("alias collision should be rejected");
 
         assert!(
-            err.to_string().contains("not permitted"),
-            "error should mention missing alias authority: {err}"
+            instruction_error_contains(&err, "alias.owner.conflict"),
+            "error should preserve the existing lease-owner conflict: {err}"
         );
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -6452,6 +6521,7 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
         seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
+        seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -6476,7 +6546,7 @@ mod tests {
         }
         .execute(&registrar, &mut tx)
         .expect_err("registrar must use an explicit CAS rebind operation");
-        assert!(error.to_string().contains("alias.binding.conflict"));
+        assert!(instruction_error_contains(&error, "alias.binding.conflict"));
 
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -6519,6 +6589,7 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
         seed_domainful_alias_manage_permissions(&mut tx, &registrar, &domain_id);
+        seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
         Register::account(Account::new(first_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register first account");
@@ -6543,7 +6614,7 @@ mod tests {
         }
         .execute(&registrar, &mut tx)
         .expect_err("global registrar must use an explicit CAS rebind operation");
-        assert!(error.to_string().contains("alias.binding.conflict"));
+        assert!(instruction_error_contains(&error, "alias.binding.conflict"));
 
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -9950,9 +10021,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect_err("fee sponsor reference must lock global balance policy");
             assert!(
-                error
-                    .to_string()
-                    .contains("fee sponsor revision, vault, or relay lease"),
+                instruction_error_contains(&error, "fee sponsor revision, vault, or relay lease"),
                 "unexpected migration error: {error}"
             );
             assert_eq!(

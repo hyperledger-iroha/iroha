@@ -794,7 +794,11 @@ pub fn snapshot_bound_contract_records_by_subject(
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        isi::{Grant, SetParameter, smart_contract_code::DeactivateContractInstance},
+        isi::{
+            Grant, SetParameter,
+            error::{InstructionExecutionError, InvalidParameterError},
+            smart_contract_code::DeactivateContractInstance,
+        },
         nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
@@ -1508,8 +1512,15 @@ seiyaku LifecycleAba {
         let error = register_code_bytes(&authority, code, &mut stx)
             .expect_err("zero-cycle artifact registration must fail closed");
         assert!(
-            error.to_string().contains("omits a non-zero `max_cycles`"),
-            "unexpected registration error: {error}"
+            matches!(
+                &error,
+                RegistryError::Instruction(
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    )
+                ) if message.contains("omits a non-zero `max_cycles`")
+            ),
+            "unexpected registration error: {error:?}"
         );
         assert!(
             stx.world.contract_code.get(&code_hash).is_none(),
@@ -1532,10 +1543,16 @@ seiyaku LifecycleAba {
 
         let error = register_code_bytes(&authority, code, &mut stx)
             .expect_err("over-ceiling artifact registration must fail closed");
-        let message = error.to_string();
         assert!(
-            message.contains("`max_cycles` exceeds upper bound"),
-            "unexpected registration error: {message}"
+            matches!(
+                &error,
+                RegistryError::Instruction(
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    )
+                ) if message.contains("`max_cycles` exceeds upper bound")
+            ),
+            "unexpected registration error: {error:?}"
         );
         assert!(
             stx.world.contract_code.get(&code_hash).is_none(),

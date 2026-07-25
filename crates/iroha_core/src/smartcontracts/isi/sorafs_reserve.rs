@@ -22,9 +22,8 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsReserveAppealById, FindSorafsReserveEvents,
-            FindSorafsReserveMovementById, FindSorafsReservePolicy,
-            FindSorafsReserveProviderById,
+            FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+            FindSorafsReservePolicy, FindSorafsReserveProviderById,
         },
     },
     sorafs::{
@@ -333,8 +332,7 @@ fn read_event_journal_head(
     let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
         return Ok(None);
     };
-    let head: ReserveEventJournalHeadV1 =
-        decode_state(bytes, "reserve event journal head")?;
+    let head: ReserveEventJournalHeadV1 = decode_state(bytes, "reserve event journal head")?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state(
             "stored reserve event journal head is invalid",
@@ -1583,8 +1581,7 @@ fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
 }
 
-const RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1: usize =
-    RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 4;
+const RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1: usize = RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 4;
 const RESERVE_QUERY_MAX_EVENT_READ_RECORDS_V1: u32 = RESERVE_QUERY_MAX_ITEMS_V1 + 8;
 
 #[derive(Debug, Default)]
@@ -1636,9 +1633,7 @@ fn resolve_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ReserveFinalizedCursorV1, QueryExecutionFail> {
     let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
-        QueryExecutionFail::Conversion(
-            "finalized reserve height does not fit into u64".to_owned(),
-        )
+        QueryExecutionFail::Conversion("finalized reserve height does not fit into u64".to_owned())
     })?;
     let block_hash = state_ro
         .block_hashes()
@@ -1694,13 +1689,12 @@ fn read_event_journal_head_for_query(
             "stored reserve event journal head is invalid",
         ));
     }
-    let record = read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(
-        || {
+    let record =
+        read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(|| {
             QueryExecutionFail::Conversion(
                 "reserve event journal head references a missing event".to_owned(),
             )
-        },
-    )?;
+        })?;
     if record.target_block_height != head.last_target_block_height
         || record.event_index != head.last_event_index
     {
@@ -1786,9 +1780,8 @@ fn query_reserve_event_page(
             if after.sequence == 0 || after.sequence > head.last_sequence {
                 return Err(QueryExecutionFail::Expired);
             }
-            let record =
-                read_persisted_event_for_query(world, after.sequence, &mut budget)?
-                    .ok_or(QueryExecutionFail::Expired)?;
+            let record = read_persisted_event_for_query(world, after.sequence, &mut budget)?
+                .ok_or(QueryExecutionFail::Expired)?;
             let resolved = resolve_committed_event(state_ro, &record)?;
             if resolved.cursor() != after {
                 return Err(QueryExecutionFail::Expired);

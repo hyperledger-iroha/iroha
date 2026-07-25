@@ -29,21 +29,46 @@ fn ivm_manifest_fixture_uses_checked_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::Ed25519);
 }
 
-fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    // Program: HALT
-    let mut code = Vec::new();
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+fn minimal_ivm_contract(abi_version: u8) -> (Vec<u8>, manifest::ContractManifest) {
     let meta = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1,
         abi_version,
     };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "AbiAdmissionFixture".to_owned(),
+        compiler_fingerprint: "iroha-core-abi-admission-test".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: manifest::EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("CanRegisterSmartContractCode".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+        error_codes: Vec::new(),
+        states: Vec::new(),
+    };
     let mut out = meta.encode();
-    out.extend_from_slice(&code);
-    out
+    out.extend_from_slice(&interface.encode_section());
+    out.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let verified =
+        ivm::verify_contract_artifact(&out).expect("valid ABI admission contract fixture");
+    (out, verified.manifest)
 }
 
 fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
@@ -77,6 +102,33 @@ fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
 
+fn test_contract_address(authority: &AccountId) -> ContractAddress {
+    ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        authority,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive ABI admission contract address")
+}
+
+fn main_contract_dispatch_metadata(contract_address: &ContractAddress) -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "contract_entrypoint"
+            .parse()
+            .expect("static contract entrypoint metadata key"),
+        iroha_primitives::json::Json::new("main"),
+    );
+    metadata.insert(
+        "contract_address"
+            .parse()
+            .expect("static contract address metadata key"),
+        iroha_primitives::json::Json::new(contract_address.to_string()),
+    );
+    metadata
+}
+
 #[test]
 fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
@@ -99,8 +151,10 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Prepare a minimal IVM program and its hashes
-    let prog = minimal_ivm_program(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let (prog, mut manifest) = minimal_ivm_contract(1);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
     let mut wrong_abi = correct_abi;
@@ -120,20 +174,8 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
         .expect("grant permission");
 
     // Register manifest with wrong abi_hash
-    let manifest = manifest::ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(wrong_abi)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
-    }
-    .signed(&kp);
+    manifest.abi_hash = Some(iroha_crypto::Hash::prehashed(wrong_abi));
+    let manifest = manifest.signed(&kp);
     stx1.world
         .contract_manifests_mut_for_testing()
         .insert(code_hash, manifest);
@@ -191,8 +233,11 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Prepare a minimal IVM program and its hashes
-    let prog = minimal_ivm_program(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let (prog, manifest) = minimal_ivm_contract(1);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
+    let contract_address = test_contract_address(&account_id);
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
 
@@ -210,23 +255,30 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         .expect("grant permission");
 
     // Register manifest with correct abi_hash
-    let manifest = manifest::ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(correct_abi)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash,
+        code: prog.clone(),
     }
-    .signed(&kp);
-    stx1.world
-        .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+    .execute(&account_id, &mut stx1)
+    .expect("register verified contract bytes");
+    assert_eq!(
+        manifest.abi_hash,
+        Some(iroha_crypto::Hash::prehashed(correct_abi)),
+        "verified contract manifest must bind the canonical ABI"
+    );
+    let manifest = manifest.signed(&kp);
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
+        .execute(&account_id, &mut stx1)
+        .expect("register verified contract manifest");
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&account_id, &mut stx1)
+        .expect("register non-signable contract-subject account");
+    iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        code_hash,
+    }
+    .execute(&account_id, &mut stx1)
+    .expect("activate verified contract instance");
     stx1.apply();
     let _ = block1.commit();
 
@@ -240,6 +292,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
+    .with_metadata(main_contract_dispatch_metadata(&contract_address))
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
@@ -274,8 +327,10 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let state = State::new_for_testing(world, kura, query_handle);
 
     // Prepare a minimal IVM program (v1) and its hashes
-    let prog = minimal_ivm_program(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let (prog, mut manifest) = minimal_ivm_contract(1);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
 
     // Block 1: grant permission and register a manifest with only code_hash (no abi_hash)
     let header1 =
@@ -291,20 +346,8 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
         .expect("grant permission");
 
     // Register manifest with code_hash only
-    let manifest = manifest::ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: None,
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
-    }
-    .signed(&kp);
+    manifest.abi_hash = None;
+    let manifest = manifest.signed(&kp);
     stx1.world
         .contract_manifests_mut_for_testing()
         .insert(code_hash, manifest);
@@ -358,8 +401,11 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    let prog = minimal_ivm_program(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let (prog, manifest) = minimal_ivm_contract(1);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
+    let contract_address = test_contract_address(&account_id);
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash
@@ -373,23 +419,30 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
 
-    let manifest = manifest::ContractManifest {
-        seiyaku_name: None,
-        code_hash: Some(code_hash),
-        abi_hash: Some(iroha_crypto::Hash::prehashed(abi_current)),
-        compiler_fingerprint: None,
-        features_bitmap: None,
-        access_set_hints: None,
-        entrypoints: None,
-        states: None,
-        kotoba: None,
-        error_codes: None,
-        provenance: None,
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+        code_hash,
+        code: prog.clone(),
     }
-    .signed(&kp);
-    stx1.world
-        .contract_manifests_mut_for_testing()
-        .insert(code_hash, manifest);
+    .execute(&account_id, &mut stx1)
+    .expect("register verified V1 contract bytes");
+    assert_eq!(
+        manifest.abi_hash,
+        Some(iroha_crypto::Hash::prehashed(abi_current)),
+        "verified V1 contract manifest must bind the canonical ABI"
+    );
+    let manifest = manifest.signed(&kp);
+    iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
+        .execute(&account_id, &mut stx1)
+        .expect("register verified V1 contract manifest");
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&account_id, &mut stx1)
+        .expect("register non-signable V1 contract-subject account");
+    iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        code_hash,
+    }
+    .execute(&account_id, &mut stx1)
+    .expect("activate verified V1 contract instance");
     stx1.apply();
     let _ = block1.commit();
 
@@ -403,6 +456,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )
+    .with_metadata(main_contract_dispatch_metadata(&contract_address))
     .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
     .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();

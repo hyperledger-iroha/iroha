@@ -6025,10 +6025,10 @@ mod tests {
             .expect("settlement lock")
             .custody
             .clone();
-        let mut maximum_bytes = vec![0xFF; 64];
-        maximum_bytes.push(0);
+        let mut maximum_bytes = vec![0xFF; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7F;
         let maximum = Quantity::try_from_numeric(Numeric::new(
-            BigInt::from_twos_bytes(&maximum_bytes).expect("512-bit positive maximum"),
+            BigInt::from_twos_bytes(&maximum_bytes).expect("signed 512-bit positive maximum"),
             6,
         ))
         .expect("positive maximum is a valid quantity");

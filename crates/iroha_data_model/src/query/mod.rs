@@ -2111,6 +2111,16 @@ impl CommittedTransaction {
 /// Filters applied when matching committed transactions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct CommittedTxFilters {
+    /// Require the carrier block hash to equal the provided hash.
+    pub block_eq: Option<HashOf<BlockHeader>>,
+    /// Require the carrier block hash to differ from the provided hash.
+    pub block_ne: Option<HashOf<BlockHeader>>,
+    /// Require the carrier block hash to be one of the listed hashes.
+    pub block_in: std::vec::Vec<HashOf<BlockHeader>>,
+    /// Require the carrier block hash to be absent from the listed hashes.
+    pub block_nin: std::vec::Vec<HashOf<BlockHeader>>,
+    /// Require the presence (`true`) or absence (`false`) of a carrier block hash.
+    pub block_exists: Option<bool>,
     /// Require the authority to equal the provided account.
     pub authority_eq: Option<crate::account::AccountId>,
     /// Require the authority to differ from the provided account.
@@ -2151,6 +2161,29 @@ impl CommittedTxFilters {
     /// Helper associated with query processing.
     #[allow(clippy::too_many_lines)]
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
+        if self.block_exists == Some(false) {
+            return false;
+        }
+        if self
+            .block_eq
+            .as_ref()
+            .is_some_and(|hash| &tx.block_hash != hash)
+        {
+            return false;
+        }
+        if self
+            .block_ne
+            .as_ref()
+            .is_some_and(|hash| &tx.block_hash == hash)
+        {
+            return false;
+        }
+        if !self.block_in.is_empty() && !self.block_in.iter().any(|hash| hash == &tx.block_hash) {
+            return false;
+        }
+        if self.block_nin.iter().any(|hash| hash == &tx.block_hash) {
+            return false;
+        }
         let authority_val = tx.entrypoint.authority_opt().cloned();
         if let Some(required) = self.authority_exists
             && (required != authority_val.is_some())
@@ -5360,11 +5393,11 @@ pub mod sorafs {
                 OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
                 OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
             },
-            reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
             proof_ledger::{
                 ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
                 ProofOutcomeKindV1,
             },
+            reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
     };
 
@@ -6138,8 +6171,8 @@ pub mod sorafs {
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
-            FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
+            FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
         };
     }
 }

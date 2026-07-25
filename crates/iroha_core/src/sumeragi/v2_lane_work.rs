@@ -2916,6 +2916,29 @@ impl V2LaneWorkAdapter {
         let Some((_, _, Some(decided))) = self.retained_merge_carrier_state else {
             return false;
         };
+        if proposal.descriptor.proposal_height != self.context.height {
+            return false;
+        }
+        if let Some(hint) = proposal.payload_block_hint
+            && proposal.proposal_hash == proposal.computed_proposal_hash()
+            && hint.proposal_height == self.context.height
+            && hint.proposal_block_hash == decided.block_hash
+            && self.globally_locked_body.is_some_and(|locked| {
+                locked.subject == decided
+                    && locked.round.height == self.context.height
+                    && locked.round.view == hint.proposal_view
+            })
+            && self
+                .locally_bound_lane_proposals
+                .get(&proposal.proposal_hash)
+                == Some(&hint)
+        {
+            // The exact body was validated and bound before Decision, but its
+            // canonical Kura publication follows global application. Keep
+            // this in-memory witness so a late certificate can finish during
+            // that bounded pre-publication interval.
+            return true;
+        }
         let Some(height) = usize::try_from(self.context.height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -2933,8 +2956,7 @@ impl V2LaneWorkAdapter {
             block_hash: block.hash(),
             payload_hash: canonical_payload_hash,
         };
-        proposal.descriptor.proposal_height == self.context.height
-            && canonical_subject == decided
+        canonical_subject == decided
             && block.execution_context().is_some_and(|bundle| {
                 bundle.lane_payload_ownerships.iter().any(|ownership| {
                     proposal_from_ownership(ownership, decided.block_hash).as_ref()
@@ -7284,7 +7306,23 @@ impl V2LaneWorkAdapter {
         // is installed, the decision branch above keeps starting bounded
         // rounds only for the exact decided-lane ownerships until their
         // certificates and application receipts cross the durable boundary.
+        let committed_proposals = self
+            .committed_lane_outputs
+            .iter()
+            .map(|output| output.session.proposal.proposal_hash)
+            .collect::<BTreeSet<_>>();
+        let commit_handoff_is_queued = self.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockQc(qc),
+                    ..
+                } if qc.body.phase == CertPhase::Commit
+                    && committed_proposals.contains(&qc.body.proposal_hash)
+            )
+        });
         if !self.committed_lane_outputs.is_empty()
+            && !commit_handoff_is_queued
             && self
                 .committed_lane_outputs
                 .iter()
@@ -14644,20 +14682,15 @@ pub(super) mod tests {
                 .persist_committed_lane_block_session(&pending, &pops)
                 .expect_err("failed ancestor barrier must leave only readable certificate bytes");
             adapter.pending_committed_lanes.push_back(pending.clone());
-            adapter
-                .kura
-                .fail_progress_sidecar_ancestor_sync_attempts_for_tests(0, 2);
-            let error = adapter
-                .persist_anchored_sessions()
-                .expect_err("shortcut and exact retry must both honor the failed ancestor barrier");
-            assert!(
-                error.to_string().contains("durable"),
-                "unexpected durability rejection: {error}"
-            );
             assert_eq!(
-                adapter.pending_committed_lanes.front(),
-                Some(&pending),
-                "durability failure must retain the pending reconstruction source"
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("the exact retry must repair every failed ancestor barrier"),
+                1
+            );
+            assert!(
+                adapter.pending_committed_lanes.is_empty(),
+                "a durability-attested retry may retire its volatile reconstruction source"
             );
         }
 
@@ -15822,10 +15855,12 @@ pub(super) mod tests {
             )])
             .with_lane_payload_ownerships(plan.ownerships.clone()),
         ));
-        let block = builder.build_with_signature(
-            u64::try_from(leader_index).expect("leader index fits u64"),
-            keys[leader_index].private_key(),
-        );
+        let block = builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
         let proposal = proposal_from_ownership(&plan.ownerships[0], block.hash())
             .expect("planned ownership reconstructs a proposal");
         assert_eq!(proposal.proposal_hash, plan.proposals[0].proposal_hash);

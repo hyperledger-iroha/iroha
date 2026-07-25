@@ -9,12 +9,16 @@ use std::{
 };
 
 use crate::sumeragi::v2_core::{EventTag, Generation};
-use iroha_config::parameters::actual::Queue as QueueConfig;
+use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId, Registrable,
     account::{Account, AccountId},
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire,
+        consensus_v2::finality::V2FinalityArtifact,
+    },
+    bridge::SccpOutboundMessageContextV1,
     domain::Domain,
     isi::SetParameter,
     parameter::{Parameter, system::SumeragiParameter},
@@ -22,6 +26,7 @@ use iroha_data_model::{
     transaction::TransactionBuilder,
 };
 use mv::storage::StorageReadOnly;
+use norito::codec::Encode;
 
 use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
 use crate::{
@@ -38,6 +43,37 @@ use crate::{
 };
 
 const HEIGHT: u64 = 1;
+
+/// Test-only mirror of Kura's private retained SCCP message layout.
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[norito(deny_unknown_fields)]
+struct CorruptedKuraRetainedSccpMessage {
+    commitment_index: u32,
+    context: SccpOutboundMessageContextV1,
+    payload_bytes: Vec<u8>,
+}
+
+/// Test-only mirror used to install a disk-corrupted retained record.
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[norito(deny_unknown_fields)]
+struct CorruptedKuraRetainedBlockRecord {
+    format_version: u16,
+    height: u64,
+    block_hash: iroha_crypto::HashOf<BlockHeader>,
+    block_header: BlockHeader,
+    proposal_wire_hash: Hash,
+    executed_block_wire_hash: Hash,
+    sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
+}
+
+/// Test-only mirror used to install a disk-corrupted v2 finality envelope.
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[norito(deny_unknown_fields)]
+struct CorruptedKuraV2FinalityRecord {
+    format_version: u16,
+    block_header: BlockHeader,
+    artifact: V2FinalityArtifact,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum TreeEntry {
@@ -764,7 +800,55 @@ impl StrictReplayFixture {
             .executed_block_wire_hash()
             .expect("encode malformed-SCCP executed block");
         Self::resign_certificate(&mut artifact.commit_qc, &self.keys);
-        self.kura_with_block_and_artifact(block, artifact)
+
+        // Production finality publication intentionally rejects this tuple while preparing the
+        // retained archive. Install the mutually correlated bytes through test-only corruption
+        // hooks so strict replay, rather than the writer, remains the component under test.
+        let kura = Kura::blank_kura_for_testing();
+        kura.store_block(Arc::new(block.clone()))
+            .expect("store malformed-SCCP canonical block");
+        kura.store_wsv_checkpoint(HEIGHT, block.hash(), self.checkpoint_hash)
+            .expect("store malformed-SCCP checkpoint");
+        let manifest =
+            CommitManifest::new(HEIGHT, block.hash(), None, None, self.checkpoint_hash, None)
+                .with_authenticated_v2_commit_authority(&artifact);
+        kura.store_commit_manifest(manifest)
+            .expect("store malformed-SCCP manifest");
+
+        let blocks_dir = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(&kura.store_root());
+        let retained_dir = blocks_dir.join("retained_blocks");
+        std::fs::create_dir_all(&retained_dir).expect("create retained-block directory");
+        let retained = CorruptedKuraRetainedBlockRecord {
+            format_version: 2,
+            height: HEIGHT,
+            block_hash: block.hash(),
+            block_header: block.header(),
+            proposal_wire_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("encode malformed-SCCP proposal"),
+            executed_block_wire_hash: block
+                .executed_block_wire_hash()
+                .expect("encode malformed-SCCP executed block"),
+            sccp_archive: Vec::new(),
+        };
+        std::fs::write(
+            retained_dir.join(format!("{HEIGHT:020}.norito")),
+            retained.encode(),
+        )
+        .expect("install malformed retained SCCP archive");
+
+        let finality_dir = blocks_dir.join("v2_finality");
+        std::fs::create_dir_all(&finality_dir).expect("create v2-finality directory");
+        let finality = CorruptedKuraV2FinalityRecord {
+            format_version: 2,
+            block_header: block.header(),
+            artifact,
+        };
+        kura.overwrite_v2_finality_bytes_for_tests(HEIGHT, &finality.encode())
+            .expect("install malformed-SCCP finality envelope");
+        kura
     }
 
     fn overwrite_correlated_artifact(
@@ -1013,7 +1097,7 @@ strict_replay_test!(
         let kura = fixture.exact_kura_copy();
         kura.remove_commit_manifest_without_binding_for_tests(HEIGHT)
             .expect("remove commit manifest");
-        fixture.assert_rejected_without_mutation(kura, "commit manifest is missing");
+        fixture.assert_rejected_without_mutation(kura, "manifest is missing");
 
         let kura = fixture.exact_kura_copy();
         let mismatched_manifest = CommitManifest::new(
@@ -1027,7 +1111,8 @@ strict_replay_test!(
         .with_authenticated_v2_commit_authority(&fixture.artifact);
         kura.overwrite_commit_manifest_without_binding_for_tests(&mismatched_manifest)
             .expect("overwrite commit manifest");
-        fixture.assert_rejected_without_mutation(kura, "checkpoint binding");
+        fixture
+            .assert_rejected_without_mutation(kura, "commit manifest WSV checkpoint hash mismatch");
 
         let kura = fixture.exact_kura_copy();
         kura.remove_v2_finality_without_binding_for_tests(HEIGHT)

@@ -23543,6 +23543,11 @@ signed ancestor-linked solid-block header proof,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
+  The typed two-quantity nested contract-call path remains bound to the
+  ungated ABI-v1 `CALL_CONTRACT_QUANTITY2` syscall at `0x010029`; removing,
+  renumbering, or changing that operation must repeat the same complete
+  artifact and documentation refresh. Its current canonical ABI-v1 hash is
+  `2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1`.
 - Finish release validation for the bounded-List, exact-decimal/quantity,
   native-JSON, and typed core-query-page corridor. The implementation, source
   migration, canonical header refresh, mapped goldens, compiler manifests, and
