@@ -25690,11 +25690,12 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 584-test, 39-module, 82-leg pre-network
+- execute the fresh source-sealed 585-test, 39-module, 82-leg pre-network
   corridor. Its proposal-origin and per-source route-attempt additions cover
   strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
-  and persistence failure. Its final six regressions cover canonical view-zero
+  persistence failure, and certified sidecar Close/CloseAck critical ingress.
+  Its final six regressions cover canonical view-zero
   genesis bytes first proposed in a later round, the contention-tolerant restart
   deadline, the successor's frozen predecessor CommitQC binding, Kura-first lane
   rollover, incomplete-tip recovery, and terminal ingress filtering. Inventory
@@ -25925,7 +25926,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  584-test target above supersedes that checkpoint. The 39-module pre-network
+  585-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

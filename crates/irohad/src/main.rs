@@ -2359,6 +2359,10 @@ impl ConsensusIngressLimiter {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                     IngressPolicy::limited()
                 }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
+                | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    IngressPolicy::critical()
+                }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     IngressPolicy::bulk()
                 }
@@ -4428,6 +4432,12 @@ impl NetworkRelayShared {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_) => {
                     ("CertifiedMergeSidecarRequest", None, None)
                 }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
+                    ("CertifiedMergeSidecarClose", None, None)
+                }
+                iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    ("CertifiedMergeSidecarCloseAck", None, None)
+                }
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
@@ -5986,10 +5996,41 @@ mod network_relay_tests {
                 )),
                 manifest: sample_v2_manifest(),
                 body: b"body".to_vec(),
-                cited_responder: 0,
+                responder: 0,
                 signature: vec![0x69],
             }),
         )))
+    }
+
+    fn certified_merge_sidecar_control_messages()
+    -> (iroha_core::NetworkMessage, iroha_core::NetworkMessage) {
+        use iroha_core::merge_sidecar::{
+            CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseAckV1,
+            CertifiedMergeSidecarCloseV1, CertifiedMergeSidecarMessage,
+        };
+
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let responder = PeerId::new(KeyPair::random().public_key().clone());
+        let close_id = Hash::prehashed([0x6C; 32]);
+        let close = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::Close(CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                closed_through: 7,
+                close_id,
+                requester: requester.clone(),
+                responder: responder.clone(),
+            }),
+        ));
+        let ack = iroha_core::NetworkMessage::CertifiedMergeSidecar(std::sync::Arc::new(
+            CertifiedMergeSidecarMessage::CloseAck(CertifiedMergeSidecarCloseAckV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                closed_through: 7,
+                close_id,
+                requester,
+                responder,
+            }),
+        ));
+        (close, ack)
     }
 
     fn limited_msg() -> iroha_core::NetworkMessage {
@@ -6401,6 +6442,17 @@ mod network_relay_tests {
             ConsensusIngressLimiter::ingress_policy(&drain_vote).rate_class,
             Some(IngressRateClass::Critical)
         );
+    }
+
+    #[test]
+    fn certified_merge_sidecar_control_uses_critical_bucket() {
+        let (close, close_ack) = certified_merge_sidecar_control_messages();
+
+        for message in [&close, &close_ack] {
+            let policy = ConsensusIngressLimiter::ingress_policy(message);
+            assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
+            assert!(!policy.apply_penalty);
+        }
     }
 
     #[test]

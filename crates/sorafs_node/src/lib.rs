@@ -333,7 +333,7 @@ use sorafs_manifest::reputation::signed::{
 use sorafs_manifest::{
     AdmissionRecord, AppealFinanceReconciliationSummaryV1, ManifestV1,
     ReconciliationValidationError, ReputationScoringEvidenceV1, ReputationSnapshotEventV1,
-    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1, ReputationWeightsV1,
+    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1,
     SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
     SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
     SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
@@ -3672,6 +3672,7 @@ fn quantity_to_metric_micro_saturating(amount: &Quantity) -> u128 {
         .unwrap_or(u128::MAX)
 }
 
+#[cfg(test)]
 fn xor_quantity_to_metric_micro_saturating(amount: &XorQuantity) -> u128 {
     quantity_to_metric_micro_saturating(amount.as_quantity())
 }
@@ -11243,34 +11244,6 @@ impl NodeHandle {
             "removed unindexed moderation quarantine envelope left by an interrupted commit"
         );
         Ok(true)
-    }
-
-    fn record_transparency_source_entry_lossy(
-        &self,
-        entry: Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError>,
-        source_kind: &'static str,
-        source_id: &str,
-    ) {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                iroha_logger::warn!(
-                    %err,
-                    source_kind,
-                    source_id,
-                    "failed to derive SoraFS transparency source entry"
-                );
-                return;
-            }
-        };
-        if let Err(err) = self.record_transparency_ledger_source_entry(entry) {
-            iroha_logger::warn!(
-                %err,
-                source_kind,
-                source_id,
-                "failed to record SoraFS transparency source entry"
-            );
-        }
     }
 
     /// Finalise a deal settlement for the supplied epoch.

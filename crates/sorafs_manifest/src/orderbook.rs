@@ -1357,10 +1357,6 @@ fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
     Ok(())
 }
 
-fn ranges_overlap(lhs_start: u64, lhs_end: u64, rhs_start: u64, rhs_end: u64) -> bool {
-    lhs_start < rhs_end && rhs_start < lhs_end
-}
-
 /// Failure to decode an attacker-controlled orderbook archive canonically.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OrderbookPayloadDecodeError {

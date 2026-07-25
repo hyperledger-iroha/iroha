@@ -1271,7 +1271,7 @@ fn message_meta(
             ),
         };
     let cited_responder = match &message.payload {
-        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.cited_responder),
+        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder),
         _ => None,
     };
     let meta = MessageMeta {

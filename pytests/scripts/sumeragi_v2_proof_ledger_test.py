@@ -17558,7 +17558,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 584 tests",
+            "must contain exactly 585 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17566,9 +17566,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
+            "readonly expected_production_liveness_test_count=585",
             "readonly expected_production_liveness_test_count=584",
-            "readonly expected_production_liveness_test_count=583",
-            "production liveness source count must be sealed as 584",
+            "production liveness source count must be sealed as 585",
         ),
         (
             "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
@@ -17795,26 +17795,26 @@ def test_production_release_inventory_seals_successor_parent_binding(
     (
         (
             Path("docs/formal/sumeragi_v2/README.md"),
-            "inventory to 584 tests across 39 modules. Together with the source-sealed\n"
+            "inventory to 585 tests across 39 modules. Together with the source-sealed\n"
             "command and tooling legs, the pre-network corridor contains 82 legs.",
-            "inventory to 584 tests across 39 modules. Together with the source-sealed\n"
+            "inventory to 585 tests across 39 modules. Together with the source-sealed\n"
             "command and tooling legs, the pre-network corridor contains 81 legs.",
         ),
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
             "current\n"
-            "584-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "585-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 82 legs",
             "current\n"
-            "584-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "585-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 81 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
             "current source-bound\n"
-            "inventory to 584 exact tests across 39 modules and 82 pre-network legs.",
+            "inventory to 585 exact tests across 39 modules and 82 pre-network legs.",
             "current source-bound\n"
-            "inventory to 584 exact tests across 39 modules and 81 pre-network legs.",
+            "inventory to 585 exact tests across 39 modules and 81 pre-network legs.",
         ),
     ),
 )
@@ -17862,9 +17862,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            "_PRODUCTION_TEST_COUNT = 585",
             "_PRODUCTION_TEST_COUNT = 584",
-            "_PRODUCTION_TEST_COUNT = 583",
-            "production test count must equal the exact shell inventory count 584",
+            "production test count must equal the exact shell inventory count 585",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -18999,8 +18999,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
             irohad_main_source,
         ),
+        (
+            "network_relay_tests::",
+            "certified_merge_sidecar_control_uses_critical_bucket",
+            irohad_main_source,
+        ),
     )
-    assert len(route_completion_inventory_additions) == 117
+    assert len(route_completion_inventory_additions) == 118
     source_geometry_inventory_additions = (
         (
             "sumeragi::authoritative_runtime_gate_tests::",
@@ -19286,10 +19291,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 584
-    assert len(set(production_inventory)) == 584
-    assert "readonly expected_production_liveness_test_count=584" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 584" in receipt_source
+    assert len(production_inventory) == 585
+    assert len(set(production_inventory)) == 585
+    assert "readonly expected_production_liveness_test_count=585" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 585" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -19299,7 +19304,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 584
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 585
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS

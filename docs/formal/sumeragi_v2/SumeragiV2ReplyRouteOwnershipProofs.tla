@@ -14046,6 +14046,7 @@ PROOF
 
 THEOREM ReplyRouteOwnershipModelObligation ==
   ReplyRouteSpec =>
+    /\ []ReplyRouteSafetyInvariant
     /\ []ReplyRouteFullSafetyInvariant
     /\ ReplyTenureAwareReplay
     /\ ReplySourceIsolation
@@ -14055,10 +14056,23 @@ THEOREM ReplyRouteOwnershipModelObligation ==
     /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
           source \in ReplySources:
          ReplySourceEventuallyProgresses(owner, semantic, source)
-BY ReplyRouteSpecAlwaysFullSafetyInvariant,
-   ReplyRouteSpecAlwaysReplayAndIsolation,
-   ReplyRouteSpecProvidesLifecycleJournal,
-   ReplyRouteSpecTerminatesCloseWork,
-   ReplyRouteSpecProvidesSourceProgress
+PROOF
+  <1>1. ReplyRouteSpec =>
+         /\ []ReplyRouteSafetyInvariant
+         /\ ReplyTenureAwareReplay
+         /\ ReplySourceIsolation
+         /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+              ReplySourceEventuallyProgresses(owner, semantic, source)
+    BY ReplyRouteSpecAlwaysSafetyInvariant, ReplyRouteSpecAlwaysReplayAndIsolation, ReplyRouteSpecProvidesSourceProgress
+  <1>2. ReplyRouteSpec => []ReplyRouteFullSafetyInvariant
+    BY ReplyRouteSpecAlwaysFullSafetyInvariant
+  <1>3. ReplyRouteSpec => ReplyLifecycleJournal
+    BY ReplyRouteSpecProvidesLifecycleJournal
+  <1>4. ReplyRouteSpec =>
+         \A requester \in ReplyOwners, responder \in ReplySources:
+           ReplyCloseWorkEventuallyTerminates(requester, responder)
+    BY ReplyRouteSpecTerminatesCloseWork
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, PTL
 
 =============================================================================

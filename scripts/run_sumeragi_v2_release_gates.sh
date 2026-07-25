@@ -1596,6 +1596,7 @@ required_production_liveness_tests=(
   consensus_message_control::tests::retired_release_finishes_drain_without_claiming_delivery
   network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered
   network_relay_tests::test_control_hold_release_preserves_live_route_and_retires_canceled_reentry
+  network_relay_tests::certified_merge_sidecar_control_uses_critical_bucket
   tests::relay_fairness::daemon_source_credit_layers_over_upstream_and_preserves_the_ninth_exact_owner
   tests::relay_fairness::saturated_sumeragi_dispatch_does_not_hold_normal_worker_permits
   tests::relay_fairness::real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank
@@ -1616,7 +1617,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=584
+readonly expected_production_liveness_test_count=585
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1716,7 +1717,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 584-test liveness inventory above. The later
+# not belong to the canonical 585-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

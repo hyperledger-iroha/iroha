@@ -990,12 +990,13 @@ The final successor/recovery closure adds six exact regressions without adding
 a module. Crash-safe response handoff and same-delivery retry after transient
 capacity pressure add two more sidecar regressions. The per-source
 route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
-sidecar, and daemon closure yields the current
-584-test, 39-module inventory. The complete source-sealed pre-network corridor
+sidecar, and daemon closure, plus the certified sidecar control-bucket
+regression, yields the current
+585-test, 39-module inventory. The complete source-sealed pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 The canonical module/test TSV inventory SHA-256 is
-`3a714b4e395aee7f06ba0583260cc26b54fda80fc63a4b5f67c4dc491752bfc1`.
+`b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

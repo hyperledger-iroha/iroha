@@ -99,10 +99,16 @@ ResponsivePacketPairAt(initialContext, recipient, source) ==
         /\ source \in AsyncVotersAt(initialContext)
   \/ HistoricalRecoveryPacketCorridor(recipient, source)
 
+DueIngressPacketCanCoalesce(item) ==
+  /\ IngressHasCoalescingOwner(item)
+  /\ \/ item.kind # "CertifiedResponse"
+     \/ CertifiedResponseClaimMatches(item)
+
 DueIngressPacketCanEnter(recipient, source) ==
   LET item == OldestDueSourcePacket(recipient, source).item
-  IN \/ item \in SequenceSet(IngressLane(recipient, source))
-     \/ CanAdmitIngressItem(item)
+  IN \/ DueIngressPacketCanCoalesce(item)
+     \/ /\ ~IngressHasCoalescingOwner(item)
+           /\ CanAdmitIngressItem(item)
 
 IoDepthLocalWorkDecreaseStep ==
   \E node \in AsyncCurrentResponsiveVoters
@@ -656,6 +662,16 @@ RetainedHistoricalLockRestartIngressWitness(recipient, source) ==
   /\ AdmitIngressPacket(recipient, source)
   /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
 
+RetainedHistoricalLockRestartCoalescingIngressWitness(recipient, source) ==
+  /\ gst
+  /\ CoalesceHiddenPacket(recipient, source)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+RetainedHistoricalLockRestartFreshIngressWitness(recipient, source) ==
+  /\ gst
+  /\ AdmitHiddenPacket(recipient, source)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
 THEOREM RetainedHistoricalLockRestartIngressWitnessRefinesExact ==
   \A recipient, source:
     RetainedHistoricalLockRestartIngressWitness(recipient, source)
@@ -693,6 +709,89 @@ PROOF
                         recipient, source))
       BY RetainedHistoricalLockRestartIngressWitnessRefinesExact
     <2>4. ENABLED RetainedHistoricalLockRestartIngressWitness(
+              recipient, source)
+             => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                           \/ PostGstAdmitHistoricalRecoveryPacket(
+                                recipient, source))
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+THEOREM EnabledRetainedHistoricalLockRestartCoalescingIngressWitnessRefinesExact ==
+  \A recipient, source:
+    ENABLED RetainedHistoricalLockRestartCoalescingIngressWitness(
+      recipient, source)
+      => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                    \/ PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source,
+                ENABLED
+                  RetainedHistoricalLockRestartCoalescingIngressWitness(
+                    recipient, source)
+         PROVE ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                          \/ PostGstAdmitHistoricalRecoveryPacket(
+                               recipient, source))
+    <2>1. RetainedHistoricalLockRestartCoalescingIngressWitness(
+              recipient, source) \in BOOLEAN
+      BY Isa
+         DEF RetainedHistoricalLockRestartCoalescingIngressWitness
+    <2>2. (PostGstAdmitHiddenPacket(recipient, source)
+               \/ PostGstAdmitHistoricalRecoveryPacket(
+                    recipient, source)) \in BOOLEAN
+      BY Isa
+         DEF PostGstAdmitHiddenPacket,
+             PostGstAdmitHistoricalRecoveryPacket
+    <2>3. RetainedHistoricalLockRestartCoalescingIngressWitness(
+              recipient, source)
+             => (PostGstAdmitHiddenPacket(recipient, source)
+                   \/ PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+         DEF RetainedHistoricalLockRestartCoalescingIngressWitness,
+             PostGstAdmitHiddenPacket, AdmitIngressPacket
+    <2>4. ENABLED
+              RetainedHistoricalLockRestartCoalescingIngressWitness(
+                recipient, source)
+             => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                           \/ PostGstAdmitHistoricalRecoveryPacket(
+                                recipient, source))
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+THEOREM EnabledRetainedHistoricalLockRestartFreshIngressWitnessRefinesExact ==
+  \A recipient, source:
+    ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
+      recipient, source)
+      => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                    \/ PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source,
+                ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
+                  recipient, source)
+         PROVE ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                          \/ PostGstAdmitHistoricalRecoveryPacket(
+                               recipient, source))
+    <2>1. RetainedHistoricalLockRestartFreshIngressWitness(
+              recipient, source) \in BOOLEAN
+      BY Isa DEF RetainedHistoricalLockRestartFreshIngressWitness
+    <2>2. (PostGstAdmitHiddenPacket(recipient, source)
+               \/ PostGstAdmitHistoricalRecoveryPacket(
+                    recipient, source)) \in BOOLEAN
+      BY Isa
+         DEF PostGstAdmitHiddenPacket,
+             PostGstAdmitHistoricalRecoveryPacket
+    <2>3. RetainedHistoricalLockRestartFreshIngressWitness(
+              recipient, source)
+             => (PostGstAdmitHiddenPacket(recipient, source)
+                   \/ PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+         DEF RetainedHistoricalLockRestartFreshIngressWitness,
+             PostGstAdmitHiddenPacket, AdmitIngressPacket
+    <2>4. ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
               recipient, source)
              => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
                            \/ PostGstAdmitHistoricalRecoveryPacket(
@@ -772,19 +871,19 @@ PROOF
              AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncHistoricalRecoveryTypeInvariant,
              AsyncRecoveryTypeInvariant, AsyncCurrentResponsiveVoters
-    <2>2. CASE Item \in SequenceSet(IngressLane(recipient, source))
+    <2>2. CASE DueIngressPacketCanCoalesce(Item)
       <3>1. ENABLED
-               RetainedHistoricalLockRestartIngressWitness(
+               RetainedHistoricalLockRestartCoalescingIngressWitness(
                  recipient, source)
         BY <1>1, <2>1, <2>2,
            AutoUSE, ExpandENABLED, IsaT(300)
-           DEF RetainedHistoricalLockRestartIngressWitness,
+           DEF RetainedHistoricalLockRestartCoalescingIngressWitness,
                RetainedHistoricalLockRestartNonRunnerOuterFrame,
                RetainedHistoricalLockRestartNonCrashOuterFrame,
                RetainedHistoricalLockRestartAuthorityFrame,
                HistoricalLockRestartAuthorityObservedVars,
-               AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket, Item, AsyncAllVars,
+               CoalesceHiddenPacket, DueIngressPacketCanCoalesce,
+               Item, AsyncAllVars,
                AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
                AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
                AsyncCoreOuterFrame, vars
@@ -793,23 +892,26 @@ PROOF
                   \/ PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source))
         BY <3>1,
-           EnabledRetainedHistoricalLockRestartIngressWitnessRefinesExact
+           EnabledRetainedHistoricalLockRestartCoalescingIngressWitnessRefinesExact
       <3> QED BY <3>2
-    <2>3. CASE Item \notin SequenceSet(IngressLane(recipient, source))
-      <3>1. CanAdmitIngressItem(Item)
-        BY <1>1, <2>3 DEF DueIngressPacketCanEnter, Item
+    <2>3. CASE ~DueIngressPacketCanCoalesce(Item)
+      <3>1. /\ ~IngressHasCoalescingOwner(Item)
+             /\ CanAdmitIngressItem(Item)
+        BY <1>1, <2>3
+           DEF DueIngressPacketCanEnter, DueIngressPacketCanCoalesce,
+               Item
       <3>2. ENABLED
-               RetainedHistoricalLockRestartIngressWitness(
+               RetainedHistoricalLockRestartFreshIngressWitness(
                  recipient, source)
         BY <1>1, <2>1, <2>3, <3>1,
            AutoUSE, ExpandENABLED, IsaT(300)
-           DEF RetainedHistoricalLockRestartIngressWitness,
+           DEF RetainedHistoricalLockRestartFreshIngressWitness,
                RetainedHistoricalLockRestartNonRunnerOuterFrame,
                RetainedHistoricalLockRestartNonCrashOuterFrame,
                RetainedHistoricalLockRestartAuthorityFrame,
                HistoricalLockRestartAuthorityObservedVars,
-               AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket, Item, AsyncAllVars,
+               AdmitHiddenPacket, DueIngressPacketCanCoalesce,
+               Item, AsyncAllVars,
                AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
                AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
                AsyncCoreOuterFrame, vars
@@ -818,7 +920,7 @@ PROOF
                   \/ PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source))
         BY <3>2,
-           EnabledRetainedHistoricalLockRestartIngressWitnessRefinesExact
+           EnabledRetainedHistoricalLockRestartFreshIngressWitnessRefinesExact
       <3> QED BY <3>3
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
@@ -1616,10 +1718,11 @@ PROOF
       BY <1>1, <2>3, <2>5,
          AdmissibleResponsivePacketEnablesConcreteProgress
     <2>6. CASE ~DueIngressPacketCanEnter(Recipient, Source)
-      <3>1. /\ Item \notin
-                       SequenceSet(IngressLane(Recipient, Source))
-             /\ ~CanAdmitIngressItem(Item)
-        BY <2>6 DEF DueIngressPacketCanEnter, Item
+      <3>1. \/ IngressHasCoalescingOwner(Item)
+             \/ ~CanAdmitIngressItem(Item)
+        BY <2>6
+           DEF DueIngressPacketCanEnter,
+               DueIngressPacketCanCoalesce, Item
       <3>2. CASE ~NodeHasApplication(Recipient)
         BY <1>1, <2>3, <3>2,
            UnappliedPacketRecipientEnablesConcreteRunnerProgress
@@ -1629,8 +1732,30 @@ PROOF
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
         <4>2. IngressDepth(Recipient) > 0
-          BY <2>1, <2>3, <2>4, <3>1,
-             RejectedFreshPacketWitnessesExistingIngress
+          <5>1. CASE IngressHasCoalescingOwner(Item)
+            <6>1. IngressResourceSource(Item) \in AsyncIngressSources
+              BY <2>4, Isa
+                 DEF AsyncItemTyped, AsyncIngressSources
+            <6>2. ASSUME IngressDepth(Recipient) = 0
+                   PROVE FALSE
+              <7>1. IngressLane(
+                       Recipient, IngressResourceSource(Item)) = <<>>
+                BY <2>1, <2>3, <6>1, <6>2,
+                   ZeroIngressDepthMeansEveryLaneEmpty
+              <7> QED BY <5>1, <7>1
+                   DEF IngressHasCoalescingOwner, SequenceSet,
+                       IngressLane
+            <6> QED BY <2>1, <6>2, SMT
+                 DEF AsyncTypeInvariant, TypeInvariant,
+                     AsyncSchedulerTypeInvariant,
+                     AsyncIngressTypeInvariant,
+                     AsyncIngressCapacityTypeInvariant
+          <5>2. CASE ~IngressHasCoalescingOwner(Item)
+            <6>1. ~CanAdmitIngressItem(Item)
+              BY <3>1, <5>2
+            <6> QED BY <2>1, <2>3, <2>4, <6>1,
+                 EmptyIngressAdmitsTypedPacket, SMT
+          <5> QED BY <5>1, <5>2
         <4>3. CASE HistoricalDrainableIngressIndices(Recipient) # {}
           BY <1>1, <4>1, <3>3, <4>3,
              AppliedDrainableRecipientEnablesConcreteIngressProgress

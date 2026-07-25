@@ -101,8 +101,6 @@ use crate::{
         decode_certified_merge_sidecar,
     },
     native_amx::{
-        MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD,
-        MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
         NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
         NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxSigningGuard,
         NativeAmxSigningGuardLimits, NativeAmxVoteV2, aggregate_votes_to_qc,
@@ -118,6 +116,11 @@ use crate::{
 
 #[cfg(test)]
 use crate::queue::{RouteLeg, RouteLegRole};
+#[cfg(test)]
+use crate::native_amx::{
+    MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD,
+    MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+};
 
 // Keep compact-QC preflight at least as strict as State's full-entry admission
 // before allocating transport. These are first-release protocol caps, not
@@ -1824,7 +1827,8 @@ impl V2LaneWorkAdapter {
         )
     }
 
-    /// Open one production adapter under the process-lifetime consensus output guard.
+    /// Open one test adapter without retained cross-height sidecar ownership.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_output_guard(
         context: wire::HeightContext,

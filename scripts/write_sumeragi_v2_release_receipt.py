@@ -340,7 +340,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 584
+_PRODUCTION_TEST_COUNT = 585
 _G_UNIT_TEST_COUNT = 256
 _G_UNIT_GROUPS = (
     (
@@ -517,7 +517,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-network-relay",
         "network_relay_tests",
-        2,
+        3,
     ),
     (
         "production-irohad-authenticated-via",
