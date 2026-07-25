@@ -196,13 +196,12 @@ use sorafs_node::{
     EconomicsRuntimeError, ModerationAuthenticatedScreeningAdmissionError,
     ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
     ModerationAuthenticatedScreeningRequestV1, ModerationCorpusRegistryRecord,
-    ModerationEvidenceViewerAccessEventRecord,
-    ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
-    ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
-    ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerAuditScheduleOutcome,
-    ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
-    ModerationEvidenceViewerSessionRecord, ModerationModelRegistryError,
-    ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
+    ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerAccessInput,
+    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
+    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
+    ModerationEvidenceViewerAuditScheduleOutcome, ModerationEvidenceViewerError,
+    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
+    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
     ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
@@ -260,9 +259,9 @@ use crate::{
         gateway::{
             ClientFingerprint, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicyTier,
             GatewayComplianceDecision, GatewayComplianceDecisionSource,
-            GatewayComplianceDisposition, GatewayComplianceSubjectKindV1, PerceptualMatchBasis,
-            PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
-            SORA_TLS_STATE_HEADER,
+            GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceSubjectKindV1,
+            PerceptualMatchBasis, PerceptualObservation, PolicyViolation, RateLimitError,
+            RequestContext, SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
@@ -9056,8 +9055,7 @@ fn orderbook_api_response(
     response: Response,
 ) -> Response {
     let is_error = response.status().is_client_error() || response.status().is_server_error();
-    telemetry
-        .with_metrics(|metrics| metrics.record_sorafs_orderbook_api_request(route, is_error));
+    telemetry.with_metrics(|metrics| metrics.record_sorafs_orderbook_api_request(route, is_error));
     response
 }
 
@@ -9394,13 +9392,9 @@ fn moderation_route_instruction_mismatch_response(route: ModerationCommandRouteV
 const fn moderation_route_instruction_label(route: ModerationCommandRouteV1) -> &'static str {
     match route {
         ModerationCommandRouteV1::SubmitAppeal => "SubmitSorafsModerationAppeal",
-        ModerationCommandRouteV1::RegisterEligibility => {
-            "RegisterSorafsModerationJurorEligibility"
-        }
+        ModerationCommandRouteV1::RegisterEligibility => "RegisterSorafsModerationJurorEligibility",
         ModerationCommandRouteV1::FinalizeSortition => "FinalizeSorafsModerationSortition",
-        ModerationCommandRouteV1::AcceptAssignment => {
-            "AcceptSorafsModerationJurorAssignment"
-        }
+        ModerationCommandRouteV1::AcceptAssignment => "AcceptSorafsModerationJurorAssignment",
         ModerationCommandRouteV1::ActivateCase => "ActivateSorafsModerationCase",
         ModerationCommandRouteV1::SubmitCommit => "SubmitSorafsModerationCommit",
         ModerationCommandRouteV1::RaiseChallenge => "RaiseSorafsModerationChallenge",
@@ -11537,7 +11531,6 @@ fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Respon
         "authoritative finalized SoraFS orderbook state is unavailable",
     )
 }
-
 
 fn require_moderation_request_auth(
     state: &SharedAppState,
@@ -15039,7 +15032,6 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
         }
     });
 }
-
 
 pub(crate) fn spawn_sorafs_moderation_evidence_viewer_audit_scheduler(
     state: SharedAppState,
@@ -21853,11 +21845,9 @@ async fn resolve_remote_cid_sources(
         }
         let torii_base_url = match normalize_provider_torii_base_url(&host_pattern) {
             Ok(url) => url,
-            Err(err) => {
+            Err(_) => {
                 warn!(
-                    provider_id_hex = %provider_id_hex,
-                    manifest_digest_hex = %manifest_digest_hex,
-                    %err,
+                    reason = "invalid_endpoint",
                     "ignoring invalid Torii endpoint advertised for CID gateway fetch"
                 );
                 continue;
@@ -21902,11 +21892,9 @@ async fn resolve_remote_cid_sources(
     for (_, source, addresses) in resolved {
         let pinned_addrs = match addresses {
             Ok(addrs) => addrs,
-            Err(err) => {
+            Err(_) => {
                 warn!(
-                    provider_id_hex = %source.provider_id_hex,
-                    manifest_digest_hex = %source.manifest_digest_hex,
-                    %err,
+                    reason = "endpoint_resolution_failed",
                     "ignoring unsafe or unresolvable Torii endpoint advertised for CID gateway fetch"
                 );
                 continue;
@@ -22420,11 +22408,9 @@ async fn fetch_remote_site_bundle(
                     None,
                 ));
             }
-            Err(RemoteFetchError::Source(err)) => {
+            Err(RemoteFetchError::Source(_)) => {
                 warn!(
-                    provider_id_hex = %source.provider_id_hex,
-                    manifest_digest_hex = %source.manifest_digest_hex,
-                    %err,
+                    reason = "remote_fetch_failed",
                     "failed to hydrate CID gateway cache from remote provider"
                 );
             }
@@ -25324,7 +25310,10 @@ fn enforce_gateway_policy_for_request(
     provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
 ) -> Result<(), Response> {
-    let provider_id = provider_id.ok_or_else(gateway_compliance_unavailable_response)?;
+    let provider_id = provider_id.ok_or_else(|| {
+        record_gateway_compliance_serving_failure(state, "unavailable");
+        gateway_compliance_unavailable_response()
+    })?;
     let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
     let now = SystemTime::now();
     let monotonic_now = Instant::now();
@@ -25394,14 +25383,9 @@ fn enforce_gateway_policy_for_request(
         ),
         Err(violation) => {
             let (policy_reason, policy_detail) = violation.telemetry_labels();
-            let provider_hex = hex::encode(provider_id);
             warn!(
-                ?violation,
-                client = ?remote,
                 policy_reason,
-                policy_detail,
-                provider_id_hex = provider_hex,
-                "gateway policy denied request"
+                policy_detail, "gateway policy denied request"
             );
             Err(gateway_policy_violation_response(
                 violation,
@@ -25412,11 +25396,15 @@ fn enforce_gateway_policy_for_request(
 }
 
 fn authoritative_sorafs_provider_id(state: &SharedAppState) -> Result<[u8; 32], Response> {
-    state
-        .sorafs_node
-        .capacity_usage()
-        .provider_id
-        .ok_or_else(gateway_compliance_unavailable_response)
+    if let Some(provider_id) = state.sorafs_node.capacity_usage().provider_id {
+        return Ok(provider_id);
+    }
+    #[cfg(test)]
+    if let Some(provider_id) = state.sorafs_gateway_test_provider_id {
+        return Ok(provider_id);
+    }
+    record_gateway_compliance_serving_failure(state, "unavailable");
+    Err(gateway_compliance_unavailable_response())
 }
 
 fn enforce_governed_gateway_compliance_for_subjects(
@@ -25429,11 +25417,15 @@ fn enforce_governed_gateway_compliance_for_subjects(
     let controller = state
         .sorafs_gateway_compliance_controller
         .as_ref()
-        .ok_or_else(gateway_compliance_unavailable_response)?;
+        .ok_or_else(|| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?;
     let observed_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| {
             warn!("gateway compliance serving clock is before the Unix epoch");
+            record_gateway_compliance_serving_failure(state, "unavailable");
             gateway_compliance_unavailable_response()
         })?
         .as_secs();
@@ -25481,10 +25473,16 @@ fn enforce_governed_gateway_compliance_for_cid(
     let controller = state
         .sorafs_gateway_compliance_controller
         .as_ref()
-        .ok_or_else(gateway_compliance_unavailable_response)?;
+        .ok_or_else(|| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?;
     let observed_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| gateway_compliance_unavailable_response())?
+        .map_err(|_| {
+            record_gateway_compliance_serving_failure(state, "unavailable");
+            gateway_compliance_unavailable_response()
+        })?
         .as_secs();
     let cid = canonical_lower_base32_cid(cid_bytes);
     evaluate_governed_gateway_compliance_subject(
@@ -25503,13 +25501,74 @@ fn evaluate_governed_gateway_compliance_subject(
     kind: GatewayComplianceSubjectKindV1,
     subject: &str,
 ) -> Result<(), Response> {
-    controller
-        .evaluate_serving(kind, subject, observed_at_unix)
-        .map_err(|_| {
+    match controller.evaluate_serving(kind, subject, observed_at_unix) {
+        Ok(decision) => {
+            let subject_kind = gateway_compliance_subject_kind_label(kind);
+            let disposition = gateway_compliance_disposition_label(decision.disposition);
+            let source = gateway_compliance_decision_source_label(decision.source);
+            state.telemetry.with_metrics(|metrics| {
+                metrics.record_sorafs_gateway_compliance_serving_decision(
+                    subject_kind,
+                    disposition,
+                    source,
+                );
+            });
+            gateway_compliance_decision_response(state, decision)
+        }
+        Err(error) => {
+            record_gateway_compliance_serving_failure(
+                state,
+                gateway_compliance_serving_error_class(&error),
+            );
             warn!("governed gateway compliance serving evaluation failed closed");
-            gateway_compliance_unavailable_response()
-        })
-        .and_then(|decision| gateway_compliance_decision_response(state, decision))
+            Err(gateway_compliance_unavailable_response())
+        }
+    }
+}
+
+fn gateway_compliance_subject_kind_label(kind: GatewayComplianceSubjectKindV1) -> &'static str {
+    match kind {
+        GatewayComplianceSubjectKindV1::Provider => "provider",
+        GatewayComplianceSubjectKindV1::ManifestDigest => "manifest_digest",
+        GatewayComplianceSubjectKindV1::Cid => "cid",
+        GatewayComplianceSubjectKindV1::Url => "url",
+    }
+}
+
+fn gateway_compliance_disposition_label(disposition: GatewayComplianceDisposition) -> &'static str {
+    match disposition {
+        GatewayComplianceDisposition::Allow => "allow",
+        GatewayComplianceDisposition::Deny => "deny",
+    }
+}
+
+fn gateway_compliance_decision_source_label(
+    source: GatewayComplianceDecisionSource,
+) -> &'static str {
+    match source {
+        GatewayComplianceDecisionSource::NoMatch => "no_match",
+        GatewayComplianceDecisionSource::Baseline => "baseline",
+        GatewayComplianceDecisionSource::AcceptedAppeal => "accepted_appeal",
+        GatewayComplianceDecisionSource::LegalSafetyHold => "legal_safety_hold",
+    }
+}
+
+fn gateway_compliance_serving_error_class(error: &GatewayComplianceError) -> &'static str {
+    match error {
+        GatewayComplianceError::CatalogNotFresh => "expired_catalog",
+        GatewayComplianceError::NoServingCatalog => "unavailable",
+        GatewayComplianceError::Persistence(_)
+        | GatewayComplianceError::InvalidCheckpoint(_)
+        | GatewayComplianceError::StatePoisoned => "persistence",
+        _ => "internal",
+    }
+}
+
+fn record_gateway_compliance_serving_failure(state: &SharedAppState, class: &'static str) {
+    state.telemetry.with_metrics(|metrics| {
+        metrics.mark_sorafs_gateway_compliance_unready();
+        metrics.record_sorafs_gateway_compliance_failure("serving", class);
+    });
 }
 
 fn gateway_compliance_decision_response(
@@ -25531,10 +25590,7 @@ fn gateway_compliance_decision_response(
     });
     #[cfg(not(feature = "telemetry"))]
     let _ = state;
-    let catalog_digest_hex = decision
-        .catalog_digest
-        .map(hex::encode)
-        .unwrap_or_default();
+    let catalog_digest_hex = decision.catalog_digest.map(hex::encode).unwrap_or_default();
     let body = json_object(vec![
         json_entry("error", Value::from("gateway_compliance_denied")),
         json_entry("source", Value::from(source)),
@@ -25937,6 +25993,38 @@ mod gateway_policy_violation_tests {
         assert_eq!(
             canonical_lower_base32_cid(&cid),
             "bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu"
+        );
+    }
+
+    #[test]
+    fn governed_compliance_telemetry_uses_closed_payload_free_labels() {
+        assert_eq!(
+            gateway_compliance_subject_kind_label(GatewayComplianceSubjectKindV1::ManifestDigest),
+            "manifest_digest"
+        );
+        assert_eq!(
+            gateway_compliance_disposition_label(GatewayComplianceDisposition::Deny),
+            "deny"
+        );
+        assert_eq!(
+            gateway_compliance_decision_source_label(
+                GatewayComplianceDecisionSource::LegalSafetyHold
+            ),
+            "legal_safety_hold"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::CatalogNotFresh),
+            "expired_catalog"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::NoServingCatalog),
+            "unavailable"
+        );
+        assert_eq!(
+            gateway_compliance_serving_error_class(&GatewayComplianceError::InvalidCatalog(
+                "payload data must not become a label".to_owned()
+            )),
+            "internal"
         );
     }
 
@@ -30896,10 +30984,10 @@ mod advert_tests {
     use norito::to_bytes;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use sorafs_manifest::{
-        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv, CapabilityType,
-        CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
-        EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
-        EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
+        AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
+        CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
+        EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointKind,
+        EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder,
         PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
         ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
         ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
@@ -30909,10 +30997,9 @@ mod advert_tests {
         ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
         ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-        SignatureAlgorithm, SoraFsAppealFinanceAccountFlowV1,
-        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
-        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1,
-        build_reputation_snapshot,
+        SignatureAlgorithm, SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+        SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1, build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
@@ -37107,7 +37194,6 @@ mod advert_tests {
         );
     }
 
-
     async fn post_appeal_finance_report(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -38255,8 +38341,8 @@ mod advert_tests {
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
         builder
-        .with_instructions([instruction])
-        .sign(signer.keypair.private_key())
+            .with_instructions([instruction])
+            .sign(signer.keypair.private_key())
     }
 
     #[test]
@@ -38417,9 +38503,7 @@ mod advert_tests {
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
                 SoraFsModerationBallotContextV1,
             },
-            moderation_ledger::{
-                MODERATION_APPEAL_INTAKE_VERSION_V1, ModerationAppealIntakeV1,
-            },
+            moderation_ledger::{MODERATION_APPEAL_INTAKE_VERSION_V1, ModerationAppealIntakeV1},
         };
 
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
@@ -40688,13 +40772,6 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-
-
-
-
-
-
-
     #[test]
     fn orderbook_websocket_frames_wrap_finalized_typed_events() {
         let (authority, _) = gen_account_in("wonderland");
@@ -40735,7 +40812,6 @@ mod advert_tests {
             Some(9)
         );
     }
-
 
     #[tokio::test]
     async fn reputation_latest_returns_not_found_before_publish() {
@@ -48821,11 +48897,12 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_fetch_requires_provider_id_when_gar_enforced() {
+    async fn storage_fetch_fails_closed_without_authoritative_provider_identity() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
         inner.sorafs_node = node;
+        inner.sorafs_gateway_test_provider_id = None;
         inner.sorafs_gateway_config.require_manifest_envelope = false;
         inner.sorafs_gateway_config.enforce_admission = true;
         inner.sorafs_gateway_config.enforce_capabilities = true;
@@ -48900,14 +48977,14 @@ mod advert_tests {
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect response body");
         let value: Value = norito::json::from_slice(&body_bytes).expect("decode provider response");
         assert_eq!(
             value.get("error"),
-            Some(&Value::String("provider_id_missing".into()))
+            Some(&Value::String("gateway_compliance_unavailable".into()))
         );
     }
 

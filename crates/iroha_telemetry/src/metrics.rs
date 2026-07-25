@@ -124,7 +124,7 @@ const SORAFS_GATEWAY_COMPLIANCE_REQUEST_OUTCOME_LABELS: [&str; 8] = [
 ];
 const SORAFS_GATEWAY_COMPLIANCE_SUBJECT_KIND_LABELS: [&str; 5] =
     ["provider", "manifest_digest", "cid", "url", "other"];
-const SORAFS_GATEWAY_COMPLIANCE_DISPOSITION_LABELS: [&str; 2] = ["allow", "deny"];
+const SORAFS_GATEWAY_COMPLIANCE_DISPOSITION_LABELS: [&str; 3] = ["allow", "deny", "other"];
 const SORAFS_GATEWAY_COMPLIANCE_DECISION_SOURCE_LABELS: [&str; 5] = [
     "no_match",
     "baseline",
@@ -15960,6 +15960,12 @@ impl Default for Metrics {
             torii_sorafs_orderbook_book_revision,
             torii_sorafs_orderbook_matcher_scan_book_revision,
             torii_sorafs_orderbook_api_requests_total,
+            torii_sorafs_gateway_compliance_requests_total,
+            torii_sorafs_gateway_compliance_serving_decisions_total,
+            torii_sorafs_gateway_compliance_failures_total,
+            torii_sorafs_gateway_compliance_serving_catalog_sequence,
+            torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds,
+            torii_sorafs_gateway_compliance_ready,
             torii_sorafs_hedging_xor_usd_reference_price_micro_usd,
             torii_sorafs_hedging_feed_lag_seconds,
             torii_sorafs_hedging_feed_divergence_bps,
@@ -16184,6 +16190,7 @@ impl Default for Metrics {
             nts_rtt_ms_sum,
             nts_rtt_ms_count,
             sorafs_orderbook_projection_exposition_lock: Mutex::new(()),
+            sorafs_gateway_compliance_exposition_lock: Mutex::new(()),
             registry,
             sumeragi_vrf_commits_emitted_total,
             sumeragi_vrf_reveals_emitted_total,
@@ -16295,6 +16302,13 @@ pub struct LaneSettlementSnapshot<'a> {
 impl Metrics {
     fn lock_sorafs_orderbook_projection_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
         match self.sorafs_orderbook_projection_exposition_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn lock_sorafs_gateway_compliance_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
+        match self.sorafs_gateway_compliance_exposition_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
@@ -17456,6 +17470,121 @@ impl Metrics {
         self.torii_sorafs_orderbook_api_requests_total
             .with_label_values(&[route, outcome])
             .inc();
+    }
+
+    /// Record one authenticated SoraFS gateway-compliance control response.
+    ///
+    /// Caller-provided values are collapsed into fixed vocabularies before
+    /// reaching Prometheus, so paths, feed identities, and payload data can
+    /// never create label cardinality.
+    pub fn record_sorafs_gateway_compliance_request(&self, operation: &str, outcome: &str) {
+        let operation = match operation {
+            "feed" => "feed",
+            "status" => "status",
+            "stage" => "stage",
+            "acknowledge" => "acknowledge",
+            "promote" => "promote",
+            "rollback" => "rollback",
+            _ => "other",
+        };
+        let outcome = match outcome {
+            "success" => "success",
+            "authentication_failed" => "authentication_failed",
+            "authorization_failed" => "authorization_failed",
+            "invalid_request" => "invalid_request",
+            "not_found" => "not_found",
+            "conflict" => "conflict",
+            "unavailable" => "unavailable",
+            _ => "internal_error",
+        };
+        self.torii_sorafs_gateway_compliance_requests_total
+            .with_label_values(&[operation, outcome])
+            .inc();
+    }
+
+    /// Record one SoraFS gateway-compliance serving decision with bounded labels.
+    pub fn record_sorafs_gateway_compliance_serving_decision(
+        &self,
+        subject_kind: &str,
+        disposition: &str,
+        source: &str,
+    ) {
+        let subject_kind = match subject_kind {
+            "provider" => "provider",
+            "manifest_digest" => "manifest_digest",
+            "cid" => "cid",
+            "url" => "url",
+            _ => "other",
+        };
+        let disposition = match disposition {
+            "allow" => "allow",
+            "deny" => "deny",
+            _ => "other",
+        };
+        let source = match source {
+            "no_match" => "no_match",
+            "baseline" => "baseline",
+            "accepted_appeal" => "accepted_appeal",
+            "legal_safety_hold" => "legal_safety_hold",
+            _ => "other",
+        };
+        self.torii_sorafs_gateway_compliance_serving_decisions_total
+            .with_label_values(&[subject_kind, disposition, source])
+            .inc();
+    }
+
+    /// Record one SoraFS gateway-compliance failure with bounded labels.
+    pub fn record_sorafs_gateway_compliance_failure(&self, surface: &str, class: &str) {
+        let surface = match surface {
+            "control" => "control",
+            "serving" => "serving",
+            "feed_sync" => "feed_sync",
+            "startup" => "startup",
+            _ => "other",
+        };
+        let class = match class {
+            "authentication" => "authentication",
+            "authorization" => "authorization",
+            "invalid_request" => "invalid_request",
+            "not_found" => "not_found",
+            "conflict" => "conflict",
+            "unavailable" => "unavailable",
+            "expired_catalog" => "expired_catalog",
+            "upstream" => "upstream",
+            "persistence" => "persistence",
+            _ => "internal",
+        };
+        self.torii_sorafs_gateway_compliance_failures_total
+            .with_label_values(&[surface, class])
+            .inc();
+    }
+
+    /// Publish one atomic gateway-compliance serving-catalog snapshot.
+    ///
+    /// The ready bit is cleared before the sequence and expiry change and is
+    /// restored last. Prometheus exposition holds the same lock, so a scrape
+    /// observes one complete snapshot rather than a mixed transition.
+    pub fn record_sorafs_gateway_compliance_serving_catalog(
+        &self,
+        sequence: Option<u64>,
+        valid_until_unix: Option<u64>,
+        ready: bool,
+    ) {
+        let _exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
+        self.torii_sorafs_gateway_compliance_ready.set(0);
+        self.torii_sorafs_gateway_compliance_serving_catalog_sequence
+            .set(sequence.unwrap_or_default());
+        self.torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+            .set(valid_until_unix.unwrap_or_default());
+        if ready {
+            self.torii_sorafs_gateway_compliance_ready.set(1);
+        }
+    }
+
+    /// Mark the serving policy unavailable without publishing partial state.
+    pub fn mark_sorafs_gateway_compliance_unready(&self) {
+        let _exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
+        self.torii_sorafs_gateway_compliance_ready.set(0);
     }
 
     /// Set the latest SoraFS hedging XOR/USD reference price in micro-USD.
@@ -18905,6 +19034,8 @@ impl Metrics {
     /// - If the buffer produced by [`Encoder`] causes [`String::from_utf8`] to fail.
     pub fn try_to_string(&self) -> eyre::Result<String> {
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
+        let _gateway_compliance_exposition_guard =
+            self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -18924,6 +19055,8 @@ impl Metrics {
         }
 
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
+        let _gateway_compliance_exposition_guard =
+            self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -20264,6 +20397,124 @@ mod test {
             metrics
                 .torii_sorafs_orderbook_finalized_projection_ready
                 .get(),
+            0
+        );
+    }
+
+    #[test]
+    fn records_gateway_compliance_metrics_used_by_dashboard_and_alerts() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_gateway_compliance_request("promote", "success");
+        metrics.record_sorafs_gateway_compliance_serving_decision(
+            "manifest_digest",
+            "deny",
+            "legal_safety_hold",
+        );
+        metrics.record_sorafs_gateway_compliance_failure("serving", "expired_catalog");
+        metrics.record_sorafs_gateway_compliance_serving_catalog(
+            Some(42),
+            Some(1_800_003_600),
+            true,
+        );
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_requests_total
+                .with_label_values(&["promote", "success"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_decisions_total
+                .with_label_values(&["manifest_digest", "deny", "legal_safety_hold"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_failures_total
+                .with_label_values(&["serving", "expired_catalog"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_catalog_sequence
+                .get(),
+            42
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+                .get(),
+            1_800_003_600
+        );
+        assert_eq!(
+            metrics.torii_sorafs_gateway_compliance_ready.get(),
+            1
+        );
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_gateway_compliance_requests_total",
+            "torii_sorafs_gateway_compliance_serving_decisions_total",
+            "torii_sorafs_gateway_compliance_failures_total",
+            "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+            "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+            "torii_sorafs_gateway_compliance_ready",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing gateway compliance metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_compliance_metric_labels_are_bounded_and_state_fails_closed() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_gateway_compliance_request(
+            "/attacker/controlled/path",
+            "attacker-controlled-outcome",
+        );
+        metrics.record_sorafs_gateway_compliance_serving_decision(
+            "attacker-controlled-kind",
+            "attacker-controlled-disposition",
+            "attacker-controlled-source",
+        );
+        metrics.record_sorafs_gateway_compliance_failure(
+            "attacker-controlled-surface",
+            "attacker-controlled-class",
+        );
+        metrics.record_sorafs_gateway_compliance_serving_catalog(Some(9), Some(10), true);
+        metrics.mark_sorafs_gateway_compliance_unready();
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_requests_total
+                .with_label_values(&["other", "internal_error"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_decisions_total
+                .with_label_values(&["other", "other", "other"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_failures_total
+                .with_label_values(&["other", "internal"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics.torii_sorafs_gateway_compliance_ready.get(),
             0
         );
     }

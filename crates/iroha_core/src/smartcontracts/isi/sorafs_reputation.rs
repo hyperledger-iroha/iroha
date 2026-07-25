@@ -10,37 +10,33 @@ use std::{str::FromStr, sync::OnceLock};
 use iroha_data_model::{
     account::AccountId,
     events::data::sorafs::{
-        SorafsGatewayEvent, SorafsReputationJournalEntryCommittedV1,
-        SorafsReputationJournalEvent, SorafsReputationJournalPolicyActivatedV1,
+        SorafsGatewayEvent, SorafsReputationJournalEntryCommittedV1, SorafsReputationJournalEvent,
+        SorafsReputationJournalPolicyActivatedV1,
     },
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::{
-            AppendSorafsPorReputationJournalEntry,
-            AppendSorafsStreamTokenReputationJournalEntry, ResolveSorafsCapacityDispute,
-            SetSorafsReputationJournalAuthorityPolicy,
+            AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
+            ResolveSorafsCapacityDispute, SetSorafsReputationJournalAuthorityPolicy,
         },
     },
     name::Name,
     permission::Permission,
-    query::{
-        error::QueryExecutionFail,
-        sorafs::prelude::FindSorafsReputationJournalEvents,
-    },
+    query::{error::QueryExecutionFail, sorafs::prelude::FindSorafsReputationJournalEvents},
     sorafs::{
         capacity::{
             CapacityDisputeRecord, CapacityDisputeResolution, CapacityDisputeStatus, ProviderId,
         },
         reputation::{
-            REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
-            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ProviderDisputeEventV1,
-            ProviderDisputeKindV1, ProviderDisputeStatusV1,
-            ReputationJournalAuthorityPolicyRecordV1, ReputationJournalCommittedEventRecordV1,
-            ReputationJournalEntryV1, ReputationJournalEventIdV1,
-            ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-            ReputationJournalFinalizedEventPageV1, ReputationJournalFinalizedEventV1,
-            ReputationJournalPayloadV1, ReputationJournalSourceHeadV1,
-            ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
+            ProviderDisputeEventV1, ProviderDisputeKindV1, ProviderDisputeResolutionV1,
+            ProviderDisputeStatusV1, REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ReputationJournalAuthorityPolicyRecordV1,
+            ReputationJournalCommittedEventRecordV1, ReputationJournalEntryV1,
+            ReputationJournalEventIdV1, ReputationJournalFinalizedCursorV1,
+            ReputationJournalFinalizedEventCursorV1, ReputationJournalFinalizedEventPageV1,
+            ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
+            ReputationJournalSourceHeadV1, ReputationJournalSourceIdV1,
+            ReputationJournalSourceKindV1,
         },
     },
 };
@@ -320,8 +316,7 @@ fn read_journal_head(
         }
         return Ok(None);
     };
-    let head: ReputationJournalHeadStateV1 =
-        decode_state(bytes, "reputation journal head")?;
+    let head: ReputationJournalHeadStateV1 = decode_state(bytes, "reputation journal head")?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state("stored reputation journal head is inert"));
     }
@@ -342,9 +337,9 @@ fn read_event(
     };
     let record: ReputationJournalCommittedEventRecordV1 =
         decode_state(bytes, "reputation committed event")?;
-    record.validate().map_err(|error| {
-        corrupt_state(format!("stored reputation event is invalid: {error}"))
-    })?;
+    record
+        .validate()
+        .map_err(|error| corrupt_state(format!("stored reputation event is invalid: {error}")))?;
     if record.sequence != sequence {
         return Err(corrupt_state(
             "reputation event key does not match its global sequence",
@@ -379,8 +374,7 @@ fn read_source_head(
     else {
         return Ok(None);
     };
-    let head: ReputationJournalSourceHeadV1 =
-        decode_state(bytes, "reputation source head")?;
+    let head: ReputationJournalSourceHeadV1 = decode_state(bytes, "reputation source head")?;
     head.validate().map_err(|error| {
         corrupt_state(format!("stored reputation source head is invalid: {error}"))
     })?;
@@ -458,9 +452,10 @@ fn validate_event_indexes(
     world: &impl WorldReadOnly,
     record: &ReputationJournalCommittedEventRecordV1,
 ) -> Result<(), InstructionExecutionError> {
-    let policy = read_policy_history(world, &record.entry.authority_policy_digest)?.ok_or_else(
-        || corrupt_state("reputation event references missing immutable recorder-policy history"),
-    )?;
+    let policy =
+        read_policy_history(world, &record.entry.authority_policy_digest)?.ok_or_else(|| {
+            corrupt_state("reputation event references missing immutable recorder-policy history")
+        })?;
     validate_policy_predecessor(world, &policy)?;
     if policy.activated_at_unix_ms > record.entry.recorded_at_unix_ms {
         return Err(corrupt_state(
@@ -475,17 +470,15 @@ fn validate_event_indexes(
                 "reputation event violates its immutable recorder policy: {error}"
             ))
         })?;
-    let indexed_sequence = read_event_id_sequence(world, record.entry.event_id)?.ok_or_else(|| {
-        corrupt_state("reputation event is missing its event-id index")
-    })?;
+    let indexed_sequence = read_event_id_sequence(world, record.entry.event_id)?
+        .ok_or_else(|| corrupt_state("reputation event is missing its event-id index"))?;
     if indexed_sequence != record.sequence {
         return Err(corrupt_state(
             "reputation event-id index points to another sequence",
         ));
     }
-    let source_head = read_source_head(world, record.entry.source_id)?.ok_or_else(|| {
-        corrupt_state("reputation event is missing its source head")
-    })?;
+    let source_head = read_source_head(world, record.entry.source_id)?
+        .ok_or_else(|| corrupt_state("reputation event is missing its source head"))?;
     if source_head.source_kind != record.entry.source_kind()
         || source_head.sequence < record.sequence
         || source_head.source_revision < record.entry.source_revision
@@ -554,10 +547,7 @@ fn ensure_no_event_after_head(
     }
     let head = head.expect("event-prefix validation returned early without a journal head");
     let terminal_key = event_key(head.last_sequence);
-    for (key, _) in world
-        .smart_contract_state()
-        .range(terminal_key.clone()..)
-    {
+    for (key, _) in world.smart_contract_state().range(terminal_key.clone()..) {
         if !key.to_string().starts_with(EVENT_STATE_KEY_PREFIX) {
             break;
         }
@@ -653,7 +643,10 @@ fn validate_new_source_revision(
             "new reputation entry unexpectedly has an event-id index",
         ));
     }
-    match (entry.source_revision, read_source_head(world, entry.source_id)?) {
+    match (
+        entry.source_revision,
+        read_source_head(world, entry.source_id)?,
+    ) {
         (1, None) => Ok(()),
         (1, Some(_)) => Err(invalid_parameter(
             "reputation source revision one is already occupied",
@@ -709,8 +702,10 @@ fn append_validated_entry(
     let (sequence, event_index, previous) = match head {
         None => (1, 0, None),
         Some(head) => {
-            let previous = read_event(state_transaction.world(), head.last_sequence)?
-                .ok_or_else(|| corrupt_state("reputation journal head points to a missing event"))?;
+            let previous =
+                read_event(state_transaction.world(), head.last_sequence)?.ok_or_else(|| {
+                    corrupt_state("reputation journal head points to a missing event")
+                })?;
             let sequence = head
                 .last_sequence
                 .checked_add(1)
@@ -737,9 +732,9 @@ fn append_validated_entry(
         event_index,
         entry: entry.clone(),
     };
-    record.validate().map_err(|error| {
-        invalid_parameter(format!("invalid reputation journal entry: {error}"))
-    })?;
+    record
+        .validate()
+        .map_err(|error| invalid_parameter(format!("invalid reputation journal entry: {error}")))?;
     validate_event_successor(previous.as_ref(), &record)?;
     let next_source_head = ReputationJournalSourceHeadV1 {
         source_kind: entry.source_kind(),
@@ -747,9 +742,9 @@ fn append_validated_entry(
         event_id: entry.event_id,
         sequence,
     };
-    next_source_head.validate().map_err(|error| {
-        corrupt_state(format!("invalid next reputation source head: {error}"))
-    })?;
+    next_source_head
+        .validate()
+        .map_err(|error| corrupt_state(format!("invalid next reputation source head: {error}")))?;
     let next_head = ReputationJournalHeadStateV1 {
         last_sequence: sequence,
         last_target_block_height: target_block_height,
@@ -804,11 +799,11 @@ fn append_validated_entry(
         authority: entry.recorded_by,
         occurred_at_unix_ms: entry.recorded_at_unix_ms,
     };
-    state_transaction.world.emit_events(Some(
-        SorafsGatewayEvent::ReputationJournal(
+    state_transaction
+        .world
+        .emit_events(Some(SorafsGatewayEvent::ReputationJournal(
             SorafsReputationJournalEvent::EntryCommitted(event),
-        ),
-    ));
+        )));
     Ok(sequence)
 }
 
@@ -819,9 +814,8 @@ fn validate_new_entry(
     expected_kind: ReputationJournalSourceKindV1,
 ) -> Result<(), InstructionExecutionError> {
     let now = block_time_ms(state_transaction)?;
-    let policy = read_active_policy(state_transaction.world())?.ok_or_else(|| {
-        invalid_parameter("SoraFS reputation recorder policy is not configured")
-    })?;
+    let policy = read_active_policy(state_transaction.world())?
+        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
     if policy.activated_at_unix_ms > now {
         return Err(corrupt_state(
             "active reputation policy activation is later than the executing block",
@@ -832,11 +826,13 @@ fn validate_new_entry(
             "reputation instruction accepts only {expected_kind:?} entries"
         )));
     }
-    entry.validate_against_policy(&policy.policy).map_err(|error| {
-        invalid_parameter(format!(
-            "reputation entry does not match the active recorder policy: {error}"
-        ))
-    })?;
+    entry
+        .validate_against_policy(&policy.policy)
+        .map_err(|error| {
+            invalid_parameter(format!(
+                "reputation entry does not match the active recorder policy: {error}"
+            ))
+        })?;
     if &entry.recorded_by != authority {
         return Err(invalid_parameter(
             "reputation entry recorded_by must equal the transaction authority",
@@ -856,11 +852,7 @@ fn execute_standalone_append(
     entry: ReputationJournalEntryV1,
     expected_kind: ReputationJournalSourceKindV1,
 ) -> Result<(), InstructionExecutionError> {
-    require_permission(
-        state_transaction,
-        authority,
-        CAN_RECORD_ENTRY,
-    )?;
+    require_permission(state_transaction, authority, CAN_RECORD_ENTRY)?;
     entry.validate().map_err(|error| {
         invalid_parameter(format!("invalid canonical reputation entry: {error}"))
     })?;
@@ -903,9 +895,8 @@ fn opened_dispute_entry(
     let Some(source_head) = read_source_head(world, source_id)? else {
         return Ok(None);
     };
-    let latest = read_event(world, source_head.sequence)?.ok_or_else(|| {
-        corrupt_state("provider-dispute source head points to a missing event")
-    })?;
+    let latest = read_event(world, source_head.sequence)?
+        .ok_or_else(|| corrupt_state("provider-dispute source head points to a missing event"))?;
     let opened = if latest.entry.source_revision == 1 {
         latest
     } else if latest.entry.source_revision == 2 {
@@ -964,12 +955,12 @@ fn opened_dispute_entry(
                     "capacity-dispute terminal revision changes immutable opened material",
                 ));
             }
-            let ProviderDisputeStatusV1::Resolved {
+            let ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                 outcome,
                 resolved_at_unix_ms,
                 rationale,
                 ..
-            } = &terminal_payload.status
+            }) = &terminal_payload.status
             else {
                 return Err(corrupt_state(
                     "capacity-dispute terminal revision is not resolved",
@@ -1039,9 +1030,8 @@ pub(super) fn append_capacity_dispute_opened(
             "capacity-dispute submitted_epoch must identify the exact committing block second",
         ));
     }
-    let policy = read_active_policy(state_transaction.world())?.ok_or_else(|| {
-        invalid_parameter("SoraFS reputation recorder policy is not configured")
-    })?;
+    let policy = read_active_policy(state_transaction.world())?
+        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
     if &policy.policy.dispute_recorder_authority != authority {
         return Err(invalid_parameter(
             "capacity dispute transaction authority is not the governed dispute recorder",
@@ -1077,9 +1067,8 @@ fn resolved_dispute_replay_matches(
     instruction: &ResolveSorafsCapacityDispute,
     authority: &AccountId,
 ) -> Result<bool, InstructionExecutionError> {
-    let source_head = read_source_head(world, opened.source_id)?.ok_or_else(|| {
-        corrupt_state("opened capacity dispute is missing its source head")
-    })?;
+    let source_head = read_source_head(world, opened.source_id)?
+        .ok_or_else(|| corrupt_state("opened capacity dispute is missing its source head"))?;
     if source_head.source_revision == 1 {
         return Ok(false);
     }
@@ -1097,12 +1086,12 @@ fn resolved_dispute_replay_matches(
             "resolved capacity-dispute source points to another source family",
         ));
     };
-    let ProviderDisputeStatusV1::Resolved {
+    let ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
         outcome,
         decision_digest,
         rationale,
         ..
-    } = &dispute.status
+    }) = &dispute.status
     else {
         return Err(corrupt_state(
             "capacity-dispute revision two is not terminal",
@@ -1110,8 +1099,7 @@ fn resolved_dispute_replay_matches(
     };
     Ok(terminal.entry.predecessor_event_id == Some(opened.event_id)
         && &terminal.entry.recorded_by == authority
-        && terminal.entry.authority_policy_digest
-            == instruction.expected_authority_policy_digest
+        && terminal.entry.authority_policy_digest == instruction.expected_authority_policy_digest
         && *outcome == instruction.outcome
         && *decision_digest == instruction.decision_digest
         && rationale == &instruction.rationale)
@@ -1132,9 +1120,7 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
             invalid_parameter(format!("invalid reputation recorder policy: {error}"))
         })?;
         let current = read_active_policy(state_transaction.world())?;
-        if let Some(existing) =
-            read_policy_history(state_transaction.world(), &policy_digest)?
-        {
+        if let Some(existing) = read_policy_history(state_transaction.world(), &policy_digest)? {
             validate_policy_predecessor(state_transaction.world(), &existing)?;
             // The first commit owns the activation timestamp. A later exact
             // policy/authority replay must not manufacture another revision.
@@ -1158,16 +1144,13 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
             }
         }
         let now = block_time_ms(state_transaction)?;
-        let candidate = ReputationJournalAuthorityPolicyRecordV1::try_new(
-            self.policy,
-            authority.clone(),
-            now,
-        )
-        .map_err(|error| {
-            invalid_parameter(format!(
-                "invalid reputation recorder-policy activation: {error}"
-            ))
-        })?;
+        let candidate =
+            ReputationJournalAuthorityPolicyRecordV1::try_new(self.policy, authority.clone(), now)
+                .map_err(|error| {
+                    invalid_parameter(format!(
+                        "invalid reputation recorder-policy activation: {error}"
+                    ))
+                })?;
         if candidate.policy_digest != policy_digest {
             return Err(corrupt_state(
                 "reputation recorder policy digest changed during canonical activation",
@@ -1213,8 +1196,9 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
             .world
             .smart_contract_state
             .insert(policy_history_key(&candidate.policy_digest), encoded);
-        state_transaction.world.emit_events(Some(
-            SorafsGatewayEvent::ReputationJournal(
+        state_transaction
+            .world
+            .emit_events(Some(SorafsGatewayEvent::ReputationJournal(
                 SorafsReputationJournalEvent::PolicyActivated(
                     SorafsReputationJournalPolicyActivatedV1 {
                         policy_digest: candidate.policy_digest,
@@ -1223,8 +1207,7 @@ impl Execute for SetSorafsReputationJournalAuthorityPolicy {
                         occurred_at_unix_ms: now,
                     },
                 ),
-            ),
-        ));
+            )));
         Ok(())
     }
 }
@@ -1283,9 +1266,10 @@ impl Execute for ResolveSorafsCapacityDispute {
                     hex::encode(self.dispute_id.as_bytes())
                 ))
             })?;
-        let opened = opened_dispute_entry(state_transaction.world(), &record)?.ok_or_else(|| {
-            corrupt_state("capacity dispute has no authoritative opened reputation entry")
-        })?;
+        let opened =
+            opened_dispute_entry(state_transaction.world(), &record)?.ok_or_else(|| {
+                corrupt_state("capacity dispute has no authoritative opened reputation entry")
+            })?;
 
         if matches!(&record.status, CapacityDisputeStatus::Resolved(_)) {
             if resolved_dispute_replay_matches(
@@ -1331,12 +1315,12 @@ impl Execute for ResolveSorafsCapacityDispute {
                 kind: opened_payload.kind,
                 evidence_digest: opened_payload.evidence_digest,
                 submitted_at_unix_ms: opened_payload.submitted_at_unix_ms,
-                status: ProviderDisputeStatusV1::Resolved {
+                status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome: self.outcome,
                     resolved_at_unix_ms: now,
                     decision_digest: self.decision_digest,
                     rationale: self.rationale.clone(),
-                },
+                }),
             }),
         )
         .map_err(|error| {
@@ -1548,8 +1532,7 @@ fn query_event_page(
     }
 
     let mut events = Vec::with_capacity(limit);
-    let payload_budget =
-        REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1.saturating_sub(4 * 1_024);
+    let payload_budget = REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1.saturating_sub(4 * 1_024);
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start_sequence;
     while sequence <= head.last_sequence && events.len() < limit {
@@ -1559,7 +1542,7 @@ fn query_event_page(
                 QueryExecutionFail::Conversion(format!(
                     "reputation journal is missing sequence {sequence}"
                 ))
-        })?;
+            })?;
         validate_event_successor(previous.as_ref(), &record).map_err(query_failure)?;
         validate_event_indexes(state_ro.world(), &record).map_err(query_failure)?;
         let resolved = resolve_finalized_event(state_ro, &record)?;
@@ -1570,13 +1553,14 @@ fn query_event_page(
                 ))
             })?
             .len();
-        let next_event_bytes = encoded_event_bytes
-            .checked_add(resolved_bytes)
-            .ok_or_else(|| {
-                QueryExecutionFail::Conversion(
-                    "reputation event-page byte counter overflow".to_owned(),
-                )
-            })?;
+        let next_event_bytes =
+            encoded_event_bytes
+                .checked_add(resolved_bytes)
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "reputation event-page byte counter overflow".to_owned(),
+                    )
+                })?;
         if next_event_bytes > payload_budget {
             if events.is_empty() {
                 return Err(QueryExecutionFail::Conversion(format!(
@@ -1645,9 +1629,8 @@ mod tests {
         sorafs::{
             capacity::CapacityDeclarationRecord,
             reputation::{
-                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-                ReputationJournalAuthorityPolicyV1, StreamTokenValidationOutcomeV1,
-                StreamTokenValidationStatusV1,
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
+                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
             },
         },
     };
@@ -1698,16 +1681,14 @@ mod tests {
             authority.clone(),
             TEST_NOW_MS,
             None,
-            ReputationJournalPayloadV1::StreamTokenValidation(
-                StreamTokenValidationOutcomeV1 {
-                    validation_id: [unique; 32],
-                    request_digest: [unique.wrapping_add(1); 32],
-                    token_body_digest: Some([unique.wrapping_add(2); 32]),
-                    token_key_version: Some(1),
-                    validated_at_unix_ms: TEST_NOW_MS,
-                    status: StreamTokenValidationStatusV1::Accepted,
-                },
-            ),
+            ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
+                validation_id: [unique; 32],
+                request_digest: [unique.wrapping_add(1); 32],
+                token_body_digest: Some([unique.wrapping_add(2); 32]),
+                token_key_version: Some(1),
+                validated_at_unix_ms: TEST_NOW_MS,
+                status: StreamTokenValidationStatusV1::Accepted,
+            }),
         )
         .expect("canonical token reputation entry")
     }
@@ -1724,9 +1705,7 @@ mod tests {
             world.accounts.insert(id, value);
         }
         let mut authority_permissions = Permissions::new();
-        authority_permissions.insert(Permission::from(
-            CanManageSorafsReputationJournalPolicy,
-        ));
+        authority_permissions.insert(Permission::from(CanManageSorafsReputationJournalPolicy));
         authority_permissions.insert(Permission::from(CanRecordSorafsReputationJournal));
         authority_permissions.insert(Permission::from(CanResolveSorafsCapacityDispute));
         world
@@ -1766,9 +1745,7 @@ mod tests {
         state: &mut State,
         height: u64,
         timestamp_ms: u64,
-        operation: impl FnOnce(
-            &mut StateTransaction<'_, '_>,
-        ) -> Result<(), InstructionExecutionError>,
+        operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
     ) -> Result<(), InstructionExecutionError> {
         let header = BlockHeader::new(
             height.try_into().expect("nonzero height"),
@@ -1909,7 +1886,8 @@ mod tests {
                 token_body_digest: Some([0x33; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_000,
-                status: iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1::Accepted,
+                status:
+                    iroha_data_model::sorafs::reputation::StreamTokenValidationStatusV1::Accepted,
             },
         );
         let entry = ReputationJournalEntryV1::try_new(
@@ -2055,8 +2033,7 @@ mod tests {
         AppendSorafsStreamTokenReputationJournalEntry::new(first)
             .execute(&authority, &mut transaction)
             .expect("exact historical entry replay remains idempotent after rotation");
-        let stale_historical_entry =
-            token_entry(&authority, provider_id, policy_digest, 0x72);
+        let stale_historical_entry = token_entry(&authority, provider_id, policy_digest, 0x72);
         AppendSorafsStreamTokenReputationJournalEntry::new(stale_historical_entry)
             .execute(&authority, &mut transaction)
             .expect_err("new entries cannot use a superseded recorder policy");
@@ -2103,10 +2080,9 @@ mod tests {
             .smart_contract_state
             .remove(journal_head_key().clone());
         let orphan_replay = token_entry(&authority, provider_id, policy_digest, 0x41);
-        let corruption =
-            AppendSorafsStreamTokenReputationJournalEntry::new(orphan_replay)
-                .execute(&authority, &mut transaction)
-                .expect_err("an orphaned journal index must fail closed on exact replay");
+        let corruption = AppendSorafsStreamTokenReputationJournalEntry::new(orphan_replay)
+            .execute(&authority, &mut transaction)
+            .expect_err("an orphaned journal index must fail closed on exact replay");
         assert!(matches!(
             corruption,
             InstructionExecutionError::InvariantViolation(_)
@@ -2118,8 +2094,7 @@ mod tests {
         let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
         let policy = policy(&authority);
         let policy_digest = policy.canonical_digest().expect("policy digest");
-        let dispute_id =
-            iroha_data_model::sorafs::capacity::CapacityDisputeId::new([0x71; 32]);
+        let dispute_id = iroha_data_model::sorafs::capacity::CapacityDisputeId::new([0x71; 32]);
         let record = CapacityDisputeRecord::new_pending(
             dispute_id,
             provider_id,

@@ -2128,6 +2128,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
+    #[cfg(all(test, feature = "app_api"))]
+    sorafs_gateway_test_provider_id: Option<[u8; 32]>,
     #[cfg(feature = "app_api")]
     sorafs_pin_policy: sorafs::PinSubmissionPolicy,
     #[cfg(feature = "app_api")]
@@ -56532,6 +56534,8 @@ impl Torii {
             sorafs_gateway_compliance_feed_transport: gateway_components
                 .as_ref()
                 .and_then(|components| components.compliance_feed_transport.clone()),
+            #[cfg(all(test, feature = "app_api"))]
+            sorafs_gateway_test_provider_id: None,
             #[cfg(feature = "app_api")]
             sorafs_pin_policy: self.sorafs_pin_policy.clone(),
             #[cfg(feature = "app_api")]
@@ -61580,6 +61584,8 @@ pub(crate) mod tests_runtime_handlers {
             ),
             #[cfg(feature = "app_api")]
             sorafs_gateway_compliance_feed_transport: None,
+            #[cfg(all(test, feature = "app_api"))]
+            sorafs_gateway_test_provider_id: Some([0x45; 32]),
             #[cfg(feature = "app_api")]
             sorafs_pin_policy: sorafs_pin_policy.clone(),
             #[cfg(feature = "app_api")]

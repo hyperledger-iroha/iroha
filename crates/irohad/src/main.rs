@@ -1232,8 +1232,7 @@ pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
-    sorafs_gateway_acme_client:
-        Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
+    sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
 }
@@ -9003,9 +9002,48 @@ impl Iroha {
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
         let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
         let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
-        let sorafs_gateway_compliance_feed_transport = runtime_deps
+        let sorafs_gateway_compliance_feed_transport: Option<
+            Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+        > = match runtime_deps
             .sorafs_gateway_compliance_feed_transport
-            .clone();
+            .clone()
+        {
+            Some(transport) => Some(transport),
+            None => match config.torii.sorafs_gateway.compliance.as_ref() {
+                Some(compliance) => {
+                    let mut pins_by_hostname = BTreeMap::<String, BTreeSet<[u8; 32]>>::new();
+                    for feed in &compliance.feeds {
+                        for host in &feed.hosts {
+                            let host_pins = host
+                                .accepted_spki_sha256
+                                .iter()
+                                .copied()
+                                .collect::<BTreeSet<_>>();
+                            if let Some(existing) = pins_by_hostname.get(&host.hostname) {
+                                if existing != &host_pins {
+                                    return Err(Report::new(StartError::StartTorii).attach(
+                                        "one SoraFS compliance feed hostname has conflicting SPKI trust inventories",
+                                    ));
+                                }
+                            } else {
+                                pins_by_hostname.insert(host.hostname.clone(), host_pins);
+                            }
+                        }
+                    }
+                    let transport =
+                        iroha_torii::sorafs::gateway::ProductionGatewayComplianceFeedTransport::try_new(
+                            pins_by_hostname,
+                        )
+                        .map_err(|_| {
+                            Report::new(StartError::StartTorii).attach(
+                                "failed to initialise the bounded SoraFS gateway compliance feed transport",
+                            )
+                        })?;
+                    Some(Arc::new(transport))
+                }
+                None => None,
+            },
+        };
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
@@ -9161,12 +9199,11 @@ impl Iroha {
         } else {
             runtime_deps
         };
-        let runtime_deps =
-            if let Some(transport) = sorafs_gateway_compliance_feed_transport {
-                runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
-            } else {
-                runtime_deps
-            };
+        let runtime_deps = if let Some(transport) = sorafs_gateway_compliance_feed_transport {
+            runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
+        } else {
+            runtime_deps
+        };
         let queue_backpressure = queue.backpressure_handle();
         // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
         // during node startup instead of the first hot-path transaction burst.

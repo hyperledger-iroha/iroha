@@ -10,17 +10,14 @@
 #![cfg(feature = "app_api")]
 
 use std::{
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{
-        HeaderMap, HeaderValue, Method, StatusCode, Uri,
-        header::CACHE_CONTROL,
-    },
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
 };
 use iroha_data_model::role::RoleId;
@@ -29,22 +26,28 @@ use norito::derive::JsonSerialize;
 use sha2::{Digest as _, Sha256};
 
 use super::gateway::{
-    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1,
-    GatewayComplianceCheckpointV1, GatewayComplianceController, GatewayComplianceError,
-    GatewayComplianceHistoryRecordV1, GatewayComplianceRollbackV1,
-    MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    GatewayComplianceAcknowledgementV1, GatewayComplianceCatalogV1, GatewayComplianceCheckpointV1,
+    GatewayComplianceController, GatewayComplianceError, GatewayComplianceHistoryRecordV1,
+    GatewayComplianceMutationBindingV1, GatewayComplianceMutationResultV1,
+    GatewayComplianceRollbackV1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
 };
 use crate::{JsonBody, SharedAppState};
 
 const GATEWAY_COMPLIANCE_OPERATOR_ROLE: &str = "sorafs_gateway_compliance_operator";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const IDEMPOTENCY_BINDING_DOMAIN_V1: &[u8] =
-    b"iroha.sorafs.gateway.compliance.idempotency.v1";
+const IDEMPOTENCY_BINDING_DOMAIN_V1: &[u8] = b"iroha.sorafs.gateway.compliance.idempotency.v1";
+const MAX_GATEWAY_COMPLIANCE_BLOCKING_OPERATIONS: usize = 16;
 static GATEWAY_COMPLIANCE_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
     GATEWAY_COMPLIANCE_OPERATOR_ROLE
         .parse()
         .expect("SoraFS gateway compliance operator role id is valid")
 });
+static GATEWAY_COMPLIANCE_BLOCKING_PERMITS: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| {
+        Arc::new(tokio::sync::Semaphore::new(
+            MAX_GATEWAY_COMPLIANCE_BLOCKING_OPERATIONS,
+        ))
+    });
 
 #[derive(Debug, JsonSerialize)]
 struct GatewayComplianceActionResponseV1 {
@@ -88,6 +91,7 @@ struct GatewayComplianceStatusResponseV1 {
     accepted_acknowledgement_count: u64,
     rejected_acknowledgement_count: u64,
     history_count: u64,
+    idempotency_record_count: u64,
     latest_action: Option<GatewayComplianceLatestActionStatusV1>,
 }
 
@@ -104,12 +108,6 @@ struct GatewayCompliancePromoteExpectationV1 {
     sequence: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GatewayComplianceMutationBindingV1 {
-    idempotency_key: [u8; 32],
-    request_digest: [u8; 32],
-}
-
 /// Fetch one configured feed through the runtime-injected authenticated
 /// address-pinned transport. The returned document is normalized and bounded;
 /// this route never promotes it or signs a catalog.
@@ -120,20 +118,24 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_feed(
     method: Method,
     uri: Uri,
 ) -> Response {
-    if let Err(response) = authorize_gateway_compliance_request(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        &[],
-    ) {
+    if let Err(response) =
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
+    {
         return response;
     }
     let (controller, transport) = match gateway_compliance_runtime(&state) {
         Ok(runtime) => runtime,
         Err(response) => return response,
     };
-    match controller.fetch_feed(&feed_id, transport.as_ref()) {
+    let result = match run_gateway_compliance_blocking(move || {
+        controller.fetch_feed(&feed_id, transport.as_ref())
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
         Ok(feed) => no_store_response(JsonBody(feed).into_response()),
         Err(error) => gateway_compliance_error_response(error),
     }
@@ -148,13 +150,9 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_status(
     method: Method,
     uri: Uri,
 ) -> Response {
-    if let Err(response) = authorize_gateway_compliance_request(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        &[],
-    ) {
+    if let Err(response) =
+        authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
+    {
         return response;
     }
     let controller = match gateway_compliance_controller(&state) {
@@ -165,7 +163,11 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_status(
         Ok(now) => now,
         Err(response) => return response,
     };
-    match controller.checkpoint() {
+    let result = match run_gateway_compliance_blocking(move || controller.checkpoint()).await {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
         Ok(checkpoint) => match status_response(&checkpoint, observed_at_unix) {
             Ok(status) => no_store_response(JsonBody(status).into_response()),
             Err(error) => gateway_compliance_error_response(error),
@@ -197,16 +199,10 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_stage(
         Ok(catalog) => catalog,
         Err(response) => return response,
     };
-    let digest = match catalog.payload.catalog_digest() {
-        Ok(digest) => digest,
-        Err(error) => return gateway_compliance_error_response(error),
+    let binding = match require_request_idempotency_binding(&headers, "stage", &uri, &body) {
+        Ok(binding) => binding,
+        Err(response) => return response,
     };
-    let binding =
-        match require_request_idempotency_binding(&headers, "stage", &uri, &body) {
-            Ok(binding) => binding,
-            Err(response) => return response,
-        };
-    let operation_timestamp_unix = catalog.payload.generated_at_unix;
     let controller = match gateway_compliance_controller(&state) {
         Ok(controller) => controller,
         Err(response) => return response,
@@ -215,29 +211,16 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_stage(
         Ok(now) => now,
         Err(response) => return response,
     };
-    match controller.stage_catalog(catalog, observed_at_unix) {
-        Ok(digest) => action_response(
-            StatusCode::ACCEPTED,
-            "stage",
-            digest,
-            binding.idempotency_key,
-            operation_timestamp_unix,
-        ),
-        Err(GatewayComplianceError::InvalidPredecessor) => {
-            match catalog_transition_already_committed(controller, digest) {
-                Ok(true) => action_response(
-                    StatusCode::ACCEPTED,
-                    "stage",
-                    digest,
-                    binding.idempotency_key,
-                    operation_timestamp_unix,
-                ),
-                Ok(false) => {
-                    gateway_compliance_error_response(GatewayComplianceError::InvalidPredecessor)
-                }
-                Err(error) => gateway_compliance_error_response(error),
-            }
-        }
+    let result = match run_gateway_compliance_blocking(move || {
+        stage_catalog_adapter(controller.as_ref(), catalog, observed_at_unix, binding)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
+        Ok(result) => action_response(StatusCode::ACCEPTED, "stage", result, binding.key_digest),
         Err(error) => gateway_compliance_error_response(error),
     }
 }
@@ -265,13 +248,10 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_acknowledge(
         Ok(acknowledgement) => acknowledgement,
         Err(response) => return response,
     };
-    let binding =
-        match require_request_idempotency_binding(&headers, "acknowledge", &uri, &body) {
-            Ok(binding) => binding,
-            Err(response) => return response,
-        };
-    let digest = acknowledgement.payload.catalog_digest;
-    let operation_timestamp_unix = acknowledgement.payload.observed_at_unix;
+    let binding = match require_request_idempotency_binding(&headers, "acknowledge", &uri, &body) {
+        Ok(binding) => binding,
+        Err(response) => return response,
+    };
     let controller = match gateway_compliance_controller(&state) {
         Ok(controller) => controller,
         Err(response) => return response,
@@ -280,13 +260,25 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_acknowledge(
         Ok(now) => now,
         Err(response) => return response,
     };
-    match controller.acknowledge(acknowledgement, observed_at_unix) {
-        Ok(()) => action_response(
+    let result = match run_gateway_compliance_blocking(move || {
+        acknowledge_adapter(
+            controller.as_ref(),
+            acknowledgement,
+            observed_at_unix,
+            binding,
+        )
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
+        Ok(result) => action_response(
             StatusCode::ACCEPTED,
             "acknowledge",
-            digest,
-            binding.idempotency_key,
-            operation_timestamp_unix,
+            result,
+            binding.key_digest,
         ),
         Err(error) => gateway_compliance_error_response(error),
     }
@@ -317,60 +309,28 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_promote(
         Ok(expectation) => expectation,
         Err(response) => return response,
     };
-    let binding =
-        match require_request_idempotency_binding(&headers, "promote", &uri, &body) {
-            Ok(binding) => binding,
-            Err(response) => return response,
-        };
+    let binding = match require_request_idempotency_binding(&headers, "promote", &uri, &body) {
+        Ok(binding) => binding,
+        Err(response) => return response,
+    };
     let controller = match gateway_compliance_controller(&state) {
         Ok(controller) => controller,
         Err(response) => return response,
     };
-    match recover_or_validate_promotion(controller, expectation) {
-        Ok(Some(recorded_at_unix)) => {
-            return action_response(
-                StatusCode::OK,
-                "promote",
-                expectation.catalog_digest,
-                binding.idempotency_key,
-                recorded_at_unix,
-            );
-        }
-        Ok(None) => {}
-        Err(response) => return response,
-    }
     let observed_at_unix = match current_unix_second() {
         Ok(now) => now,
         Err(response) => return response,
     };
-    match controller.promote(observed_at_unix) {
-        Ok(digest) if digest == expectation.catalog_digest => action_response(
-            StatusCode::OK,
-            "promote",
-            digest,
-            binding.idempotency_key,
-            observed_at_unix,
-        ),
-        Ok(_) => gateway_compliance_request_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "controller_state_changed",
-            "the staged gateway compliance catalog changed during promotion",
-        ),
-        Err(GatewayComplianceError::NoStagedCatalog) => {
-            match recover_or_validate_promotion(controller, expectation) {
-                Ok(Some(recorded_at_unix)) => action_response(
-                    StatusCode::OK,
-                    "promote",
-                    expectation.catalog_digest,
-                    binding.idempotency_key,
-                    recorded_at_unix,
-                ),
-                Ok(None) => gateway_compliance_error_response(
-                    GatewayComplianceError::NoStagedCatalog,
-                ),
-                Err(response) => response,
-            }
-        }
+    let result = match run_gateway_compliance_blocking(move || {
+        promote_adapter(controller.as_ref(), expectation, observed_at_unix, binding)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
+        Ok(result) => action_response(StatusCode::OK, "promote", result, binding.key_digest),
         Err(error) => gateway_compliance_error_response(error),
     }
 }
@@ -406,9 +366,9 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_rollback(
         &uri,
         &body,
     ) {
-            Ok(binding) => binding,
-            Err(response) => return response,
-        };
+        Ok(binding) => binding,
+        Err(response) => return response,
+    };
     let controller = match gateway_compliance_controller(&state) {
         Ok(controller) => controller,
         Err(response) => return response,
@@ -417,25 +377,23 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_rollback(
         Ok(now) => now,
         Err(response) => return response,
     };
-    match controller.rollback(&rollback, observed_at_unix) {
-        Ok(digest) => action_response(
-            StatusCode::OK,
-            "rollback",
-            digest,
-            binding.idempotency_key,
+    let worker_controller = Arc::clone(&controller);
+    let worker_rollback = rollback.clone();
+    let result = match run_gateway_compliance_blocking(move || {
+        rollback_adapter(
+            worker_controller.as_ref(),
+            &worker_rollback,
             observed_at_unix,
-        ),
-        Err(GatewayComplianceError::Replay) => match recover_rollback(controller, &rollback) {
-            Ok(Some(recorded_at_unix)) => action_response(
-                StatusCode::OK,
-                "rollback",
-                rollback.payload.to_catalog_digest,
-                binding.idempotency_key,
-                recorded_at_unix,
-            ),
-            Ok(None) => gateway_compliance_error_response(GatewayComplianceError::Replay),
-            Err(response) => response,
-        },
+            binding,
+        )
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    match result {
+        Ok(result) => action_response(StatusCode::OK, "rollback", result, binding.key_digest),
         Err(error) => gateway_compliance_error_response(error),
     }
 }
@@ -444,26 +402,95 @@ fn gateway_compliance_runtime(
     state: &SharedAppState,
 ) -> Result<
     (
-        &GatewayComplianceController,
-        &std::sync::Arc<dyn super::gateway::GatewayComplianceFeedTransport>,
+        Arc<GatewayComplianceController>,
+        Arc<dyn super::gateway::GatewayComplianceFeedTransport>,
     ),
     Response,
 > {
     let controller = gateway_compliance_controller(state)?;
     let transport = state
         .sorafs_gateway_compliance_feed_transport
-        .as_ref()
+        .clone()
         .ok_or_else(gateway_compliance_unavailable)?;
     Ok((controller, transport))
 }
 
 fn gateway_compliance_controller(
     state: &SharedAppState,
-) -> Result<&GatewayComplianceController, Response> {
+) -> Result<Arc<GatewayComplianceController>, Response> {
     state
         .sorafs_gateway_compliance_controller
-        .as_deref()
+        .clone()
         .ok_or_else(gateway_compliance_unavailable)
+}
+
+async fn run_gateway_compliance_blocking<T, F>(operation: F) -> Result<T, Response>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = Arc::clone(&GATEWAY_COMPLIANCE_BLOCKING_PERMITS)
+        .acquire_owned()
+        .await
+        .map_err(|_| gateway_compliance_worker_unavailable())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+    .await
+    .map_err(|_| {
+        warn!("gateway compliance blocking worker failed");
+        gateway_compliance_worker_unavailable()
+    })
+}
+
+fn gateway_compliance_worker_unavailable() -> Response {
+    gateway_compliance_request_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "controller_worker_unavailable",
+        "the bounded gateway compliance worker is unavailable",
+    )
+}
+
+fn stage_catalog_adapter(
+    controller: &GatewayComplianceController,
+    catalog: GatewayComplianceCatalogV1,
+    observed_at_unix: u64,
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+    controller.stage_catalog(catalog, observed_at_unix, binding)
+}
+
+fn acknowledge_adapter(
+    controller: &GatewayComplianceController,
+    acknowledgement: GatewayComplianceAcknowledgementV1,
+    observed_at_unix: u64,
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+    controller.acknowledge(acknowledgement, observed_at_unix, binding)
+}
+
+fn promote_adapter(
+    controller: &GatewayComplianceController,
+    expectation: GatewayCompliancePromoteExpectationV1,
+    observed_at_unix: u64,
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+    controller.promote(
+        expectation.catalog_digest,
+        expectation.sequence,
+        observed_at_unix,
+        binding,
+    )
+}
+
+fn rollback_adapter(
+    controller: &GatewayComplianceController,
+    rollback: &GatewayComplianceRollbackV1,
+    observed_at_unix: u64,
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+    controller.rollback(rollback, observed_at_unix, binding)
 }
 
 fn gateway_compliance_unavailable() -> Response {
@@ -594,6 +621,8 @@ fn status_response(
         accepted_acknowledgement_count,
         rejected_acknowledgement_count,
         history_count: u64::try_from(checkpoint.history.len()).unwrap_or(u64::MAX),
+        idempotency_record_count: u64::try_from(checkpoint.idempotency_records.len())
+            .unwrap_or(u64::MAX),
         latest_action: checkpoint.history.last().map(latest_action_status),
     })
 }
@@ -656,16 +685,14 @@ fn decode_canonical_promote_expectation(
     let Some(sequence_text) = sequence_field.strip_prefix("expected_sequence=") else {
         return Err(non_canonical_promote_expectation());
     };
-    let catalog_digest = decode_lower_hex_32(digest_hex)
-        .ok_or_else(non_canonical_promote_expectation)?;
+    let catalog_digest =
+        decode_lower_hex_32(digest_hex).ok_or_else(non_canonical_promote_expectation)?;
     let sequence = sequence_text
         .parse::<u64>()
         .ok()
         .filter(|sequence| *sequence != 0 && sequence.to_string() == sequence_text)
         .ok_or_else(non_canonical_promote_expectation)?;
-    let canonical = format!(
-        "expected_catalog_digest={digest_hex}&expected_sequence={sequence}"
-    );
+    let canonical = format!("expected_catalog_digest={digest_hex}&expected_sequence={sequence}");
     if canonical != query {
         return Err(non_canonical_promote_expectation());
     }
@@ -690,9 +717,9 @@ fn require_request_idempotency_binding(
     body: &[u8],
 ) -> Result<GatewayComplianceMutationBindingV1, Response> {
     let request_digest = request_idempotency_binding(action, uri, body);
-    let idempotency_key = require_exact_idempotency_key(headers, request_digest)?;
+    let key_digest = require_exact_idempotency_key(headers, request_digest)?;
     Ok(GatewayComplianceMutationBindingV1 {
-        idempotency_key,
+        key_digest,
         request_digest,
     })
 }
@@ -711,9 +738,9 @@ fn require_operation_idempotency_binding(
             "the signed gateway compliance operation id must be non-zero",
         ));
     }
-    let idempotency_key = require_exact_idempotency_key(headers, operation_id)?;
+    let key_digest = require_exact_idempotency_key(headers, operation_id)?;
     Ok(GatewayComplianceMutationBindingV1 {
-        idempotency_key,
+        key_digest,
         request_digest: request_idempotency_binding(action, uri, body),
     })
 }
@@ -801,107 +828,6 @@ fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
     decoded.try_into().ok()
 }
 
-fn catalog_transition_already_committed(
-    controller: &GatewayComplianceController,
-    catalog_digest: [u8; 32],
-) -> Result<bool, GatewayComplianceError> {
-    let checkpoint = controller.checkpoint()?;
-    for catalog in [
-        checkpoint.candidate.as_ref(),
-        checkpoint.chain_head.as_ref(),
-        checkpoint.serving.as_ref(),
-        checkpoint.previous_serving.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if catalog.payload.catalog_digest()? == catalog_digest {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn recover_or_validate_promotion(
-    controller: &GatewayComplianceController,
-    expectation: GatewayCompliancePromoteExpectationV1,
-) -> Result<Option<u64>, Response> {
-    let checkpoint = controller
-        .checkpoint()
-        .map_err(gateway_compliance_error_response)?;
-    if let Some(candidate) = checkpoint.candidate.as_ref() {
-        let digest = candidate
-            .payload
-            .catalog_digest()
-            .map_err(gateway_compliance_error_response)?;
-        if digest != expectation.catalog_digest || candidate.payload.sequence != expectation.sequence
-        {
-            return Err(expected_resource_conflict());
-        }
-        return Ok(None);
-    }
-    let Some(record) = checkpoint.history.iter().rev().find(|record| {
-        record.action == "promotion" && record.serving_digest == expectation.catalog_digest
-    }) else {
-        return Ok(None);
-    };
-    let retained_sequence = [
-        checkpoint.chain_head.as_ref(),
-        checkpoint.serving.as_ref(),
-        checkpoint.previous_serving.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(|catalog| {
-        catalog
-            .payload
-            .catalog_digest()
-            .ok()
-            .filter(|digest| *digest == expectation.catalog_digest)
-            .map(|_| catalog.payload.sequence)
-    });
-    if retained_sequence != Some(expectation.sequence) {
-        return Err(expected_resource_conflict());
-    }
-    Ok(Some(record.recorded_at_unix))
-}
-
-fn recover_rollback(
-    controller: &GatewayComplianceController,
-    rollback: &GatewayComplianceRollbackV1,
-) -> Result<Option<u64>, Response> {
-    let checkpoint = controller
-        .checkpoint()
-        .map_err(gateway_compliance_error_response)?;
-    let Some(record) = checkpoint
-        .history
-        .iter()
-        .find(|record| record.operation_id == rollback.payload.operation_id)
-    else {
-        return Ok(None);
-    };
-    if record.action != "rollback"
-        || record.previous_serving_digest != Some(rollback.payload.from_catalog_digest)
-        || record.serving_digest != rollback.payload.to_catalog_digest
-        || record.reason_code != rollback.payload.reason_code
-    {
-        return Err(gateway_compliance_request_error(
-            StatusCode::CONFLICT,
-            "idempotency_key_conflict",
-            "Idempotency-Key is already bound to a different rollback operation",
-        ));
-    }
-    Ok(Some(record.recorded_at_unix))
-}
-
-fn expected_resource_conflict() -> Response {
-    gateway_compliance_request_error(
-        StatusCode::CONFLICT,
-        "expected_resource_conflict",
-        "the expected gateway compliance catalog digest or sequence does not match durable state",
-    )
-}
-
 fn decode_canonical_catalog(body: &[u8]) -> Result<GatewayComplianceCatalogV1, Response> {
     let value: GatewayComplianceCatalogV1 = norito::json::from_slice(body).map_err(|_| {
         gateway_compliance_request_error(
@@ -985,21 +911,22 @@ fn current_unix_second() -> Result<u64, Response> {
 fn action_response(
     status: StatusCode,
     action: &'static str,
-    digest: [u8; 32],
-    idempotency_key: &str,
-    operation_timestamp_unix: u64,
+    result: GatewayComplianceMutationResultV1,
+    idempotency_key: [u8; 32],
 ) -> Response {
-    no_store_response((
-        status,
-        JsonBody(GatewayComplianceActionResponseV1 {
-            schema: "sorafs.gateway.compliance.action.v1".to_owned(),
-            action: action.to_owned(),
-            catalog_digest_hex: hex::encode(digest),
-            idempotency_key: idempotency_key.to_owned(),
-            operation_timestamp_unix,
-        }),
+    no_store_response(
+        (
+            status,
+            JsonBody(GatewayComplianceActionResponseV1 {
+                schema: "sorafs.gateway.compliance.action.v1".to_owned(),
+                action: action.to_owned(),
+                catalog_digest_hex: hex::encode(result.catalog_digest),
+                idempotency_key: hex::encode(idempotency_key),
+                operation_timestamp_unix: result.recorded_at_unix,
+            }),
+        )
+            .into_response(),
     )
-        .into_response())
 }
 
 fn gateway_compliance_request_error(
@@ -1007,15 +934,17 @@ fn gateway_compliance_request_error(
     code: &'static str,
     message: &'static str,
 ) -> Response {
-    no_store_response((
-        status,
-        JsonBody(GatewayComplianceErrorResponseV1 {
-            schema: "sorafs.gateway.compliance.error.v1".to_owned(),
-            code: code.to_owned(),
-            message: message.to_owned(),
-        }),
+    no_store_response(
+        (
+            status,
+            JsonBody(GatewayComplianceErrorResponseV1 {
+                schema: "sorafs.gateway.compliance.error.v1".to_owned(),
+                code: code.to_owned(),
+                message: message.to_owned(),
+            }),
+        )
+            .into_response(),
     )
-        .into_response())
 }
 
 fn no_store_response(mut response: Response) -> Response {
@@ -1030,12 +959,13 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
     use GatewayComplianceError::{
         CatalogEquivocation, CatalogNotFresh, Decompression, DnsRebinding, DuplicateSigner,
         Encoding, FetchTimeout, GatewayEquivocation, GatewayQuorumNotMet, HistoryFull,
-        InvalidAcknowledgement, InvalidCatalog, InvalidCheckpoint, InvalidFeed, InvalidPolicy,
-        InvalidPredecessor, InvalidRollback, InvalidSignature, MissingRequiredFeed,
-        NoLastKnownGood, NoServingCatalog, NoStagedCatalog, NonCanonical, NonPublicAddress,
-        Persistence, PolicyDigestMismatch, QuorumNotMet, Replay, ResourceLimit, RevokedSigner,
+        IdempotencyConflict, IdempotencyRegistryFull, InvalidAcknowledgement, InvalidCatalog,
+        InvalidCheckpoint, InvalidFeed, InvalidPolicy, InvalidPredecessor, InvalidRollback,
+        InvalidSignature, MissingRequiredFeed, MutationTimeInvalid, NoLastKnownGood,
+        NoServingCatalog, NoStagedCatalog, NonCanonical, NonPublicAddress, Persistence,
+        PolicyDigestMismatch, PromotionTargetMismatch, QuorumNotMet, ResourceLimit, RevokedSigner,
         RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow, TooManyRedirects,
-        TrustPinMismatch, UnsafeAddressSet, UnsafeUrl, UnknownFeed, UntrustedSigner,
+        TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl, UntrustedSigner,
     };
 
     let (status, code, message) = match &error {
@@ -1051,14 +981,25 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
         ),
         CatalogEquivocation { .. }
         | GatewayEquivocation(_)
+        | IdempotencyConflict
         | InvalidPredecessor
+        | PromotionTargetMismatch
         | RollbackTargetMismatch
-        | Replay
         | HistoryFull
         | GatewayQuorumNotMet { .. } => (
             StatusCode::CONFLICT,
             "transition_rejected",
             "the gateway compliance transition conflicts with durable state",
+        ),
+        IdempotencyRegistryFull => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "idempotency_capacity_exhausted",
+            "the durable gateway compliance idempotency registry requires operator archival",
+        ),
+        MutationTimeInvalid => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "controller_clock_rejected",
+            "the gateway compliance controller rejected a zero or regressed operation clock",
         ),
         DuplicateSigner(_)
         | UntrustedSigner(_)
@@ -1123,7 +1064,8 @@ mod tests {
     use crate::sorafs::gateway::{
         GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
         GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1, GatewayComplianceCatalogApprovalV1,
-        GatewayComplianceCatalogPayloadV1,
+        GatewayComplianceCatalogPayloadV1, GatewayComplianceIdempotencyRecordV1,
+        GatewayComplianceMutationKindV1,
     };
 
     fn signed_catalog() -> GatewayComplianceCatalogV1 {
@@ -1141,9 +1083,7 @@ mod tests {
             legal_safety_holds: Vec::new(),
             toggles: Vec::new(),
         };
-        let digest = payload
-            .signing_digest()
-            .expect("catalog signing digest");
+        let digest = payload.signing_digest().expect("catalog signing digest");
         GatewayComplianceCatalogV1 {
             payload,
             approvals: vec![GatewayComplianceCatalogApprovalV1 {
@@ -1184,7 +1124,7 @@ mod tests {
             StatusCode::BAD_GATEWAY
         );
         assert_eq!(
-            gateway_compliance_error_response(GatewayComplianceError::Replay).status(),
+            gateway_compliance_error_response(GatewayComplianceError::IdempotencyConflict).status(),
             StatusCode::CONFLICT
         );
         let signature_response =
@@ -1202,17 +1142,14 @@ mod tests {
     #[test]
     fn status_projection_never_serializes_catalog_or_signature_payloads() {
         let catalog = signed_catalog();
-        let catalog_digest = catalog
-            .payload
-            .catalog_digest()
-            .expect("catalog digest");
+        let catalog_digest = catalog.payload.catalog_digest().expect("catalog digest");
         let checkpoint = GatewayComplianceCheckpointV1 {
             version: GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1,
             policy_digest: [0xA5; 32],
             chain_head: Some(catalog.clone()),
             serving: Some(catalog.clone()),
             previous_serving: None,
-            candidate: Some(catalog),
+            candidate: None,
             acknowledgements: Vec::new(),
             history: vec![GatewayComplianceHistoryRecordV1 {
                 operation_id: [0x42; 32],
@@ -1222,12 +1159,22 @@ mod tests {
                 action: "promotion".to_owned(),
                 reason_code: "gateway-quorum".to_owned(),
             }],
+            idempotency_records: vec![GatewayComplianceIdempotencyRecordV1 {
+                key_digest: [0x42; 32],
+                request_digest: [0x43; 32],
+                operation: GatewayComplianceMutationKindV1::Promote,
+                catalog_digest,
+                recorded_at_unix: 1_700_000_010,
+            }],
         };
         let status =
             status_response(&checkpoint, 1_700_000_020).expect("redacted status projection");
         let json = norito::json::to_string(&status).expect("status JSON");
 
-        assert!(json.len() < 4_096, "status projection must remain tightly bounded");
+        assert!(
+            json.len() < 4_096,
+            "status projection must remain tightly bounded"
+        );
         assert!(json.contains("\"serving_ready\":true"));
         assert!(json.contains(&hex::encode(catalog_digest)));
         for forbidden in [
@@ -1241,6 +1188,7 @@ mod tests {
             "\"legal_safety_holds\"",
             "\"toggles\"",
             "\"acknowledgements\"",
+            "\"idempotency_records\"",
         ] {
             assert!(
                 !json.contains(forbidden),
@@ -1261,6 +1209,7 @@ mod tests {
             candidate: None,
             acknowledgements: Vec::new(),
             history: Vec::new(),
+            idempotency_records: Vec::new(),
         };
         assert!(
             !status_response(&checkpoint, 1_699_999_999)
@@ -1288,11 +1237,10 @@ mod tests {
             IDEMPOTENCY_KEY_HEADER,
             HeaderValue::from_str(&expected).expect("idempotency header"),
         );
-        assert_eq!(
-            require_request_idempotency_key(&headers, "stage", &uri, body)
-                .expect("matching binding"),
-            expected
-        );
+        let binding = require_request_idempotency_binding(&headers, "stage", &uri, body)
+            .expect("matching binding");
+        assert_eq!(hex::encode(binding.key_digest), expected);
+        assert_eq!(binding.key_digest, binding.request_digest);
 
         headers.append(
             IDEMPOTENCY_KEY_HEADER,
@@ -1328,10 +1276,8 @@ mod tests {
             HeaderValue::from_str(&key).expect("idempotency header"),
         );
 
-        assert!(
-            require_request_idempotency_key(&headers, "stage", &uri, original).is_ok()
-        );
-        let response = require_request_idempotency_key(&headers, "stage", &uri, changed)
+        assert!(require_request_idempotency_binding(&headers, "stage", &uri, original).is_ok());
+        let response = require_request_idempotency_binding(&headers, "stage", &uri, changed)
             .expect_err("same key must reject a different canonical body");
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
@@ -1397,19 +1343,21 @@ mod tests {
             IDEMPOTENCY_KEY_HEADER,
             HeaderValue::from_str(&expected).expect("operation id header"),
         );
+        let uri: Uri = "/v1/sorafs/gateway/compliance/rollback"
+            .parse()
+            .expect("rollback URI");
+        let binding =
+            require_operation_idempotency_binding(&headers, operation_id, "rollback", &uri, b"{}")
+                .expect("matching operation id");
+        assert_eq!(hex::encode(binding.key_digest), expected);
         assert_eq!(
-            require_operation_idempotency_key(&headers, operation_id)
-                .expect("matching operation id"),
-            expected
-        );
-        assert_eq!(
-            require_operation_idempotency_key(&headers, [0x5D; 32])
+            require_operation_idempotency_binding(&headers, [0x5D; 32], "rollback", &uri, b"{}",)
                 .expect_err("mismatched operation id")
                 .status(),
             StatusCode::CONFLICT
         );
         assert_eq!(
-            require_operation_idempotency_key(&headers, [0; 32])
+            require_operation_idempotency_binding(&headers, [0; 32], "rollback", &uri, b"{}",)
                 .expect_err("zero operation id")
                 .status(),
             StatusCode::BAD_REQUEST
@@ -1422,16 +1370,14 @@ mod tests {
             action_response(
                 StatusCode::OK,
                 "promote",
+                GatewayComplianceMutationResultV1 {
+                    catalog_digest: [0x11; 32],
+                    recorded_at_unix: 1_700_000_000,
+                },
                 [0x11; 32],
-                &"11".repeat(32),
-                1_700_000_000,
             ),
-            gateway_compliance_request_error(
-                StatusCode::BAD_REQUEST,
-                "fixture",
-                "fixture",
-            ),
-            gateway_compliance_error_response(GatewayComplianceError::Replay),
+            gateway_compliance_request_error(StatusCode::BAD_REQUEST, "fixture", "fixture"),
+            gateway_compliance_error_response(GatewayComplianceError::IdempotencyConflict),
         ];
         for response in responses {
             assert_eq!(
