@@ -636,9 +636,6 @@ pub enum TransactionSignatureError {
     },
 }
 
-#[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
-pub use self::ffi::*;
-
 static EXPIRES_AT_HEIGHT_NAME: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("expires_at_height").expect("expires_at_height is a valid metadata key")
 });

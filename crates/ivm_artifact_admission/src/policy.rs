@@ -12,7 +12,7 @@ use ivm_abi::metadata::{
 use crate::{ContractArtifactError, DecodedOp};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ValidationProfile {
+pub enum ValidationProfile {
     Production,
     KotoTest,
 }
@@ -24,7 +24,11 @@ impl ValidationProfile {
     }
 }
 
-pub(crate) fn validate_contract_interface(
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered artifact/interface audit preserves stable fail-closed first-error precedence"
+)]
+pub fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
@@ -424,6 +428,10 @@ fn validate_koto_test_return_entrypoint(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the bytecode security pass keeps its exhaustive opcode policy in one auditable traversal"
+)]
 fn validate_bytecode_security(
     decoded: &[DecodedOp],
     zk_enabled: bool,
@@ -543,7 +551,7 @@ fn decoded_syscall_number(instruction: u32) -> Option<u32> {
     use ivm_abi::instruction::wide;
 
     match wide::opcode(instruction) {
-        wide::system::SCALL => Some(u32::from(wide::imm8(instruction) as u8)),
+        wide::system::SCALL => Some(u32::from(wide::imm8(instruction).cast_unsigned())),
         wide::system::SYSTEM => Some(ivm_abi::encoding::wide::decode_syscallx(instruction)),
         _ => None,
     }
@@ -557,6 +565,10 @@ fn is_direct_call(op: &DecodedOp) -> bool {
 }
 
 /// Validate the deployable direct-call graph without trusting compiler metadata.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the direct-call graph audit keeps discovery, validation, and cycle rejection in one deterministic pass"
+)]
 fn validate_nonrecursive_direct_calls(
     decoded: &[DecodedOp],
     entrypoint_pcs: &BTreeSet<u64>,

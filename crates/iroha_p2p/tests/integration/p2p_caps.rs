@@ -26,6 +26,8 @@ use iroha_p2p::{
 use iroha_primitives::addr::SocketAddrHost;
 use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
+#[cfg(feature = "p2p_ws")]
+use tokio::net::TcpListener;
 use tokio::time::Duration;
 
 // These tests assert process-global cap counters, so their snapshots must not overlap.
@@ -55,6 +57,101 @@ impl<'a> norito::core::DecodeFromSlice<'a> for BigMsg {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical::<Self>(bytes)
     }
+}
+
+async fn wait_for_peer_state(
+    network: &NetworkHandle<BigMsg>,
+    should_be_online: bool,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> bool {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let is_online = network.online_peers(HashSet::len) > 0;
+            if is_online == should_be_online {
+                break;
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+async fn wait_for_both_online(
+    first: &NetworkHandle<BigMsg>,
+    second: &NetworkHandle<BigMsg>,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> bool {
+    wait_for_peer_state(first, true, timeout, poll_interval).await
+        && wait_for_peer_state(second, true, timeout, poll_interval).await
+}
+
+async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> Option<u64> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let current = iroha_p2p::network::cap_violations_consensus();
+            if current > start_cap {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
+#[cfg(feature = "p2p_ws")]
+async fn forward_one_ws_connection(listener: TcpListener, network: NetworkHandle<BigMsg>) {
+    let Ok((stream, remote)) = listener.accept().await else {
+        return;
+    };
+    let Ok((read, write)) = super::ws_io::accept_bounded(stream).await else {
+        return;
+    };
+    let _ = network.accept_stream(read, write, remote).await;
+}
+
+#[cfg(feature = "p2p_ws")]
+async fn assert_ws_global_cap_disconnects(
+    listener: &NetworkHandle<BigMsg>,
+    dialer: &NetworkHandle<BigMsg>,
+    listener_peer: &Peer,
+) {
+    let start_cap = iroha_p2p::network::cap_violations_consensus();
+    dialer.post(Post {
+        data: BigMsg {
+            topic: 0,
+            data: vec![0_u8; 8 * 1024],
+        },
+        peer_id: listener_peer.id().clone(),
+        priority: Priority::High,
+    });
+
+    assert!(
+        wait_for_peer_state(
+            listener,
+            false,
+            Duration::from_millis(1_500),
+            Duration::from_millis(50),
+        )
+        .await,
+        "listener should disconnect after WS frame cap violation"
+    );
+    assert_eq!(
+        iroha_p2p::network::cap_violations_consensus(),
+        start_cap,
+        "global cap enforcement must precede topic cap accounting",
+    );
+
+    let _ = wait_for_peer_state(
+        dialer,
+        false,
+        Duration::from_millis(1_000),
+        Duration::from_millis(50),
+    )
+    .await;
 }
 
 fn default_soranet_handshake() -> ActualSoranetHandshake {
@@ -263,30 +360,14 @@ async fn topic_cap_violation_disconnects() {
     net2.update_topology(UpdateTopology(HashSet::from([p1.id().clone()])));
     net2.update_peers_addresses(UpdatePeers(vec![(p1.id().clone(), a1.clone())]));
 
-    // Wait connection established
-    if tokio::time::timeout(Duration::from_millis(1500), async {
-        loop {
-            if net1.online_peers(std::collections::HashSet::len) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
+    // Wait for both views of the connection to be established.
+    if !wait_for_both_online(
+        &net1,
+        &net2,
+        Duration::from_millis(1_500),
+        Duration::from_millis(50),
+    )
     .await
-    .is_err()
-    {
-        return;
-    }
-    if tokio::time::timeout(Duration::from_millis(1500), async {
-        loop {
-            if net2.online_peers(std::collections::HashSet::len) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .is_err()
     {
         return;
     }
@@ -317,17 +398,9 @@ async fn topic_cap_violation_disconnects() {
             ..
         }
     ));
-    let end_cap = tokio::time::timeout(Duration::from_millis(1_000), async {
-        loop {
-            let current = iroha_p2p::network::cap_violations_consensus();
-            if current > start_cap {
-                break current;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("consensus cap violation counter should increase");
+    let end_cap = wait_for_consensus_cap_increase(start_cap, Duration::from_millis(1_000))
+        .await
+        .expect("consensus cap violation counter should increase");
 
     // Exact outbound admission rejects the oversized canonical frame before
     // transferring ownership, and the consensus cap counter records it.
@@ -735,17 +808,6 @@ async fn quic_global_frame_cap_disconnects() {
 async fn ws_global_frame_cap_disconnects() {
     let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
 
-    use bytes::Bytes;
-    use futures::StreamExt;
-    use tokio::{
-        io::{AsyncRead, AsyncWrite, ReadBuf},
-        net::TcpListener,
-    };
-    use tokio_tungstenite::{
-        accept_async,
-        tungstenite::{Error as WsError, Message as WsMessage},
-    };
-
     let chain = ChainId::from("test_chain_ws");
     let kp_listener = KeyPair::random();
     let kp_dialer = KeyPair::random();
@@ -773,159 +835,10 @@ async fn ws_global_frame_cap_disconnects() {
     };
     let ws_addr = ws_listener.local_addr().expect("ws listener addr");
 
-    let forward_handle = network_listener.clone();
-    tokio::spawn(async move {
-        if let Ok((stream, remote)) = ws_listener.accept().await {
-            if let Ok(ws_stream) = accept_async(stream).await {
-                let (sink, stream) = ws_stream.split();
-
-                struct WsRead<S> {
-                    stream: S,
-                    buffer: Bytes,
-                }
-
-                impl<S> WsRead<S> {
-                    fn new(stream: S) -> Self {
-                        Self {
-                            stream,
-                            buffer: Bytes::new(),
-                        }
-                    }
-                }
-
-                impl<S> AsyncRead for WsRead<S>
-                where
-                    S: futures::Stream<Item = Result<WsMessage, WsError>> + Unpin + Send,
-                {
-                    fn poll_read(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                        buf: &mut ReadBuf<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        if !self.buffer.is_empty() {
-                            let n = core::cmp::min(self.buffer.len(), buf.remaining());
-                            buf.put_slice(&self.buffer.split_to(n));
-                            return core::task::Poll::Ready(Ok(()));
-                        }
-
-                        match futures::ready!(core::pin::Pin::new(&mut self.stream).poll_next(cx)) {
-                            Some(Ok(WsMessage::Binary(frame))) => {
-                                self.buffer = frame;
-                                let n = core::cmp::min(self.buffer.len(), buf.remaining());
-                                buf.put_slice(&self.buffer.split_to(n));
-                                core::task::Poll::Ready(Ok(()))
-                            }
-                            Some(Ok(_)) => {
-                                cx.waker().wake_by_ref();
-                                core::task::Poll::Pending
-                            }
-                            Some(Err(err)) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws read error: {err}"),
-                            ))),
-                            None => core::task::Poll::Ready(Ok(())),
-                        }
-                    }
-                }
-
-                struct WsWrite<S> {
-                    sink: S,
-                    buffer: Vec<u8>,
-                }
-
-                impl<S> WsWrite<S> {
-                    fn new(sink: S) -> Self {
-                        Self {
-                            sink,
-                            buffer: Vec::new(),
-                        }
-                    }
-                }
-
-                impl<S> AsyncWrite for WsWrite<S>
-                where
-                    S: futures::Sink<WsMessage, Error = WsError> + Unpin + Send,
-                {
-                    fn poll_write(
-                        mut self: core::pin::Pin<&mut Self>,
-                        _cx: &mut core::task::Context<'_>,
-                        data: &[u8],
-                    ) -> core::task::Poll<std::io::Result<usize>> {
-                        self.buffer.extend_from_slice(data);
-                        core::task::Poll::Ready(Ok(data.len()))
-                    }
-
-                    fn poll_flush(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        if self.buffer.is_empty() {
-                            return core::task::Poll::Ready(Ok(()));
-                        }
-                        let payload = core::mem::take(&mut self.buffer);
-                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_ready(cx)) {
-                            Ok(()) => {}
-                            Err(err) => {
-                                return core::task::Poll::Ready(Err(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("ws ready error: {err}"),
-                                )));
-                            }
-                        }
-                        if let Err(err) = core::pin::Pin::new(&mut self.sink)
-                            .start_send(WsMessage::Binary(payload.into()))
-                        {
-                            return core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws send error: {err}"),
-                            )));
-                        }
-                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_flush(cx)) {
-                            Ok(()) => core::task::Poll::Ready(Ok(())),
-                            Err(err) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws flush error: {err}"),
-                            ))),
-                        }
-                    }
-
-                    fn poll_shutdown(
-                        mut self: core::pin::Pin<&mut Self>,
-                        cx: &mut core::task::Context<'_>,
-                    ) -> core::task::Poll<std::io::Result<()>> {
-                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_ready(cx)) {
-                            Ok(()) => {}
-                            Err(err) => {
-                                return core::task::Poll::Ready(Err(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("ws ready error: {err}"),
-                                )));
-                            }
-                        }
-                        if let Err(err) =
-                            core::pin::Pin::new(&mut self.sink).start_send(WsMessage::Close(None))
-                        {
-                            return core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws close error: {err}"),
-                            )));
-                        }
-                        match futures::ready!(core::pin::Pin::new(&mut self.sink).poll_flush(cx)) {
-                            Ok(()) => core::task::Poll::Ready(Ok(())),
-                            Err(err) => core::task::Poll::Ready(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("ws close error: {err}"),
-                            ))),
-                        }
-                    }
-                }
-
-                let read = WsRead::new(stream);
-                let write = WsWrite::new(sink);
-                let _ = forward_handle.accept_stream(read, write, remote).await;
-            }
-        }
-    });
+    tokio::spawn(forward_one_ws_connection(
+        ws_listener,
+        network_listener.clone(),
+    ));
 
     let dialer_addr = super::next_addr();
     let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
@@ -959,58 +872,16 @@ async fn ws_global_frame_cap_disconnects() {
         listener_host.clone(),
     )]));
 
-    let online = tokio::time::timeout(Duration::from_millis(2_000), async {
-        loop {
-            if network_listener.online_peers(HashSet::len) > 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    if online.is_err() {
+    if !wait_for_peer_state(
+        &network_listener,
+        true,
+        Duration::from_millis(2_000),
+        Duration::from_millis(50),
+    )
+    .await
+    {
         return;
     }
 
-    let start_cap = iroha_p2p::network::cap_violations_consensus();
-
-    let oversize = BigMsg {
-        topic: 0,
-        data: vec![0u8; 8 * 1024],
-    };
-    net_dialer.post(Post {
-        data: oversize,
-        peer_id: peer_listener.id().clone(),
-        priority: Priority::High,
-    });
-
-    let dropped = tokio::time::timeout(Duration::from_millis(1_500), async {
-        loop {
-            if network_listener.online_peers(HashSet::len) == 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    assert!(
-        dropped.is_ok(),
-        "listener should disconnect after WS frame cap violation"
-    );
-
-    let end_cap = iroha_p2p::network::cap_violations_consensus();
-    assert_eq!(
-        end_cap, start_cap,
-        "global cap enforcement must precede topic cap accounting",
-    );
-
-    let _ = tokio::time::timeout(Duration::from_millis(1_000), async {
-        loop {
-            if net_dialer.online_peers(HashSet::len) == 0 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
+    assert_ws_global_cap_disconnects(&network_listener, &net_dialer, &peer_listener).await;
 }

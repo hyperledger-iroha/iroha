@@ -103,7 +103,7 @@ where
 
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
-pub(super) struct Args {
+pub struct Args {
     #[command(subcommand)]
     command: Command,
 }
@@ -309,6 +309,14 @@ fn validate_device_attestation_policy_for_atomic_activation(
             "atomic Kagemusha activation requires version-1 fail-closed iOS and Android app policy"
         );
     }
+    validate_atomic_activation_trusted_roots(policy)?;
+    validate_atomic_activation_revocations(policy)?;
+    validate_atomic_activation_ios_apps(policy)?;
+    validate_atomic_activation_android_apps(policy)?;
+    Ok(())
+}
+
+fn validate_atomic_activation_trusted_roots(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut root_ids = BTreeSet::new();
     let mut platforms = BTreeSet::new();
     for root in &policy.trusted_roots {
@@ -332,12 +340,20 @@ fn validate_device_attestation_policy_for_atomic_activation(
     if platforms != BTreeSet::from(["android-keymint", "ios-appattest"]) {
         bail!("atomic Kagemusha activation requires both platform trust roots");
     }
+    Ok(())
+}
+
+fn validate_atomic_activation_revocations(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut revoked = BTreeSet::new();
     for digest in &policy.revoked_certificate_sha256 {
         if digest.len() != 32 || !revoked.insert(digest.as_slice()) {
             bail!("atomic Kagemusha activation contains an invalid duplicate revocation");
         }
     }
+    Ok(())
+}
+
+fn validate_atomic_activation_ios_apps(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut ios_ids = BTreeSet::new();
     for app in &policy.ios_apps {
         if app.team_id.is_empty()
@@ -377,6 +393,10 @@ fn validate_device_attestation_policy_for_atomic_activation(
             bail!("atomic Kagemusha activation contains an invalid iOS app policy");
         }
     }
+    Ok(())
+}
+
+fn validate_atomic_activation_android_apps(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
     let mut android_ids = BTreeSet::new();
     for app in &policy.android_apps {
         if app.package_name.is_empty()
@@ -456,6 +476,10 @@ impl VerifiedReleaseV4 {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered fail-closed release verification keeps authenticated inputs and first-error checks in one auditable pass"
+)]
 fn verify_release_directory_v4(
     bundle_dir: &Path,
     policy_bytes: &[u8],
@@ -650,6 +674,16 @@ fn verify_release_directory_v4(
     Ok(verified)
 }
 
+fn roster_release_generations_match_v4(
+    roster_generation: &str,
+    manifest_generation: &str,
+    descriptor_generation: &str,
+) -> bool {
+    let descriptor_matches_roster = descriptor_generation == roster_generation;
+    let descriptor_matches_manifest = descriptor_generation == manifest_generation;
+    descriptor_matches_roster && descriptor_matches_manifest
+}
+
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
     let descriptor = &manifest.topup_finality_roster_artifact;
     let bytes = read_regular_bounded(
@@ -668,7 +702,11 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
         decode_canonical_norito(&bytes, "Kagemusha V4 top-up finality roster")?;
     roster.validate().map_err(|error| eyre!(error))?;
     if roster.chain_id != manifest.chain_id
-        || roster.artifact_generation != manifest.generation
+        || !roster_release_generations_match_v4(
+            &roster.artifact_generation,
+            &manifest.generation,
+            &manifest.topup_finality_roster_artifact.artifact_generation,
+        )
         || roster.window_at(manifest.activation_height).is_err()
         || roster
             .window_at(manifest.withdrawal_height.saturating_sub(1))
@@ -1081,8 +1119,8 @@ mod tests {
 
     use super::{
         AUTHENTICATED_ARTIFACT_ROLES_V4, REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE,
-        parse_manifest_sha256, validate_artifacts_sequentially,
-        validate_device_attestation_policy_for_atomic_activation,
+        parse_manifest_sha256, roster_release_generations_match_v4,
+        validate_artifacts_sequentially, validate_device_attestation_policy_for_atomic_activation,
     };
 
     struct LivePayload {
@@ -1136,6 +1174,25 @@ mod tests {
         assert!(parse_manifest_sha256(&"AB".repeat(32)).is_err());
         assert!(parse_manifest_sha256(&"a".repeat(63)).is_err());
         assert!(parse_manifest_sha256(&format!("{}g", "a".repeat(63))).is_err());
+    }
+
+    #[test]
+    fn roster_generation_binding_uses_the_authenticated_descriptor() {
+        assert!(roster_release_generations_match_v4(
+            "release-a",
+            "release-a",
+            "release-a"
+        ));
+        assert!(!roster_release_generations_match_v4(
+            "release-a",
+            "release-a",
+            "release-b"
+        ));
+        assert!(!roster_release_generations_match_v4(
+            "release-b",
+            "release-a",
+            "release-a"
+        ));
     }
 
     #[test]

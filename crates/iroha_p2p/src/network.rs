@@ -819,7 +819,7 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
         RelayTarget::Direct(peer_id.clone())
     });
     let frame = RelayMessage::new(origin.clone(), target, ttl, priority, payload.clone());
-    crate::peer::data_message_wire_len(frame)
+    crate::peer::data_message_wire_len(&frame)
 }
 
 fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
@@ -7478,6 +7478,10 @@ fn validate_channel_capacity_geometry(
     Ok(())
 }
 
+#[expect(
+    clippy::struct_field_names,
+    reason = "the repeated _bytes suffix makes byte units explicit beside count-based transport limits and prevents queue-geometry unit confusion"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TransportQueueGeometry {
     /// Additive global reserve used only by authoritative safety traffic.
@@ -7877,10 +7881,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         )?;
         let safety_reserve_bytes = transport_geometry.safety_reserve_bytes;
         let progress_reserve_bytes = transport_geometry.progress_reserve_bytes;
-        let max_total_connections = max_total_connections
-            .map(core::num::NonZeroUsize::get)
-            .unwrap_or(
+        let max_total_connections = max_total_connections.map_or(
             iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
+            core::num::NonZeroUsize::get,
         );
         let authenticated_source_credit_capacity = inbound_source_credit_capacity(
             p2p_subscriber_queue_cap.get(),
@@ -8871,8 +8874,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     rank,
                 });
             }
-            ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),
-            ProgressLeaseAttempt::CancelledMembership => return Ok(None),
+            ProgressLeaseAttempt::SameRequestAlreadyOwned
+            | ProgressLeaseAttempt::CancelledMembership => return Ok(None),
             ProgressLeaseAttempt::InvalidTicket => {
                 return Err(NetworkActorAdmissionError::Rejected {
                     message,
@@ -9449,11 +9452,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let topic = msg.data.topic();
         let route = msg.data.subscriber_route();
         let priority = canonical_outbound_priority(topic, route, msg.priority);
-        if is_reliable_progress_route(topic, route) {
-            panic!(
-                "reliable P2P route {topic:?} requires post_recoverable so backpressure preserves source ownership"
-            );
-        }
+        assert!(
+            !is_reliable_progress_route(topic, route),
+            "reliable P2P route {topic:?} requires post_recoverable so backpressure preserves source ownership"
+        );
         if !msg.data.is_outbound_allowed() {
             iroha_logger::warn!(
                 topic = ?msg.data.topic(),
@@ -9529,11 +9531,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let topic = msg.data.topic();
         let route = msg.data.subscriber_route();
         let priority = canonical_outbound_priority(topic, route, msg.priority);
-        if is_reliable_progress_route(topic, route) {
-            panic!(
-                "reliable P2P route {topic:?} requires broadcast_recoverable so backpressure preserves source ownership"
-            );
-        }
+        assert!(
+            !is_reliable_progress_route(topic, route),
+            "reliable P2P route {topic:?} requires broadcast_recoverable so backpressure preserves source ownership"
+        );
         if !msg.data.is_outbound_allowed() {
             iroha_logger::warn!(
                 topic = ?msg.data.topic(),
@@ -16958,7 +16959,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 generation,
                 wire_bytes,
                 sequence,
-                _aggregate_lease,
+                _aggregate_lease: aggregate_lease,
             } = entry;
             match ref_peer.handle.post_recover(frame) {
                 Ok(()) => {
@@ -16978,7 +16979,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         generation,
                         wire_bytes,
                         sequence,
-                        _aggregate_lease,
+                        _aggregate_lease: aggregate_lease,
                     };
                     if matches!(topic, message::Topic::ConsensusSafety)
                         && blocked_safety.is_none()
@@ -17010,7 +17011,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         generation: None,
                         wire_bytes,
                         sequence,
-                        _aggregate_lease,
+                        _aggregate_lease: aggregate_lease,
                     };
                     let peer = Peer::new(peer_addr, peer_id.clone());
                     iroha_logger::warn!(
@@ -18191,12 +18192,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             if let Some(hub_id) = self.hub_handle().map(|(id, _)| id.clone()) {
                 let frame = frame_for(RelayTarget::Direct(peer_id.clone()));
                 return self.send_frame_to_peer(&hub_id, frame, topic);
-            } else {
-                iroha_logger::warn!(
-                    peer=%peer_id,
-                    "Relay mode could not route post because hub is unavailable"
-                );
             }
+            iroha_logger::warn!(
+                peer=%peer_id,
+                "Relay mode could not route post because hub is unavailable"
+            );
         }
         false
     }
@@ -24115,7 +24115,7 @@ mod tests {
 
         let sample_frame = mk_frame(32);
         let sample_bytes =
-            crate::frame_queue_charge(crate::peer::data_message_wire_len(sample_frame.clone()))
+            crate::frame_queue_charge(crate::peer::data_message_wire_len(&sample_frame))
                 .expect("deferred fixture stream charge");
         let mut queue = DeferredPeerFrameQueue::<Vec<u8>>::new(
             8,
@@ -24173,7 +24173,7 @@ mod tests {
         );
         let large_frame = mk_frame(1024);
         let large_bytes =
-            crate::frame_queue_charge(crate::peer::data_message_wire_len(large_frame.clone()))
+            crate::frame_queue_charge(crate::peer::data_message_wire_len(&large_frame))
                 .expect("large deferred fixture stream charge");
         assert!(
             large_bytes > sample_bytes,
@@ -28621,7 +28621,7 @@ pub mod message {
         General,
         /// Genesis request/response bootstrap protocol.
         GenesisBootstrap,
-        /// Torii and SoraCloud request/response proxy protocol.
+        /// Torii and `SoraCloud` request/response proxy protocol.
         ToriiProxy,
         /// Torii websocket Connect relay protocol.
         Connect,

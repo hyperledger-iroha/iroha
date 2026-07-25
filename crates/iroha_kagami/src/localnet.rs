@@ -44,7 +44,7 @@ use iroha_data_model::{
     offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, offline_escrow_account_id},
     parameter::{
         custom::{CustomParameter, CustomParameterId},
-        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
     peer::PeerId,
     prelude::*,
@@ -332,7 +332,7 @@ fn resolve_sora_profile(
         (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Cbuae)) => {
             Ok(Some(SoraProfile::PrivateCbuae))
         }
-        (Some(SoraProfileArg::Nexus), Some(_)) | (None, Some(_)) => Err(eyre!(
+        (Some(SoraProfileArg::Nexus) | None, Some(_)) => Err(eyre!(
             "`--private-dataspace` requires `--sora-profile dataspace`"
         )),
     }
@@ -771,7 +771,6 @@ fn localnet_fee_sponsor_revision(
     program_id: FeeSponsorProgramId,
     fee_asset_id: AssetDefinitionId,
 ) -> FeeSponsorProgramRevision {
-    let quantity = |value| Quantity::try_from(value).expect("static sponsor budget must fit");
     let native = |wire_id: &str| {
         FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
             wire_id: wire_id.to_owned(),
@@ -801,11 +800,11 @@ fn localnet_fee_sponsor_revision(
         }],
         asset_budgets: vec![FeeSponsorAssetBudget {
             asset_definition_id: fee_asset_id,
-            per_transaction: quantity(LOCALNET_FEE_SPONSOR_PER_TRANSACTION),
-            per_block: quantity(LOCALNET_FEE_SPONSOR_PER_BLOCK),
-            per_program_epoch: quantity(LOCALNET_FEE_SPONSOR_PER_PROGRAM_EPOCH),
-            per_beneficiary_epoch: quantity(LOCALNET_FEE_SPONSOR_PER_BENEFICIARY_EPOCH),
-            reserve_floor: quantity(LOCALNET_FEE_SPONSOR_RESERVE_FLOOR),
+            per_transaction: Quantity::from(LOCALNET_FEE_SPONSOR_PER_TRANSACTION),
+            per_block: Quantity::from(LOCALNET_FEE_SPONSOR_PER_BLOCK),
+            per_program_epoch: Quantity::from(LOCALNET_FEE_SPONSOR_PER_PROGRAM_EPOCH),
+            per_beneficiary_epoch: Quantity::from(LOCALNET_FEE_SPONSOR_PER_BENEFICIARY_EPOCH),
+            reserve_floor: Quantity::from(LOCALNET_FEE_SPONSOR_RESERVE_FLOOR),
             epoch_length_blocks: NonZeroU64::new(LOCALNET_FEE_SPONSOR_EPOCH_BLOCKS)
                 .expect("static sponsor epoch length must be non-zero"),
         }],
@@ -1272,10 +1271,8 @@ fn generate_localnet_with_line<T: Write>(
     let block_cadence_override = opts
         .block_cadence_ms
         .or_else(|| perf_spec.map(|spec| spec.block_cadence_ms));
-    let block_cadence_ms = Some(block_cadence_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS));
-    let tx_gossip_overrides = localnet_tx_gossip_overrides(
-        block_cadence_ms.unwrap_or_else(|| SumeragiParameters::default().block_cadence_ms().get()),
-    );
+    let block_cadence_ms = block_cadence_override.unwrap_or(LOCALNET_PIPELINE_TIME_MS);
+    let tx_gossip_overrides = localnet_tx_gossip_overrides(block_cadence_ms);
     let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
         spec.block_max_transactions
     });
@@ -1311,7 +1308,7 @@ fn generate_localnet_with_line<T: Write>(
     );
     genesis = apply_parameter_overrides(
         genesis,
-        block_cadence_ms,
+        Some(block_cadence_ms),
         block_max_transactions,
         opts.consensus_mode,
     );
@@ -1332,7 +1329,7 @@ fn generate_localnet_with_line<T: Write>(
             genesis,
             &peers,
             gas_account_id,
-            stake_amount,
+            &stake_amount,
             opts.sora_profile,
             &genesis_account_id,
             &client_identity.account_id,
@@ -1442,19 +1439,19 @@ fn generate_localnet_with_line<T: Write>(
             &genesis_private,
         )?;
     }
-    write_genesis(
-        &genesis,
-        &genesis_public_key,
-        genesis_private.clone(),
-        &config,
+    write_genesis(GenesisWriteContext {
+        manifest: &genesis,
+        public_key: &genesis_public_key,
+        private_key: genesis_private.clone(),
+        config: &config,
         chain_discriminant,
-        &genesis_json_path,
-        &genesis_signed_path,
-        GenesisConsensusPolicies {
+        json_path: &genesis_json_path,
+        signed_path: &genesis_signed_path,
+        policies: GenesisConsensusPolicies {
             da_proof_policies,
             confidential_policy_hash,
         },
-    )?;
+    })?;
     tui::status("Genesis staged and bootstrap-validated");
 
     tui::status("Writing peer configs");
@@ -1873,6 +1870,10 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
     hex
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canonical lane matrices stay together so profile ordering remains auditable"
+)]
 fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<toml::Value>)> {
     use toml::{Table, Value};
 
@@ -1989,6 +1990,10 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
 }
 
 #[allow(clippy::items_after_statements)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canonical routing matrices stay together so first-match ordering remains auditable"
+)]
 fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Table> {
     use toml::{Table, Value};
 
@@ -3418,8 +3423,7 @@ fn localnet_alias_setup_request(
     let guard = AliasQuoteGuardV1 {
         expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
         expected_payment_asset: localnet_fee_asset_definition_id(),
-        max_amount: Quantity::try_from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE)
-            .expect("static alias setup cap must fit"),
+        max_amount: Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
         valid_until_ms: u64::MAX,
     };
     let acquisition = AliasLeaseAcquisitionV1::new(1, None);
@@ -3635,7 +3639,7 @@ fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     gas_account_id: &AccountId,
-    stake_amount: Quantity,
+    stake_amount: &Quantity,
     sora_profile: Option<SoraProfile>,
     genesis_account_id: &AccountId,
 ) -> Result<RawGenesisTransaction> {
@@ -3655,7 +3659,7 @@ fn append_localnet_npos_bootstrap_for_client(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     gas_account_id: &AccountId,
-    stake_amount: Quantity,
+    stake_amount: &Quantity,
     sora_profile: Option<SoraProfile>,
     genesis_account_id: &AccountId,
     client_account_id: &AccountId,
@@ -3672,12 +3676,16 @@ fn append_localnet_npos_bootstrap_for_client(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the ordered NPoS bootstrap matrix stays linear so transaction ordering remains auditable"
+)]
 fn append_localnet_npos_bootstrap_for_services(
     genesis: RawGenesisTransaction,
     peers: &[Peer],
     gas_account_id: &AccountId,
-    stake_amount: Quantity,
+    stake_amount: &Quantity,
     sora_profile: Option<SoraProfile>,
     genesis_account_id: &AccountId,
     client_account_id: &AccountId,
@@ -3824,8 +3832,7 @@ fn append_localnet_npos_bootstrap_for_services(
     builder = builder.append_instruction(FundFeeSponsorProgram {
         program_id: fee_sponsor_program_id.clone(),
         asset_definition_id: fee_asset_id,
-        amount: Quantity::try_from(LOCALNET_FEE_SPONSOR_VAULT_BALANCE)
-            .expect("static sponsor funding amount must fit"),
+        amount: Quantity::from(LOCALNET_FEE_SPONSOR_VAULT_BALANCE),
     });
     builder = builder.append_instruction(ActivateFeeSponsorProgramRevision {
         program_id: fee_sponsor_program_id.clone(),
@@ -4082,19 +4089,31 @@ struct GenesisConsensusPolicies {
     confidential_policy_hash: [u8; 32],
 }
 
-fn write_genesis(
-    genesis: &RawGenesisTransaction,
-    genesis_public_key: &iroha_crypto::PublicKey,
-    genesis_private_key: ExposedPrivateKey,
-    config: &actual::Root,
+struct GenesisWriteContext<'a> {
+    manifest: &'a RawGenesisTransaction,
+    public_key: &'a iroha_crypto::PublicKey,
+    private_key: ExposedPrivateKey,
+    config: &'a actual::Root,
     chain_discriminant: Option<u16>,
-    json_path: &Path,
-    signed_path: &Path,
+    json_path: &'a Path,
+    signed_path: &'a Path,
     policies: GenesisConsensusPolicies,
-) -> Result<()> {
+}
+
+fn write_genesis(context: GenesisWriteContext<'_>) -> Result<()> {
+    let GenesisWriteContext {
+        manifest,
+        public_key,
+        private_key,
+        config,
+        chain_discriminant,
+        json_path,
+        signed_path,
+        policies,
+    } = context;
     let chain_discriminant =
         chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
-    let genesis = genesis.clone().with_chain_discriminant(chain_discriminant);
+    let genesis = manifest.clone().with_chain_discriminant(chain_discriminant);
     let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
     let json = norito::json::to_json_pretty(&genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
@@ -4104,8 +4123,8 @@ fn write_genesis(
     let persisted_genesis = RawGenesisTransaction::from_path(json_path)
         .wrap_err("failed to reload persisted genesis.json before signing")?;
 
-    let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
-        .wrap_err("make genesis key pair")?;
+    let genesis_key_pair =
+        KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
     let block = crate::genesis::bind_staged_sumeragi_v2_context(
         persisted_genesis,
         &genesis_key_pair,
@@ -5114,7 +5133,7 @@ mod tests {
                     genesis,
                     &peers,
                     &gas_account_id,
-                    stake_amount,
+                    &stake_amount,
                     opts.sora_profile,
                     &genesis_account_id,
                 )
@@ -5123,7 +5142,7 @@ mod tests {
                     genesis,
                     &peers,
                     &gas_account_id,
-                    stake_amount,
+                    &stake_amount,
                     opts.sora_profile,
                     &genesis_account_id,
                     client_account_id,
@@ -5377,7 +5396,7 @@ mod tests {
             assert_eq!(restricted_read_grant.destination(), &client_account_id);
             assert_eq!(restricted_read_grant.object(), &restricted_read_permission);
 
-            let expected_universal_permissions = vec![
+            let expected_universal_permissions = [
                 Permission::from(CanManageAccountAlias {
                     scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
                 }),
@@ -6672,6 +6691,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test audits the complete generated Sumeragi v2 schema and its prohibited legacy fields"
+    )]
     fn generated_configs_use_strict_sumeragi_v2_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
@@ -9621,6 +9644,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test validates one multi-file localnet path-normalization contract end to end"
+    )]
     fn relative_out_dir_paths_are_absolute_in_configs() {
         struct DirGuard {
             prev: PathBuf,

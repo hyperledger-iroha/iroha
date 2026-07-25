@@ -1381,13 +1381,15 @@ impl SupervisorBuilder {
 
         let genesis = GenesisMaterial::create(
             &mut binaries,
-            &paths,
-            &chain_id,
-            &specs,
-            &peer_config_overrides,
-            self.profile.consensus_mode,
-            self.genesis_profile,
-            self.vrf_seed_hex.as_deref(),
+            GenesisCreateContext {
+                paths: &paths,
+                chain_id: &chain_id,
+                peers: &specs,
+                config_overrides: &peer_config_overrides,
+                consensus_mode: self.profile.consensus_mode,
+                genesis_profile: self.genesis_profile,
+                vrf_seed_hex: self.vrf_seed_hex.as_deref(),
+            },
         )?;
 
         for spec in &specs {
@@ -2522,13 +2524,15 @@ impl Supervisor {
 
         let genesis = GenesisMaterial::create(
             &mut self.binaries,
-            &self.paths,
-            &self.chain_id,
-            &specs,
-            &self.peer_config_overrides,
-            self.profile.consensus_mode,
-            self.genesis.profile,
-            self.genesis.vrf_seed_hex.as_deref(),
+            GenesisCreateContext {
+                paths: &self.paths,
+                chain_id: &self.chain_id,
+                peers: &specs,
+                config_overrides: &self.peer_config_overrides,
+                consensus_mode: self.profile.consensus_mode,
+                genesis_profile: self.genesis.profile,
+                vrf_seed_hex: self.genesis.vrf_seed_hex.as_deref(),
+            },
         )?;
         for spec in &specs {
             spec.write_config(
@@ -3343,6 +3347,17 @@ struct GenesisMaterial {
     consensus_fingerprint: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct GenesisCreateContext<'a> {
+    paths: &'a NetworkPaths,
+    chain_id: &'a str,
+    peers: &'a [PeerSpec],
+    config_overrides: &'a PeerConfigOverrides,
+    consensus_mode: SumeragiConsensusMode,
+    genesis_profile: Option<GenesisProfile>,
+    vrf_seed_hex: Option<&'a str>,
+}
+
 #[derive(Debug)]
 struct TemporaryGenesisKeyFile {
     path: PathBuf,
@@ -3410,16 +3425,16 @@ impl Drop for TemporaryGenesisKeyFile {
 }
 
 impl GenesisMaterial {
-    fn create(
-        binaries: &mut BinaryPaths,
-        paths: &NetworkPaths,
-        chain_id: &str,
-        peers: &[PeerSpec],
-        config_overrides: &PeerConfigOverrides,
-        consensus_mode: SumeragiConsensusMode,
-        genesis_profile: Option<GenesisProfile>,
-        vrf_seed_hex: Option<&str>,
-    ) -> Result<Self> {
+    fn create(binaries: &mut BinaryPaths, context: GenesisCreateContext<'_>) -> Result<Self> {
+        let GenesisCreateContext {
+            paths,
+            chain_id,
+            peers,
+            config_overrides,
+            consensus_mode,
+            genesis_profile,
+            vrf_seed_hex,
+        } = context;
         let genesis_dir = paths.genesis_dir();
         fs::create_dir_all(&genesis_dir)?;
         let manifest_path = genesis_dir.join(GENESIS_FILE_NAME);

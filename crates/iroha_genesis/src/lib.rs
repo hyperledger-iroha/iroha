@@ -2112,6 +2112,7 @@ pub mod genesis_instructions_json {
             }
         }
 
+        #[test]
         fn deserialize_structured_register_account_with_label() {
             let account_id = ALICE_ID.clone();
             let account_literal = account_literal(&account_id).expect("account literal");
@@ -3010,11 +3011,8 @@ impl RawGenesisTransaction {
 
         let mode = match (mode, npos_payload) {
             (SumeragiConsensusMode::Permissioned, None) => ConsensusGenesisModeParams::Permissioned,
-            (SumeragiConsensusMode::Permissioned, Some(_)) => {
-                self.consensus_fingerprint = None;
-                return self;
-            }
-            (SumeragiConsensusMode::Npos, None) => {
+            (SumeragiConsensusMode::Permissioned, Some(_))
+            | (SumeragiConsensusMode::Npos, None) => {
                 self.consensus_fingerprint = None;
                 return self;
             }
@@ -3785,7 +3783,7 @@ mod tests2 {
     }
 
     #[test]
-    fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() -> Result<()> {
+    fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
         init_instruction_registry();
         use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
 
@@ -3847,8 +3845,6 @@ mod tests2 {
                 .to_string()
                 .contains("multiple structured `parameters` blocks")
         );
-
-        Ok(())
     }
 
     #[test]
@@ -6349,7 +6345,7 @@ mod tests {
             }
         }
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0], expected_fingerprint.to_string());
+        assert_eq!(found[0], expected_fingerprint);
         Ok(())
     }
 
@@ -6416,7 +6412,7 @@ mod tests {
             }
         }
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0], expected_fingerprint.to_string());
+        assert_eq!(found[0], expected_fingerprint);
         Ok(())
     }
 
@@ -6449,7 +6445,7 @@ mod tests {
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
-                    norito::json::Value::String(expected_fingerprint.to_string()),
+                    norito::json::Value::String(expected_fingerprint.clone()),
                 );
                 payload
             }))
@@ -6595,7 +6591,7 @@ mod tests {
                 );
                 payload.insert(
                     "consensus_fingerprint".to_string(),
-                    norito::json::Value::String(expected_fingerprint.to_string()),
+                    norito::json::Value::String(expected_fingerprint.clone()),
                 );
                 payload
             }))

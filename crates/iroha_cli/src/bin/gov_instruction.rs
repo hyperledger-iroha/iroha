@@ -222,20 +222,6 @@ fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<Verify
     Ok(None)
 }
 
-fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
-    match (requested, quoted) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    }
-}
-
 fn quote_and_sign_governance_transaction(
     client: &Client,
     instructions: Vec<InstructionBox>,
@@ -250,7 +236,7 @@ fn quote_and_sign_governance_transaction(
     let quote = client
         .quote_fees(&payload)
         .wrap_err("failed to quote exact governance transaction fees")?;
-    if !fee_payment_selection_matches(fee_payment, &quote.intent) {
+    if !fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
             "fee quote changed the selected payer, sponsor revision, or gas bound"
         ));
@@ -767,7 +753,7 @@ mod tests {
     fn fee_quote_selection_preserves_payer_revision_and_gas_bound() {
         let requested = FeePaymentIntent::authority(Vec::new(), None);
         let quoted = FeePaymentIntent::authority(Vec::new(), None);
-        assert!(fee_payment_selection_matches(&requested, &quoted));
+        assert!(requested.has_same_payer_and_gas_bound(&quoted));
 
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let sponsor = iroha::data_model::nexus::FeeSponsorProgramId::new(
@@ -775,7 +761,7 @@ mod tests {
             "governance".parse().expect("program name"),
         );
         let changed = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), None);
-        assert!(!fee_payment_selection_matches(&requested, &changed));
+        assert!(!requested.has_same_payer_and_gas_bound(&changed));
     }
 
     #[test]

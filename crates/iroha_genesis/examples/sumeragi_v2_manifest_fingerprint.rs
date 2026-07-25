@@ -39,9 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for path in paths {
         let manifest = RawGenesisTransaction::from_path(&path)?;
         let refreshed = manifest.with_consensus_meta();
-        let context = refreshed
-            .sumeragi_v2_context_parameters()
-            .ok_or("manifest omitted sumeragi_v2")?;
+        let context = refreshed.sumeragi_v2_context_parameters();
         let fingerprint = refreshed
             .consensus_fingerprint()
             .ok_or("manifest omitted consensus fingerprint")?;

@@ -4577,7 +4577,9 @@ fn sumeragi_v2_explicit_schema_parses() {
         .expect("first-release v2 configuration should parse");
 
     assert_eq!(
-        cfg.network.max_total_connections.map(|limit| limit.get()),
+        cfg.network
+            .max_total_connections
+            .map(std::num::NonZeroUsize::get),
         Some(32)
     );
     assert_eq!(cfg.sumeragi.role, NodeRole::Observer);

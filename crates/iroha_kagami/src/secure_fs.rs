@@ -118,6 +118,14 @@ mod unix {
         inode: u64,
     }
 
+    fn stat_identifier<T>(value: T, field: &str) -> Result<u64>
+    where
+        u64: TryFrom<T>,
+    {
+        u64::try_from(value)
+            .map_err(|_| eyre!("kernel stat {field} identifier cannot be represented as u64"))
+    }
+
     impl PrivateFileIdentity {
         fn from_metadata(metadata: &fs::Metadata) -> Self {
             Self {
@@ -126,11 +134,11 @@ mod unix {
             }
         }
 
-        fn from_stat(stat: &rustix::fs::Stat) -> Self {
-            Self {
-                device: stat.st_dev as u64,
-                inode: stat.st_ino as u64,
-            }
+        fn from_stat(stat: &rustix::fs::Stat) -> Result<Self> {
+            Ok(Self {
+                device: stat_identifier(stat.st_dev, "device")?,
+                inode: stat_identifier(stat.st_ino, "inode")?,
+            })
         }
     }
 
@@ -155,7 +163,7 @@ mod unix {
                         format!("reinspect private path ancestry for {}", path.display())
                     })?;
                 if RustixFileType::from_raw_mode(observed.st_mode) != RustixFileType::Directory
-                    || PrivateFileIdentity::from_stat(&observed) != link.child_identity
+                    || PrivateFileIdentity::from_stat(&observed)? != link.child_identity
                 {
                     return Err(eyre!(
                         "private path ancestry changed during hardening: {}",
@@ -167,7 +175,7 @@ mod unix {
         }
     }
 
-    pub(crate) fn validate_private_directory(path: &Path) -> Result<()> {
+    fn validate_private_directory(path: &Path) -> Result<()> {
         reject_symlink_components(path)?;
         let lexical = fs::symlink_metadata(path)
             .wrap_err_with(|| format!("inspect private directory {}", path.display()))?;
@@ -195,7 +203,7 @@ mod unix {
         Ok(())
     }
 
-    pub(crate) fn prepare_empty_private_directory(path: &Path) -> Result<()> {
+    pub fn prepare_empty_private_directory(path: &Path) -> Result<()> {
         reject_symlink_components(path)?;
         if !path.exists() {
             let mut builder = DirBuilder::new();
@@ -218,6 +226,10 @@ mod unix {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keep the security-audited stat/open/stat root walk as one linear flow"
+    )]
     fn open_private_tree_root(path: &Path) -> Result<OpenPrivateTreeRoot> {
         let raw_path = path.as_os_str().as_bytes();
         if raw_path.is_empty()
@@ -274,7 +286,7 @@ mod unix {
                     path.display()
                 ));
             }
-            let child_identity = PrivateFileIdentity::from_stat(&before);
+            let child_identity = PrivateFileIdentity::from_stat(&before)?;
             let child = File::from(
                 openat(
                     &current,
@@ -299,7 +311,7 @@ mod unix {
             if !opened.is_dir()
                 || PrivateFileIdentity::from_metadata(&opened) != child_identity
                 || RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::Directory
-                || PrivateFileIdentity::from_stat(&after) != child_identity
+                || PrivateFileIdentity::from_stat(&after)? != child_identity
             {
                 return Err(eyre!(
                     "private path component changed while opening: {}",
@@ -373,10 +385,10 @@ mod unix {
         expected_mode: u32,
     ) -> bool {
         RustixFileType::from_raw_mode(stat.st_mode) == RustixFileType::RegularFile
-            && PrivateFileIdentity::from_stat(stat) == identity
+            && PrivateFileIdentity::from_stat(stat).is_ok_and(|observed| observed == identity)
             && stat.st_uid == current_uid()
             && stat.st_nlink == 1
-            && stat.st_mode as u32 & 0o777 == expected_mode
+            && u32::from(stat.st_mode) & 0o777 == expected_mode
     }
 
     fn verify_hardened_directory(metadata: &fs::Metadata, identity: PrivateFileIdentity) -> bool {
@@ -391,9 +403,9 @@ mod unix {
         identity: PrivateFileIdentity,
     ) -> bool {
         RustixFileType::from_raw_mode(stat.st_mode) == RustixFileType::Directory
-            && PrivateFileIdentity::from_stat(stat) == identity
+            && PrivateFileIdentity::from_stat(stat).is_ok_and(|observed| observed == identity)
             && stat.st_uid == current_uid()
-            && stat.st_mode as u32 & 0o777 == PRIVATE_DIRECTORY_MODE
+            && u32::from(stat.st_mode) & 0o777 == PRIVATE_DIRECTORY_MODE
     }
 
     #[cfg(test)]
@@ -461,7 +473,7 @@ mod unix {
                     child_path.display()
                 ));
             }
-            let identity = PrivateFileIdentity::from_stat(&before);
+            let identity = PrivateFileIdentity::from_stat(&before)?;
             #[cfg(test)]
             replace_private_tree_entry_for_test(&child_path);
             match RustixFileType::from_raw_mode(before.st_mode) {
@@ -654,7 +666,7 @@ mod unix {
         harden_private_tree_inner(path, &BTreeSet::new())
     }
 
-    pub(crate) fn harden_private_tree_with_owner_executables(
+    pub fn harden_private_tree_with_owner_executables(
         path: &Path,
         owner_executable_files: &[&Path],
     ) -> Result<()> {
@@ -696,7 +708,7 @@ mod unix {
         Ok(parent.join(format!(".{target_name}.tmp.{suffix}")))
     }
 
-    pub(crate) fn write_private_file_atomic(path: &Path, raw: &[u8]) -> Result<()> {
+    pub fn write_private_file_atomic(path: &Path, raw: &[u8]) -> Result<()> {
         let parent = path
             .parent()
             .ok_or_else(|| eyre!("private output path has no parent"))?;
@@ -753,7 +765,7 @@ mod unix {
         result
     }
 
-    pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
+    pub fn read_private_file(path: &Path) -> Result<Vec<u8>> {
         reject_symlink_components(path)?;
         let lexical = fs::symlink_metadata(path)
             .wrap_err_with(|| format!("inspect private file {}", path.display()))?;
@@ -1045,7 +1057,7 @@ mod unix {
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
-pub(crate) use unix::{
+pub use unix::{
     harden_private_tree_with_owner_executables, prepare_empty_private_directory, read_private_file,
     write_private_file_atomic,
 };
@@ -1068,7 +1080,7 @@ fn unsupported() -> Result<()> {
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub(crate) fn validate_private_directory(_path: &Path) -> Result<()> {
+pub fn prepare_empty_private_directory(_path: &Path) -> Result<()> {
     unsupported()
 }
 
@@ -1078,17 +1090,7 @@ pub(crate) fn validate_private_directory(_path: &Path) -> Result<()> {
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub(crate) fn prepare_empty_private_directory(_path: &Path) -> Result<()> {
-    unsupported()
-}
-
-#[cfg(any(
-    not(unix),
-    target_os = "espidf",
-    target_os = "horizon",
-    target_os = "redox"
-))]
-pub(crate) fn harden_private_tree_with_owner_executables(
+pub fn harden_private_tree_with_owner_executables(
     _path: &Path,
     _owner_executable_files: &[&Path],
 ) -> Result<()> {
@@ -1101,7 +1103,7 @@ pub(crate) fn harden_private_tree_with_owner_executables(
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub(crate) fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()> {
+pub fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()> {
     unsupported()
 }
 
@@ -1111,7 +1113,7 @@ pub(crate) fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()>
     target_os = "horizon",
     target_os = "redox"
 ))]
-pub(crate) fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
+pub fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
     unsupported()?;
     unreachable!()
 }
