@@ -1,36 +1,42 @@
 ---
 title: Ministry Red-Team Status (MINFO-9)
-summary: Snapshot of the chaos drill program covering upcoming runs, last completed scenario, and remediation items.
+summary: Current moderation red-team evidence posture and the runtime-only admission rule for completed drills.
 ---
 
 # Ministry Red-Team Status
 
-This page complements the [Moderation Red-Team Plan](moderation_red_team_plan.md)
-by tracking the near-term drill calendar, evidence bundles, and remediation
-status. Update it after every run alongside the artefacts captured under
-`artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`.
+This page complements the [Moderation Red-Team Plan](moderation_red_team_plan.md).
+As of 2026-07-25, no completed genuine moderation red-team drill or reviewed
+runtime evidence bundle is recorded here. This page is an evidence index, not
+evidence by itself.
 
-## Upcoming Drills
+## Evidence Status
 
-| Date (UTC) | Scenario | Owner(s) | Evidence Prep | Notes |
-|------------|---------|----------|---------------|-------|
-| 2026-11-12 | **Operation Blindfold** — Taikai mixed-mode smuggling rehearsal with gateway downgrade attempts | Security Engineering (Miyu Sato), Ministry Ops (Liam O’Connor) | `scripts/ministry/scaffold_red_team_drill.py` bundle `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + staging directory `artifacts/ministry/red-team/2026-11/operation-blindfold/` | Exercises GAR/Taikai overlap plus DNS failover; requires denylist Merkle snapshot before start and `export_red_team_evidence.py` run after dashboards are captured. |
+No completed drill is recorded. Production readiness must remain blocked on
+this evidence until an authorized drill actually runs against the reviewed
+deployment and its payload-free evidence passes independent review.
 
-## Last Drill Snapshot
+Only genuine runtime evidence may populate a completed-drill row. Before adding
+one, reviewers must verify:
 
-| Date (UTC) | Scenario | Evidence Bundle | Remediation & Follow-Ups |
-|------------|---------|-----------------|--------------------------|
-| 2026-08-18 | **Operation SeaGlass** — Gateway smuggling, governance replay, and alert brownout rehearsal | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana exports, Alertmanager logs, `seaglass_evidence_manifest.json`) | **Open:** replay seal automation (`MINFO-RT-17`, owner: Governance Ops, due 2026-09-05); pin dashboard freeze to SoraFS (`MINFO-RT-18`, Observability, due 2026-08-25). **Closed:** logbook template updated to carry Norito manifest hashes. |
+- the drill completed at or before the review time on the reviewed production
+  deployment context;
+- runtime-generated manifests, dashboard snapshots, alert outcomes, and
+  remediation records exist and their digests are independently verified;
+- the evidence is payload-free and contains no credentials, private moderation
+  material, signing keys, tokens, or synthetic success claims; and
+- the reviewer, accountable owners, unresolved findings, and retention location
+  are recorded without embedding private evidence.
 
 ## Tracking & Tooling
 
 - Use `scripts/ministry/moderation_payload_tool.py` to package injectible
-  payloads and denylist patches per scenario.
+  test payloads for an authorized runtime drill. Generated inputs are not proof
+  that the drill ran.
 - Record dashboard/log captures via `scripts/ministry/export_red_team_evidence.py`
-  immediately after each drill so the evidence manifest contains signed hashes.
-- CI guard `ci/check_ministry_red_team.sh` enforces that committed drill reports
-  do not contain placeholder text and that referenced artefacts exist before
-  merging.
-
-See `status.md` (§ *Ministry red-team status*) for the live summary referenced
-in weekly coordination calls.
+  immediately after an actual drill so the evidence manifest contains reviewed
+  hashes.
+- CI guard `ci/check_ministry_red_team.sh` rejects committed drill reports that
+  retain template placeholders. Passing that structural guard does not verify
+  referenced artefacts or convert examples, scaffolds, or future-dated reports
+  into runtime evidence.

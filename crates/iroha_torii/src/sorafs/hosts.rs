@@ -1,4 +1,4 @@
-//! Deterministic host mapping scaffolding backed by shared manifest helpers.
+//! Deterministic host mapping backed by canonical manifest helpers.
 
 use iroha_data_model::prelude::ChainId;
 use sorafs_manifest::hosts::{

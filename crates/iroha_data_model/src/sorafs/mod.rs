@@ -1,7 +1,7 @@
-//! `SoraFS` data model scaffolding.
+//! Canonical `SoraFS` ledger data model.
 //!
-//! This module hosts forward-looking types for the `SoraFS` pin registry and
-//! related governance flows. The pin registry operates alongside the manifest
+//! This module defines the V1 `SoraFS` pin registry and related governance
+//! flows. The pin registry operates alongside the manifest
 //! schema defined in `sorafs_manifest` and stores both canonical manifest
 //! digests (the envelope identity) and exact binary root CIDs (the content DAG
 //! identity), plus replication policies and lifecycle metadata. These two

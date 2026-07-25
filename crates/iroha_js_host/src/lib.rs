@@ -4015,10 +4015,8 @@ pub struct JsGatewayFetchOptions {
     pub manifest_envelope_b64: Option<String>,
     /// Expected manifest CID expressed as hexadecimal.
     pub manifest_cid_hex: Option<String>,
-    /// Expected cache/denylist version advertised by gateways.
+    /// Expected cache version advertised by successful gateway responses.
     pub cache_version: Option<String>,
-    /// Base64-encoded moderation proof key for validating denylist tokens.
-    pub moderation_token_key: Option<String>,
     /// Optional client identifier forwarded via headers.
     pub client_id: Option<String>,
     /// Telemetry region label attached to orchestrator metrics.
@@ -4772,12 +4770,6 @@ fn build_gateway_fetch_config(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let moderation_token_key_b64 = options
-        .moderation_token_key
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
     if let Some(ref cid) = expected_cid_hex
         && (cid.len() != 64 || !cid.chars().all(|c| c.is_ascii_hexdigit()))
     {
@@ -4794,7 +4786,6 @@ fn build_gateway_fetch_config(
         blinded_cid_b64: None,
         salt_epoch: None,
         expected_cache_version,
-        moderation_token_key_b64,
     })
 }
 
@@ -5991,12 +5982,9 @@ fn attempt_failure_to_value(failure: AttemptFailure) -> Value {
             let policy = policy_block.map(|policy| {
                 norito_json!({
                     "observedStatus": policy.observed_status.as_u16(),
-                    "canonicalStatus": policy.canonical_status.as_u16(),
                     "code": policy.code,
-                    "cacheVersion": policy.cache_version,
-                    "denylistVersion": policy.denylist_version,
-                    "proofTokenPresent": policy.proof_token_present,
-                    "message": policy.message,
+                    "source": policy.source,
+                    "catalogDigestHex": policy.catalog_digest_hex,
                 })
             });
             norito_json!({
@@ -20743,6 +20731,54 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn gateway_policy_block_uses_canonical_compliance_evidence_only() {
+        let value = attempt_failure_to_value(AttemptFailure::Provider {
+            message: "blocked".to_owned(),
+            policy_block: Some(multi_fetch::PolicyBlockEvidence {
+                observed_status: "451".parse().expect("valid HTTP status"),
+                code: "gateway_compliance_denied".to_owned(),
+                source: "legal_safety_hold".to_owned(),
+                catalog_digest_hex:
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            }),
+        });
+        let policy = value
+            .get("policyBlock")
+            .and_then(Value::as_object)
+            .expect("policy block object");
+
+        assert_eq!(policy.len(), 4);
+        assert_eq!(
+            policy.get("observedStatus").and_then(Value::as_u64),
+            Some(451)
+        );
+        assert_eq!(
+            policy.get("code").and_then(Value::as_str),
+            Some("gateway_compliance_denied")
+        );
+        assert_eq!(
+            policy.get("source").and_then(Value::as_str),
+            Some("legal_safety_hold")
+        );
+        assert_eq!(
+            policy.get("catalogDigestHex").and_then(Value::as_str),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        for removed in [
+            "canonicalStatus",
+            "cacheVersion",
+            "denylistVersion",
+            "proofTokenPresent",
+            "message",
+        ] {
+            assert!(
+                !policy.contains_key(removed),
+                "removed policy evidence field `{removed}` must stay absent"
+            );
+        }
+    }
+
+    #[test]
     fn taikai_cache_validation_rejects_invalid_values() {
         let mut config = OrchestratorConfig::default();
         let mut invalid = sample_taikai_cache_options();
@@ -20823,7 +20859,6 @@ seiyaku Privacy {
             manifest_envelope_b64: None,
             manifest_cid_hex: None,
             cache_version: None,
-            moderation_token_key: None,
             client_id: None,
             telemetry_region: None,
             rollout_phase: None,
@@ -21422,7 +21457,6 @@ seiyaku Privacy {
             manifest_envelope_b64: None,
             manifest_cid_hex: None,
             cache_version: None,
-            moderation_token_key: None,
             client_id: Some("ci-test".into()),
             telemetry_region: Some("ci-region".into()),
             rollout_phase: Some("canary".into()),

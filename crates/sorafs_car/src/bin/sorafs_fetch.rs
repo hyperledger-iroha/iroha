@@ -1,4 +1,4 @@
-//! Prototype CLI for exercising the multi-source chunk fetch orchestrator.
+//! CLI for exercising the canonical multi-source chunk fetch orchestrator.
 #![allow(unexpected_cfgs)]
 //!
 //! The tool accepts a chunk fetch plan (as emitted by `sorafs_manifest_builder
@@ -584,7 +584,6 @@ fn run() -> Result<(), String> {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let inputs: Vec<GatewayProviderInput> = gateway_specs
             .iter()

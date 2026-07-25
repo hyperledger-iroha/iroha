@@ -31,13 +31,14 @@ use iroha_data_model::{
         capacity::ProviderId,
         reserve::{
             RESERVE_COMMITTED_EVENT_MAX_BYTES_V1, RESERVE_MAX_REASON_BYTES_V1,
-            RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1, ReserveAppealPageV1,
-            ReserveAppealRecordV1, ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1,
-            ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1, ReserveFinalizedEventPageV1,
-            ReserveFinalizedEventV1, ReserveLifecycleStage, ReserveMovementKindV1,
-            ReserveMovementPageV1, ReserveMovementRecordV1, ReserveMovementStatusV1,
+            RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
             RESERVE_RENT_BILLING_PERIOD_SECONDS_V1, RESERVE_RENT_MAX_BILLING_PERIODS_V1,
-            ReserveProviderAccountPageV1, ReserveProviderAccountV1, ReserveTier,
+            ReserveAppealPageV1, ReserveAppealRecordV1, ReserveAppealStatusV1,
+            ReserveAuthorityPolicyRecordV1, ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1,
+            ReserveFinalizedEventPageV1, ReserveFinalizedEventV1, ReserveLifecycleStage,
+            ReserveMovementKindV1, ReserveMovementPageV1, ReserveMovementRecordV1,
+            ReserveMovementStatusV1, ReserveProviderAccountPageV1, ReserveProviderAccountV1,
+            ReserveTier,
         },
     },
 };
@@ -875,9 +876,7 @@ fn advance_provider_revision(
     now: u64,
 ) -> Result<(), InstructionExecutionError> {
     ensure_provider_timestamp(account, now)?;
-    if account.rent_charged_through_unix > now
-        || account.interest_accrued_at_unix > now
-    {
+    if account.rent_charged_through_unix > now || account.interest_accrued_at_unix > now {
         return Err(corrupt_state(
             "reserve provider anchors cannot exceed the next update timestamp",
         ));
@@ -1383,9 +1382,9 @@ impl Execute for ChargeSorafsReserveRent {
             provider_for_policy(state_transaction.world(), self.provider_id, &policy)?;
         ensure_revision(&account, self.expected_provider_revision)?;
         ensure_provider_timestamp(&account, now)?;
-        let due_periods = account
-            .rent_periods_due_at(now)
-            .map_err(|error| invalid_parameter(format!("reserve rent anchor is invalid: {error}")))?;
+        let due_periods = account.rent_periods_due_at(now).map_err(|error| {
+            invalid_parameter(format!("reserve rent anchor is invalid: {error}"))
+        })?;
         if u64::from(self.billing_periods) > due_periods {
             return Err(invalid_parameter(format!(
                 "reserve rent charge requests {} periods but only {due_periods} are due",
@@ -1503,9 +1502,7 @@ impl Execute for AdvanceSorafsReserveLifecycle {
                 &policy.policy,
                 &account.terms.provider_account,
             )?;
-            if quote.effective_rent.is_zero()
-                || &spendable_balance >= &quote.effective_rent
-            {
+            if quote.effective_rent.is_zero() || &spendable_balance >= &quote.effective_rent {
                 return Err(invalid_parameter(
                     "reserve lifecycle cannot age while one whole rent period is affordable",
                 ));
@@ -2577,7 +2574,7 @@ mod tests {
         sorafs::{
             pin_registry::StorageClass,
             reserve::{
-                RESERVE_AUTHORITY_POLICY_VERSION_V1, ClassRentRate, ReserveDuration,
+                ClassRentRate, RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveDuration,
                 ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
             },
         },
@@ -3463,8 +3460,7 @@ mod tests {
         })
         .expect("activate policy and register reserve provider");
 
-        let lifecycle_at =
-            NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 + 31 * 86_400;
+        let lifecycle_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 + 31 * 86_400;
         let header = block_header_at(2, lifecycle_at);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
@@ -4018,13 +4014,7 @@ mod tests {
             &treasury,
             quantity_micro(2_000_000_000),
         );
-        let configured = policy(
-            1,
-            None,
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
+        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
         let policy_digest = configured.digest().expect("reserve policy digest");
         transact(&mut state, 1, NOW, |transaction| {
             SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
@@ -4238,13 +4228,7 @@ mod tests {
             &treasury,
             quantity_micro(1_000_000_000),
         );
-        let first = policy(
-            1,
-            None,
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
+        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
         let first_digest = first.digest().expect("first reserve policy digest");
         let reserve_requirement = first
             .economics
@@ -4304,16 +4288,11 @@ mod tests {
             active
         );
 
-        let mut second = policy(
-            2,
-            Some(first_digest),
-            custody,
-            treasury,
-            &governance,
-        );
-        second.economics.rent_rates.retain(|rate| {
-            rate.storage_class != StorageClass::Hot
-        });
+        let mut second = policy(2, Some(first_digest), custody, treasury, &governance);
+        second
+            .economics
+            .rent_rates
+            .retain(|rate| rate.storage_class != StorageClass::Hot);
         second.economics.rent_rates.push(ClassRentRate::new(
             StorageClass::Hot,
             "24".parse().expect("rotated hot rent"),
@@ -4366,13 +4345,7 @@ mod tests {
         let custody = account(&keypair(0xCB));
         let treasury = account(&keypair(0xCC));
         let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let configured = policy(
-            1,
-            None,
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
+        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
         let policy_digest = configured.digest().expect("reserve policy digest");
         transact(&mut state, 1, NOW - 100, |transaction| {
             SetSorafsReservePolicy::new(configured).execute(&governance, transaction)
@@ -4471,13 +4444,8 @@ mod tests {
                 policy_digest,
             )
             .execute(&provider, transaction)?;
-            DrawSorafsReserveCredit::new(
-                PROVIDER_ID,
-                4,
-                xor_micro(1_000_000),
-                policy_digest,
-            )
-            .execute(&governance, transaction)
+            DrawSorafsReserveCredit::new(PROVIDER_ID, 4, xor_micro(1_000_000), policy_digest)
+                .execute(&governance, transaction)
         })
         .expect("establish pending records and a later provider timestamp");
 
@@ -4503,16 +4471,13 @@ mod tests {
         let header = block_header_at(3, regressed_at);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
-        let assert_regression =
-            |result: Result<(), InstructionExecutionError>, operation: &str| {
-                let error = result.expect_err(operation);
-                assert!(
-                    error
-                        .to_string()
-                        .contains("predates provider update"),
-                    "{operation} failed for the wrong reason: {error}"
-                );
-            };
+        let assert_regression = |result: Result<(), InstructionExecutionError>, operation: &str| {
+            let error = result.expect_err(operation);
+            assert!(
+                error.to_string().contains("predates provider update"),
+                "{operation} failed for the wrong reason: {error}"
+            );
+        };
 
         assert_regression(
             RequestSorafsReserveMovement::new(
@@ -4650,13 +4615,7 @@ mod tests {
         let treasury = account(&keypair(0xF0));
         let mut state = state_fixture(&governance, &provider, &custody, &treasury);
         let activated_at = NOW + 100;
-        let first = policy(
-            1,
-            None,
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
+        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
         let first_digest = first.digest().expect("first reserve policy digest");
         transact(&mut state, 1, activated_at, |transaction| {
             SetSorafsReservePolicy::new(first).execute(&governance, transaction)
@@ -4665,13 +4624,7 @@ mod tests {
         let baseline = read_reserve_state(state.view().world())
             .expect("read baseline reserve state")
             .expect("reserve state exists");
-        let second = policy(
-            2,
-            Some(first_digest),
-            custody,
-            treasury,
-            &governance,
-        );
+        let second = policy(2, Some(first_digest), custody, treasury, &governance);
 
         let header = block_header_at(2, activated_at - 1);
         let mut block = state.block(header);

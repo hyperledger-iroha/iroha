@@ -1,22 +1,5 @@
-# Reviewed moderation-toggle canary inputs for the SFM-4 gateway compliance gate.
+# Canonicalize real governed-control probes. No claim is synthesized.
 --kind moderation_toggle
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/moderation-controls.json
 --out artifacts/sorafs_gateway/moderation-toggle-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
 --now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---toggle-api-url https://gateway-compliance.internal/toggles
---toggle-count 4
---toggle provider-deny
---toggle appeal-override
---toggle legal-hold
---toggle regional-emergency
---toggle-digest-hex bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
---verified-claim iroha_config_bound
---verified-claim operator_role_enforced
---verified-claim approval_workflow_verified
---verified-claim expiry_enforced
---verified-claim cache_invalidation_verified
---verified-claim operator_audit_trail_persisted
---verified-claim rollback_verified

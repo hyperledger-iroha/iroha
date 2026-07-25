@@ -100,14 +100,6 @@ validate_output_file_path() {
   reject_symlinked_output_parent "$label" "$target"
 }
 
-prepare_output_file_path() {
-  local label="$1"
-  local target="$2"
-  validate_output_file_path "$label" "$target"
-  mkdir -p "$(dirname "$target")"
-  validate_output_file_path "$label" "$target"
-}
-
 prepare_new_output_file_path() {
   local label="$1"
   local target="$2"

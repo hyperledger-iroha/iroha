@@ -74,7 +74,7 @@ from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
     REQUIRED_METRICS as APPEAL_FINANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
-    BUNDLE_BOUND_KINDS as GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS,
+    CATALOG_BOUND_KINDS as GATEWAY_COMPLIANCE_CATALOG_BOUND_KINDS,
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
     POLICY_BOUND_KINDS as GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS,
@@ -346,7 +346,7 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
         {
             "metric_count_values",
             "metrics",
-            "valid_bundle_digests",
+            "valid_catalog_digests",
             "valid_policy_digests",
         }
     ),
@@ -530,7 +530,7 @@ PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS = frozenset(
 )
 PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
     {
-        "valid_bundle_digests",
+        "valid_catalog_digests",
         "valid_case_digests",
         "valid_checkpoint_digests",
         "valid_config_digests",
@@ -730,7 +730,7 @@ PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS = {
     "snapshot_id_hex": 32,
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
-    "valid_bundle_digests": "bundle_digest_hex",
+    "valid_catalog_digests": "catalog_digest_hex",
     "valid_case_digests": "case_digest_hex",
     "valid_checkpoint_digests": "checkpoint_digest_hex",
     "valid_config_digests": "config_digest_hex",
@@ -780,8 +780,8 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("ai_prescreen", "valid_workflow_digests"): ("end_to_end_workflow",),
     ("appeal_finance", "valid_config_digests"): ("pricing_config",),
     ("appeal_finance", "valid_policy_digests"): ("pricing_config",),
-    ("gateway_compliance", "valid_bundle_digests"): ("feed_promotion",),
-    ("gateway_compliance", "valid_policy_digests"): ("feed_promotion",),
+    ("gateway_compliance", "valid_catalog_digests"): ("catalog_promotion",),
+    ("gateway_compliance", "valid_policy_digests"): ("catalog_promotion",),
     ("gateway_load", "valid_policy_digests"): ("staging_load",),
     ("gateway_load", "valid_staging_report_digests"): ("staging_load",),
     ("gateway_load", "valid_suite_report_digests"): ("local_conformance",),
@@ -3903,12 +3903,12 @@ def validate_gateway_compliance_bound_artifact_metadata(
 
     bound_artifact_fingerprints_match_hex_list_metadata(
         payload,
-        kind_names=GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS,
-        metadata_field="valid_bundle_digests",
-        fingerprint_field="bundle_digest_hex",
+        kind_names=GATEWAY_COMPLIANCE_CATALOG_BOUND_KINDS,
+        metadata_field="valid_catalog_digests",
+        fingerprint_field="catalog_digest_hex",
         error=(
-            "gateway_compliance bundle-bound artifact fingerprints must match "
-            "valid_bundle_digests"
+            "gateway_compliance catalog-bound artifact fingerprints must match "
+            "valid_catalog_digests"
         ),
         errors=errors,
     )

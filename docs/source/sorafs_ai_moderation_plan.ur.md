@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_ai_moderation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0a9639fc95319aea1795364e5874193b8e1a874661a4b6da7f78b2a2def64529
+source_hash: 6d79a80878813b78b504b32837727e5c805debb509dd258145e514a3383c927f
 source_last_modified: "2026-07-03T11:24:20.207381+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-07-25
 ---
 
 # AI Moderation Runner Specification
@@ -153,10 +153,10 @@ struct AdversarialPerceptualVariantV1 {
 
 The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
 validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
+governed compliance feed producer to populate `perceptual_family` entries that block
 entire near-duplicate clusters instead of individual bytes. A runnable fixture
 (`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+the expected layout and is consumed only by a governed producer that emits a bounded, predecessor-bound, threshold-signed catalog; it is not a local gateway pack.
 
 ## 5. Execution Pipeline
 1. Load `AiModerationManifestV1` from the governance DAG. Reject if
@@ -282,7 +282,7 @@ the expected layout and feeds directly into the sample gateway denylist.
   family/variant identifiers, or reuse perceptual hashes/embedding digests
   across variants. Successful
   runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
+  so operators can pin the evidence before a governed producer stages the corresponding catalog rules
   described in Section 4.3.
 
 ## 13. Open Follow-Ups
@@ -323,7 +323,7 @@ gateway automation to block unsigned manifests.
 ### 14.2 Publication cadence
 
 Quarterly (first Tuesday of Jan/Apr/Jul/Oct, 12:00 UTC) releases ensure gateway
-operators can rotate denylists on a predictable schedule without lagging behind
+governed producers can publish predecessor-bound signed catalog updates on a predictable schedule without lagging behind
 appeals or calibration data. The timeline below must be documented in
 `docs/source/sorafs/reports/ai_moderation_calibration_<YYYYMM>.md` alongside the
 usual calibration notes:
@@ -334,7 +334,7 @@ usual calibration notes:
 | Deterministic dry run | T−7 days | Run `sorafs_cli moderation validate-corpus` against the draft, store the CLI summary in `artifacts/ministry/transparency/<stamp>/corpus_summary.json`, and attach telemetry snapshots proving the new families pass the drift SLOs. |
 | Governance vote | T−2 days | Council and Observability delegates sign the manifest, record signatures in the Norito payload, and stage the governance DAG change (per `sorafs_governance_dag_plan.md`). |
 | Publication | T±0 | Mirror the JSON + Norito artefacts to SoraFS, update `docs/examples/` with the cohort file name, and circulate the CID + digest to gateway operators. |
-| Post-publication check | T+1 day | Observability verifies that denylists imported the new cohort (see Section 14.4) and files a signed note in `docs/source/sorafs/reports/ai_moderation_corpus_<YYYYMM>.md`. |
+| Post-publication check | T+1 day | Observability verifies that both regional gateways report the promoted catalog sequence through the governed compliance status API (see Section 14.4) and files a signed note in `docs/source/sorafs/reports/ai_moderation_corpus_<YYYYMM>.md`. |
 
 Emergency updates (e.g., takedown requests) can follow the same checklist with a
 shorter intake window, but the governance vote and signed publication artefacts

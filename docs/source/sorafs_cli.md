@@ -404,22 +404,24 @@ evidence:
 iroha app sorafs moderation honey-audit \
   --manifest-id feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface \
   --honey 35c60c0f4cf6a1116fd17c2a930f37390f34030e7c5f23d77ecbb543c1a2d9ba \
-  --expected-cache-version cache-v7 \
-  --moderation-key-b64 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  --expected-catalog-digest 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --provider name=alpha,provider-id=AAAA...,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gateway.example/,stream-token=BASE64 \
   --json-out artifacts/sorafs_gateway/honey_audit.json \
   --markdown-out artifacts/sorafs_gateway/honey_audit.md
 ```
 
-- The command fails if any provider returns success or omits/mismatches the
-  catalog version advertised by policy. `--require-proof` enforces the
-  presence of verified moderation proofs when the gateway publishes them.
+- The command accepts only the canonical governed denial: exact HTTP 451 and a
+  three-field JSON body containing `gateway_compliance_denied`, a denying
+  source (`baseline` or `legal_safety_hold`), and a lowercase 32-byte
+  `catalog_digest_hex`. It fails on success, aliases, missing or extra fields,
+  non-denying sources, malformed digests, and an optional expected-catalog
+  digest mismatch.
 - Outputs include a machine-readable JSON summary plus an optional Markdown
-  digest for governance packets.
-- `fetch` accepts `--expected-cache-version` and `--moderation-key-b64`; when
-  provided, the orchestrator rejects responses that are missing the declared
-  catalog version and surfaces verified moderation proof tokens alongside the
-  policy evidence.
+  digest for governance packets. Neither output contains local proof-token,
+  denylist-version, cache-binding, or human-message fields.
+- `fetch` retains `--expected-cache-version` solely for successful content
+  cache pinning. Policy denials are never inferred, rewritten, or authenticated
+  from cache headers or local moderation-token keys.
 
 ## Gateway compliance control
 

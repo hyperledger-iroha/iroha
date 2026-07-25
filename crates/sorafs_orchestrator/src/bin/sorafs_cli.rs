@@ -2939,7 +2939,7 @@ fn usage() -> String {
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
@@ -2968,7 +2968,7 @@ fn usage() -> String {
   sorafs_cli moderation committee-authenticated-serve --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
   sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
-  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
+  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-catalog-digest=HEX] [--json-out=PATH] [--markdown-out=PATH]
   sorafs_cli appeal quote --class=content|access|fraud|other [--backlog=N] [--evidence-mb=N] [--urgency=normal|high] [--panel-size=N] [--format=table|json] [--config=PATH|-]
   sorafs_cli governance dag list --root=DIR [--format=table|json] [--summary-out=PATH]
   sorafs_cli governance dag show --node=PATH [--format=table|json] [--summary-out=PATH]
@@ -2997,7 +2997,7 @@ fn reputation_usage() -> String {
 
 fn fetch_usage() -> String {
     "Usage:
-  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64]"
+  sorafs_cli fetch --plan=PATH --manifest-id=HEX --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [additional --provider entries...] [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--local-proxy-manifest-out=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION]"
         .to_string()
 }
 
@@ -3271,7 +3271,7 @@ fn moderation_usage() -> String {
   sorafs_cli moderation committee-authenticated-serve --manifest=PATH [--format=json|norito] --trust-policy=PATH [--trust-policy-format=json|norito] --trust-anchor=PUBLIC_KEY [--trust-anchor=PUBLIC_KEY...] --minimum-governance-quorum=N --provenance=PATH --provenance-log-id=HEX16 [--listen=HOST:PORT] [--max-body-bytes=N]
   sorafs_cli moderation committee-bundle --manifest=PATH [--format=json|norito] --quorum=N --bundle-out=DIR [--listen=HOST:PORT] [--max-body-bytes=N] [--binary=PATH] [--service-name=NAME] [--service-user=USER] [--service-group=GROUP]
   sorafs_cli moderation committee-canary --manifest=PATH [--format=json|norito] --committee-url=URL --quorum=N --result=PATH [--result=PATH...] --generated-at-unix=UNIX_SECS --deployment-id=ID --environment=prod|production|release|staging --deployment-context-reviewed=true --process-isolation-enforcement=systemd_ip_filter|container_network_policy|host_firewall --process-isolation-attestation-digest=HEX32 --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true [--checked-at=UNIX_SECS] [--notes=TEXT] [--timeout-ms=N] [--json-out=PATH]
-  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] [--require-proof] [--json-out=PATH] [--markdown-out=PATH]
+  sorafs_cli moderation honey-audit --manifest-id=HEX --honey=HEX [--honey=HEX...] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...] [--chunker-handle=HANDLE] [--expected-catalog-digest=HEX] [--json-out=PATH] [--markdown-out=PATH]
 
 Validates internally signed AI moderation reproducibility manifests and adversarial corpus registries before a separate governance trust policy admits them. `run-signed-local` is the production trust-boundary path: it verifies external governance anchors, signs a fresh result with a policy-authorized runner key, and atomically appends the complete result to a tamper-evident provenance segment. `committee-authenticated-run` verifies distinct authorized runner signatures, freshness, revocation, and policy quorum before persisting the deterministic aggregate. `run-local`, `runner-serve`, `runner-grpc-serve`, `committee-run`, and `committee-serve` are unsigned diagnostic/foundation paths and must not be used as production trust boundaries."
         .to_string()
@@ -3289,7 +3289,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_report_source: Option<JsonSource> = None;
     let mut manifest_cid_hex: Option<String> = None;
     let mut expected_cache_version: Option<String> = None;
-    let mut moderation_token_key_b64: Option<String> = None;
     let mut client_id: Option<String> = None;
     let mut telemetry_region: Option<String> = None;
     let mut rollout_phase: Option<RolloutPhase> = None;
@@ -3337,12 +3336,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
                 return Err("`--expected-cache-version` must not be empty".into());
             }
             expected_cache_version = Some(trimmed.to_string());
-        } else if let Some(rest) = arg.strip_prefix("--moderation-key-b64=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
-                return Err("`--moderation-key-b64` must not be empty".into());
-            }
-            moderation_token_key_b64 = Some(trimmed.to_string());
         } else if let Some(rest) = arg.strip_prefix("--client-id=") {
             client_id = Some(rest.trim().to_string());
         } else if let Some(rest) = arg.strip_prefix("--telemetry-region=") {
@@ -3554,7 +3547,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         blinded_cid_b64: None,
         salt_epoch: None,
         expected_cache_version: expected_cache_version.clone(),
-        moderation_token_key_b64: moderation_token_key_b64.clone(),
     };
 
     let provider_inputs: Vec<GatewayProviderInput> = provider_specs
@@ -11576,13 +11568,11 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
 
     let mut manifest_id_hex: Option<String> = None;
     let mut chunker_handle = DEFAULT_CHUNKER_HANDLE.to_string();
-    let mut expected_cache_version: Option<String> = None;
-    let mut moderation_token_key_b64: Option<String> = None;
+    let mut expected_catalog_digest_hex: Option<String> = None;
     let mut honey_digests: Vec<String> = Vec::new();
     let mut provider_specs: Vec<GatewayProviderSpec> = Vec::new();
     let mut json_out: Option<PathBuf> = None;
     let mut markdown_out: Option<PathBuf> = None;
-    let mut require_proof = false;
 
     for arg in raw_args {
         if arg == "--help" || arg == "-h" {
@@ -11596,18 +11586,17 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
                 return Err("`--chunker-handle` must not be empty".into());
             }
             chunker_handle = trimmed.to_string();
-        } else if let Some(rest) = arg.strip_prefix("--expected-cache-version=") {
+        } else if let Some(rest) = arg.strip_prefix("--expected-catalog-digest=") {
             let trimmed = rest.trim();
-            if trimmed.is_empty() {
-                return Err("`--expected-cache-version` must not be empty".into());
+            if trimmed != rest
+                || trimmed.len() != 64
+                || !trimmed
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err("`--expected-catalog-digest` must be lowercase 32-byte hex".into());
             }
-            expected_cache_version = Some(trimmed.to_string());
-        } else if let Some(rest) = arg.strip_prefix("--moderation-key-b64=") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
-                return Err("`--moderation-key-b64` must not be empty".into());
-            }
-            moderation_token_key_b64 = Some(trimmed.to_string());
+            expected_catalog_digest_hex = Some(trimmed.to_string());
         } else if let Some(rest) = arg.strip_prefix("--honey=") {
             let trimmed = rest.trim();
             if trimmed.is_empty() {
@@ -11618,8 +11607,6 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             json_out = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--markdown-out=") {
             markdown_out = Some(PathBuf::from(rest));
-        } else if arg == "--require-proof" {
-            require_proof = true;
         } else if let Some(rest) = arg.strip_prefix("--provider") {
             if let Some(spec) = rest.strip_prefix('=') {
                 provider_specs.push(parse_gateway_provider_spec(spec)?);
@@ -11672,8 +11659,7 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         expected_manifest_cid_hex: None,
         blinded_cid_b64: None,
         salt_epoch: None,
-        expected_cache_version: expected_cache_version.clone(),
-        moderation_token_key_b64: moderation_token_key_b64.clone(),
+        expected_cache_version: None,
     };
 
     let provider_inputs: Vec<GatewayProviderInput> = provider_specs
@@ -11695,13 +11681,11 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         return Err("gateway context did not expose any providers".to_string());
     }
 
-    let mut validator = PolicyEvidenceValidator::new();
-    if let Some(version) = expected_cache_version.as_deref() {
-        validator = validator.with_expected_cache_version(version);
-    }
-    if require_proof || moderation_token_key_b64.is_some() {
-        validator = validator.require_moderation_proof();
-    }
+    let validator = expected_catalog_digest_hex
+        .as_deref()
+        .map_or_else(PolicyEvidenceValidator::new, |digest| {
+            PolicyEvidenceValidator::new().with_expected_catalog_digest(digest)
+        });
 
     let runtime =
         Runtime::new().map_err(|err| format!("failed to initialise Tokio runtime: {err}"))?;
@@ -11728,32 +11712,18 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         println!("digest {}:", hex::encode(spec.digest));
         for report in reports {
             let evidence = &report.policy.evidence;
-            let proof_state = if report.policy.moderation_proof.is_some() {
-                "verified"
-            } else if report.policy.evidence.proof_token_b64.is_some() {
-                "present"
-            } else {
-                "missing"
-            };
             println!(
-                "  - provider {} cache_version={:?} code={:?} status={} proof={proof_state}",
+                "  - provider {} status={} code={} source={} catalog_digest_hex={}",
                 report.provider_id,
-                evidence
-                    .cache_version
-                    .as_deref()
-                    .or(evidence.denylist_version.as_deref()),
+                evidence.observed_status,
                 evidence.code,
-                evidence.canonical_status
+                evidence.source,
+                evidence.catalog_digest_hex,
             );
         }
     }
 
     if let Some(path) = json_out {
-        let to_value_opt = |opt: &Option<String>| {
-            opt.as_ref()
-                .map(|value| Value::from(value.clone()))
-                .unwrap_or(Value::Null)
-        };
         let digests: Vec<Value> = digest_reports
             .iter()
             .map(|(spec, reports)| {
@@ -11764,40 +11734,14 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
                         let mut map = Map::new();
                         map.insert("provider".into(), Value::from(report.provider_id.clone()));
                         map.insert(
-                            "cache_version".into(),
-                            to_value_opt(&evidence.cache_version),
-                        );
-                        map.insert(
-                            "denylist_version".into(),
-                            to_value_opt(&evidence.denylist_version),
-                        );
-                        map.insert(
-                            "code".into(),
-                            evidence
-                                .code
-                                .as_ref()
-                                .map(|value| Value::from(value.clone()))
-                                .unwrap_or(Value::Null),
-                        );
-                        map.insert(
                             "observed_status".into(),
                             Value::from(evidence.observed_status.as_u16()),
                         );
+                        map.insert("code".into(), Value::from(evidence.code.clone()));
+                        map.insert("source".into(), Value::from(evidence.source.clone()));
                         map.insert(
-                            "canonical_status".into(),
-                            Value::from(evidence.canonical_status.as_u16()),
-                        );
-                        map.insert(
-                            "proof_token_present".into(),
-                            Value::from(evidence.proof_token_b64.is_some()),
-                        );
-                        map.insert(
-                            "proof_verified".into(),
-                            Value::from(report.policy.proof.is_some()),
-                        );
-                        map.insert(
-                            "moderation_proof_verified".into(),
-                            Value::from(report.policy.moderation_proof.is_some()),
+                            "catalog_digest_hex".into(),
+                            Value::from(evidence.catalog_digest_hex.clone()),
                         );
                         Value::Object(map)
                     })
@@ -11816,12 +11760,11 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
         );
         summary.insert("chunker_handle".into(), Value::from(chunker_handle.clone()));
         summary.insert(
-            "expected_cache_version".into(),
-            to_value_opt(&expected_cache_version),
-        );
-        summary.insert(
-            "moderation_proof_required".into(),
-            Value::from(require_proof || moderation_token_key_b64.is_some()),
+            "expected_catalog_digest_hex".into(),
+            expected_catalog_digest_hex
+                .as_ref()
+                .map(|value| Value::from(value.clone()))
+                .unwrap_or(Value::Null),
         );
         summary.insert("provider_count".into(), Value::from(providers.len() as u64));
         summary.insert("digests".into(), Value::Array(digests));
@@ -11834,10 +11777,10 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(path) = markdown_out {
         let mut md = String::from("# Honey Audit Report\n\n");
         md.push_str(&format!(
-            "- manifest: `{}`\n- chunker: `{}`\n- expected cache version: `{}`\n- providers: {}\n\n",
+            "- manifest: `{}`\n- chunker: `{}`\n- expected catalog digest: `{}`\n- providers: {}\n\n",
             manifest_id_hex,
             chunker_handle,
-            expected_cache_version
+            expected_catalog_digest_hex
                 .as_deref()
                 .unwrap_or("unspecified"),
             providers.len()
@@ -11847,19 +11790,12 @@ fn moderation_honey_audit(raw_args: Vec<String>) -> Result<(), String> {
             for report in reports {
                 let evidence = &report.policy.evidence;
                 md.push_str(&format!(
-                    "- {}: status={} code={:?} cache_version={:?} moderation_proof={}\n",
+                    "- {}: status={} code={} source={} catalog_digest_hex={}\n",
                     report.provider_id,
-                    evidence.canonical_status,
+                    evidence.observed_status,
                     evidence.code,
-                    evidence
-                        .cache_version
-                        .as_deref()
-                        .or(evidence.denylist_version.as_deref()),
-                    if report.policy.moderation_proof.is_some() {
-                        "verified"
-                    } else {
-                        "absent"
-                    }
+                    evidence.source,
+                    evidence.catalog_digest_hex,
                 ));
             }
             md.push('\n');
@@ -21597,6 +21533,63 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn gateway_cli_usage_exposes_only_canonical_denial_audit_inputs() {
+        let fetch = fetch_usage();
+        assert!(fetch.contains("--expected-cache-version=VERSION"));
+        assert!(!fetch.contains("--moderation-key-b64"));
+
+        let moderation = moderation_usage();
+        assert!(moderation.contains("--expected-catalog-digest=HEX"));
+        for retired in [
+            "--expected-cache-version",
+            "--moderation-key-b64",
+            "--require-proof",
+        ] {
+            assert!(
+                !moderation.contains(retired),
+                "retired honey-audit flag remains advertised: {retired}"
+            );
+        }
+    }
+
+    #[test]
+    fn honey_audit_rejects_retired_local_denial_proof_flags() {
+        for retired in [
+            "--expected-cache-version=cache-v1",
+            "--moderation-key-b64=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "--require-proof",
+        ] {
+            let error = moderation_honey_audit(vec![retired.to_owned()]).expect_err("retired flag");
+            assert_eq!(error, moderation_usage());
+        }
+    }
+
+    #[test]
+    fn honey_audit_expected_catalog_digest_is_exact_lowercase_hex() {
+        let valid = "01".repeat(32);
+        let accepted = moderation_honey_audit(vec![format!("--expected-catalog-digest={valid}")])
+            .expect_err("manifest is still required");
+        assert!(accepted.contains("missing required `--manifest-id`"));
+
+        for invalid in [
+            String::new(),
+            "01".repeat(31),
+            "01".repeat(33),
+            valid.to_ascii_uppercase(),
+            format!("{}g", &valid[..63]),
+            format!(" {valid}"),
+        ] {
+            let error =
+                moderation_honey_audit(vec![format!("--expected-catalog-digest={invalid}")])
+                    .expect_err("non-canonical digest");
+            assert_eq!(
+                error,
+                "`--expected-catalog-digest` must be lowercase 32-byte hex"
+            );
+        }
     }
 
     fn finalized_pin_for_manifest(manifest: &ManifestV1) -> PinManifestFinalizedRecordV1 {

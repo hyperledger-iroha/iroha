@@ -1,9 +1,5 @@
-# Reviewed gateway-reload canary inputs for the SFM-4 gateway compliance gate.
+# Canonicalize real gateway activation/readback probes. No claim is synthesized.
 --kind gateway_reload
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/gateway-reload.json
 --out artifacts/sorafs_gateway/gateway-reload-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
 --now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---reload-latency-ms 1000

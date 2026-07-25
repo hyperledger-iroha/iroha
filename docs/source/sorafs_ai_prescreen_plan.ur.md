@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e03fe0e0df92a288512769710ac2f0739440dc514e604ad5da913b33cabdd9f2
+source_hash: 3fb6d923636525c556bc4366f79ac1f85194a345206f91ade238969d17d09c5c
 source_last_modified: "2026-07-06T20:15:01.175288+00:00"
-translation_last_reviewed: 2026-07-05
+translation_last_reviewed: 2026-07-25
 source_mtime: "2026-07-06T20:15:01.175288+00:00"
 ---
 
@@ -40,11 +40,47 @@ local AI pre-screening rollout evidence collection planning,
 local AI pre-screening dry-run evidence-contract export,
 local AI pre-screening payload-free canary artifact builder,
 standalone persistent model-registry service foundation, deterministic local
-runner CLI output, HTTP service mode, unary gRPC service mode, supervised
+runner CLI output, bounded loopback HTTP service mode, unary gRPC service mode, supervised
 bundle generation, HTTP canary evidence, deterministic local committee
 aggregation CLI output, locked-manifest committee HTTP service foundation,
 supervised committee bundle generation, committee canary evidence,
 gateway-policy, honey-audit, and observability foundations.
+The first-release runner executes manifest-bound canonical Norito integer model
+artefacts; it does not derive scores from hashes, seeds, or an external ONNX
+runtime. The local admission boundary now accepts only a canonical
+runner-signed result under a governed single-signer policy or an exact
+committee aggregate reconstructed from its complete bounded inventory of
+canonical signed member results. It verifies signer uniqueness and
+authorization/revocation, policy and model-manifest chains, subject and
+evidence bindings, score/verdict consistency, freshness/future skew, quorum,
+and replay/idempotency before atomically checkpointing a payload-free receipt
+with the screening/quarantine projection. The authority bundle is canonical
+Norito loaded from an absolute, bounded, no-follow regular file whose exact
+BLAKE3 digest is pinned in `iroha_config`; request bodies cannot replace it.
+This closes the local unsigned-admission path, but does not provide trained
+production artefacts, deployed signer/committee isolation, or rollout
+evidence.
+
+Quarantine payload envelopes now use chunked
+`iroha_crypto` ChaCha20-Poly1305 with a fresh random per-object DEK, unique
+nonce prefix plus chunk index, immutable object/chunk metadata as AAD, atomic
+envelope/index persistence, authenticated range reads, recovery validation,
+and rotation by DEK rewrap only after every old ciphertext chunk and the full
+payload digest authenticate. The DEK wrapper is a runtime-only
+`ModerationQuarantineKeyWrapper` boundary for PKCS#11 or a managed KMS.
+Enabling authenticated screening without that wrapper fails node startup.
+Torii and `Iroha::start_with_runtime_deps` can carry the dependency, but the
+standard `irohad` launcher still constructs no deployable provider adapter.
+`V1-BLOCK-AI-QUARANTINE-KMS-01` therefore remains open; tests-only wrappers,
+file keys, environment keys, and software fallback wrapping cannot close it.
+The repository does not contain operator-supplied genuine trained and
+calibrated canonical V1 model artefacts, and no deployed runner or committee
+process-isolation attestation has been supplied. Checked-in manifests,
+scorecards, and test model data are fixtures, not production model or
+deployment evidence. A rollout can report `runtime_verified` isolation only
+when an operator supplies the mandatory reviewed enforcement kind,
+non-placeholder attestation digest, and verification timestamp captured from
+the deployed runtime policy.
 It does not yet ship captured deployed juror notification transport service
 rollout evidence, captured deployed commit/reveal executor job rollout
 evidence, or end-to-end release workflow as runnable services. The
@@ -133,9 +169,9 @@ service identity before promotion can report ready. Duplicate or unknown
 artifact entries are rejected before promotion can report ready. Swapped-path
 or mislabeled artifact entries are also rejected before promotion can report
 ready. Executor bundle metadata, bundle artifact byte counts, execution-summary
-byte counts, and commit/reveal/tally action counts are validated, and the
-per-action counts must sum to `action_count` before executor evidence can be
-accepted.
+byte counts, and
+commit/reveal/tally action counts are validated, and the per-action counts must
+sum to `action_count` before executor evidence can be accepted.
 Notification manifest paths, commit/reveal executor artifact paths,
 execution-summary paths, and transparency payload paths must also be
 archive-portable after repeated percent-decoding, so encoded traversal, hidden
@@ -158,10 +194,12 @@ Implemented locally:
 
 - `crates/iroha_data_model/src/sorafs/moderation.rs` defines
   `ModerationReproManifestV1`, `ModerationReproBodyV1`,
-  `ModerationModelFingerprintV1`, `ModerationThresholdsV1`,
+  `ModerationModelArtifactV1`, `ModerationModelFingerprintV1`,
+  `ModerationModelScoreV1`, `ModerationThresholdsV1`,
   `ModerationReproSignatureV1`, and `AdversarialCorpusManifestV1` with Norito
   encode/decode support and validators for schema version, model coverage,
-  duplicate signers, and governance signatures.
+  canonical body-digest derivation, bounded canonical artifact paths/resources,
+  canonical model/signer ordering, duplicate signers, and governance signatures.
 - `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
   validates governance-signed reproducibility manifests.
 - `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
@@ -176,29 +214,42 @@ Implemented locally:
   Norito manifests, validate them with the data-model validators, reject
   conflicting manifest ids, and atomically persist the Norito checkpoint after
   each accepted mutation.
-- `sorafs_cli moderation run-local --manifest=PATH --payload=PATH --subject=ID
+- `sorafs_cli moderation run-local --manifest=PATH --artifact-root=DIR --payload=PATH --subject=ID
   --screened-at=UNIX_SECS` validates a governance-signed reproducibility
-  manifest, derives deterministic local model scores from the manifest
-  seed/material and payload digest, and emits JSON compatible with
+  manifest, verifies the measured runner executable and every canonical model
+  artifact, executes the bounded integer feature/linear/calibration engine, and
+  emits aggregate plus per-model JSON compatible with
   `POST /v1/sorafs/moderation/screening-results`.
-- `sorafs_cli moderation runner-serve --manifest=PATH
-  [--format=json|norito] [--listen=HOST:PORT] [--max-body-bytes=N]` locks the
+- `sorafs_cli moderation runner-serve --manifest=PATH --artifact-root=DIR
+  [--format=json|norito] [--listen=LOOPBACK:PORT] [--max-body-bytes=N]
+  [--max-payload-bytes=N]` locks the
   same governance-signed reproducibility manifest into a bounded local HTTP
   runner service. `GET /healthz` and
   `GET /v1/sorafs/moderation/runner/status` report the active manifest and
-  disabled outbound-network posture; `POST /v1/sorafs/moderation/runner/screen`
+  model engine's no-outbound-I/O posture and the need for process-level network
+  policy; `POST /v1/sorafs/moderation/runner/screen`
   accepts `subject`, base64 payload bytes, and explicit `screened_at_unix`,
   then returns the same deterministic Torii-compatible screening JSON as
-  `run-local`.
-- `sorafs_cli moderation runner-bundle --manifest=PATH
+  `run-local`. HTTP bodies are capped at 16 MiB, headers at 16 KiB, active
+  connections at 64, and malformed framing, transfer encoding, duplicate
+  lengths/hosts, trailing bytes, and non-canonical request metadata fail closed.
+- `sorafs_cli moderation runner-grpc-serve` exposes the same engine over unary
+  gRPC with a global 32-screen in-flight limit, per-connection concurrency
+  limit, bounded request decoding, and a 1 MiB encoded-response cap.
+- `sorafs_cli moderation runner-bundle --manifest=PATH --artifact-root=DIR
   [--format=json|norito] --bundle-out=DIR` validates the same locked
   reproducibility manifest and emits a supervised local HTTP runner deployment
-  bundle: manifest copy, `runner.env`, executable `run.sh`, systemd unit,
+  bundle: manifest and verified artifact copies, `runner.env`, executable `run.sh`, systemd unit,
   launchd plist, README, and
   `sorafs.moderation.runner.bundle.v1` metadata JSON.
 - `sorafs_cli moderation runner-canary --manifest=PATH
   [--format=json|norito] --runner-url=URL --payload=PATH --subject=ID
-  --screened-at=UNIX_SECS` probes a deployed locked-manifest HTTP runner,
+  --screened-at=UNIX_SECS --generated-at-unix=UNIX_SECS --deployment-id=ID
+  --environment=production --deployment-context-reviewed=true
+  --process-isolation-enforcement=KIND
+  --process-isolation-attestation-digest=HEX32
+  --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true`
+  probes a deployed locked-manifest HTTP runner,
   verifies status and screening responses against the manifest id, runner hash,
   payload digest, score range, and threshold-derived verdict, and emits
   payload-free `sorafs.moderation.runner.rollout_evidence.v1` JSON for rollout
@@ -214,10 +265,13 @@ Implemented locally:
   [--format=json|norito] --quorum=N` locks the same manifest and quorum into a
   bounded local HTTP committee service. `GET /healthz` and
   `GET /v1/sorafs/moderation/committee/status` report the active manifest,
-  quorum, aggregation rule, and disabled outbound-network posture; `POST
+  quorum, aggregation rule, and the honest
+  `network_capable_process_policy_required` posture; `POST
   /v1/sorafs/moderation/committee/aggregate` accepts payload-free runner result
   JSON arrays and returns the same deterministic committee aggregate JSON as
-  `committee-run`.
+  `committee-run`. One aggregation accepts at most 64 result records; local
+  result files are individually capped at 128 KiB and use stable no-follow
+  reads.
 - `sorafs_cli moderation committee-bundle --manifest=PATH
   [--format=json|norito] --quorum=N --bundle-out=DIR` validates the locked
   reproducibility manifest and emits a supervised local HTTP committee
@@ -226,11 +280,18 @@ Implemented locally:
   `sorafs.moderation.committee.bundle.v1` metadata JSON.
 - `sorafs_cli moderation committee-canary --manifest=PATH
   [--format=json|norito] --committee-url=URL --quorum=N --result=PATH
-  [--result=PATH...]` probes a deployed locked-manifest HTTP committee service,
+  [--result=PATH...] --generated-at-unix=UNIX_SECS --deployment-id=ID
+  --environment=production --deployment-context-reviewed=true
+  --process-isolation-enforcement=KIND
+  --process-isolation-attestation-digest=HEX32
+  --process-isolation-verified-at=UNIX_SECS --process-isolation-reviewed=true`
+  probes a deployed locked-manifest HTTP committee service,
   verifies status and payload-free aggregate responses against the manifest id,
   runner hash, quorum, deterministic median aggregate, score range, and
   threshold-derived verdict, and emits payload-free
   `sorafs.moderation.committee.rollout_evidence.v1` JSON for rollout archives.
+  Runner and committee canary response bodies are capped at 1 MiB even when a
+  peer omits or lies about `Content-Length`.
 - `sorafs_node::NodeHandle` admits validated moderation reproducibility
   manifests and adversarial corpus manifests into a local model registry,
   rejects conflicting manifest ids, keys corpus manifests by canonical Norito
@@ -249,16 +310,21 @@ Implemented locally:
   submit-corpus --manifest PATH [--format=json|norito]` wrap the local model
   registry readback and signed admission endpoints. Submit commands validate
   JSON or Norito inputs and send canonical Norito manifest bytes to Torii.
-- `sorafs_node::NodeHandle` records deterministic local screening-result
-  evidence with BLAKE3 record digests, creates pending local quarantine records
-  for `quarantine` and `escalate` verdicts, advances those records through
-  reviewed and released states with operator metadata, exports/restores
-  validated duplicate-checked snapshots, and checkpoints them under
-  `moderation-screening/screening-snapshot.to` when SoraFS storage is enabled.
+- `sorafs_node::NodeHandle` authenticates canonical runner-signed results or
+  exact committee aggregates against the config-pinned authority, commits
+  replay-scoped admission receipts with BLAKE3 authority/record digests, creates
+  pending local quarantine records for `quarantine` and `escalate` verdicts,
+  advances those records through reviewed and released states with operator
+  metadata, exports/restores validated duplicate-checked snapshots, and
+  checkpoints them under `moderation-screening/screening-snapshot.to` when
+  SoraFS storage is enabled.
 - Torii exposes the local screening/quarantine evidence surface through
   canonical-authenticated `POST /v1/sorafs/moderation/screening-results`,
   bounded `GET /v1/sorafs/moderation/screening-results?limit=N`, and bounded
-  `GET /v1/sorafs/moderation/quarantine?limit=N`. Canonical-authenticated
+  `GET /v1/sorafs/moderation/quarantine?limit=N`. The screening POST requires a
+  non-zero idempotency key plus canonical Norito `signed_result` evidence or a
+  `committee_aggregate` and its complete signed-member inventory; unsigned
+  local screening JSON is rejected. Canonical-authenticated
   accounts assigned the `sorafs_moderation_operator` role can call
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review` and
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release` to
@@ -266,16 +332,22 @@ Implemented locally:
   `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object`, which
   seals base64 payload bytes into the local encrypted object store after
   digest verification, and `GET` on the same path, which verifies the envelope
-  and returns `payload_b64` for authorized operators. The same role gate also
+  and returns `payload_b64` for authorized operators. Object notes are reserved
+  and must be absent; private metadata belongs inside the encrypted payload.
+  The only plaintext media metadata is an optional coarse exact-match V1
+  content-type allowlist. The same role gate also
   protects
   `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel?limit=N`,
   which bundles the quarantine record, encrypted-object metadata status,
   matching finalized-chain appeal/case projections, operator routes, and
   next-action hints without returning payload bytes.
-- `iroha sorafs moderation screening submit --input screening-result.json`
-  submits deterministic local runner output through the signed Torii screening
-  admission endpoint, while `iroha sorafs moderation screening list --limit N`
-  prints bounded local screening-record readback JSON.
+- `iroha sorafs moderation screening submit --input authenticated-screening.json`
+  submits a non-zero idempotency key, canonical evidence kind, canonical
+  padded-base64 Norito authority, and the complete signed-member inventory when
+  required through the signed Torii screening admission endpoint. The obsolete
+  unsigned local-runner JSON request shape is not retained. `iroha sorafs
+  moderation screening list --limit N` prints bounded local screening-record
+  readback JSON.
 - Native moderation ISIs, queries, and committed events are the sole authority
   for appeal, eligibility, sortition, assignment, activation, commit,
   challenge, reveal, finalization, and no-show state. The finalized-chain
@@ -377,8 +449,9 @@ Implemented locally:
   encrypted Norito envelope under the SoraFS data directory, persist a separate
   object index checkpoint, reload it on restart, verify plaintext digests
   against quarantine records, and fail closed on tampered envelopes.
-- `sorafs_cli moderation honey-audit` probes configured gateways with
-  denylisted digests and emits JSON/Markdown evidence for policy enforcement.
+- `sorafs_cli moderation honey-audit` probes configured gateways with digests
+  blocked by the promoted compliance catalog and emits JSON/Markdown evidence
+  for policy enforcement.
 - `docs/examples/ai_moderation_calibration_manifest_202602.json`,
   `docs/examples/ai_moderation_calibration_scorecard_202602.json`, and
   `docs/examples/ai_moderation_perceptual_registry_202602.json` provide the
@@ -393,10 +466,11 @@ Implemented locally:
   lookup metadata response also bounds embedded site-file listings with
   `limit` (default 50, max 500) while preserving full file counts and
   truncation metadata for operator tooling.
-- Torii exposes the configured gateway denylist catalog and pack metadata
-  through `/v1/sorafs/denylist/catalog?limit=N` and
-  `/v1/sorafs/denylist/packs/{pack_id}`; catalog readback preserves full pack
-  counts while bounding returned pack/config-list arrays for operator tooling.
+- Torii exposes authenticated governed-compliance feed and status reads plus
+  account-signed `stage`, `acknowledge`, `promote`, and `rollback` mutations
+  under `/v1/sorafs/gateway/compliance`. Catalogs are bounded,
+  predecessor-bound, and threshold-signed; no local catalog pack or unsigned
+  readback route is part of V1.
 - `dashboards/grafana/ministry_moderation_overview.json` and
   `dashboards/alerts/ministry_moderation_rules.yml` provide the moderation
   ingest, latency, drift, and manifest-health monitoring story.
@@ -416,9 +490,9 @@ The production service remains a staged rollout target:
 | Component | Responsibility | Local state |
 |-----------|----------------|-------------|
 | Model registry | Stores model artifacts, reproducibility manifests, calibration datasets, and hashes. | Local Torii admission/readback, client/CLI admission tooling, node snapshot/checkpoint foundation, and standalone persistent `registry-serve` HTTP service foundation exist. |
-| AI runner | Executes approved models deterministically and emits model scores. | Deterministic local `run-local` CLI, bounded `runner-serve` HTTP mode, production unary `runner-grpc-serve` gRPC service, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling emit/operate Torii-compatible screening results. |
-| Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local screening-result admission, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, `committee-canary` rollout evidence tooling, local moderation-ballot lifecycle/readback, and client/CLI ballot tooling exist. |
-| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, encrypted local payload envelopes, role-gated object store/read, operator-panel read model, review/release API transitions, local CLI queue/review/release/operator-panel commands, and local HTTP operator workflow service with payload-free readback, juror notification planning and delivery manifests, commit/reveal coordination status, a browser operator UI, operator workflow canary evidence tooling, and signed review/release forwarding exist. |
+| AI runner | Executes approved models deterministically and emits model scores. | Deterministic integer `run-local` CLI, bounded loopback `runner-serve` HTTP mode, unary `runner-grpc-serve` gRPC foundation, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling exist. Torii now requires canonical signed results under the config-pinned governed policy; production signer packaging and deployed isolation evidence remain open. |
+| Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, and `committee-canary` tooling exist. Torii admits an aggregate only by reconstructing it from the complete bounded, unique, policy-authorized signed member set. |
+| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. A runtime wrapper injection seam exists, but standard `irohad` has no deployable PKCS#11/KMS provider adapter; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open. |
 | Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, and transparency readback/source-entry tooling exist; durable production boundary deployment and live rollout evidence remain gates. |
 
 ## Data Model
@@ -449,21 +523,53 @@ struct ModerationThresholdsV1 {
     quarantine: u16,
     escalate: u16,
 }
+
+struct ModerationModelArtifactV1 {
+    schema_version: u16,
+    engine: DeterministicLinearV1,
+    feature_profile: ByteHistogramAndBigramV1,
+    model_id: [u8; 16],
+    max_input_bytes: u32,
+    max_operations: u64,
+    working_memory_bytes: u32,
+    bias: i64,
+    weights: Vec<i32>, // exactly 512
+    calibration: Vec<ModerationCalibrationKnotV1>,
+}
 ```
+
+Integer V1 uses 256 normalized byte-frequency features and 256 stable
+adjacent-byte bins, signed fixed-point weights, and a monotonic piecewise-linear
+calibration curve. It allocates one fixed 4 KiB feature array, uses checked
+integer arithmetic only, and combines model scores with canonical half-up
+weighted rounding. Fingerprints commit the portable relative path, exact byte
+length, canonical artefact digest, behaviour digest, engine/profile, curve
+length, and exact input/operation/memory ceilings. The loader rejects symlinks,
+hard-link aliases, path traversal, root/file identity changes, non-canonical
+Norito bytes, digest mismatches, and runner executable hash mismatches before
+binding a listener.
+`seed_material` remains signed calibration provenance and is deliberately not an
+inference input.
 
 The adversarial corpus manifest records digest families and variants used for
 honey-probe and regression testing. These structures are validation artifacts;
 they do not execute models or store quarantined payloads.
 
-The local screening checkpoint stores metadata and digests for gateway or
-runner-supplied screening outcomes. It does not execute models. `quarantine`
-and `escalate` verdicts enqueue local evidence records that can be reviewed and
-released through authenticated Torii endpoints, while quarantined payload bytes
-can be sealed locally into encrypted object envelopes whose plaintext digest
-must match the queue record. The local Torii object endpoint stores base64
-payload bytes and returns base64 readback only after canonical request
-authentication, `sorafs_moderation_operator` role authorization, and envelope
-verification.
+The local screening checkpoint stores the authenticated authority kind/digest,
+non-zero idempotency key, payload-free receipt, metadata, and digests derived
+from runner-signed or committee-authorized evidence. It does not execute
+models. `quarantine` and `escalate` verdicts enqueue local evidence records that
+can be reviewed and released through authenticated Torii endpoints.
+Quarantined payload bytes are split into bounded independently authenticated
+chunks and sealed with a fresh random per-object DEK. The envelope persists
+only the non-secret PKCS#11/KMS key handle and context-bound wrapped DEK;
+provider credentials and plaintext DEKs are never config or checkpoint data.
+The plaintext digest must match the queue record, and rewrap authenticates all
+old chunks and that full digest before atomically replacing the wrapped DEK.
+The local Torii object endpoint returns base64 readback only after canonical
+request authentication, `sorafs_moderation_operator` role authorization, and
+envelope verification. Provider diagnostics, plaintext payloads, and private
+notes are redacted from API errors and logs.
 
 ## Gateway Policy Integration
 
@@ -485,7 +591,7 @@ Shipped commands:
 
 ```bash
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  moderation validate-repro --manifest docs/examples/ai_moderation_calibration_manifest_202602.json
+  moderation validate-repro --manifest moderation-repro.to --format norito
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation validate-corpus --manifest docs/examples/ai_moderation_perceptual_registry_202602.json
@@ -526,6 +632,7 @@ iroha sorafs moderation ballots tally \
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation run-local \
   --manifest moderation-repro.to \
+  --artifact-root moderation-models \
   --format norito \
   --payload quarantined-candidate.bin \
   --subject cid:bafy... \
@@ -535,16 +642,20 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation runner-serve \
   --manifest=moderation-repro.to \
+  --artifact-root=moderation-models \
   --format=norito \
   --listen=127.0.0.1:9194 \
-  --max-body-bytes=16777216
+  --max-body-bytes=16777216 \
+  --max-payload-bytes=16777216
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation runner-grpc-serve \
   --manifest=moderation-repro.to \
+  --artifact-root=moderation-models \
   --format=norito \
   --listen=127.0.0.1:9199 \
-  --max-body-bytes=16777216
+  --max-body-bytes=16777216 \
+  --max-payload-bytes=16777216
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation registry-serve \
@@ -556,10 +667,12 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation runner-bundle \
   --manifest=moderation-repro.to \
+  --artifact-root=moderation-models \
   --format=norito \
   --bundle-out=artifacts/sorafs-moderation-runner \
   --listen=127.0.0.1:9194 \
-  --max-body-bytes=16777216
+  --max-body-bytes=16777216 \
+  --max-payload-bytes=16777216
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   moderation runner-canary \
@@ -569,6 +682,14 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --payload=canary-payload.bin \
   --subject=cid:bafy... \
   --screened-at=<unix-seconds> \
+  --generated-at-unix=<unix-seconds> \
+  --deployment-id=ai-prescreen-production-YYYYMMDD \
+  --environment=production \
+  --deployment-context-reviewed=true \
+  --process-isolation-enforcement=systemd_ip_filter \
+  --process-isolation-attestation-digest=<64-lowercase-hex-runtime-attestation-digest> \
+  --process-isolation-verified-at=<unix-seconds> \
+  --process-isolation-reviewed=true \
   --json-out=runner-rollout-evidence.json
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
@@ -605,6 +726,14 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --quorum=2 \
   --result=runner-a.json \
   --result=runner-b.json \
+  --generated-at-unix=<unix-seconds> \
+  --deployment-id=ai-prescreen-production-YYYYMMDD \
+  --environment=production \
+  --deployment-context-reviewed=true \
+  --process-isolation-enforcement=systemd_ip_filter \
+  --process-isolation-attestation-digest=<64-lowercase-hex-runtime-attestation-digest> \
+  --process-isolation-verified-at=<unix-seconds> \
+  --process-isolation-reviewed=true \
   --json-out=committee-rollout-evidence.json
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
@@ -693,14 +822,18 @@ transaction authority, and submitted as a versioned Norito
 model-registry admission and bounded snapshot surface as a standalone persistent
 HTTP service backed by a Norito checkpoint; admission requests use base64
 canonical Norito manifests and remain payload-free. The `runner-serve` command exposes the
-same locked-manifest deterministic scoring path as `run-local` over local HTTP;
+same manifest-, executable-, and artifact-locked integer scoring path as `run-local` over loopback HTTP;
 its screening endpoint requires an explicit timestamp and returns
 Torii-compatible screening-result JSON. The `runner-bundle` command generates
 the supervised HTTP runner artifacts operators install with systemd or launchd
-after pinning the audited `sorafs_cli` binary path in `runner.env`. The
+after pinning the audited `sorafs_cli` binary path in `runner.env`; the generated
+systemd unit restricts IP traffic to loopback, while direct/launchd operation
+still requires an equivalent process sandbox. The
 `runner-canary` command captures payload-free rollout evidence from a deployed
 HTTP runner by checking status and screening responses against the locked
-manifest; it does not replace the planned gRPC runner. The `committee-run`
+manifest. It requires reviewed external runtime-isolation evidence and never
+promotes the runner's own deliberately unverified process-isolation status into
+a deployment attestation. It does not replace the gRPC runner. The `committee-run`
 command aggregates payload-free runner outputs under a validated manifest and
 quorum using a deterministic median score. The `committee-serve` command locks
 the same manifest and quorum into a bounded local HTTP committee service for
@@ -709,7 +842,10 @@ command generates supervised HTTP committee artifacts operators install with
 systemd or launchd after pinning the audited `sorafs_cli` binary path in
 `committee.env`. The `committee-canary` command captures payload-free rollout
 evidence from a deployed HTTP committee service by checking status and aggregate
-responses against the locked manifest and deterministic local aggregation. The
+responses against the locked manifest and deterministic local aggregation. It
+has the same mandatory external runtime-isolation evidence gate because the
+committee process is network-capable even though its listener is loopback-only.
+The
 screening submit/list and quarantine list/review/release commands operate on the local Torii evidence
 queue. The object store/read commands operate on the local encrypted payload object API.
 Review/release and object store/read calls must be signed by an account
@@ -787,6 +923,14 @@ live governance-evidence rollout and production quarantine workflow.
 
 ## Remaining Production Gates
 
+- Resolve `V1-BLOCK-AI-QUARANTINE-KMS-01`: package a deployable PKCS#11 or
+  managed-KMS implementation of `ModerationQuarantineKeyWrapper`, construct it
+  from runtime-only credentials in the standard `irohad` launcher, inject it
+  through `IrohaRuntimeDeps`/`ToriiRuntimeDeps`, and prove provider-outage,
+  config/runtime mismatch, wrong key/tag/AAD, chunk reorder, restart recovery,
+  rotation/rewrap, and rollback behavior. The shipped default launcher
+  intentionally supplies no wrapper, so screening-enabled configuration fails
+  closed until this is done.
 - Collect a payload-free live evidence bundle with
   `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` and require it to pass
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`, covering runner,
@@ -824,12 +968,15 @@ Completed local foundations:
 - Define adversarial corpus manifests and validators.
 - Provide deterministic local runner CLI output for Torii screening-result
   admission fixtures.
-- Provide locked-manifest local HTTP runner service mode for deterministic
-  screening-result emission without outbound network access.
+- Provide manifest/executable/artifact-locked loopback HTTP runner service mode
+  using the bounded deterministic integer engine. The engine performs no
+  outbound I/O; process enforcement is supplied by the generated systemd unit
+  or an operator-equivalent sandbox.
 - Provide supervised local HTTP runner deployment bundle generation for
   systemd/launchd installation of the locked-manifest runner service.
 - Provide payload-free HTTP runner canary evidence that verifies deployed
-  status and screening responses against the locked reproducibility manifest.
+  status and screening responses against the locked reproducibility manifest,
+  while requiring reviewed external runtime-isolation attestation metadata.
 - Provide local deterministic committee aggregation over payload-free runner
   results under a validated reproducibility manifest and quorum.
 - Provide locked-manifest local HTTP committee aggregation service endpoints for
@@ -838,7 +985,8 @@ Completed local foundations:
   systemd/launchd installation of the locked-manifest committee service.
 - Provide payload-free HTTP committee canary evidence that verifies deployed
   status and aggregate responses against the locked reproducibility manifest and
-  deterministic local aggregation.
+  deterministic local aggregation, while requiring reviewed external
+  runtime-isolation attestation metadata.
 - Admit validated reproducibility and corpus manifests into a local model
   registry snapshot and Norito checkpoint.
 - Expose canonical-authenticated Torii endpoints for local model registry
@@ -858,12 +1006,22 @@ Completed local foundations:
 - Persist deterministic local screening-result and pending-quarantine evidence
   snapshots, with Torii admission/readback endpoints for screening results and
   quarantine records.
-- Provide local CLI commands for screening-result admission and bounded
-  readback.
+- Require canonical runner signatures or an exact reconstructable committee
+  aggregate at Torii admission, under a digest-pinned canonical Norito authority
+  bundle from `iroha_config`, with signer/quorum/policy/manifest/binding,
+  freshness, score/verdict, revocation, replay, and idempotency validation.
+- Provide local CLI commands for authenticated signed-result/exact-committee
+  admission and bounded readback; the client validates non-zero idempotency,
+  canonical evidence-kind/member cardinality, bounded canonical padded base64,
+  and emits only the V1 request shape.
 - Advance local quarantine records through role-gated reviewed and released
   states with checkpointed operator metadata.
-- Seal quarantined payload bytes into encrypted local object envelopes with a
-  persisted object index and digest/authentication checks.
+- Seal quarantined payload bytes into chunked ChaCha20-Poly1305 object
+  envelopes with fresh per-object DEKs, unique per-chunk nonces, immutable
+  metadata AAD, atomic persistence, authenticated ranges, recovery validation,
+  full-ciphertext authentication before DEK rewrap, and a persisted object
+  index. The PKCS#11/KMS wrapper remains runtime-injected and has no file-key or
+  environment-key production fallback.
 - Expose canonical-authenticated and `sorafs_moderation_operator` role-gated
   Torii object store/readback for local encrypted quarantine payloads.
 - Provide local CLI commands for quarantine queue listing, review, release, and
@@ -971,16 +1129,14 @@ Completed local foundations:
   It also rejects duplicate or unsupported `--source-entry` kinds before
   dry-run output or live canaries.
 - Provide `scripts/build_sorafs_ai_prescreen_canary.py` as a fail-closed
-  payload-free SFM-4a canary builder for individual runner, committee,
-  operator workflow, juror notification transport, commit/reveal executor,
-  transparency publication, Governance DAG, and end-to-end workflow artifacts.
-  The builder requires reviewed deployment context, runner tuple digests,
-  reviewed `--subject` references matching the gate's `cid:*` production
-  shape, runner `--evidence-digest-hex` and `--policy-digest-hex` evidence
-  anchors, integer `--score-bps` values capped at `10000`, workflow digest
-  bindings, reviewed committee-result labels whose
-  unique inventory matches `--result-count` and the
-  `ai-prescreen-committee-result-*` production family, generated notification
+  payload-free non-runner SFM-4a canary builder for operator workflow, juror
+  notification transport, commit/reveal executor, transparency publication,
+  Governance DAG, and end-to-end workflow artifacts. Runner and committee evidence
+  must come from their deployed live-probe commands (`runner-canary` and
+  `committee-canary`), because those commands bind the evidence to real service
+  responses rather than operator-supplied synthetic facts. The non-runner
+  builder requires reviewed deployment context, workflow digest bindings,
+  and generated notification
   delivery labels in the `ai-prescreen-notification-delivery-*` production
   family, `--probe-count` covers both shipped notification actions by default
   and must continue to cover them, complete operator
@@ -994,7 +1150,7 @@ Completed local foundations:
   reviewed `ai-prescreen-governance-edge-*` edge labels without non-production
   markers, commit/reveal executor action-count breakdowns that sum to
   `--action-count`, and
-  shared URL preflight for runner, committee, operator, and webhook URLs so
+  shared URL preflight for operator and webhook URLs so
   userinfo, query strings, fragments, encoded traversal/separators/drive
   prefixes, URI-like path tokens, and secret-looking host/path components fail
   before evidence is written, and
@@ -1008,20 +1164,23 @@ Completed local foundations:
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.
-- Provide production unary gRPC runner service status/screening endpoints backed
-  by the locked reproducibility manifest and deterministic local runner.
+- Provide unary gRPC runner service status/screening endpoints backed by the
+  same verified integer runner foundation, with bounded decoding/encoding and a
+  hard in-flight work limit. Torii's governed signed-result admission is
+  shipped; production runner signer custody and deployment evidence remain
+  open.
 - Provide honey-audit gateway probing.
 - Provide calibration fixtures, report, dashboards, and alert rules.
 - Wire GAR moderation directives into gateway policy checks.
-- Expose bounded Torii gateway denylist catalog readback for operator audits.
+- Use governed gateway compliance feed/status readback for operator audits.
 
 Remaining rollout work is captured deployed juror notification transport
 service rollout evidence, captured deployed commit/reveal executor job rollout
 evidence, and a live bundle that passes the AI pre-screening rollout evidence
 gate, not the local
 manifest/corpus validators, deterministic local runner CLI output,
-locked-manifest local HTTP runner service mode, supervised HTTP runner bundle
-generation, production unary gRPC runner service, HTTP runner canary rollout
+verified local HTTP runner service mode, supervised HTTP runner bundle
+generation, unary gRPC runner foundation, HTTP runner canary rollout
 evidence tooling, local committee aggregation CLI, local committee aggregation
 HTTP service, supervised committee bundle generation, HTTP committee canary
 rollout evidence tooling,
@@ -1045,5 +1204,5 @@ local commit/reveal executor canary evidence tooling, local operator workflow
 canary evidence tooling, local AI pre-screening rollout evidence gate and
 collection planner/dry-run evidence-contract export, local AI pre-screening
 payload-free canary artifact builder, documented operator role-provisioning
-runbook, GAR policy plumbing, bounded denylist catalog readback, or
+runbook, GAR policy plumbing, governed compliance feed/status readback, or
 observability fixtures.

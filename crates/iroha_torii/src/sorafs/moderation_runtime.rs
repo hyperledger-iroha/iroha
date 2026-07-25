@@ -11,7 +11,9 @@ use std::{sync::Arc, time::Duration};
 use iroha_core::{
     queue::Queue,
     smartcontracts::ValidSingularQuery,
-    state::{State, StateQueryView, StateReadOnly},
+    state::{
+        State, StateQueryView, StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly,
+    },
 };
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -29,6 +31,7 @@ use iroha_data_model::{
         TransactionPayload,
     },
 };
+use mv::storage::StorageReadOnly;
 use sorafs_node::moderation_orchestrator::{
     MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1, MODERATION_TRANSACTION_TTL_MS_V1,
     ModerationFinalizedSnapshotReaderV1, ModerationHandoffFailureV1, ModerationSignedTransactionV1,
@@ -593,7 +596,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         else {
             return ModerationSubmissionLookupV1::Unknown;
         };
-        let Some(block) = view.kura().get_block(*block_height) else {
+        let Some(block) = view.kura().get_block(block_height) else {
             return ModerationSubmissionLookupV1::Unknown;
         };
         let Ok(block_height_u64) = u64::try_from(block_height.get()) else {

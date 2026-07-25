@@ -420,18 +420,12 @@ pub enum AttemptFailure {
 pub struct PolicyBlockEvidence {
     /// Status observed on the wire.
     pub observed_status: reqwest::StatusCode,
-    /// Canonicalised status used for telemetry/reporting.
-    pub canonical_status: reqwest::StatusCode,
-    /// Canonical policy code parsed from the gateway response body.
-    pub code: Option<String>,
-    /// Cache version advertised by the gateway (or denylist version fallback).
-    pub cache_version: Option<String>,
-    /// Denylist version advertised by the gateway.
-    pub denylist_version: Option<String>,
-    /// Whether a moderation proof token was present on the response.
-    pub proof_token_present: bool,
-    /// Optional human-readable message extracted from the response body.
-    pub message: Option<String>,
+    /// Exact canonical policy code parsed from the gateway response body.
+    pub code: String,
+    /// Governed decision source (`baseline` or `legal_safety_hold`).
+    pub source: String,
+    /// Lowercase hexadecimal digest of the active governed catalog.
+    pub catalog_digest_hex: String,
 }
 
 /// Detailed information about the most recent attempt for a chunk.

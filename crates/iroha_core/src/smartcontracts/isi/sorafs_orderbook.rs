@@ -37,11 +37,10 @@ use iroha_data_model::{
         orderbook::{
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
             ORDERBOOK_MAX_OPEN_ORDERS_V1, ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1,
-            ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1,
-            ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1, ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1,
-            ORDERBOOK_QUERY_MAX_ITEMS_V1, ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
-            OrderbookAdmissionPolicyRecord, OrderbookBidEscrowBindingV1,
-            OrderbookCancellationRecord, OrderbookFinalizedCursorV1,
+            ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1, ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1, ORDERBOOK_QUERY_MAX_ITEMS_V1,
+            ORDERBOOK_QUERY_MAX_READ_BYTES_V1, OrderbookAdmissionPolicyRecord,
+            OrderbookBidEscrowBindingV1, OrderbookCancellationRecord, OrderbookFinalizedCursorV1,
             OrderbookFinalizedEventPageV1, OrderbookFinalizedEventV1, OrderbookLedgerStatusV1,
             OrderbookOrderPageV1, OrderbookOrderRecord, OrderbookOrderStatusV1,
             OrderbookOwnerNonceRecord, OrderbookSettlementChannelPageV1,
@@ -654,8 +653,7 @@ fn read_status(
         || status.next_trade_sequence == 0
         || status.last_match_scan_book_revision > status.book_revision
         || status.open_settlement_channels > status.settlement_channels
-        || status.open_settlement_channels
-            > u64::from(ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1)
+        || status.open_settlement_channels > u64::from(ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1)
         || status
             .open_orders
             .checked_add(status.partially_filled_orders)
@@ -1154,12 +1152,11 @@ fn read_channel(
         .filled_gib
         .checked_mul(BYTES_PER_GIB)
         .ok_or_else(|| corrupt_state("stored orderbook channel byte capacity overflow"))?;
-    let expected_initial =
-        trade_escrow_requirement_v1(&trade_payload).map_err(|error| {
-            corrupt_state(format!(
-                "failed to derive stored channel custody from its trade: {error}"
-            ))
-        })?;
+    let expected_initial = trade_escrow_requirement_v1(&trade_payload).map_err(|error| {
+        corrupt_state(format!(
+            "failed to derive stored channel custody from its trade: {error}"
+        ))
+    })?;
     let expected_fee = trade_fee_requirement_v1(&trade_payload).map_err(|error| {
         corrupt_state(format!(
             "failed to derive stored channel fee custody from its trade: {error}"
@@ -2008,9 +2005,9 @@ impl Execute for CancelSorafsOrderbookOrder {
                 &binding.initial_xor_locked.clone().into_quantity(),
                 expires_at_ms,
             )
-                .map_err(|error| {
-                    corrupt_state(format!("failed to refund cancelled bid custody: {error}"))
-                })?;
+            .map_err(|error| {
+                corrupt_state(format!("failed to refund cancelled bid custody: {error}"))
+            })?;
         }
         write_nonce(state_transaction, &owner, cancel.nonce)?;
         state_transaction
@@ -2147,9 +2144,7 @@ impl Execute for MatchSorafsOrderbook {
                 ))
             })?;
             let fee_escrow = trade_fee_requirement_v1(&outcome.trade).map_err(|error| {
-                invalid_parameter(format!(
-                    "invalid orderbook trade fee requirement: {error}"
-                ))
+                invalid_parameter(format!("invalid orderbook trade fee requirement: {error}"))
             })?;
             let expires_at_unix = bid_before
                 .order
@@ -2466,9 +2461,7 @@ impl Execute for MaintainSorafsOrderbook {
                 status.provider_revoked_orders = status
                     .provider_revoked_orders
                     .checked_add(1)
-                    .ok_or_else(|| {
-                        corrupt_state("orderbook provider-revoked counter overflow")
-                    })?;
+                    .ok_or_else(|| corrupt_state("orderbook provider-revoked counter overflow"))?;
                 entry.record.status = OrderbookOrderStatusV1::ProviderRevoked;
                 provider_revoked_orders.push(entry.record);
             } else {
@@ -2598,10 +2591,10 @@ impl Execute for MaintainSorafsOrderbook {
                     decode_order_request_v1(&record.canonical_order).map_err(|error| {
                         corrupt_state(format!("failed to decode expiring stored bid: {error}"))
                     })?;
-                let expires_at_ms =
-                    signed_order.expiry_unix.checked_mul(1_000).ok_or_else(|| {
-                        corrupt_state("expired bid custody expiry overflow")
-                    })?;
+                let expires_at_ms = signed_order
+                    .expiry_unix
+                    .checked_mul(1_000)
+                    .ok_or_else(|| corrupt_state("expired bid custody expiry overflow"))?;
                 super::escrow::expire_orderbook_order_asset_lock(
                     state_transaction,
                     &binding.escrow_id,
@@ -3740,13 +3733,11 @@ mod tests {
         domain::{Domain, DomainId},
         isi::{
             escrow::{
-                CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetEscrow,
-                OpenAssetLock,
+                CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetEscrow, OpenAssetLock,
             },
             sorafs::{
                 AdvanceSorafsReserveLifecycle, DecideSorafsReserveAppeal,
-                RegisterSorafsReserveAccount, SetSorafsReservePolicy,
-                SubmitSorafsReserveAppeal,
+                RegisterSorafsReserveAccount, SetSorafsReservePolicy, SubmitSorafsReserveAppeal,
             },
         },
         permission::{Permission, Permissions},
@@ -3754,14 +3745,13 @@ mod tests {
             capacity::ProviderId,
             orderbook::{
                 ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyV1,
-                OrderbookOrderStatusV1, orderbook_order_escrow_id,
-                orderbook_settlement_escrow_id,
+                OrderbookOrderStatusV1, orderbook_order_escrow_id, orderbook_settlement_escrow_id,
             },
             pin_registry::StorageClass,
             reserve::{
                 RESERVE_AUTHORITY_POLICY_VERSION_V1, RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
-                ReserveAuthorityPolicyV1, ReserveDuration, ReserveLifecycleStage,
-                ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
+                ReserveAuthorityPolicyV1, ReserveDuration, ReserveLifecycleStage, ReservePolicyV1,
+                ReserveProviderTermsV1, ReserveTier,
             },
         },
     };
@@ -3908,7 +3898,11 @@ mod tests {
         sign_order(ask, keypair)
     }
 
-    fn working_order(order: OrderRequestV1, owner: &AccountId, sequence: u64) -> WorkingLedgerOrder {
+    fn working_order(
+        order: OrderRequestV1,
+        owner: &AccountId,
+        sequence: u64,
+    ) -> WorkingLedgerOrder {
         WorkingLedgerOrder {
             record: OrderbookOrderRecord {
                 order_id: order.order_id,
@@ -4695,7 +4689,10 @@ mod tests {
             .expect("funded bid custody");
         assert_eq!(escrow.amount, required.clone().into_quantity());
         assert_eq!(escrow.remaining_amount, required.clone().into_quantity());
-        assert_eq!(asset_balance(&stx, &escrow.custody), required.clone().into_quantity());
+        assert_eq!(
+            asset_balance(&stx, &escrow.custody),
+            required.clone().into_quantity()
+        );
         assert_eq!(
             asset_balance(&stx, &authority),
             initial_balance
@@ -4742,11 +4739,8 @@ mod tests {
         assert_eq!(asset_balance(&stx, &buyer_id), initial_balance);
         assert!(stx.world.asset_escrows.get(&escrow_id).is_none());
         assert!(
-            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(
-                stx.world(),
-                &escrow_id,
-            )
-            .expect("read absent bid marker")
+            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(stx.world(), &escrow_id,)
+                .expect("read absent bid marker")
         );
         assert!(
             read_order(stx.world(), bid.order_id)
@@ -4948,13 +4942,8 @@ mod tests {
 
         let default_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 + 31 * 86_400;
         transact(&mut state, 2, default_at, |transaction| {
-            AdvanceSorafsReserveLifecycle::new(
-                provider_id,
-                1,
-                31,
-                reserve_policy_digest,
-            )
-            .execute(&settlement_id, transaction)?;
+            AdvanceSorafsReserveLifecycle::new(provider_id, 1, 31, reserve_policy_digest)
+                .execute(&settlement_id, transaction)?;
             let mut ask = ask_order(&provider, 1, 90, 5);
             ask.expiry_unix = default_at + 100;
             let ask = sign_order(ask, &provider);
@@ -5677,14 +5666,14 @@ mod tests {
             .asset_escrows
             .get(&escrow_id)
             .expect("closed bid custody");
-        assert_eq!(escrow.status, iroha_data_model::escrow::AssetEscrowStatus::Cancelled);
+        assert_eq!(
+            escrow.status,
+            iroha_data_model::escrow::AssetEscrowStatus::Cancelled
+        );
         assert_eq!(escrow.remaining_amount, Quantity::zero());
         assert!(
-            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(
-                stx.world(),
-                &escrow_id,
-            )
-            .expect("read removed bid marker")
+            !crate::smartcontracts::isi::escrow::is_orderbook_order_lock(stx.world(), &escrow_id,)
+                .expect("read removed bid marker")
         );
         assert_eq!(
             read_nonce(stx.world(), &authority)
@@ -5776,11 +5765,7 @@ mod tests {
             let mut bid = order(&owner, ask_count + offset + 1);
             bid.price_per_gib = xor_micro(200);
             let bid = sign_order(bid, &owner);
-            orders.push(working_order(
-                bid,
-                &owner_id,
-                ask_count + offset + 1,
-            ));
+            orders.push(working_order(bid, &owner_id, ask_count + offset + 1));
         }
 
         let excluded = BTreeSet::new();
@@ -5821,9 +5806,8 @@ mod tests {
         assert_eq!(orders.len(), ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize);
 
         let mut match_work = MatchCandidateWorkV1::default();
-        let (bid, ask) =
-            best_crossing_pair_with_work(&orders, &excluded, NOW, &mut match_work)
-                .expect("the unrelated final bid crosses the first ask");
+        let (bid, ask) = best_crossing_pair_with_work(&orders, &excluded, NOW, &mut match_work)
+            .expect("the unrelated final bid crosses the first ask");
         assert_eq!(orders[bid].record.owner, other_id);
         assert_eq!(orders[ask].record.owner, owner_id);
         assert!(
@@ -6004,19 +5988,11 @@ mod tests {
             .provider_owners
             .remove(ProviderId::new([0x73; 32]));
         assert!(
-            provider_binding_is_current(
-                stx.world(),
-                ProviderId::new([0x72; 32]),
-                &provider_id,
-            ),
+            provider_binding_is_current(stx.world(), ProviderId::new([0x72; 32]), &provider_id,),
             "removing another id owned by the same provider must not revoke the exact ask binding"
         );
         assert!(
-            !provider_binding_is_current(
-                stx.world(),
-                ProviderId::new([0x73; 32]),
-                &provider_id,
-            ),
+            !provider_binding_is_current(stx.world(), ProviderId::new([0x73; 32]), &provider_id,),
             "provider identity is selected by exact id, never an owner-wide lookup"
         );
 
@@ -6051,7 +6027,9 @@ mod tests {
             .execute(&settlement_id, &mut stx)
             .expect_err("revoked exact ask binding blocks matching until maintenance");
         assert!(
-            revoked_match.to_string().contains("run orderbook maintenance"),
+            revoked_match
+                .to_string()
+                .contains("run orderbook maintenance"),
             "unexpected revoked-provider match error: {revoked_match}"
         );
         assert_eq!(

@@ -9135,7 +9135,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         let providers = [
@@ -11005,7 +11004,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -11050,7 +11048,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         let err = fetch_via_gateway(

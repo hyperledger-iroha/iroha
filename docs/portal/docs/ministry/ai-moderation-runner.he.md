@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/ministry/ai-moderation-runner.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00cf1d37cf06d24b6eb7b2acba6b5c2ec3c3fae249b5cb6055384ca19ceaefac
+source_hash: 36f29f59fd46f55712fcbab3afbcc84abba22b6e1f38f49ef8061e58a5cceff7
 source_last_modified: "2025-11-10T16:27:31.384538+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-07-25
 ---
 
 ---
@@ -135,7 +135,14 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-הסכמה נמצאת ב־`crates/iroha_data_model/src/sorafs/moderation.rs` ומאומתת באמצעות `AdversarialCorpusManifestV1::validate()`. ה־manifest מאפשר לטעינת denylist של ה־gateway למלא ערכי `perceptual_family` שחוסמים אשכולות שלמים של כמעט־כפילויות במקום בייטים בודדים. fixture ניתן להרצה (`docs/examples/ai_moderation_perceptual_registry_202602.json`) מדגים את ה־layout הצפוי ומזין ישירות את ה־denylist לדוגמה.
+The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
+validated via `AdversarialCorpusManifestV1::validate()`. A governed compliance
+feed producer converts an approved manifest into `perceptual_family` rules that
+block entire near-duplicate clusters instead of individual bytes. The resulting
+catalog is bounded, predecessor-bound, and threshold-signed before staging; the
+runnable fixture
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) is validation
+input, not a local gateway pack.
 
 ## 5. פייפליין ביצוע
 1. טען `AiModerationManifestV1` מ־DAG הממשל. דחה אם `runner_hash` או `runtime_version` אינם תואמים לבינארי המופעל.
@@ -222,9 +229,13 @@ struct AdversarialPerceptualVariantV1 {
   מקבל גם את ארטיפקטי ה־JSON שמפורסמים ב־
   `docs/examples/ai_moderation_calibration_manifest_202602.json` וגם את קידוד Norito הגולמי ומדפיס את כמות המודלים/חתימות ואת חותמת הזמן של ה־manifest לאחר אימות מוצלח.
 - gateways ואוטומציה משתמשים באותו helper כדי לדחות manifests של שחזור בצורה דטרמיניסטית כאשר הסכמה נודדת, חסרים digests או אימות חתימות נכשל.
-- חבילות corpus adversarial עוקבות אחר אותו דפוס:
+- Adversarial corpus bundles follow the same pattern:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  מנתח את `AdversarialCorpusManifestV1`, אוכף את גרסת הסכמה ומסרב ל־manifests שחסרים משפחות, וריאנטים או מטא־דטה של טביעות. ריצות מוצלחות מפיקות חותמת זמן הנפקה, תווית cohort ומספרי משפחה/וריאנט כדי שהמפעילים יוכלו לקבע ראיות לפני עדכון רשומות ה־denylist של ה־gateway המתוארות בסעיף 4.3.
+  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
+  manifests that omit families, variants, or fingerprint metadata. Successful
+  runs emit the issued-at timestamp, cohort label, and the family/variant counts
+  so operators can pin the evidence before a governed producer stages the
+  corresponding catalog rules described in Section 4.3.
 
 ## 13. מעקבים פתוחים
 - חלונות כיול חודשיים אחרי 2026-03-02 ממשיכים לפי ההליך בסעיף 6; יש לפרסם `ai-moderation-calibration-<YYYYMM>.md` יחד עם חבילות manifest/scorecard מעודכנות בעץ הדוחות של SoraFS.

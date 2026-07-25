@@ -38,16 +38,10 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 
-use crate::{
-    moderation::{
-        ModerationTokenError, ModerationTokenKey, ValidatedModerationProof,
-        verify_token_for_context,
-    },
-    multi_fetch::{
-        AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
-        MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
-        TransportHint,
-    },
+use crate::multi_fetch::{
+    AttemptFailure, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
+    MultiSourceError, PolicyBlockEvidence, ProviderMetadata, RangeCapability, StreamBudget,
+    TransportHint,
 };
 
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
@@ -58,9 +52,13 @@ const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
 const HEADER_SORA_REQ_SALT_EPOCH: &str = "sora-req-salt-epoch";
 const HEADER_SORA_REQ_NONCE: &str = "sora-req-nonce";
-const HEADER_SORA_MODERATION_TOKEN: &str = "sora-moderation-token";
-const HEADER_SORA_DENYLIST_VERSION: &str = "sora-denylist-version";
 const HEADER_SORA_CACHE_VERSION: &str = "sora-cache-version";
+/// Exact V1 gateway compliance denial code.
+pub(crate) const GATEWAY_COMPLIANCE_DENIED_CODE: &str = "gateway_compliance_denied";
+/// Baseline governed-catalog decision source.
+pub(crate) const GATEWAY_COMPLIANCE_SOURCE_BASELINE: &str = "baseline";
+/// Legal or safety hold decision source.
+pub(crate) const GATEWAY_COMPLIANCE_SOURCE_LEGAL_SAFETY_HOLD: &str = "legal_safety_hold";
 const MAX_GATEWAY_PROVIDERS: usize = 256;
 const MAX_DNS_ADDRESSES_PER_HOST: usize = 16;
 const MAX_PROVIDER_NAME_BYTES: usize = 128;
@@ -68,9 +66,6 @@ const MAX_CHUNKER_HANDLE_BYTES: usize = 128;
 const MAX_MANIFEST_ENVELOPE_BASE64_BYTES: usize = 64 * 1024;
 const MAX_CLIENT_ID_BYTES: usize = 128;
 const MAX_CACHE_VERSION_BYTES: usize = 128;
-const MAX_FAILURE_CODE_CHARS: usize = 128;
-const MAX_FAILURE_MESSAGE_CHARS: usize = 512;
-const MAX_MODERATION_PROOF_HEADER_BYTES: usize = 16 * 1024;
 const MAX_GATEWAY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STREAM_TOKEN_ID_BYTES: usize = 128;
 const MAX_MANIFEST_CID_BYTES: usize = 128;
@@ -97,20 +92,12 @@ pub(crate) struct HttpResponse {
 pub struct GatewayFailureEvidence {
     /// Status code observed on the wire.
     pub observed_status: StatusCode,
-    /// Canonicalised status for reporting/telemetry.
-    pub canonical_status: StatusCode,
-    /// Error code parsed from the response body (e.g., `denylisted`).
-    pub code: Option<String>,
-    /// Optional opaque moderation token for audit/appeal workflows.
-    pub proof_token_b64: Option<String>,
-    /// Parsed and verified moderation proof when a key was supplied.
-    pub verified_proof: Option<ValidatedModerationProof>,
-    /// Optional denylist version or digest advertised by the gateway.
-    pub denylist_version: Option<String>,
-    /// Optional cache version advertised by the gateway (falls back to the denylist version).
-    pub cache_version: Option<String>,
-    /// Human-readable message taken from the response body, when provided.
-    pub message: Option<String>,
+    /// Exact canonical policy-denial code from the response body.
+    pub code: String,
+    /// Governed decision source (`baseline` or `legal_safety_hold`).
+    pub source: String,
+    /// Lowercase hexadecimal digest of the active governed catalog.
+    pub catalog_digest_hex: String,
 }
 
 pub(crate) type HttpFuture = Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + Send>>;
@@ -224,10 +211,8 @@ pub struct GatewayFetchConfig {
     pub blinded_cid_b64: Option<String>,
     /// Optional salt epoch associated with `blinded_cid_b64`.
     pub salt_epoch: Option<u32>,
-    /// Optional cache version to enforce on gateway responses (falls back to denylist version when absent).
+    /// Optional cache version to enforce on successful gateway responses.
     pub expected_cache_version: Option<String>,
-    /// Optional base64-encoded key used to verify opaque moderation proof tokens.
-    pub moderation_token_key_b64: Option<String>,
 }
 
 impl GatewayFetchConfig {
@@ -344,14 +329,12 @@ impl GatewayFetchContext {
         let fetcher = GatewayFetcher {
             inner: Arc::new(GatewayFetcherInner {
                 manifest_id_hex: config.manifest_id.clone(),
-                manifest_id_bytes: config.manifest_id_bytes,
                 chunker_header: config.chunker_header.clone(),
                 manifest_envelope: config.manifest_envelope.clone(),
                 client_header: config.client_header.clone(),
                 blinded_header: config.blinded_header.clone(),
                 salt_epoch_header: config.salt_epoch_header.clone(),
                 cache_version: config.cache_version.clone(),
-                moderation_token_key: config.moderation_token_key.clone(),
                 engine,
                 providers: provider_map,
             }),
@@ -437,14 +420,12 @@ pub type GatewayFetchFuture =
 struct GatewayFetcherInner {
     engine: Arc<dyn HttpEngine>,
     manifest_id_hex: String,
-    manifest_id_bytes: [u8; 32],
     chunker_header: HeaderValue,
     manifest_envelope: Option<HeaderValue>,
     client_header: Option<HeaderValue>,
     blinded_header: Option<HeaderValue>,
     salt_epoch_header: Option<HeaderValue>,
     cache_version: Option<String>,
-    moderation_token_key: Option<ModerationTokenKey>,
     providers: HashMap<String, Arc<ProviderRuntime>>,
 }
 
@@ -556,29 +537,8 @@ impl GatewayFetcherInner {
                 },
             })?;
 
-        let (_, cache_version) = observed_versions(&response.headers);
         if !response.status.is_success() {
-            let proof_context = ModerationProofContext {
-                manifest_id: &self.manifest_id_bytes,
-                chunk_digest: Some(&request.spec.digest),
-            };
-            let evidence = extract_failure_evidence(
-                &response,
-                Some(proof_context),
-                self.moderation_token_key.as_ref(),
-            );
-            if let Some(expected) = &self.cache_version
-                && cache_version.as_deref() != Some(expected.as_str())
-            {
-                return Err(GatewayFetchError::CacheVersionMismatch {
-                    provider: provider_alias.clone(),
-                    expected: expected.clone(),
-                    observed: cache_version.clone(),
-                    status: response.status,
-                    evidence,
-                });
-            }
-            if let Some(evidence) = evidence {
+            if let Some(evidence) = extract_failure_evidence(&response) {
                 return Err(GatewayFetchError::PolicyBlocked {
                     provider: provider_alias,
                     evidence,
@@ -595,6 +555,7 @@ impl GatewayFetcherInner {
                 body,
             });
         }
+        let cache_version = observed_cache_version(&response.headers);
         if let Some(expected) = &self.cache_version
             && cache_version.as_deref() != Some(expected.as_str())
         {
@@ -603,7 +564,6 @@ impl GatewayFetcherInner {
                 expected: expected.clone(),
                 observed: cache_version,
                 status: response.status,
-                evidence: None,
             });
         }
 
@@ -673,48 +633,18 @@ impl GatewayFetcherInner {
                 }
             };
 
-            let proof_context = ModerationProofContext {
-                manifest_id: &self.manifest_id_bytes,
-                chunk_digest: None,
-            };
-            let (_, cache_version) = observed_versions(&response.headers);
-
             if !response.status.is_success() {
-                let evidence = extract_failure_evidence(
-                    &response,
-                    Some(proof_context),
-                    self.moderation_token_key.as_ref(),
-                );
-                if let Some(expected) = &self.cache_version
-                    && cache_version.as_deref() != Some(expected.as_str())
-                {
-                    last_error = Some(GatewayManifestError::CacheVersionMismatch {
-                        provider: alias.clone(),
-                        expected: expected.clone(),
-                        observed: cache_version.clone(),
-                        status: response.status,
-                    });
-                    continue;
-                }
-                if let Some(evidence) = evidence {
-                    let mut detail = format!(
-                        "gateway blocked request (status={}, code={:?}",
-                        evidence.canonical_status, evidence.code
+                if let Some(evidence) = extract_failure_evidence(&response) {
+                    let detail = format!(
+                        "gateway blocked request (status={}, code={}, source={}, catalog_digest_hex={})",
+                        evidence.observed_status,
+                        evidence.code,
+                        evidence.source,
+                        evidence.catalog_digest_hex
                     );
-                    if evidence.proof_token_b64.is_some() {
-                        detail.push_str(", proof_token=present");
-                    }
-                    if let Some(denylist) = &evidence.denylist_version {
-                        detail.push_str(&format!(", denylist={denylist}"));
-                    }
-                    if let Some(message) = &evidence.message {
-                        detail.push_str(&format!(", message={message}"));
-                    }
-                    detail.push(')');
-
                     last_error = Some(GatewayManifestError::Status {
                         provider: alias.clone(),
-                        status: evidence.canonical_status,
+                        status: evidence.observed_status,
                         body: Some(detail),
                     });
                     continue;
@@ -732,6 +662,7 @@ impl GatewayFetcherInner {
                 continue;
             }
 
+            let cache_version = observed_cache_version(&response.headers);
             if let Some(expected) = &self.cache_version
                 && cache_version.as_deref() != Some(expected.as_str())
             {
@@ -772,113 +703,56 @@ fn truncate(text: &str, max: usize) -> String {
     truncated
 }
 
-#[derive(Clone, Copy)]
-struct ModerationProofContext<'a> {
-    manifest_id: &'a [u8; 32],
-    chunk_digest: Option<&'a [u8; 32]>,
-}
-
-fn observed_versions(headers: &HeaderMap) -> (Option<String>, Option<String>) {
-    let denylist_version = headers
-        .get(HEADER_SORA_DENYLIST_VERSION)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty() && value.len() <= MAX_CACHE_VERSION_BYTES)
-        .map(ToOwned::to_owned);
-    let cache_header = headers
+fn observed_cache_version(headers: &HeaderMap) -> Option<String> {
+    headers
         .get(HEADER_SORA_CACHE_VERSION)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty() && value.len() <= MAX_CACHE_VERSION_BYTES)
-        .map(ToOwned::to_owned);
-    let cache_version = cache_header.or_else(|| denylist_version.clone());
-    (denylist_version, cache_version)
+        .map(ToOwned::to_owned)
 }
 
-fn extract_failure_evidence(
-    response: &HttpResponse,
-    proof_context: Option<ModerationProofContext<'_>>,
-    proof_key: Option<&ModerationTokenKey>,
-) -> Option<GatewayFailureEvidence> {
-    let proof_token = response
-        .headers
-        .get(HEADER_SORA_MODERATION_TOKEN)
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty() && value.len() <= MAX_MODERATION_PROOF_HEADER_BYTES)
-        .map(ToOwned::to_owned);
-    let (denylist_version, cache_version) = observed_versions(&response.headers);
-    let (code, message) = parse_failure_body(&response.body);
-    let canonical_status = canonical_status(code.as_deref(), response.status);
-    let verified_proof = match (proof_key, proof_token.as_deref(), proof_context) {
-        (Some(key), Some(token), Some(ctx)) => {
-            match (cache_version.as_deref(), denylist_version.as_deref()) {
-                (Some(cache), Some(denylist)) => verify_token_for_context(
-                    token,
-                    key,
-                    ctx.manifest_id,
-                    ctx.chunk_digest,
-                    denylist,
-                    cache,
-                )
-                .ok(),
-                _ => None,
-            }
-        }
-        _ => None,
-    };
-
-    if proof_token.is_some()
-        || denylist_version.is_some()
-        || matches!(response.status, StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS)
-        || code.is_some()
+fn extract_failure_evidence(response: &HttpResponse) -> Option<GatewayFailureEvidence> {
+    // Obsolete local-evidence headers make an otherwise valid body noncanonical.
+    if response.status != StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
+        || response.headers.contains_key("sora-moderation-token")
+        || response.headers.contains_key("sora-denylist-version")
     {
-        return Some(GatewayFailureEvidence {
-            observed_status: response.status,
-            canonical_status,
-            code,
-            proof_token_b64: proof_token,
-            denylist_version,
-            cache_version,
-            message,
-            verified_proof,
-        });
+        return None;
     }
-    None
+    let value = json::from_slice::<Value>(&response.body).ok()?;
+    let object = value.as_object()?;
+    if object.len() != 3 {
+        return None;
+    }
+    let code = object.get("error")?.as_str()?;
+    let source = object.get("source")?.as_str()?;
+    let catalog_digest_hex = object.get("catalog_digest_hex")?.as_str()?;
+    if code != GATEWAY_COMPLIANCE_DENIED_CODE
+        || !is_canonical_gateway_compliance_source(source)
+        || !is_canonical_catalog_digest_hex(catalog_digest_hex)
+    {
+        return None;
+    }
+    Some(GatewayFailureEvidence {
+        observed_status: response.status,
+        code: code.to_owned(),
+        source: source.to_owned(),
+        catalog_digest_hex: catalog_digest_hex.to_owned(),
+    })
 }
 
-fn canonical_status(code: Option<&str>, observed: StatusCode) -> StatusCode {
-    match code {
-        Some("denylisted") => StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-        _ => observed,
-    }
+/// Return whether a governed decision source can deny a request in V1.
+pub(crate) fn is_canonical_gateway_compliance_source(source: &str) -> bool {
+    source == GATEWAY_COMPLIANCE_SOURCE_BASELINE
+        || source == GATEWAY_COMPLIANCE_SOURCE_LEGAL_SAFETY_HOLD
 }
 
-fn parse_failure_body(bytes: &[u8]) -> (Option<String>, Option<String>) {
-    if bytes.is_empty() {
-        return (None, None);
-    }
-    if let Ok(value) = json::from_slice::<Value>(bytes) {
-        let code = value
-            .get("error")
-            .and_then(Value::as_str)
-            .map(|value| truncate(value, MAX_FAILURE_CODE_CHARS));
-        let message = value
-            .get("message")
-            .and_then(Value::as_str)
-            .map(|value| truncate(value, MAX_FAILURE_MESSAGE_CHARS))
-            .or_else(|| {
-                value
-                    .as_str()
-                    .map(|value| truncate(value, MAX_FAILURE_MESSAGE_CHARS))
-            });
-        return (code, message);
-    }
-
-    (
-        None,
-        Some(truncate(
-            &String::from_utf8_lossy(bytes),
-            MAX_FAILURE_MESSAGE_CHARS,
-        )),
-    )
+/// Return whether a catalog digest is exact lowercase 32-byte hexadecimal text.
+pub(crate) fn is_canonical_catalog_digest_hex(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 #[derive(Debug)]
@@ -919,7 +793,6 @@ struct ProviderDescriptor {
 #[derive(Debug)]
 struct NormalisedConfig {
     manifest_id: String,
-    manifest_id_bytes: [u8; 32],
     chunker_handle: String,
     chunker_header: HeaderValue,
     manifest_envelope: Option<HeaderValue>,
@@ -928,7 +801,6 @@ struct NormalisedConfig {
     blinded_header: Option<HeaderValue>,
     salt_epoch_header: Option<HeaderValue>,
     cache_version: Option<String>,
-    moderation_token_key: Option<ModerationTokenKey>,
 }
 
 impl NormalisedConfig {
@@ -937,17 +809,6 @@ impl NormalisedConfig {
         if manifest_id.len() != 64 || !manifest_id.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(GatewayBuildError::InvalidManifestId { manifest_id });
         }
-        let manifest_bytes =
-            hex::decode(&manifest_id).map_err(|_| GatewayBuildError::InvalidManifestId {
-                manifest_id: manifest_id.clone(),
-            })?;
-        let manifest_id_bytes: [u8; 32] =
-            manifest_bytes
-                .try_into()
-                .map_err(|_| GatewayBuildError::InvalidManifestId {
-                    manifest_id: manifest_id.clone(),
-                })?;
-
         let GatewayFetchConfig {
             manifest_id_hex: _,
             chunker_handle,
@@ -957,7 +818,6 @@ impl NormalisedConfig {
             blinded_cid_b64,
             salt_epoch,
             expected_cache_version,
-            moderation_token_key_b64,
         } = config;
 
         let chunker_handle = chunker_handle.trim().to_string();
@@ -1103,24 +963,8 @@ impl NormalisedConfig {
             None
         };
 
-        let moderation_token_key = if let Some(value) = moderation_token_key_b64 {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Err(GatewayBuildError::InvalidModerationTokenKey {
-                    source: ModerationTokenError::EmptyField("moderation token key"),
-                });
-            }
-            Some(
-                ModerationTokenKey::from_base64(trimmed)
-                    .map_err(|source| GatewayBuildError::InvalidModerationTokenKey { source })?,
-            )
-        } else {
-            None
-        };
-
         Ok(Self {
             manifest_id,
-            manifest_id_bytes,
             chunker_handle,
             chunker_header,
             manifest_envelope,
@@ -1129,7 +973,6 @@ impl NormalisedConfig {
             blinded_header,
             salt_epoch_header,
             cache_version,
-            moderation_token_key,
         })
     }
 }
@@ -1589,11 +1432,6 @@ pub enum GatewayBuildError {
         header: &'static str,
         reason: &'static str,
     },
-    #[error("invalid moderation proof key: {source}")]
-    InvalidModerationTokenKey {
-        #[source]
-        source: ModerationTokenError,
-    },
     #[error("Sora-Req-Salt-Epoch must be provided when Sora-Req-Blinded-CID is set")]
     MissingSaltEpoch,
     #[error("Sora-Req-Salt-Epoch cannot be supplied without Sora-Req-Blinded-CID")]
@@ -1708,7 +1546,7 @@ pub enum GatewayManifestError {
         status: StatusCode,
         body: Option<String>,
     },
-    /// Gateway did not advertise the expected cache/denylist version.
+    /// Gateway did not advertise the expected cache version.
     #[error(
         "provider `{provider}` manifest response advertised cache version {observed:?} but expected {expected} (status {status})"
     )]
@@ -1968,7 +1806,6 @@ pub enum GatewayFetchError {
         expected: String,
         observed: Option<String>,
         status: StatusCode,
-        evidence: Option<GatewayFailureEvidence>,
     },
     #[error("failed to read response from provider `{provider}`: {source}")]
     RequestBody {
@@ -1979,13 +1816,11 @@ pub enum GatewayFetchError {
     #[error("provider `{provider}` response exceeds the {limit}-byte safety limit")]
     ResponseTooLarge { provider: String, limit: usize },
     #[error(
-        "provider `{provider}` blocked request (status={status}, code={code:?}, token_present={token_present}, denylist={denylist:?}, cache_version={cache_version:?}, message={message:?})",
-        status = .evidence.canonical_status,
+        "provider `{provider}` blocked request (status={status}, code={code}, source={decision_source}, catalog_digest_hex={catalog_digest_hex})",
+        status = .evidence.observed_status,
         code = .evidence.code,
-        token_present = .evidence.proof_token_b64.is_some(),
-        denylist = .evidence.denylist_version,
-        cache_version = .evidence.cache_version,
-        message = .evidence.message,
+        decision_source = .evidence.source,
+        catalog_digest_hex = .evidence.catalog_digest_hex,
     )]
     PolicyBlocked {
         provider: String,
@@ -2003,22 +1838,10 @@ pub enum GatewayFetchError {
 
 impl From<GatewayFetchError> for AttemptFailure {
     fn from(error: GatewayFetchError) -> Self {
-        let message = match &error {
-            GatewayFetchError::PolicyBlocked { evidence, .. } => {
-                format!(
-                    "{error} (observed_status={}, canonical_status={})",
-                    evidence.observed_status, evidence.canonical_status
-                )
-            }
-            GatewayFetchError::CacheVersionMismatch { .. } => error.to_string(),
-            _ => error.to_string(),
-        };
+        let message = error.to_string();
         let policy_block = match &error {
             GatewayFetchError::PolicyBlocked { evidence, .. } => {
                 Some(PolicyBlockEvidence::from(evidence))
-            }
-            GatewayFetchError::CacheVersionMismatch { evidence, .. } => {
-                evidence.as_ref().map(PolicyBlockEvidence::from)
             }
             _ => None,
         };
@@ -2033,12 +1856,9 @@ impl From<&GatewayFailureEvidence> for PolicyBlockEvidence {
     fn from(evidence: &GatewayFailureEvidence) -> Self {
         PolicyBlockEvidence {
             observed_status: evidence.observed_status,
-            canonical_status: evidence.canonical_status,
             code: evidence.code.clone(),
-            cache_version: evidence.cache_version.clone(),
-            denylist_version: evidence.denylist_version.clone(),
-            proof_token_present: evidence.proof_token_b64.is_some(),
-            message: evidence.message.clone(),
+            source: evidence.source.clone(),
+            catalog_digest_hex: evidence.catalog_digest_hex.clone(),
         }
     }
 }
@@ -2087,9 +1907,7 @@ mod tests {
         assert!(header_value("invalid\nnonce").is_err());
         assert!(header_value("invalid\0nonce").is_err());
     }
-    use crate::{
-        CarBuildPlan, ChunkFetchSpec, moderation::encode_token, multi_fetch::FetchProvider,
-    };
+    use crate::{CarBuildPlan, ChunkFetchSpec, multi_fetch::FetchProvider};
 
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
@@ -2166,7 +1984,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         }
     }
 
@@ -2315,7 +2132,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         let err = NormalisedConfig::from_config(config).expect_err("manifest envelope should fail");
@@ -2347,7 +2163,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let input = GatewayProviderInput {
             name: "provider-1".to_string(),
@@ -2755,7 +2570,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -2883,7 +2697,6 @@ mod tests {
             blinded_cid_b64: Some(blinded_b64.clone()),
             salt_epoch: Some(salt_epoch),
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -2967,7 +2780,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -2992,9 +2804,12 @@ mod tests {
 
         let error = fetcher.fetch(request).await.expect_err("should fail");
         match error {
-            GatewayFetchError::PolicyBlocked { evidence, .. } => {
-                assert_eq!(evidence.canonical_status, StatusCode::TOO_MANY_REQUESTS);
-                assert_eq!(evidence.code.as_deref(), Some("stream_token_rate_limited"));
+            GatewayFetchError::UnexpectedStatus { status, body, .. } => {
+                assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+                assert_eq!(
+                    body.as_deref(),
+                    Some(r#"{"error":"stream_token_rate_limited"}"#)
+                );
             }
             other => panic!("unexpected error {other:?}"),
         }
@@ -3006,6 +2821,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_surfaces_policy_block_evidence() {
+        const CATALOG_DIGEST_HEX: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let payload = sample_payload(2048);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
@@ -3019,26 +2836,16 @@ mod tests {
             manifest_id_hex,
             hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice())
         );
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HeaderName::from_static(HEADER_SORA_MODERATION_TOKEN),
-            HeaderValue::from_static("dG9rZW4="),
-        );
-        headers.insert(
-            HeaderName::from_static(HEADER_SORA_DENYLIST_VERSION),
-            HeaderValue::from_static("v1"),
-        );
-        headers.insert(
-            HeaderName::from_static(HEADER_SORA_CACHE_VERSION),
-            HeaderValue::from_static("cache-v1"),
-        );
         let mut responses = HashMap::new();
         responses.insert(
             path.clone(),
             HttpResponse {
                 status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-                headers,
-                body: br#"{"error":"denylisted","message":"blocked"}"#.to_vec(),
+                headers: HeaderMap::new(),
+                body: format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"legal_safety_hold","catalog_digest_hex":"{CATALOG_DIGEST_HEX}"}}"#
+                )
+                .into_bytes(),
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
@@ -3052,7 +2859,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -3083,15 +2889,9 @@ mod tests {
                     evidence.observed_status,
                     StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
                 );
-                assert_eq!(
-                    evidence.canonical_status,
-                    StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
-                );
-                assert_eq!(evidence.code.as_deref(), Some("denylisted"));
-                assert_eq!(evidence.proof_token_b64.as_deref(), Some("dG9rZW4="));
-                assert_eq!(evidence.denylist_version.as_deref(), Some("v1"));
-                assert_eq!(evidence.cache_version.as_deref(), Some("cache-v1"));
-                assert_eq!(evidence.message.as_deref(), Some("blocked"));
+                assert_eq!(evidence.code, GATEWAY_COMPLIANCE_DENIED_CODE);
+                assert_eq!(evidence.source, GATEWAY_COMPLIANCE_SOURCE_LEGAL_SAFETY_HOLD);
+                assert_eq!(evidence.catalog_digest_hex, CATALOG_DIGEST_HEX);
             }
             other => panic!("unexpected error {other:?}"),
         }
@@ -3137,7 +2937,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: Some("cache-v2".to_string()),
-            moderation_token_key_b64: None,
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -3182,7 +2981,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn gateway_policy_evidence_includes_verified_proof() {
+    async fn canonical_policy_denial_precedes_success_cache_validation() {
+        const CATALOG_DIGEST_HEX: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let payload = sample_payload(1024);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
@@ -3191,16 +2992,6 @@ mod tests {
         let token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 1);
         let token_b64 = encode_token_b64(&token);
         let chunk_digest_hex = hex::encode(plan.chunk_fetch_specs()[0].digest.as_slice());
-        let proof_key = ModerationTokenKey::from_bytes([7u8; 32]);
-        let proof_token = encode_token(
-            &proof_key,
-            &manifest_id_hex,
-            Some(&chunk_digest_hex),
-            "dl-v1",
-            "cache-v1",
-        )
-        .expect("encode moderation token");
-        let proof_key_b64 = STANDARD.encode(proof_key.as_ref());
 
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -3208,16 +2999,8 @@ mod tests {
         );
         let mut headers = HeaderMap::new();
         headers.insert(
-            HeaderName::from_static(HEADER_SORA_MODERATION_TOKEN),
-            HeaderValue::from_str(&proof_token).expect("store proof token"),
-        );
-        headers.insert(
-            HeaderName::from_static(HEADER_SORA_DENYLIST_VERSION),
-            HeaderValue::from_static("dl-v1"),
-        );
-        headers.insert(
             HeaderName::from_static(HEADER_SORA_CACHE_VERSION),
-            HeaderValue::from_static("cache-v1"),
+            HeaderValue::from_static("stale-cache"),
         );
         let mut responses = HashMap::new();
         responses.insert(
@@ -3225,7 +3008,10 @@ mod tests {
             HttpResponse {
                 status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
                 headers,
-                body: br#"{"error":"denylisted"}"#.to_vec(),
+                body: format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{CATALOG_DIGEST_HEX}"}}"#
+                )
+                .into_bytes(),
             },
         );
         let engine = Arc::new(MockHttpEngine::new(responses));
@@ -3238,8 +3024,7 @@ mod tests {
             expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
             blinded_cid_b64: None,
             salt_epoch: None,
-            expected_cache_version: Some("cache-v1".to_string()),
-            moderation_token_key_b64: Some(proof_key_b64),
+            expected_cache_version: Some("expected-cache".to_string()),
         };
         let provider_input = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -3261,36 +3046,179 @@ mod tests {
         let err = context.fetcher().fetch(request).await.expect_err("blocked");
         match err {
             GatewayFetchError::PolicyBlocked { evidence, .. } => {
-                let proof = evidence.verified_proof.expect("proof attached");
-                assert_eq!(proof.body.cache_version, "cache-v1");
-                assert_eq!(proof.body.denylist_version, "dl-v1");
-                assert_eq!(
-                    proof.body.chunk_digest,
-                    Some(plan.chunk_fetch_specs()[0].digest)
-                );
-                let mut expected_manifest = [0u8; 32];
-                expected_manifest.copy_from_slice(&hex::decode(manifest_id_hex).unwrap());
-                assert_eq!(proof.body.manifest_id, expected_manifest);
+                assert_eq!(evidence.catalog_digest_hex, CATALOG_DIGEST_HEX);
             }
             other => panic!("unexpected error {other:?}"),
         }
     }
 
     #[test]
-    fn failure_evidence_falls_back_to_denylist_version_for_cache_binding() {
+    fn failure_evidence_accepts_exact_canonical_denials() {
+        const CATALOG_DIGEST_HEX: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        for source in [
+            GATEWAY_COMPLIANCE_SOURCE_BASELINE,
+            GATEWAY_COMPLIANCE_SOURCE_LEGAL_SAFETY_HOLD,
+        ] {
+            let response = HttpResponse {
+                status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                headers: HeaderMap::new(),
+                body: format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"{source}","catalog_digest_hex":"{CATALOG_DIGEST_HEX}"}}"#
+                )
+                .into_bytes(),
+            };
+
+            let evidence = extract_failure_evidence(&response).expect("canonical evidence");
+            assert_eq!(evidence.observed_status, response.status);
+            assert_eq!(evidence.code, GATEWAY_COMPLIANCE_DENIED_CODE);
+            assert_eq!(evidence.source, source);
+            assert_eq!(evidence.catalog_digest_hex, CATALOG_DIGEST_HEX);
+        }
+    }
+
+    #[test]
+    fn failure_evidence_rejects_noncanonical_status_body_and_sources() {
+        const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let uppercase_digest = DIGEST.to_ascii_uppercase();
+        let malformed_digest = format!("{}g", &DIGEST[..63]);
+        let cases = [
+            (
+                "legacy code",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                r#"{"error":"denylisted","source":"baseline","catalog_digest_hex":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}"#.to_owned(),
+            ),
+            (
+                "rewritten forbidden status",
+                StatusCode::FORBIDDEN,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{DIGEST}"}}"#
+                ),
+            ),
+            (
+                "missing code",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(r#"{{"source":"baseline","catalog_digest_hex":"{DIGEST}"}}"#),
+            ),
+            (
+                "missing source",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","catalog_digest_hex":"{DIGEST}"}}"#
+                ),
+            ),
+            (
+                "missing digest",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                r#"{"error":"gateway_compliance_denied","source":"baseline"}"#.to_owned(),
+            ),
+            (
+                "unknown source",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"unknown","catalog_digest_hex":"{DIGEST}"}}"#
+                ),
+            ),
+            (
+                "allow source no_match",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"no_match","catalog_digest_hex":"{DIGEST}"}}"#
+                ),
+            ),
+            (
+                "allow source accepted_appeal",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"accepted_appeal","catalog_digest_hex":"{DIGEST}"}}"#
+                ),
+            ),
+            (
+                "uppercase digest",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{uppercase_digest}"}}"#
+                ),
+            ),
+            (
+                "malformed digest",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{malformed_digest}"}}"#
+                ),
+            ),
+            (
+                "short digest",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                r#"{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"abcd"}"#.to_owned(),
+            ),
+            (
+                "extra legacy message",
+                StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{DIGEST}","message":"blocked"}}"#
+                ),
+            ),
+        ];
+        for (label, status, body) in cases {
+            let response = HttpResponse {
+                status,
+                headers: HeaderMap::new(),
+                body: body.into_bytes(),
+            };
+            assert!(
+                extract_failure_evidence(&response).is_none(),
+                "{label} unexpectedly produced policy evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_headers_alone_do_not_create_policy_evidence() {
         let mut headers = HeaderMap::new();
         headers.insert(
-            HeaderName::from_static(HEADER_SORA_DENYLIST_VERSION),
-            HeaderValue::from_static("dl-v2"),
+            HeaderName::from_static("sora-denylist-version"),
+            HeaderValue::from_static("legacy-v1"),
+        );
+        headers.insert(
+            HeaderName::from_static("sora-moderation-token"),
+            HeaderValue::from_static("dG9rZW4="),
         );
         let response = HttpResponse {
             status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
             headers,
-            body: br#"{"error":"denylisted"}"#.to_vec(),
+            body: Vec::new(),
         };
 
-        let evidence = extract_failure_evidence(&response, None, None).expect("evidence");
-        assert_eq!(evidence.cache_version.as_deref(), Some("dl-v2"));
+        assert!(extract_failure_evidence(&response).is_none());
+    }
+
+    #[test]
+    fn legacy_token_headers_invalidate_canonical_body_evidence() {
+        const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        for (header, value) in [
+            ("sora-moderation-token", "dG9rZW4="),
+            ("sora-denylist-version", "legacy-v1"),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                HeaderName::from_static(header),
+                HeaderValue::from_static(value),
+            );
+            let response = HttpResponse {
+                status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+                headers,
+                body: format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{DIGEST}"}}"#
+                )
+                .into_bytes(),
+            };
+
+            assert!(
+                extract_failure_evidence(&response).is_none(),
+                "legacy header {header} unexpectedly preserved policy evidence"
+            );
+        }
     }
 
     #[derive(Clone)]
@@ -3336,13 +3264,10 @@ mod tests {
     fn attempt_failure_preserves_policy_block_evidence() {
         let evidence = GatewayFailureEvidence {
             observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            canonical_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            code: Some("denylisted".to_string()),
-            proof_token_b64: Some("token".to_string()),
-            denylist_version: Some("dl-v1".to_string()),
-            cache_version: Some("cache-v1".to_string()),
-            message: Some("blocked".to_string()),
-            verified_proof: None,
+            code: GATEWAY_COMPLIANCE_DENIED_CODE.to_owned(),
+            source: GATEWAY_COMPLIANCE_SOURCE_BASELINE.to_owned(),
+            catalog_digest_hex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_owned(),
         };
         let error = GatewayFetchError::PolicyBlocked {
             provider: "alpha".to_string(),
@@ -3355,11 +3280,10 @@ mod tests {
                 policy_block: Some(policy),
                 message,
             } => {
-                assert!(message.contains("canonical_status"));
-                assert_eq!(policy.cache_version.as_deref(), Some("cache-v1"));
-                assert_eq!(policy.denylist_version.as_deref(), Some("dl-v1"));
-                assert!(policy.proof_token_present);
-                assert_eq!(policy.canonical_status, evidence.canonical_status);
+                assert!(message.contains(GATEWAY_COMPLIANCE_DENIED_CODE));
+                assert_eq!(policy.code, evidence.code);
+                assert_eq!(policy.source, evidence.source);
+                assert_eq!(policy.catalog_digest_hex, evidence.catalog_digest_hex);
                 assert_eq!(policy.observed_status, evidence.observed_status);
             }
             other => panic!("unexpected attempt failure: {other:?}"),

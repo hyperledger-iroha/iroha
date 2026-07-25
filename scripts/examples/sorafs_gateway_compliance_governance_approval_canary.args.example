@@ -1,9 +1,5 @@
-# Reviewed governance-approval canary inputs for the SFM-4 gateway compliance gate.
+# Canonicalize a real governance-approval probe. No claim is synthesized.
 --kind governance_approval
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/governance-approval.json
 --out artifacts/sorafs_gateway/governance-approval-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
 --now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---policy-digest-hex cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

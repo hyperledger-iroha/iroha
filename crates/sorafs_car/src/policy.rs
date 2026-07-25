@@ -195,157 +195,55 @@ mod tests {
 
 #[cfg(feature = "manifest")]
 mod compliance {
-    use std::{fmt, sync::Arc};
+    use std::sync::Arc;
 
-    use blake3::Hasher;
-    use ed25519_dalek::VerifyingKey;
-    use iroha_crypto::sorafs::proof_token::{ProofToken, ProofTokenDigestKey};
     use reqwest::StatusCode;
     use thiserror::Error;
 
     use crate::{
         ChunkFetchSpec,
-        gateway::{GatewayFailureEvidence, GatewayFetchError, GatewayFetcher},
-        moderation::ValidatedModerationProof,
+        gateway::{
+            GATEWAY_COMPLIANCE_DENIED_CODE, GatewayFailureEvidence, GatewayFetchError,
+            GatewayFetcher, is_canonical_catalog_digest_hex,
+            is_canonical_gateway_compliance_source,
+        },
         multi_fetch::FetchRequest,
     };
 
-    const POLICY_BINDING_DOMAIN: &[u8] = b"sorafs.policy.binding.v1";
-
-    /// Verifies proof tokens emitted by gateways when policy blocks occur.
-    #[derive(Clone)]
-    pub struct ProofTokenVerifier {
-        verifying_key: VerifyingKey,
-        digest_key: Option<ProofTokenDigestKey>,
-    }
-
-    impl fmt::Debug for ProofTokenVerifier {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("ProofTokenVerifier")
-                .field("verifying_key", &"ed25519")
-                .field("digest_key", &self.digest_key.as_ref().map(|_| "present"))
-                .finish()
-        }
-    }
-
-    impl ProofTokenVerifier {
-        /// Construct a verifier with the supplied Ed25519 verifying key.
-        #[must_use]
-        pub fn new(verifying_key: VerifyingKey) -> Self {
-            Self {
-                verifying_key,
-                digest_key: None,
-            }
-        }
-
-        /// Construct a verifier from raw Ed25519 public-key bytes after canonical key admission.
-        pub fn try_from_verifying_key_bytes(
-            public_key: &[u8],
-        ) -> Result<Self, ProofTokenVerifierKeyError> {
-            let parsed = iroha_crypto::ed25519_parse_public_key(public_key)
-                .map_err(|err| ProofTokenVerifierKeyError::Invalid(err.to_string()))?;
-            let verifying_key = VerifyingKey::from_bytes(parsed.as_bytes())
-                .map_err(|err| ProofTokenVerifierKeyError::Invalid(err.to_string()))?;
-            Ok(Self::new(verifying_key))
-        }
-
-        /// Attach the blinded-digest key used by gateways to bind tokens to cache versions.
-        #[must_use]
-        pub fn with_digest_key(mut self, digest_key: ProofTokenDigestKey) -> Self {
-            self.digest_key = Some(digest_key);
-            self
-        }
-
-        /// Decode and verify a proof token string.
-        pub fn verify(
-            &self,
-            token_b64: &str,
-            binding_digest: &[u8; 32],
-        ) -> Result<ValidatedProofToken, ProofTokenError> {
-            let token = ProofToken::decode_base64(token_b64).map_err(ProofTokenError::Decode)?;
-            token
-                .verify_signature(&self.verifying_key)
-                .map_err(|_| ProofTokenError::Signature)?;
-            if let Some(digest_key) = self.digest_key.as_ref() {
-                token
-                    .verify_blinded_digest(digest_key, binding_digest)
-                    .map_err(|_| ProofTokenError::Digest)?;
-            }
-            Ok(ValidatedProofToken {
-                token,
-                digest_bound: self.digest_key.is_some(),
-            })
-        }
-    }
-
-    /// Errors surfaced while admitting proof-token verifier keys.
-    #[derive(Debug, Error)]
-    pub enum ProofTokenVerifierKeyError {
-        /// The Ed25519 verifier key is malformed, weak, all-zero, or non-canonical.
-        #[error("invalid proof-token verifier Ed25519 key: {0}")]
-        Invalid(String),
-    }
-
-    /// Proof token plus verification results.
-    #[derive(Debug, Clone)]
-    pub struct ValidatedProofToken {
-        pub token: ProofToken,
-        pub digest_bound: bool,
-    }
-
-    /// Errors surfaced while decoding or verifying proof tokens.
-    #[derive(Debug, Error)]
-    pub enum ProofTokenError {
-        #[error("failed to decode proof token: {0}")]
-        Decode(iroha_crypto::sorafs::proof_token::DecodeError),
-        #[error("invalid proof token signature")]
-        Signature,
-        #[error("proof token not bound to cache version")]
-        Digest,
-    }
-
     /// Parsed and validated policy evidence returned by a gateway.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PolicyEvidence {
-        pub cache_version: String,
+        /// Exact catalog-backed denial returned by the gateway.
         pub evidence: GatewayFailureEvidence,
-        pub proof: Option<ValidatedProofToken>,
-        pub moderation_proof: Option<ValidatedModerationProof>,
     }
 
     /// Validation errors surfaced while interpreting policy evidence.
     #[derive(Debug, Error)]
     pub enum PolicyValidationError {
-        #[error("canonical status mismatch (expected {expected}, got {actual})")]
-        Status {
-            expected: StatusCode,
-            actual: StatusCode,
-        },
-        #[error("missing cache version on policy block")]
-        MissingCacheVersion,
-        #[error("cache version mismatch (expected {expected}, got {actual})")]
-        CacheVersionMismatch { expected: String, actual: String },
-        #[error("policy code mismatch (expected {expected}, got {actual:?})")]
-        CodeMismatch {
-            expected: String,
-            actual: Option<String>,
-        },
-        #[error("proof token missing from gateway response")]
-        MissingProofToken,
-        #[error("proof token verification failed: {0}")]
-        ProofToken(#[from] ProofTokenError),
-        #[error("verified moderation proof missing from gateway evidence")]
-        MissingModerationProof,
+        /// The wire status was not exactly HTTP 451.
+        #[error("policy status mismatch (expected 451, got {actual})")]
+        Status { actual: StatusCode },
+        /// The body did not carry the exact V1 denial code.
+        #[error("policy code is not gateway_compliance_denied")]
+        Code,
+        /// The body named a source that cannot deny under the V1 precedence rules.
+        #[error("policy source is not a canonical denying source")]
+        Source,
+        /// The body catalog digest was not canonical lowercase 32-byte hex.
+        #[error("policy catalog digest is not canonical lowercase 32-byte hex")]
+        CatalogDigest,
+        /// The caller supplied a noncanonical catalog digest expectation.
+        #[error("expected policy catalog digest is not canonical lowercase 32-byte hex")]
+        ExpectedCatalogDigest,
+        /// The denial was evaluated under a different governed catalog.
+        #[error("policy catalog digest mismatch (expected {expected}, got {actual})")]
+        CatalogDigestMismatch { expected: String, actual: String },
     }
 
     /// Validator for policy evidence emitted by gateways.
     #[derive(Debug, Clone, Copy)]
     pub struct PolicyEvidenceValidator<'a> {
-        expected_status: StatusCode,
-        expected_code: Option<&'a str>,
-        expected_cache_version: Option<&'a str>,
-        verifier: Option<&'a ProofTokenVerifier>,
-        expect_moderation_proof: bool,
+        expected_catalog_digest_hex: Option<&'a str>,
     }
 
     impl<'a> Default for PolicyEvidenceValidator<'a> {
@@ -355,96 +253,52 @@ mod compliance {
     }
 
     impl<'a> PolicyEvidenceValidator<'a> {
-        /// Construct a validator expecting HTTP 451 and the canonical `denylisted` code.
+        /// Construct a validator requiring the exact canonical V1 denial envelope.
         #[must_use]
         pub fn new() -> Self {
             Self {
-                expected_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-                expected_code: Some("denylisted"),
-                expected_cache_version: None,
-                verifier: None,
-                expect_moderation_proof: false,
+                expected_catalog_digest_hex: None,
             }
         }
 
-        /// Require the supplied cache version in the gateway evidence.
+        /// Require an exact governed catalog digest in the gateway evidence.
         #[must_use]
-        pub fn with_expected_cache_version(mut self, version: &'a str) -> Self {
-            self.expected_cache_version = Some(version);
+        pub fn with_expected_catalog_digest(mut self, digest_hex: &'a str) -> Self {
+            self.expected_catalog_digest_hex = Some(digest_hex);
             self
         }
 
-        /// Verify proof tokens with the supplied verifier.
-        #[must_use]
-        pub fn with_proof_verifier(mut self, verifier: &'a ProofTokenVerifier) -> Self {
-            self.verifier = Some(verifier);
-            self
-        }
-
-        /// Require a verified moderation proof in the gateway evidence.
-        #[must_use]
-        pub fn require_moderation_proof(mut self) -> Self {
-            self.expect_moderation_proof = true;
-            self
-        }
-
-        /// Validate policy evidence and optionally verify the proof token.
+        /// Validate exact catalog-backed policy evidence.
         pub fn validate(
             &self,
             evidence: GatewayFailureEvidence,
         ) -> Result<PolicyEvidence, PolicyValidationError> {
-            if evidence.canonical_status != self.expected_status {
+            if evidence.observed_status != StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS {
                 return Err(PolicyValidationError::Status {
-                    expected: self.expected_status,
-                    actual: evidence.canonical_status,
+                    actual: evidence.observed_status,
                 });
             }
-
-            if let Some(expected_code) = self.expected_code
-                && evidence.code.as_deref() != Some(expected_code)
-            {
-                return Err(PolicyValidationError::CodeMismatch {
-                    expected: expected_code.to_string(),
-                    actual: evidence.code.clone(),
-                });
+            if evidence.code != GATEWAY_COMPLIANCE_DENIED_CODE {
+                return Err(PolicyValidationError::Code);
             }
-
-            let cache_version = evidence
-                .cache_version
-                .clone()
-                .or_else(|| evidence.denylist_version.clone())
-                .ok_or(PolicyValidationError::MissingCacheVersion)?;
-
-            if let Some(expected) = self.expected_cache_version
-                && cache_version != expected
-            {
-                return Err(PolicyValidationError::CacheVersionMismatch {
-                    expected: expected.to_string(),
-                    actual: cache_version,
-                });
+            if !is_canonical_gateway_compliance_source(&evidence.source) {
+                return Err(PolicyValidationError::Source);
             }
-
-            let proof = if let Some(verifier) = self.verifier {
-                let token = evidence
-                    .proof_token_b64
-                    .as_deref()
-                    .ok_or(PolicyValidationError::MissingProofToken)?;
-                let digest = compute_policy_binding_digest(&cache_version);
-                Some(verifier.verify(token, &digest)?)
-            } else {
-                None
-            };
-            let moderation_proof = evidence.verified_proof.clone();
-            if self.expect_moderation_proof && moderation_proof.is_none() {
-                return Err(PolicyValidationError::MissingModerationProof);
+            if !is_canonical_catalog_digest_hex(&evidence.catalog_digest_hex) {
+                return Err(PolicyValidationError::CatalogDigest);
             }
-
-            Ok(PolicyEvidence {
-                cache_version,
-                evidence,
-                proof,
-                moderation_proof,
-            })
+            if let Some(expected) = self.expected_catalog_digest_hex {
+                if !is_canonical_catalog_digest_hex(expected) {
+                    return Err(PolicyValidationError::ExpectedCatalogDigest);
+                }
+                if evidence.catalog_digest_hex != expected {
+                    return Err(PolicyValidationError::CatalogDigestMismatch {
+                        expected: expected.to_owned(),
+                        actual: evidence.catalog_digest_hex.clone(),
+                    });
+                }
+            }
+            Ok(PolicyEvidence { evidence })
         }
     }
 
@@ -516,15 +370,6 @@ mod compliance {
         }
         Ok(reports)
     }
-
-    /// Derive the deterministic binding digest used for cache-version proof tokens.
-    #[must_use]
-    pub fn compute_policy_binding_digest(cache_version: &str) -> [u8; 32] {
-        let mut hasher = Hasher::new();
-        hasher.update(POLICY_BINDING_DOMAIN);
-        hasher.update(cache_version.as_bytes());
-        hasher.finalize().into()
-    }
 }
 
 #[cfg(feature = "manifest")]
@@ -532,23 +377,12 @@ pub use compliance::*;
 
 #[cfg(all(feature = "manifest", test))]
 mod compliance_tests {
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-        time::{Duration, SystemTime},
-    };
+    use std::{collections::HashMap, sync::Arc};
 
     use base64::Engine as _;
     use blake3;
     use ed25519_dalek::SigningKey;
-    use iroha_crypto::sorafs::proof_token::{
-        ModerationAction, ProofToken, ProofTokenDigestKey, ProofTokenParams,
-    };
-    use rand::SeedableRng;
-    use reqwest::{
-        StatusCode,
-        header::{HeaderMap, HeaderName, HeaderValue},
-    };
+    use reqwest::{StatusCode, header::HeaderMap};
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
 
@@ -559,25 +393,11 @@ mod compliance_tests {
             GatewayFailureEvidence, GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput,
             HttpEngine, HttpError, HttpFuture, HttpRequest, HttpResponse,
         },
-        moderation::{ModerationTokenBodyV1, ValidatedModerationProof},
-        policy::{
-            PolicyEvidenceValidator, ProofTokenVerifier, compute_policy_binding_digest,
-            run_honey_probe,
-        },
+        policy::{PolicyEvidenceValidator, run_honey_probe},
     };
 
-    const MODERATION_HEADER: &str = "sora-moderation-token";
-    const DENYLIST_HEADER: &str = "sora-denylist-version";
-    const CACHE_VERSION_HEADER: &str = "sora-cache-version";
-    const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,
-    ];
-    const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
+    const CATALOG_DIGEST_HEX: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
@@ -620,35 +440,6 @@ mod compliance_tests {
         "ab".repeat(32)
     }
 
-    #[test]
-    fn proof_token_verifier_checked_byte_constructor_admits_only_canonical_keys() {
-        let signing_key = SigningKey::from_bytes(&[8u8; 32]);
-        ProofTokenVerifier::try_from_verifying_key_bytes(&signing_key.verifying_key().to_bytes())
-            .expect("canonical verifier key should be admitted");
-
-        for (label, public_key, expected) in [
-            (
-                "all-zero",
-                [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
-                "all zero",
-            ),
-            ("small-order", ED25519_SMALL_ORDER_POINT, "small-order"),
-            (
-                "noncanonical",
-                ED25519_NONCANONICAL_IDENTITY,
-                "non-canonical",
-            ),
-        ] {
-            let err = ProofTokenVerifier::try_from_verifying_key_bytes(&public_key)
-                .expect_err("invalid verifier key should fail admission");
-            let message = err.to_string();
-            assert!(
-                message.contains(expected),
-                "{label} key failed with unexpected message: {message}"
-            );
-        }
-    }
-
     #[derive(Clone)]
     struct StubEngine {
         responses: HashMap<String, HttpResponse>,
@@ -673,7 +464,7 @@ mod compliance_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn honey_probe_verifies_cache_binding_and_proof_token() {
+    async fn honey_probe_requires_exact_catalog_backed_denial() {
         let payload = sample_payload(2048);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
@@ -684,52 +475,21 @@ mod compliance_tests {
         let stream_token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
         let stream_token_b64 = encode_token_b64(&stream_token);
 
-        let cache_version = "cache-v2";
-        let denylist_version = "dl-v2";
-        let binding_digest = compute_policy_binding_digest(cache_version);
-
-        let digest_key = ProofTokenDigestKey::new([9; 32]);
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let proof_token = ProofToken::mint(
-            &mut rand::rngs::StdRng::seed_from_u64(7),
-            &digest_key,
-            &signing_key,
-            &ProofTokenParams {
-                moderation: ModerationAction::Block,
-                entry_ids: &[denylist_version],
-                evidence_digest: &binding_digest,
-                issued_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-                expires_at: None,
-            },
-        )
-        .expect("mint token");
-        let proof_token_b64 = proof_token.encode_base64();
-
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex::encode(spec.digest)
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HeaderName::from_static(MODERATION_HEADER),
-            HeaderValue::from_str(&proof_token_b64).expect("token header"),
-        );
-        headers.insert(
-            HeaderName::from_static(DENYLIST_HEADER),
-            HeaderValue::from_str(denylist_version).expect("denylist header"),
-        );
-        headers.insert(
-            HeaderName::from_static(CACHE_VERSION_HEADER),
-            HeaderValue::from_str(cache_version).expect("cache header"),
         );
         let mut responses = HashMap::new();
         responses.insert(
             path.clone(),
             HttpResponse {
                 status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-                headers,
-                body: br#"{"error":"denylisted","message":"blocked"}"#.to_vec(),
+                headers: HeaderMap::new(),
+                body: format!(
+                    r#"{{"error":"gateway_compliance_denied","source":"baseline","catalog_digest_hex":"{CATALOG_DIGEST_HEX}"}}"#
+                )
+                .into_bytes(),
             },
         );
         let engine = Arc::new(StubEngine::new(responses));
@@ -743,7 +503,6 @@ mod compliance_tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let provider = GatewayProviderInput {
             name: "alpha".to_string(),
@@ -760,11 +519,8 @@ mod compliance_tests {
         let context = GatewayFetchContext::build_with_engine(config, [provider], engine)
             .expect("gateway fetch context builds");
 
-        let verifier =
-            ProofTokenVerifier::new(signing_key.verifying_key()).with_digest_key(digest_key);
-        let validator = PolicyEvidenceValidator::new()
-            .with_expected_cache_version(cache_version)
-            .with_proof_verifier(&verifier);
+        let validator =
+            PolicyEvidenceValidator::new().with_expected_catalog_digest(CATALOG_DIGEST_HEX);
 
         let reports = run_honey_probe(&context.fetcher(), &context.providers(), &spec, &validator)
             .await
@@ -772,106 +528,76 @@ mod compliance_tests {
         assert_eq!(reports.len(), 1);
         let report = &reports[0];
         assert_eq!(report.provider_id, "alpha");
-        assert_eq!(report.policy.cache_version, cache_version);
-        assert!(report.policy.proof.as_ref().unwrap().digest_bound);
-    }
-
-    #[test]
-    fn proof_token_verifier_rejects_wrong_binding_digest() {
-        let cache_version = "cache-v1";
-        let wrong_version = "cache-v3";
-        let digest_key = ProofTokenDigestKey::new([3; 32]);
-        let signing_key = SigningKey::from_bytes(&[5u8; 32]);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
-        let token = ProofToken::mint(
-            &mut rng,
-            &digest_key,
-            &signing_key,
-            &ProofTokenParams {
-                moderation: ModerationAction::Block,
-                entry_ids: &["dl-v1"],
-                evidence_digest: &compute_policy_binding_digest(cache_version),
-                issued_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100),
-                expires_at: None,
-            },
-        )
-        .expect("mint token");
-        let verifier =
-            ProofTokenVerifier::new(signing_key.verifying_key()).with_digest_key(digest_key);
-
-        let err = verifier
-            .verify(
-                &token.encode_base64(),
-                &compute_policy_binding_digest(wrong_version),
-            )
-            .expect_err("digest mismatch should fail");
-        match err {
-            ProofTokenError::Digest => {}
-            other => panic!("unexpected error {other:?}"),
-        }
-    }
-
-    #[test]
-    fn validator_requires_moderation_proof_when_requested() {
-        let cache_version = "cache-v1";
-        let evidence = GatewayFailureEvidence {
-            observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            canonical_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            code: Some("denylisted".to_string()),
-            proof_token_b64: None,
-            verified_proof: None,
-            denylist_version: Some(cache_version.to_string()),
-            cache_version: Some(cache_version.to_string()),
-            message: None,
-        };
-
-        let validator = PolicyEvidenceValidator::new()
-            .with_expected_cache_version(cache_version)
-            .require_moderation_proof();
-        let err = validator
-            .validate(evidence)
-            .expect_err("missing proof fails");
-        match err {
-            PolicyValidationError::MissingModerationProof => {}
-            other => panic!("unexpected error {other:?}"),
-        }
-    }
-
-    #[test]
-    fn validator_accepts_present_moderation_proof() {
-        let cache_version = "cache-v1";
-        let proof = ValidatedModerationProof {
-            body: ModerationTokenBodyV1 {
-                manifest_id: [0xAA; 32],
-                chunk_digest: None,
-                denylist_version: cache_version.to_string(),
-                cache_version: cache_version.to_string(),
-            },
-        };
-        let evidence = GatewayFailureEvidence {
-            observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            canonical_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            code: Some("denylisted".to_string()),
-            proof_token_b64: None,
-            verified_proof: Some(proof.clone()),
-            denylist_version: Some(cache_version.to_string()),
-            cache_version: Some(cache_version.to_string()),
-            message: None,
-        };
-
-        let validator = PolicyEvidenceValidator::new()
-            .with_expected_cache_version(cache_version)
-            .require_moderation_proof();
-        let validated = validator.validate(evidence).expect("validation passes");
-        assert!(validated.moderation_proof.is_some());
         assert_eq!(
-            validated
-                .moderation_proof
-                .as_ref()
-                .unwrap()
-                .body
-                .cache_version,
-            cache_version
+            report.policy.evidence.catalog_digest_hex,
+            CATALOG_DIGEST_HEX
         );
+        assert_eq!(report.policy.evidence.source, "baseline");
+    }
+
+    fn policy_evidence(source: &str, catalog_digest_hex: &str) -> GatewayFailureEvidence {
+        GatewayFailureEvidence {
+            observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+            code: "gateway_compliance_denied".to_owned(),
+            source: source.to_owned(),
+            catalog_digest_hex: catalog_digest_hex.to_owned(),
+        }
+    }
+
+    #[test]
+    fn validator_accepts_only_denying_sources_and_exact_catalog() {
+        let validator =
+            PolicyEvidenceValidator::new().with_expected_catalog_digest(CATALOG_DIGEST_HEX);
+        for source in ["baseline", "legal_safety_hold"] {
+            let validated = validator
+                .validate(policy_evidence(source, CATALOG_DIGEST_HEX))
+                .expect("canonical denial validates");
+            assert_eq!(validated.evidence.source, source);
+        }
+
+        for source in ["no_match", "accepted_appeal", "unknown"] {
+            let error = validator
+                .validate(policy_evidence(source, CATALOG_DIGEST_HEX))
+                .expect_err("non-denying source must fail");
+            assert!(matches!(error, PolicyValidationError::Source));
+        }
+    }
+
+    #[test]
+    fn validator_rejects_noncanonical_or_unexpected_catalog() {
+        let validator =
+            PolicyEvidenceValidator::new().with_expected_catalog_digest(CATALOG_DIGEST_HEX);
+
+        let mut wrong_status = policy_evidence("baseline", CATALOG_DIGEST_HEX);
+        wrong_status.observed_status = StatusCode::FORBIDDEN;
+        assert!(matches!(
+            validator.validate(wrong_status),
+            Err(PolicyValidationError::Status { .. })
+        ));
+
+        let mut wrong_code = policy_evidence("baseline", CATALOG_DIGEST_HEX);
+        wrong_code.code = "denylisted".to_owned();
+        assert!(matches!(
+            validator.validate(wrong_code),
+            Err(PolicyValidationError::Code)
+        ));
+
+        let uppercase = CATALOG_DIGEST_HEX.to_ascii_uppercase();
+        assert!(matches!(
+            validator.validate(policy_evidence("baseline", &uppercase)),
+            Err(PolicyValidationError::CatalogDigest)
+        ));
+
+        assert!(matches!(
+            validator.validate(policy_evidence("baseline", &"ab".repeat(32))),
+            Err(PolicyValidationError::CatalogDigestMismatch { .. })
+        ));
+
+        let malformed_expectation =
+            PolicyEvidenceValidator::new().with_expected_catalog_digest("not-a-digest");
+        assert!(matches!(
+            malformed_expectation.validate(policy_evidence("baseline", CATALOG_DIGEST_HEX)),
+            Err(PolicyValidationError::ExpectedCatalogDigest)
+        ));
     }
 }

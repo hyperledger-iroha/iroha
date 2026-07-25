@@ -257,9 +257,10 @@ use crate::{
         },
         encode_token_base64,
         gateway::{
-            ClientFingerprint, GatewayComplianceDecision, GatewayComplianceDecisionSource,
-            GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceSubjectKindV1,
-            PolicyViolation, RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
+            ClientFingerprint, GatewayComplianceController, GatewayComplianceDecision,
+            GatewayComplianceDecisionSource, GatewayComplianceDisposition, GatewayComplianceError,
+            GatewayComplianceSubjectKindV1, PolicyViolation, RateLimitError, RequestContext,
+            SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
@@ -9395,6 +9396,36 @@ fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) ->
             StatusCode::BAD_REQUEST,
             "invalid moderation request binding",
             "invalid_request_binding",
+        ),
+        ModerationOrchestratorError::InvalidPanelNotificationClaim => (
+            StatusCode::BAD_REQUEST,
+            "invalid moderation panel-notification claim",
+            "invalid_panel_notification_claim",
+        ),
+        ModerationOrchestratorError::InvalidPanelNotificationReceipt => (
+            StatusCode::BAD_REQUEST,
+            "invalid moderation panel-notification receipt",
+            "invalid_panel_notification_receipt",
+        ),
+        ModerationOrchestratorError::PanelNotificationClockRollback { .. } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "moderation panel-notification clock is stale",
+            "panel_notification_clock_rollback",
+        ),
+        ModerationOrchestratorError::PanelNotificationNotFound { .. } => (
+            StatusCode::NOT_FOUND,
+            "moderation panel notification was not found",
+            "panel_notification_not_found",
+        ),
+        ModerationOrchestratorError::PanelNotificationClaimConflict { .. } => (
+            StatusCode::CONFLICT,
+            "moderation panel-notification claim conflicts with durable state",
+            "panel_notification_claim_conflict",
+        ),
+        ModerationOrchestratorError::PanelNotificationReceiptConflict { .. } => (
+            StatusCode::CONFLICT,
+            "moderation panel-notification receipt conflicts with durable state",
+            "panel_notification_receipt_conflict",
         ),
         ModerationOrchestratorError::AuthorityMismatch { .. } => (
             StatusCode::FORBIDDEN,
@@ -21819,7 +21850,9 @@ async fn resolve_remote_cid_sources(
             Some(torii_base_url.as_str()),
         ) {
             Ok(()) => {}
-            Err(response) if response.status() == StatusCode::FORBIDDEN => continue,
+            Err(response) if response.status() == StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS => {
+                continue;
+            }
             Err(response) => return Err(response),
         }
         unresolved.push(UnresolvedRemoteCidSource {
@@ -25078,14 +25111,19 @@ fn gateway_compliance_decision_response(
     state: &SharedAppState,
     decision: GatewayComplianceDecision,
 ) -> Result<(), Response> {
-    if decision.disposition == GatewayComplianceDisposition::Allow {
+    let denial = match canonical_gateway_compliance_denial(&decision) {
+        Ok(denial) => denial,
+        Err(reason) => {
+            record_gateway_compliance_serving_failure(state, "internal");
+            warn!(
+                reason,
+                "governed gateway compliance returned an invalid serving decision"
+            );
+            return Err(gateway_compliance_unavailable_response());
+        }
+    };
+    let Some((source, catalog_digest)) = denial else {
         return Ok(());
-    }
-    let source = match decision.source {
-        GatewayComplianceDecisionSource::LegalSafetyHold => "legal_safety_hold",
-        GatewayComplianceDecisionSource::AcceptedAppeal => "accepted_appeal",
-        GatewayComplianceDecisionSource::Baseline => "baseline",
-        GatewayComplianceDecisionSource::NoMatch => "no_match",
     };
     #[cfg(feature = "telemetry")]
     state.telemetry.with_metrics(|metrics| {
@@ -25093,18 +25131,52 @@ fn gateway_compliance_decision_response(
     });
     #[cfg(not(feature = "telemetry"))]
     let _ = state;
-    let catalog_digest_hex = decision.catalog_digest.map(hex::encode).unwrap_or_default();
+    Err(gateway_compliance_denial_http_response(
+        source,
+        catalog_digest,
+    ))
+}
+
+fn canonical_gateway_compliance_denial(
+    decision: &GatewayComplianceDecision,
+) -> Result<Option<(&'static str, [u8; 32])>, &'static str> {
+    match (decision.disposition, decision.source) {
+        (
+            GatewayComplianceDisposition::Allow,
+            GatewayComplianceDecisionSource::NoMatch
+            | GatewayComplianceDecisionSource::AcceptedAppeal,
+        ) => Ok(None),
+        (
+            GatewayComplianceDisposition::Deny,
+            GatewayComplianceDecisionSource::Baseline
+            | GatewayComplianceDecisionSource::LegalSafetyHold,
+        ) => {
+            let source = gateway_compliance_decision_source_label(decision.source);
+            let catalog_digest = decision
+                .catalog_digest
+                .ok_or("denial_missing_catalog_digest")?;
+            Ok(Some((source, catalog_digest)))
+        }
+        (GatewayComplianceDisposition::Allow, _) => Err("allow_with_denial_source"),
+        (GatewayComplianceDisposition::Deny, _) => Err("deny_with_allow_source"),
+    }
+}
+
+fn gateway_compliance_denial_http_response(source: &str, catalog_digest: [u8; 32]) -> Response {
     let body = json_object(vec![
         json_entry("error", Value::from("gateway_compliance_denied")),
         json_entry("source", Value::from(source)),
-        json_entry("catalog_digest_hex", Value::from(catalog_digest_hex)),
+        json_entry(
+            "catalog_digest_hex",
+            Value::from(hex::encode(catalog_digest)),
+        ),
     ]);
-    let mut response = (StatusCode::FORBIDDEN, JsonBody(body)).into_response();
+    let mut response = (StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS, JsonBody(body)).into_response();
     response.headers_mut().insert(
         CACHE_CONTROL,
         HeaderValue::from_static("private, no-store, max-age=0"),
     );
-    Err(response)
+    response
 }
 
 fn gateway_compliance_unavailable_response() -> Response {
@@ -25364,6 +25436,21 @@ mod gateway_policy_violation_tests {
         })
     }
 
+    fn compliance_decision(
+        disposition: GatewayComplianceDisposition,
+        source: GatewayComplianceDecisionSource,
+        catalog_digest: Option<[u8; 32]>,
+    ) -> GatewayComplianceDecision {
+        GatewayComplianceDecision {
+            disposition,
+            source,
+            reference_id: None,
+            catalog_digest,
+            catalog_sequence: 7,
+            catalog_valid_until_unix: 4_102_444_800,
+        }
+    }
+
     #[test]
     fn governed_compliance_cid_encoding_is_canonical_lower_base32() {
         let mut cid = vec![1, 0x71, 0x1f, 32];
@@ -25412,6 +25499,87 @@ mod gateway_policy_violation_tests {
             )),
             "internal"
         );
+    }
+
+    #[test]
+    fn governed_compliance_denials_use_one_canonical_http_contract() {
+        for (source, expected_source) in [
+            (GatewayComplianceDecisionSource::Baseline, "baseline"),
+            (
+                GatewayComplianceDecisionSource::LegalSafetyHold,
+                "legal_safety_hold",
+            ),
+        ] {
+            let decision =
+                compliance_decision(GatewayComplianceDisposition::Deny, source, Some([0xAB; 32]));
+            let (validated_source, catalog_digest) = canonical_gateway_compliance_denial(&decision)
+                .expect("canonical denial")
+                .expect("denial contract");
+            assert_eq!(validated_source, expected_source);
+            let response =
+                gateway_compliance_denial_http_response(validated_source, catalog_digest);
+            assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+            assert_eq!(
+                response.headers().get(CACHE_CONTROL),
+                Some(&HeaderValue::from_static("private, no-store, max-age=0"))
+            );
+            let body = response_json(response);
+            assert_eq!(
+                body.get("error").and_then(Value::as_str),
+                Some("gateway_compliance_denied")
+            );
+            assert_eq!(
+                body.get("source").and_then(Value::as_str),
+                Some(expected_source)
+            );
+            assert_eq!(
+                body.get("catalog_digest_hex").and_then(Value::as_str),
+                Some("abababababababababababababababababababababababababababababababab")
+            );
+        }
+    }
+
+    #[test]
+    fn governed_compliance_decision_contract_rejects_impossible_states() {
+        for source in [
+            GatewayComplianceDecisionSource::AcceptedAppeal,
+            GatewayComplianceDecisionSource::NoMatch,
+        ] {
+            let decision =
+                compliance_decision(GatewayComplianceDisposition::Deny, source, Some([0x11; 32]));
+            assert!(canonical_gateway_compliance_denial(&decision).is_err());
+        }
+        for source in [
+            GatewayComplianceDecisionSource::Baseline,
+            GatewayComplianceDecisionSource::LegalSafetyHold,
+        ] {
+            let decision = compliance_decision(
+                GatewayComplianceDisposition::Allow,
+                source,
+                Some([0x11; 32]),
+            );
+            assert!(canonical_gateway_compliance_denial(&decision).is_err());
+        }
+        let missing_digest = compliance_decision(
+            GatewayComplianceDisposition::Deny,
+            GatewayComplianceDecisionSource::Baseline,
+            None,
+        );
+        assert_eq!(
+            canonical_gateway_compliance_denial(&missing_digest),
+            Err("denial_missing_catalog_digest")
+        );
+        for source in [
+            GatewayComplianceDecisionSource::AcceptedAppeal,
+            GatewayComplianceDecisionSource::NoMatch,
+        ] {
+            let allowed = compliance_decision(
+                GatewayComplianceDisposition::Allow,
+                source,
+                Some([0x22; 32]),
+            );
+            assert_eq!(canonical_gateway_compliance_denial(&allowed), Ok(None));
+        }
     }
 
     #[test]
@@ -25494,6 +25662,11 @@ mod gateway_policy_violation_tests {
             gateway_policy_violation_response(PolicyViolation::ProviderNotAdmitted {
                 provider_id: [0xBB; 32],
             }),
+            &entries,
+        );
+        check_response(
+            "D1",
+            gateway_compliance_denial_http_response("baseline", [0xD1; 32]),
             &entries,
         );
     }
@@ -35551,7 +35724,7 @@ mod advert_tests {
     }
 
     #[test]
-    fn appeal_finance_settlement_worker_step_key_advances_after_partial_drawdown() {
+    fn appeal_finance_settlement_submission_advances_after_partial_drawdown() {
         let auth = orderbook_auth_fixture();
         let request = appeal_finance_deposit_request(
             &auth.provider.account,
@@ -35573,12 +35746,36 @@ mod advert_tests {
                 .cloned()
                 .expect("appeal deposit record")
         };
+        let next_step = || -> Result<Option<(String, String)>, String> {
+            let current = record();
+            let config = baseline_appeal_settlement_config();
+            let deposit_xor =
+                parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string())
+                    .map_err(|error| error.to_string())?;
+            let verdict = appeal_verdict_from_request("frivolous")?;
+            let breakdown = config
+                .settle(deposit_xor, 7, verdict)
+                .map_err(|error| error.to_string())?;
+            let reconciliation = appeal_finance_deposit_settlement_reconciliation(
+                &expected,
+                &current,
+                config.version(),
+                verdict,
+                7,
+                &breakdown,
+            )?;
+            let execution =
+                appeal_finance_deposit_settlement_execution(&expected, &current, &breakdown)?;
+            let action =
+                appeal_finance_deposit_next_settlement_submission_step(&reconciliation, &execution)
+                    .map(|step| step.action.to_owned());
+            Ok(action.map(|action| (action, reconciliation.reconciliation_digest_hex)))
+        };
 
-        let first_key =
-            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
-                .expect("initial worker step key")
-                .expect("initial settlement step");
-        assert_eq!(first_key.action, "drawdown_non_refund");
+        let (first_action, first_reconciliation_digest) = next_step()
+            .expect("initial settlement step")
+            .expect("initial settlement step is pending");
+        assert_eq!(first_action, "drawdown_non_refund");
 
         drawdown_appeal_finance_asset_lock(
             &app,
@@ -35588,22 +35785,14 @@ mod advert_tests {
                 .expect("drawdown amount quantity"),
             2,
         );
-        let follow_up_key =
-            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
-                .expect("follow-up worker step key")
-                .expect("follow-up settlement step");
-        assert_eq!(follow_up_key.action, "cancel_refund");
-        assert_ne!(
-            first_key.reconciliation_digest_hex,
-            follow_up_key.reconciliation_digest_hex
-        );
+        let (follow_up_action, follow_up_reconciliation_digest) = next_step()
+            .expect("follow-up settlement step")
+            .expect("refund settlement step is pending");
+        assert_eq!(follow_up_action, "cancel_refund");
+        assert_ne!(first_reconciliation_digest, follow_up_reconciliation_digest);
 
         cancel_appeal_finance_asset_lock(&app, &expected, &auth.provider.account, 3);
-        assert!(
-            appeal_finance_settlement_worker_step_key(&expected, &record(), "frivolous", 7)
-                .expect("settled worker step key")
-                .is_none()
-        );
+        assert!(next_step().expect("settled submission state").is_none());
     }
 
     #[tokio::test]

@@ -68,8 +68,9 @@ caps provider attempts, DNS answers, response headers, metadata, file entries,
 payload bytes, and concurrent distinct CID hydrations. Declared lengths are
 checked before allocation and streamed lengths are checked again. Canonical
 base64/Norito, manifest policy and digest bindings, exact fetch ranges, payload
-and chunk-plan digests, file layout, local free capacity, and the active denylist
-must all pass before anything is persisted. Redirects are never followed. A
+and chunk-plan digests, file layout, local free capacity, and the promoted
+governed compliance catalog must all pass before anything is persisted.
+Redirects are never followed. A
 `429` with `Retry-After` means the bounded hydration single-flight table is full;
 a `502` means every approved route failed transport or integrity checks.
 
@@ -171,7 +172,7 @@ Recommended alerts:
 |----------|-----------|------------------|-----------|
 | Stream token exhaustion | Alert: `rate_limited` denials | Issue a token with `max_streams` no greater than the configured ceiling; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams` through the controlled configuration rollout if the ceiling is too low. |
 | GAR mismatch / provider not admitted | Refusal metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
-| TLS automation failure | `X-Sora-TLS-State` transitions to `degraded` | Trigger manual ACME renewal (`sorafs-gateway tls renew`); fall back to stored cert. | File incident report with cert timeline. |
+| TLS automation failure | `X-Sora-TLS-State` transitions to `degraded`, the active chain approaches expiry, or the public handshake fails | Withdraw the affected gateway from admission and traffic; do not continue on a stored-certificate fallback. Recover only through the deployment's audited runtime ACME adapter and controller boundary. | Re-admit only after a CA-valid chain, controller success state, external handshake probe, and self-cert evidence all pass; file the certificate timeline in the incident report. |
 | Governed compliance denial | `torii_sorafs_gateway_compliance_serving_decisions_total{disposition="deny"}` | Inspect only the bounded `subject_kind` and `source` dimensions, confirm catalog sequence/expiry, and notify governance. | Reconcile the signed catalog or accepted appeal; retain payload-free audit evidence. |
 
 ### 5.3 Log & Audit Requirements
@@ -214,7 +215,7 @@ Gateway rollouts must include the shared WAF/rate pack emitted under `configs/so
 
 - **Evidence pack**: admission envelopes, token rotation logs, change tickets.
 - **Self-cert validation**: run `docs/source/sorafs_gateway_self_cert.md` workflows before onboarding operators.
-- **Regulatory alignment**: ensure storage providers sign the gateway operations SLA covering stream-token retention, TLS rotation cadence, and denylist response time.
+- **Regulatory alignment**: ensure storage providers sign the gateway operations SLA covering stream-token retention, TLS rotation cadence, and governed compliance response time.
 
 ## 7. Appendix: CLI Reference
 

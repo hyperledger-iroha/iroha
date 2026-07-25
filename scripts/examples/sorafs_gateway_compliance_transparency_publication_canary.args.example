@@ -1,9 +1,5 @@
-# Reviewed transparency-publication canary inputs for the SFM-4 gateway compliance gate.
+# Canonicalize a real transparency-publication probe. No claim is synthesized.
 --kind transparency_publication
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/transparency-publication.json
 --out artifacts/sorafs_gateway/transparency-publication-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
 --now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---publication-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

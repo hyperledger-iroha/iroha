@@ -146,11 +146,13 @@ struct AdversarialPerceptualVariantV1 {
 ```
 
 The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
-validated via `AdversarialCorpusManifestV1::validate()`. The manifest allows the
-gateway denylist loader to populate `perceptual_family` entries that block
-entire near-duplicate clusters instead of individual bytes. A runnable fixture
-(`docs/examples/ai_moderation_perceptual_registry_202602.json`) demonstrates
-the expected layout and feeds directly into the sample gateway denylist.
+validated via `AdversarialCorpusManifestV1::validate()`. A governed compliance
+feed producer converts an approved manifest into `perceptual_family` rules that
+block entire near-duplicate clusters instead of individual bytes. The resulting
+catalog is bounded, predecessor-bound, and threshold-signed before staging; the
+runnable fixture
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) is validation
+input, not a local gateway pack.
 
 ## 5. Execution Pipeline
 1. Load `AiModerationManifestV1` from the governance DAG. Reject if
@@ -271,8 +273,8 @@ the expected layout and feeds directly into the sample gateway denylist.
   parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
   manifests that omit families, variants, or fingerprint metadata. Successful
   runs emit the issued-at timestamp, cohort label, and the family/variant counts
-  so operators can pin the evidence before updating the gateway denylist entries
-  described in Section 4.3.
+  so operators can pin the evidence before a governed producer stages the
+  corresponding catalog rules described in Section 4.3.
 
 ## 13. Open Follow-Ups
 - Monthly recalibration windows after 2026-03-02 continue to follow the

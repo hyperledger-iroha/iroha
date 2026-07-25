@@ -57,8 +57,8 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 ## Objectives
 
 1. Keep the local conformance load profile deterministic and fixture-backed.
-2. Validate success, byte-range, corruption, admission, rate-limit, and denylist
-   outcomes without relying on live network timing.
+2. Validate success, byte-range, corruption, admission, rate-limit, and
+   governed-compliance outcomes without relying on live network timing.
 3. Emit JSON reports and signed attestation envelopes that operators can archive
    for governance review.
 4. Use live staging rigs only for hardware SLO evidence, not for the local
@@ -69,7 +69,7 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 | Area | Status | Notes |
 |------|--------|-------|
 | Deterministic load scheduler | Implemented | `LoadProfile` and `DeterministicLoadGenerator` produce reproducible waves from the configured stream count and duration. |
-| Fixture replay | Implemented | The suite covers full CAR replay, aligned and multi-range byte replay, unsupported chunkers, missing headers, corrupted proofs, corrupted CAR payloads, provider admission failures, rate limits, GAR denylist refusals, and capability-refusal fixtures. |
+| Fixture replay | Implemented | The suite covers full CAR replay, aligned and multi-range byte replay, unsupported chunkers, missing headers, corrupted proofs, corrupted CAR payloads, provider admission failures, rate limits, governed-compliance refusals, and capability-refusal fixtures. |
 | Metrics report | Implemented | `LoadTestReport` records total requests, elapsed time, per-scenario success/refusal/error counts, and P50/P95/P99 latency. |
 | Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
 | Payload-free rollout canary builder | Implemented | `scripts/build_sorafs_gateway_load_canary.py` builds checked-in local conformance, staging load, telemetry/SLO, transport-scope, and governance approval evidence artifacts from reviewed rollout facts. |
@@ -91,7 +91,20 @@ capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 | B5 | Provider not admitted | Default load cycle | 412 refusal |
 | B6 | Gateway rate limit | Default load cycle | 429 refusal |
 | C* | Capability-refusal fixtures | Suite replay | Fixture-declared refusal |
-| D1 | GAR denylist refusal | Suite replay | 451 refusal |
+| D1 | Governed-compliance catalog refusal | Suite replay | `451 gateway_compliance_denied` |
+
+D1 represents the production denial contract, not a process-local list:
+`451 Unavailable For Legal Reasons` with
+`error=gateway_compliance_denied`, a decision `source` of `baseline` or
+`legal_safety_hold`, and the promoted catalog's 64-character lowercase
+`catalog_digest_hex`. Accepted appeals override baseline entries, while
+legal/safety holds retain precedence. If no fresh promoted catalog can be
+evaluated, or the compliance controller encounters invalid, conflicting, or
+unavailable durable state, the production gateway fails closed with
+`503 gateway_compliance_unavailable`. Both responses use
+`Cache-Control: private, no-store, max-age=0`. The deterministic D1 fixture
+pins the `451` status and canonical error code; it does not substitute for live
+staging evidence of catalog binding or the `503` failure path.
 
 ## Metrics & Telemetry
 
@@ -181,7 +194,8 @@ before final promotion can report ready.
 - **Header downgrade:** B2 omits required trustless headers and expects 428.
 - **Admission mismatch:** B5 exercises provider admission refusal and expects 412.
 - **Rate limiting:** B6 exceeds configured gateway limits and expects 429.
-- **GAR denylist:** D1 verifies policy denial and expects 451.
+- **Governed compliance:** D1 verifies the canonical catalog-bound denial code
+  and expects `451 gateway_compliance_denied`.
 - **Capability refusal:** C* fixtures pin additional deterministic refusal payloads.
 
 ## Remaining Rollout Work

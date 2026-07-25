@@ -159,6 +159,14 @@ def complete_args(tmp_path: Path) -> list[str]:
         DIGEST,
         "--audit-digest-hex",
         DIGEST,
+        "--gateway-compliance-denial-status-code",
+        "451",
+        "--gateway-compliance-denial-code",
+        "gateway_compliance_denied",
+        "--gateway-compliance-denial-source",
+        "baseline",
+        "--gateway-compliance-catalog-digest-hex",
+        DIGEST,
     ]
     for value in MODULE.REQUIRED_VIEWER_ROLES:
         args.extend(["--role", value])
@@ -217,6 +225,13 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     ]
     for claim in MODULE.VERIFIED_TRUE_CLAIMS:
         assert payload[claim] is True
+    assert payload["gateway_compliance_denial_enforced"] == {
+        "status_code": 451,
+        "code": "gateway_compliance_denied",
+        "source": "baseline",
+        "catalog_digest_hex": DIGEST,
+    }
+    assert "denylisted_digest_blocked" not in payload
     assert payload["audit_log_tamper_rejected"] is True
     assert payload["watermark_metadata_mismatch_rejected"] is True
     for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS:
@@ -574,6 +589,70 @@ def test_digest_must_be_exact_lowercase_hex_before_write(
     captured = capsys.readouterr()
     assert "--case-digest-hex must be exact lowercase 32-byte hex" in captured.err
     assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_removed_local_denylist_claim_is_rejected_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--verified-claim", "denylisted_digest_blocked"])
+
+    assert_rejected_without_artifact(
+        args,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--verified-claim contains an unknown value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "expected_error"),
+    (
+        (
+            "--gateway-compliance-denial-status-code",
+            "403",
+            "--gateway-compliance-denial-status-code must be exactly 451",
+        ),
+        (
+            "--gateway-compliance-denial-code",
+            "denylisted",
+            (
+                "--gateway-compliance-denial-code must be exactly "
+                "gateway_compliance_denied"
+            ),
+        ),
+        (
+            "--gateway-compliance-denial-source",
+            "accepted_appeal",
+            "--gateway-compliance-denial-source must be one of",
+        ),
+        (
+            "--gateway-compliance-catalog-digest-hex",
+            "A" * 64,
+            (
+                "--gateway-compliance-catalog-digest-hex must be exact "
+                "lowercase 32-byte hex"
+            ),
+        ),
+    ),
+)
+def test_gateway_compliance_denial_input_must_be_canonical_before_write(
+    option: str,
+    value: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index(option) + 1] = value
+
+    assert_rejected_without_artifact(
+        args,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
+    )
 
 
 def test_long_lived_url_ttl_fails_before_write(tmp_path: Path, capsys) -> None:

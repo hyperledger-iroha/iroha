@@ -180,25 +180,42 @@ path or hardware-backed signer implementation via the same trait.
 | B6 | Client exceeds rate limit window | 429 `rate_limited` with `Retry-After` header |
 | C1 | 1k concurrent range streaming (warm cache) | P95 latency < target, no proof failures |
 | C2 | 1k concurrent streaming with injected 1% corruption | All corrupted responses rejected, gateway returns 422 |
-| D1 | Load with GAR denylist trigger | 451 Unavailable For Legal Reasons |
+| D1 | Load with governed compliance-catalog trigger | 451 Unavailable For Legal Reasons |
 
 The Rust harness already exercises scenarios A1, A2, A3, A4, B1, B2, B3, B4, B5, and B6 against deterministic fixtures, asserting canonical digests, byte-range alignment, refusal semantics, and policy enforcement.
 
-## Sample Denylist
+## Governed Compliance Catalog
 
-To exercise policy enforcement without wiring governance feeds, point the node configuration
-`torii.sorafs_gateway.denylist.path` at `docs/source/sorafs_gateway_denylist_sample.json`. The
-fixture contains:
-- `provider` and `manifest_digest` entries that demonstrate fixed-width hex identifiers with optional jurisdiction windows.
-- a `cid` entry encoded in base64 alongside an expiry window.
-- a `url` entry for URL-level blocking.
-- an `account_id` entry using the canonical AccountAddress hex encoding to mirror governance suspensions.
-- an `account_alias` entry that blocks an on-chain account alias (`name@dataspace` or `name@domain.dataspace`).
-- a `perceptual_family` entry that pairs a family/variant UUID with perceptual hash metadata (`perceptual_hash_hex`, `perceptual_hamming_radius`) so gateways can block near-duplicate content clusters.
+Scenario D1 must exercise the same governed controller used by deployed
+gateways; a local file, sample pack, or unsigned bootstrap is not a valid
+conformance shortcut.
 
-Each record follows the same Norito JSON layout used by the loader, including optional `issued_at`
-and `expires_at` fields. Operators can copy the file as a starting point for their own governance
-feeds or integration tests.
+1. Read the approved source through
+   `GET /v1/sorafs/gateway/compliance/feeds/{feed_id}` and confirm the current
+   head through `GET /v1/sorafs/gateway/compliance/status`.
+2. Have the external governed producer normalize a bounded candidate into
+   canonical Norito, bind it to the promoted predecessor and monotonic
+   sequence, and collect the required signatures from distinct active,
+   non-revoked Ed25519 signers.
+3. Submit the exact signed bytes through authenticated
+   `POST /v1/sorafs/gateway/compliance/stage`. After both independently
+   administered regional gateways verify the digest, sequence, predecessor,
+   signer threshold, scope, and validity window, record their distinct
+   acknowledgements through
+   `POST /v1/sorafs/gateway/compliance/acknowledge`.
+4. Promote through authenticated
+   `POST /v1/sorafs/gateway/compliance/promote`, wait until the status response
+   reports the same promoted digest and sequence on both gateways, and then run
+   D1 against the catalog-blocked fixture subject.
+5. Exercise authenticated
+   `POST /v1/sorafs/gateway/compliance/rollback` separately and verify that it
+   restores the durable last-known-good catalog without rewriting the signed
+   predecessor chain.
+
+Conformance artifacts record only payload-free feed, policy, catalog,
+predecessor, and signer-set digests plus bounded sequence, acknowledgement, and
+outcome fields. Feed payloads, matched subjects, credentials, tokens, and
+signing material must not enter reports or logs.
 
 ## Reporting Format
 

@@ -193,7 +193,7 @@ fn sorafs_gateway_attestation_verifier_rejects_all_zero_signature() {
 }
 
 #[test]
-fn sorafs_gateway_provider_denylist_is_refused() {
+fn sorafs_gateway_unadmitted_provider_is_refused() {
     let report = default_suite_report();
     let scenario = report
         .scenario("B5")
