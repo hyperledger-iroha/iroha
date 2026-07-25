@@ -387,7 +387,7 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
     })
 }
 
-pub(crate) fn bind_staged_sumeragi_v2_context(
+pub fn bind_staged_sumeragi_v2_context(
     genesis: RawGenesisTransaction,
     genesis_key_pair: &KeyPair,
     config: Option<&actual::Root>,
@@ -517,61 +517,8 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
         LiveQueryStore::start_test(),
         genesis.chain_id().clone(),
     );
-    match config {
-        Some(config) => {
-            state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
-            state
-                .set_zk(config.zk.clone())
-                .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
-            state
-                .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
-                .map_err(|error| {
-                    eyre!("invalid primary Nexus geometry for staged genesis: {error}")
-                })?;
-            state
-                .restore_kura_lane_segments_before_startup_replay()
-                .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
-            state
-                .set_nexus_from_config(config.nexus.clone())
-                .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
-            state.set_crypto(config.crypto.clone());
-        }
-        None => {
-            state.set_pipeline(staged_genesis_pipeline(actual::Pipeline::default()));
-            state
-                .set_nexus(actual::Nexus::default())
-                .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
-            state.set_crypto(actual::Crypto::default());
-        }
-    }
-
-    let nexus = state.nexus_snapshot();
-    let lane_compliance = match config {
-        Some(config) if config.nexus.compliance.enabled => {
-            let policy_dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
-                eyre!("lane compliance is enabled but no policy_dir is configured")
-            })?;
-            let engine = LaneComplianceEngine::from_directory(
-                policy_dir,
-                config.nexus.compliance.audit_only,
-            )
-            .map_err(|error| eyre!("load staged genesis lane compliance policies: {error}"))?;
-            engine
-                .validate_active_catalog(&nexus.lane_catalog)
-                .map_err(|error| {
-                    eyre!("validate staged genesis lane compliance policies: {error}")
-                })?;
-            Some(Arc::new(engine))
-        }
-        _ => None,
-    };
-    state.install_lane_compliance_engine(lane_compliance);
-    let lane_manifests = if nexus.enabled {
-        staged_lane_manifest_registry(genesis, &nexus)?
-    } else {
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
-    };
-    state.install_lane_manifests(&Arc::new(lane_manifests));
+    configure_staged_genesis_state(&mut state, config)?;
+    install_staged_nexus_policies(&mut state, genesis, config)?;
 
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
         .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
@@ -640,6 +587,71 @@ fn staged_genesis_pipeline(mut pipeline: actual::Pipeline) -> actual::Pipeline {
     // account parsing cannot fall back to the process-global discriminant.
     pipeline.workers = 1;
     pipeline
+}
+
+fn configure_staged_genesis_state(
+    state: &mut State,
+    config: Option<&actual::Root>,
+) -> Result<(), color_eyre::eyre::Error> {
+    if let Some(config) = config {
+        state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
+        state
+            .set_zk(config.zk.clone())
+            .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
+        state
+            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
+            .map_err(|error| eyre!("invalid primary Nexus geometry for staged genesis: {error}"))?;
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
+        state
+            .set_nexus_from_config(config.nexus.clone())
+            .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+        state.set_crypto(config.crypto.clone());
+    } else {
+        state.set_pipeline(staged_genesis_pipeline(actual::Pipeline::default()));
+        state
+            .set_nexus(actual::Nexus::default())
+            .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
+        state.set_crypto(actual::Crypto::default());
+    }
+    Ok(())
+}
+
+fn install_staged_nexus_policies(
+    state: &mut State,
+    genesis: &RawGenesisTransaction,
+    config: Option<&actual::Root>,
+) -> Result<(), color_eyre::eyre::Error> {
+    let nexus = state.nexus_snapshot();
+    let lane_compliance = match config {
+        Some(config) if config.nexus.compliance.enabled => {
+            let policy_dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+                eyre!("lane compliance is enabled but no policy_dir is configured")
+            })?;
+            let engine = LaneComplianceEngine::from_directory(
+                policy_dir,
+                config.nexus.compliance.audit_only,
+            )
+            .map_err(|error| eyre!("load staged genesis lane compliance policies: {error}"))?;
+            engine
+                .validate_active_catalog(&nexus.lane_catalog)
+                .map_err(|error| {
+                    eyre!("validate staged genesis lane compliance policies: {error}")
+                })?;
+            Some(Arc::new(engine))
+        }
+        _ => None,
+    };
+    state.install_lane_compliance_engine(lane_compliance);
+
+    let lane_manifests = if nexus.enabled {
+        staged_lane_manifest_registry(genesis, &nexus)?
+    } else {
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
+    };
+    state.install_lane_manifests(&Arc::new(lane_manifests));
+    Ok(())
 }
 
 fn should_auto_bootstrap_npos_validators(
@@ -1537,6 +1549,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the regression test audits the complete bound-manifest write/sign contract as one transaction"
+    )]
     fn bound_manifest_output_matches_the_manifest_used_for_signing() {
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
@@ -2061,6 +2077,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the integration regression exercises one generated Nexus localnet through complete peer-config resigning"
+    )]
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
         let seed = "localnet-resign-confidential-policy".to_owned();

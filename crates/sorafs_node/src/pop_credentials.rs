@@ -1345,6 +1345,10 @@ impl PopCredentialApiV1 {
     }
 
     /// Authenticate and produce a local proof from runtime wallet custody.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the public facade keeps service state, wallet custody, authentication material, proof challenge, verifier domain, and epoch as explicit security bindings"
+    )]
     pub fn prove_membership(
         &self,
         service: &PopCredentialService,

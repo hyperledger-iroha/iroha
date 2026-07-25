@@ -2298,7 +2298,7 @@ mod tests {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
 
-        let mut bad_version = baseline.clone();
+        let mut bad_version = baseline;
         bad_version.wire_protocol_version = 99;
         assert!(bad_version.validate().is_err());
 

@@ -13,14 +13,15 @@ Running the command above writes `docs/portal/static/openapi/torii.json` and
 feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
 automatically. The generator builds the canonical OpenAPI projection from the
 Torii route catalog and fails if that live projection cannot be produced. The
-explicit `--allow-stub` escape hatch is diagnostic-only and must never be used
-for a tracked canonical or release artifact.
+release workflow has no stub escape hatch: a missing, empty, or structurally
+incomplete document fails before manifest creation, signing, synchronization,
+or version publication.
 
 ## Current status
 
 - **Spec source:** `cargo run -p xtask --bin xtask -- openapi` queries the Torii
-  router directly; stub output requires an explicit diagnostic opt-in and is
-  rejected by the canonical artifact workflow.
+  router directly and fails closed if the complete specification is
+  unavailable.
 - **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
 - **Authentication:** The “Try it” sandbox now forwards requests through a
   constrained staging proxy. Operators must supply a Torii endpoint and bearer

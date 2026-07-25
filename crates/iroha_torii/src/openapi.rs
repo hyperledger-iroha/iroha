@@ -7184,30 +7184,6 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/denylist/catalog".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Fetch gateway denylist catalog.",
-            "Fetch the configured SoraFS gateway denylist catalog. The returned `packs`, `opt_out_packs`, and `extra_packs` arrays are bounded by `limit` (default 50, max 500) while full counts remain visible.",
-            "#/components/schemas/JsonValue",
-            vec![integer_query_param(
-                "limit",
-                "Optional denylist catalog list limit.",
-                Some("uint64"),
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/denylist/packs/{pack_id}".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Fetch gateway denylist pack metadata.",
-            "Fetch metadata for one configured SoraFS gateway denylist pack.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("pack_id", "Denylist pack identifier.")],
-        )),
-    );
-    paths.insert(
         "/v1/sorafs/storage/pin".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -26321,22 +26297,6 @@ fn components_section() -> Value {
     Value::Object(components)
 }
 
-/// Returns the placeholder OpenAPI document used when the live spec is unavailable.
-///
-/// The stub advertises a deterministic skeleton so tooling can reference a
-/// well-formed document even if routing fails to expose the spec.
-#[must_use]
-pub fn stub_spec() -> Value {
-    let mut doc = Map::new();
-    doc.insert("openapi".into(), Value::String("3.1.0".to_owned()));
-    doc.insert("info".into(), info_section(license_section()));
-    doc.insert("servers".into(), servers_section());
-    doc.insert("paths".into(), Value::Object(Map::new()));
-    doc.insert("components".into(), Value::Object(Map::new()));
-    doc.insert("tags".into(), tags_section());
-    Value::Object(doc)
-}
-
 /// Returns the OpenAPI specification for the full Torii surface.
 #[must_use]
 pub fn generate_spec() -> Value {
@@ -28567,21 +28527,6 @@ mod tests {
     }
 
     #[test]
-    fn stub_spec_has_minimum_fields() {
-        let doc = stub_spec();
-        assert_eq!(
-            doc.get("openapi").and_then(norito::json::Value::as_str),
-            Some("3.1.0")
-        );
-        let info = doc
-            .get("info")
-            .and_then(|value| value.as_object())
-            .expect("stub spec must expose info section");
-        assert!(info.contains_key("title"));
-        assert!(info.contains_key("version"));
-    }
-
-    #[test]
     fn generated_spec_sccp_discovery_is_state_derived_and_closed() {
         let doc = generate_spec();
         let paths = doc
@@ -30559,6 +30504,8 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/reputation/events"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/ws"));
+        assert!(!paths.contains_key("/v1/sorafs/denylist/catalog"));
+        assert!(!paths.contains_key("/v1/sorafs/denylist/packs/{pack_id}"));
         assert!(!paths.contains_key("/ws/reputation"));
         for repair_command_path in [
             "/v1/sorafs/audit/repair/report",

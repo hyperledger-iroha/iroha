@@ -2117,14 +2117,9 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_gateway_policy: Option<Arc<sorafs::gateway::GatewayPolicy>>,
     #[cfg(feature = "app_api")]
-    sorafs_gateway_denylist: Option<Arc<sorafs::gateway::GatewayDenylist>>,
-    #[cfg(feature = "app_api")]
-    sorafs_gateway_denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
-    #[cfg(feature = "app_api")]
     sorafs_gateway_tls_state: Option<Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>>,
     #[cfg(feature = "app_api")]
-    sorafs_gateway_compliance_controller:
-        Option<Arc<sorafs::gateway::GatewayComplianceController>>,
+    sorafs_gateway_compliance_controller: Option<Arc<sorafs::gateway::GatewayComplianceController>>,
     #[cfg(feature = "app_api")]
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
@@ -54572,11 +54567,6 @@ impl Torii {
         capacity_get!(STORAGE_STATE, sorafs::api::handle_get_sorafs_storage_state);
         capacity_get!(CID_LOOKUP, sorafs::api::handle_get_sorafs_cid_lookup);
         capacity_get!(
-            DENYLIST_CATALOG,
-            sorafs::api::handle_get_sorafs_denylist_catalog
-        );
-        capacity_get!(DENYLIST_PACK, sorafs::api::handle_get_sorafs_denylist_pack);
-        capacity_get!(
             STORAGE_MANIFEST,
             sorafs::api::handle_get_sorafs_storage_manifest
         );
@@ -55612,13 +55602,12 @@ impl Torii {
                         checkpoint_max_bytes: config.checkpoint_max_bytes.0,
                     };
                 let adapter_chain_id = Arc::new(chain_id.clone());
-                let fee_quoter = Arc::new(
-                    sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
+                let fee_quoter =
+                    Arc::new(sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
                         Arc::clone(&adapter_chain_id),
                         Arc::clone(&queue),
                         Arc::clone(&state),
-                    ),
-                );
+                    ));
                 let ingress = Arc::new(
                     sorafs::moderation_runtime::ToriiModerationStrictTransactionIngressV1::new(
                         Arc::clone(&adapter_chain_id),
@@ -55651,21 +55640,19 @@ impl Torii {
                         publication_handoff,
                     ),
                 );
-                let deps =
-                    sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
-                        submitter,
-                        snapshot_reader,
-                        settlement_sink,
-                        publication_sink,
-                    };
-                let runtime =
-                    sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
-                        orchestrator_config,
-                        deps,
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("failed to initialise SoraFS moderation orchestrator: {error}")
-                    });
+                let deps = sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
+                    submitter,
+                    snapshot_reader,
+                    settlement_sink,
+                    publication_sink,
+                };
+                let runtime = sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
+                    orchestrator_config,
+                    deps,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("failed to initialise SoraFS moderation orchestrator: {error}")
+                });
                 Some(Arc::new(runtime))
             }
             (Some(_), _, _, _) => {
@@ -56479,14 +56466,6 @@ impl Torii {
                 .as_ref()
                 .map(|components| Arc::clone(&components.policy)),
             #[cfg(feature = "app_api")]
-            sorafs_gateway_denylist: gateway_components
-                .as_ref()
-                .map(|components| Arc::clone(&components.denylist)),
-            #[cfg(feature = "app_api")]
-            sorafs_gateway_denylist_catalog: gateway_components
-                .as_ref()
-                .and_then(|components| components.denylist_catalog.clone()),
-            #[cfg(feature = "app_api")]
             sorafs_gateway_tls_state: gateway_components
                 .as_ref()
                 .map(|components| Arc::clone(&components.tls_state)),
@@ -56575,7 +56554,6 @@ impl Torii {
             &app_state.sorafs_admission,
             &app_state.sorafs_gateway_config,
             &app_state.sorafs_gateway_policy,
-            &app_state.sorafs_gateway_denylist,
             &app_state.sorafs_gateway_tls_state,
             &app_state.sorafs_blinded_resolver,
             &app_state.stream_token_issuer,
@@ -57297,8 +57275,6 @@ fn load_cdn_policy(
 #[derive(Clone)]
 struct GatewaySecurityComponents {
     policy: Arc<sorafs::gateway::GatewayPolicy>,
-    denylist: Arc<sorafs::gateway::GatewayDenylist>,
-    denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
     tls_state: Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>,
     tls_automation: Option<Arc<sorafs::gateway::TlsAutomationHandle>>,
     compliance_controller: Option<Arc<sorafs::gateway::GatewayComplianceController>>,
@@ -57400,24 +57376,11 @@ fn build_sorafs_gateway_security(
     compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
 ) -> GatewaySecurityComponents {
     use sorafs::gateway::{
-        FileGatewayComplianceStore, GatewayComplianceController, GatewayDenylist, GatewayPolicy,
+        FileGatewayComplianceStore, GatewayComplianceController, GatewayPolicy,
         GatewayPolicyConfig, GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle,
         TlsStateSnapshot,
     };
 
-    if config.compliance.is_some()
-        && (config.denylist.path.is_some()
-            || config.denylist.catalog_path.is_some()
-            || !config.denylist.opt_out_packs.is_empty()
-            || !config.denylist.extra_packs.is_empty()
-            || config.denylist.jurisdiction.is_some())
-    {
-        panic!(
-            "governed SoraFS gateway compliance cannot run with the obsolete unsigned denylist bootstrap authority"
-        );
-    }
-    let denylist = Arc::new(GatewayDenylist::new());
-    let denylist_catalog = populate_gateway_denylist(&denylist, &config.denylist).map(Arc::new);
     let rate_limit = GatewayRateLimitConfig {
         max_requests: config.rate_limit.max_requests.map(NonZeroU32::get),
         window: config.rate_limit.window,
@@ -57431,12 +57394,7 @@ fn build_sorafs_gateway_security(
         cdn_policy,
     };
     let rate_limiter = GatewayRateLimiter::new(rate_limit);
-    let policy = Arc::new(GatewayPolicy::new(
-        policy_config,
-        admission,
-        denylist.clone(),
-        rate_limiter,
-    ));
+    let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
 
     let tls_automation = match (config.acme.enabled, acme_client) {
@@ -57506,8 +57464,6 @@ fn build_sorafs_gateway_security(
 
     GatewaySecurityComponents {
         policy,
-        denylist,
-        denylist_catalog,
         tls_state,
         tls_automation,
         compliance_controller,
@@ -57845,926 +57801,6 @@ mod gateway_runtime_config_tests {
 
         let _ = build_sorafs_gateway_security(&config, None, None, None);
     }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
-pub(crate) struct GatewayDenylistPackSnapshot {
-    pub pack_id: String,
-    pub version: Option<String>,
-    pub default_enabled: bool,
-    pub active: bool,
-    pub policy_tier: Option<String>,
-    pub manifest_cid: Option<String>,
-    pub merkle_root: Option<String>,
-    pub issued_by_proposal_id: Option<String>,
-    pub review_reference: Option<String>,
-    pub jurisdiction: Option<String>,
-    pub issued_at: Option<String>,
-    pub expires_at: Option<String>,
-    pub path: PathBuf,
-    pub entry_count: usize,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
-pub(crate) struct GatewayDenylistCatalogSnapshot {
-    pub version: u8,
-    pub jurisdiction: Option<String>,
-    pub opt_out_packs: Vec<String>,
-    pub extra_packs: Vec<String>,
-    pub packs: Vec<GatewayDenylistPackSnapshot>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, JsonDeserialize)]
-struct GatewayDenylistFileEntry {
-    kind: String,
-    provider_id_hex: Option<String>,
-    manifest_digest_hex: Option<String>,
-    cid_b64: Option<String>,
-    cid_hex: Option<String>,
-    cid_utf8: Option<String>,
-    url: Option<String>,
-    account_id: Option<String>,
-    account_alias: Option<String>,
-    jurisdiction: Option<String>,
-    reason: Option<String>,
-    issued_at: Option<String>,
-    expires_at: Option<String>,
-    policy_tier: Option<String>,
-    emergency_canon: Option<String>,
-    governance_reference: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, JsonDeserialize)]
-struct GatewayDenylistCatalogFile {
-    version: Option<u8>,
-    packs: Vec<GatewayDenylistPackFile>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, JsonDeserialize)]
-struct GatewayDenylistPackFile {
-    pack_id: String,
-    version: Option<String>,
-    path: String,
-    default_enabled: Option<bool>,
-    policy_tier: Option<String>,
-    manifest_cid: Option<String>,
-    merkle_root: Option<String>,
-    issued_by_proposal_id: Option<String>,
-    review_reference: Option<String>,
-    jurisdiction: Option<String>,
-    issued_at: Option<String>,
-    expires_at: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-struct GatewayDenylistPolicyMeta {
-    tier: sorafs::gateway::DenylistPolicyTier,
-    canon: Option<String>,
-    governance_reference: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, Default)]
-struct GatewayDenylistSourceMeta {
-    source_pack_id: Option<String>,
-    source_pack_manifest_cid: Option<String>,
-    source_pack_merkle_root: Option<String>,
-    issued_by_proposal_id: Option<String>,
-    review_reference: Option<String>,
-    jurisdiction: Option<String>,
-    issued_at: Option<String>,
-    expires_at: Option<String>,
-    policy_tier: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-fn populate_gateway_denylist(
-    denylist: &Arc<sorafs::gateway::GatewayDenylist>,
-    config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
-) -> Option<GatewayDenylistCatalogSnapshot> {
-    if let Some(path) = &config.catalog_path {
-        return load_gateway_denylist_catalog(denylist, config, path);
-    }
-
-    let policy = gateway_denylist_policy_from_config(config);
-    let Some(path) = &config.path else {
-        return None;
-    };
-
-    let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, path, None);
-    iroha_logger::info!(count = loaded, path = ?path, "loaded gateway denylist entries");
-    None
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_gateway_pack_id(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn read_gateway_denylist_entries(path: &Path) -> Option<Vec<GatewayDenylistFileEntry>> {
-    let data = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            iroha_logger::warn!(?err, path = ?path, "failed to read gateway denylist file");
-            return None;
-        }
-    };
-
-    match norito::json::from_slice(&data) {
-        Ok(entries) => Some(entries),
-        Err(err) => {
-            iroha_logger::warn!(?err, path = ?path, "failed to parse gateway denylist file");
-            None
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn load_gateway_denylist_entries_from_path(
-    denylist: &Arc<sorafs::gateway::GatewayDenylist>,
-    policy: &sorafs::gateway::DenylistPolicy,
-    path: &Path,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> usize {
-    let Some(entries) = read_gateway_denylist_entries(path) else {
-        return 0;
-    };
-    let mut loaded = 0usize;
-    for entry in entries {
-        let result = match entry.kind.as_str() {
-            "provider" => build_provider_denylist_entry(&entry, &policy, source_meta),
-            "manifest_digest" => build_manifest_digest_denylist_entry(&entry, &policy, source_meta),
-            "cid" => build_cid_denylist_entry(&entry, &policy, source_meta),
-            "url" => build_url_denylist_entry(&entry, &policy, source_meta),
-            "account_id" => build_account_id_denylist_entry(&entry, &policy, source_meta),
-            "account_alias" => build_account_alias_denylist_entry(&entry, &policy, source_meta),
-            other => {
-                iroha_logger::warn!(
-                    kind = other,
-                    path = ?path,
-                    "unsupported gateway denylist entry kind"
-                );
-                continue;
-            }
-        };
-
-        match result {
-            Ok((kind, metadata)) => {
-                denylist.upsert(kind, metadata);
-                loaded += 1;
-            }
-            Err(err) => {
-                iroha_logger::warn!(
-                    error = %err,
-                    kind = %entry.kind,
-                    path = ?path,
-                    "failed to load gateway denylist entry"
-                );
-            }
-        }
-    }
-
-    loaded
-}
-
-#[cfg(feature = "app_api")]
-fn load_gateway_denylist_catalog(
-    denylist: &Arc<sorafs::gateway::GatewayDenylist>,
-    config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
-    catalog_path: &Path,
-) -> Option<GatewayDenylistCatalogSnapshot> {
-    let data = match fs::read(catalog_path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            iroha_logger::warn!(?err, path = ?catalog_path, "failed to read gateway denylist catalog");
-            return None;
-        }
-    };
-
-    let catalog: GatewayDenylistCatalogFile = match norito::json::from_slice(&data) {
-        Ok(value) => value,
-        Err(err) => {
-            iroha_logger::warn!(
-                ?err,
-                path = ?catalog_path,
-                "failed to parse gateway denylist catalog"
-            );
-            return None;
-        }
-    };
-
-    let policy = gateway_denylist_policy_from_config(config);
-    let opt_out = config
-        .opt_out_packs
-        .iter()
-        .filter_map(|value| normalize_gateway_pack_id(value))
-        .collect::<HashSet<_>>();
-    let extra = config
-        .extra_packs
-        .iter()
-        .filter_map(|value| normalize_gateway_pack_id(value))
-        .collect::<HashSet<_>>();
-
-    let base_dir = catalog_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut packs = Vec::new();
-    let mut total_loaded = 0usize;
-
-    for pack in catalog.packs {
-        let Some(pack_id) = normalize_gateway_pack_id(&pack.pack_id) else {
-            iroha_logger::warn!(path = ?catalog_path, "skipping gateway denylist pack with empty pack_id");
-            continue;
-        };
-
-        let path = {
-            let raw = PathBuf::from(pack.path.trim());
-            if raw.is_absolute() {
-                raw
-            } else {
-                base_dir.join(raw)
-            }
-        };
-
-        let jurisdiction_matches = pack
-            .jurisdiction
-            .as_ref()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map_or(true, |value| config.jurisdiction.as_deref() == Some(value));
-        let default_enabled = pack.default_enabled.unwrap_or(false);
-        let active = extra.contains(&pack_id)
-            || (default_enabled && jurisdiction_matches && !opt_out.contains(&pack_id));
-        let entry_count = if active {
-            let source_meta = GatewayDenylistSourceMeta {
-                source_pack_id: Some(pack_id.clone()),
-                source_pack_manifest_cid: pack.manifest_cid.clone(),
-                source_pack_merkle_root: pack.merkle_root.clone(),
-                issued_by_proposal_id: pack.issued_by_proposal_id.clone(),
-                review_reference: pack.review_reference.clone(),
-                jurisdiction: pack.jurisdiction.clone(),
-                issued_at: pack.issued_at.clone(),
-                expires_at: pack.expires_at.clone(),
-                policy_tier: pack.policy_tier.clone(),
-            };
-            let loaded = load_gateway_denylist_entries_from_path(
-                denylist,
-                &policy,
-                &path,
-                Some(&source_meta),
-            );
-            total_loaded += loaded;
-            loaded
-        } else {
-            read_gateway_denylist_entries(&path).map_or(0, |entries| entries.len())
-        };
-
-        packs.push(GatewayDenylistPackSnapshot {
-            pack_id,
-            version: pack.version,
-            default_enabled,
-            active,
-            policy_tier: pack.policy_tier,
-            manifest_cid: pack.manifest_cid,
-            merkle_root: pack.merkle_root,
-            issued_by_proposal_id: pack.issued_by_proposal_id,
-            review_reference: pack.review_reference,
-            jurisdiction: pack.jurisdiction,
-            issued_at: pack.issued_at,
-            expires_at: pack.expires_at,
-            path,
-            entry_count,
-        });
-    }
-
-    iroha_logger::info!(
-        count = total_loaded,
-        path = ?catalog_path,
-        "loaded gateway denylist entries from catalog"
-    );
-
-    Some(GatewayDenylistCatalogSnapshot {
-        version: catalog.version.unwrap_or(1),
-        jurisdiction: config.jurisdiction.clone(),
-        opt_out_packs: config.opt_out_packs.clone(),
-        extra_packs: config.extra_packs.clone(),
-        packs,
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn build_denylist_entry_metadata(
-    entry: &GatewayDenylistFileEntry,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistEntryBuilder,
-        GatewayDenylistPolicyMeta,
-    ),
-    String,
-> {
-    let mut builder = sorafs::gateway::DenylistEntryBuilder::default();
-    let mut issued_set = false;
-    if let Some(source_meta) = source_meta {
-        builder = builder
-            .source_pack_id(source_meta.source_pack_id.clone())
-            .source_pack_manifest_cid(source_meta.source_pack_manifest_cid.clone())
-            .source_pack_merkle_root(source_meta.source_pack_merkle_root.clone())
-            .issued_by_proposal_id(source_meta.issued_by_proposal_id.clone())
-            .review_reference(source_meta.review_reference.clone());
-    }
-    let jurisdiction = entry
-        .jurisdiction
-        .as_deref()
-        .or(source_meta.and_then(|meta| meta.jurisdiction.as_deref()))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    if let Some(jurisdiction) = jurisdiction {
-        builder = builder.jurisdiction(jurisdiction);
-    }
-    if let Some(reason) = &entry.reason {
-        builder = builder.reason(reason.clone());
-    }
-    let issued_at_raw = entry
-        .issued_at
-        .as_deref()
-        .or(source_meta.and_then(|meta| meta.issued_at.as_deref()));
-    if let Some(issued_at) = parse_optional_timestamp(issued_at_raw)? {
-        builder = builder.issued_at(issued_at);
-        issued_set = true;
-    }
-    let expires_at_raw = entry
-        .expires_at
-        .as_deref()
-        .or(source_meta.and_then(|meta| meta.expires_at.as_deref()));
-    if let Some(expires_at) = parse_optional_timestamp(expires_at_raw)? {
-        builder = builder.expires_at(expires_at);
-    }
-    if !issued_set {
-        builder = builder.issued_at(SystemTime::now());
-    }
-    let tier = parse_policy_tier(
-        entry
-            .policy_tier
-            .as_deref()
-            .or(source_meta.and_then(|meta| meta.policy_tier.as_deref())),
-    )?;
-    let canon = entry
-        .emergency_canon
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(std::borrow::ToOwned::to_owned);
-    let governance_reference = entry
-        .governance_reference
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(std::borrow::ToOwned::to_owned);
-    Ok((
-        builder,
-        GatewayDenylistPolicyMeta {
-            tier,
-            canon,
-            governance_reference,
-        },
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn build_provider_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let provider_hex = entry
-        .provider_id_hex
-        .as_ref()
-        .ok_or_else(|| "provider_id_hex is required for provider denylist entries".to_string())?;
-    let bytes = hex::decode(provider_hex)
-        .map_err(|err| format!("invalid provider_id_hex `{provider_hex}`: {err}"))?;
-    let array: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| "provider_id_hex must be 32 bytes".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-
-    Ok((sorafs::gateway::DenylistKind::Provider(array), metadata))
-}
-
-#[cfg(feature = "app_api")]
-fn build_manifest_digest_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let digest_hex = entry.manifest_digest_hex.as_ref().ok_or_else(|| {
-        "manifest_digest_hex is required for manifest_digest denylist entries".to_string()
-    })?;
-    let bytes = hex::decode(digest_hex)
-        .map_err(|err| format!("invalid manifest_digest_hex `{digest_hex}`: {err}"))?;
-    let array: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| "manifest_digest_hex must be 32 bytes".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-
-    Ok((
-        sorafs::gateway::DenylistKind::ManifestDigest(array),
-        metadata,
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn build_cid_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let cid_bytes = if let Some(encoded) = entry.cid_b64.as_ref() {
-        base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|err| format!("invalid cid_b64 `{encoded}`: {err}"))?
-    } else if let Some(hex_value) = entry.cid_hex.as_ref() {
-        hex::decode(hex_value).map_err(|err| format!("invalid cid_hex `{hex_value}`: {err}"))?
-    } else if let Some(text) = entry.cid_utf8.as_ref() {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err("cid_utf8 must not be empty".to_string());
-        }
-        trimmed.as_bytes().to_vec()
-    } else {
-        return Err(
-            "cid denylist entries require `cid_b64`, `cid_hex`, or `cid_utf8` field".to_string(),
-        );
-    };
-
-    if cid_bytes.is_empty() {
-        return Err("CID payload must not be empty".to_string());
-    }
-
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-    Ok((sorafs::gateway::DenylistKind::Cid(cid_bytes), metadata))
-}
-
-#[cfg(feature = "app_api")]
-fn build_url_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let url = entry
-        .url
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "url is required for url denylist entries".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-    Ok((sorafs::gateway::DenylistKind::Url(url.to_owned()), metadata))
-}
-
-#[cfg(feature = "app_api")]
-fn build_account_id_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let account_id_raw = entry
-        .account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "account_id is required for account_id denylist entries".to_string())?;
-    let parsed = AccountId::parse_encoded(account_id_raw)
-        .map_err(|err| format!("invalid account_id `{account_id_raw}`: {err}"))?;
-    let account_id = parsed.into_account_id();
-    let account_address = AccountAddress::from_account_id(&account_id)
-        .map_err(|err| format!("failed to derive account address: {err}"))?;
-    iroha_logger::debug!(
-        literal = %account_id_raw,
-        "gateway denylist normalized account id literal"
-    );
-    let canonical = account_address
-        .canonical_hex()
-        .map_err(|err| format!("failed to encode canonical account address: {err}"))?;
-
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let mut builder = builder;
-    if let Some(alias) = entry.account_alias.as_ref().map(|value| value.trim()) {
-        if alias.is_empty() {
-            return Err("account_alias must not be empty when provided".to_string());
-        }
-        builder = builder.alias(alias.to_owned());
-    }
-
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-
-    Ok((
-        sorafs::gateway::DenylistKind::AccountId(canonical),
-        metadata,
-    ))
-}
-
-#[cfg(feature = "app_api")]
-fn build_account_alias_denylist_entry(
-    entry: &GatewayDenylistFileEntry,
-    policy: &sorafs::gateway::DenylistPolicy,
-    source_meta: Option<&GatewayDenylistSourceMeta>,
-) -> Result<
-    (
-        sorafs::gateway::DenylistKind,
-        sorafs::gateway::DenylistEntry,
-    ),
-    String,
-> {
-    let alias = entry
-        .account_alias
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            "account_alias is required for account_alias denylist entries".to_string()
-        })?;
-
-    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
-    let builder = builder.alias(alias.to_owned());
-    let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
-
-    Ok((
-        sorafs::gateway::DenylistKind::AccountAlias(alias.to_owned()),
-        metadata,
-    ))
-}
-
-#[cfg(all(test, feature = "app_api"))]
-mod gateway_denylist_loader_tests {
-    use iroha_crypto::PublicKey;
-    use iroha_data_model::{
-        account::{AccountId, address::chain_discriminant},
-        domain::DomainId,
-    };
-
-    use super::*;
-
-    fn sample_policy() -> sorafs::gateway::DenylistPolicy {
-        sorafs::gateway::DenylistPolicy::new(
-            Duration::from_secs(600),
-            Duration::from_secs(60),
-            Duration::from_secs(30),
-            true,
-        )
-    }
-
-    pub(super) fn sample_account_literals() -> (String, String, String) {
-        let _domain: DomainId =
-            DomainId::try_new("wonderland", "universal").expect("domain parses");
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .expect("public key parses");
-        let account = AccountId::new(public_key);
-        let address = AccountAddress::from_account_id(&account).expect("address from account_id");
-        let canonical = address.canonical_hex().expect("canonical hex");
-        let i105 = address
-            .to_i105_for_discriminant(chain_discriminant())
-            .expect("i105 encoding");
-        let non_canonical_i105 = address
-            .to_i105_for_discriminant(chain_discriminant().wrapping_add(1))
-            .expect("alternate i105 encoding");
-        (canonical, i105, non_canonical_i105)
-    }
-
-    fn base_account_entry() -> GatewayDenylistFileEntry {
-        GatewayDenylistFileEntry {
-            kind: "account_id".to_string(),
-            provider_id_hex: None,
-            manifest_digest_hex: None,
-            cid_b64: None,
-            cid_hex: None,
-            cid_utf8: None,
-            url: None,
-            account_id: None,
-            account_alias: None,
-            jurisdiction: None,
-            reason: None,
-            issued_at: None,
-            expires_at: None,
-            policy_tier: None,
-            emergency_canon: None,
-            governance_reference: None,
-        }
-    }
-
-    #[test]
-    fn account_id_entries_normalise_to_canonical_hex() {
-        let (sample_canonical, sample_i105, _) = sample_account_literals();
-        let mut entry = base_account_entry();
-        entry.account_id = Some(sample_i105);
-        entry.account_alias = Some("routing@dataspace".to_string());
-        entry.jurisdiction = Some("US".to_string());
-        entry.reason = Some("test".to_string());
-        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
-
-        let policy = sample_policy();
-        let (kind, metadata) =
-            build_account_id_denylist_entry(&entry, &policy, None).expect("entry");
-
-        match kind {
-            sorafs::gateway::DenylistKind::AccountId(ref canonical) => {
-                assert_eq!(canonical, &sample_canonical);
-            }
-            other => panic!("unexpected denylist kind: {other:?}"),
-        }
-
-        assert_eq!(metadata.alias(), Some("routing@dataspace"));
-        assert_eq!(metadata.jurisdiction(), Some("US"));
-        assert_eq!(metadata.reason(), Some("test"));
-    }
-
-    #[test]
-    fn account_id_entries_reject_canonical_hex_literals() {
-        let (canonical, _, _) = sample_account_literals();
-        let mut entry = base_account_entry();
-        entry.account_id = Some(canonical);
-        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
-
-        let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy, None)
-            .expect_err("canonical hex account_id must be rejected");
-        assert!(err.contains("invalid account_id"));
-    }
-
-    #[test]
-    fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
-        let (_, i105, _) = sample_account_literals();
-        let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{i105}@banka.dataspace"));
-        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
-
-        let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy, None)
-            .expect_err("encoded literal with @domain suffix must be rejected");
-        assert!(err.contains("invalid account_id"));
-    }
-
-    #[test]
-    fn account_alias_entries_require_alias_field() {
-        let entry = GatewayDenylistFileEntry {
-            kind: "account_alias".to_string(),
-            provider_id_hex: None,
-            manifest_digest_hex: None,
-            cid_b64: None,
-            cid_hex: None,
-            cid_utf8: None,
-            url: None,
-            account_id: None,
-            account_alias: Some("alias@dataspace".to_string()),
-            jurisdiction: None,
-            reason: Some("alias".to_string()),
-            issued_at: Some("2025-04-15T00:00:00Z".to_string()),
-            expires_at: Some("2025-04-15T00:05:00Z".to_string()),
-            policy_tier: None,
-            emergency_canon: None,
-            governance_reference: None,
-        };
-
-        let policy = sample_policy();
-        let (kind, metadata) =
-            build_account_alias_denylist_entry(&entry, &policy, None).expect("alias entry");
-
-        match kind {
-            sorafs::gateway::DenylistKind::AccountAlias(ref alias) => {
-                assert_eq!(alias, "alias@dataspace");
-            }
-            other => panic!("unexpected denylist kind: {other:?}"),
-        }
-
-        assert_eq!(metadata.alias(), Some("alias@dataspace"));
-        assert_eq!(metadata.reason(), Some("alias"));
-    }
-
-    #[test]
-    fn account_id_entries_accept_i105_literals() {
-        let (canonical, i105, _) = sample_account_literals();
-        let mut entry = base_account_entry();
-        entry.account_id = Some(i105);
-        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
-
-        let policy = sample_policy();
-        let (kind, _) = build_account_id_denylist_entry(&entry, &policy, None).expect("i105 entry");
-
-        match kind {
-            sorafs::gateway::DenylistKind::AccountId(ref value) => assert_eq!(value, &canonical),
-            other => panic!("unexpected denylist kind: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn account_id_entries_reject_non_canonical_i105_literals() {
-        let (_, _, non_canonical_i105) = sample_account_literals();
-        let mut entry = base_account_entry();
-        entry.account_id = Some(non_canonical_i105);
-        entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
-
-        let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy, None)
-            .expect_err("non-canonical I105 account_id must be rejected");
-        assert!(err.contains("invalid account_id"));
-    }
-
-    #[test]
-    fn pack_metadata_flows_into_loaded_entries() {
-        let dir = tempfile::tempdir().expect("catalog tempdir");
-        let pack_path = dir.path().join("global-core.json");
-
-        std::fs::write(
-            &pack_path,
-            r#"[{"kind":"cid","cid_utf8":"bafy-example","reason":"core pack"}]"#,
-        )
-        .expect("write pack");
-
-        let denylist = Arc::new(sorafs::gateway::GatewayDenylist::new());
-        let source_meta = GatewayDenylistSourceMeta {
-            source_pack_id: Some("global-core".to_owned()),
-            source_pack_manifest_cid: Some("bafy-pack".to_owned()),
-            source_pack_merkle_root: Some("merkle-root".to_owned()),
-            issued_by_proposal_id: Some("AC-2026-241".to_owned()),
-            review_reference: Some("review-42".to_owned()),
-            jurisdiction: Some("US".to_owned()),
-            issued_at: Some("2026-04-01T00:00:00Z".to_owned()),
-            expires_at: None,
-            policy_tier: Some("permanent".to_owned()),
-        };
-
-        let loaded = load_gateway_denylist_entries_from_path(
-            &denylist,
-            &sample_policy(),
-            &pack_path,
-            Some(&source_meta),
-        );
-        assert_eq!(loaded, 1);
-
-        let hit = denylist
-            .check_cid(
-                b"bafy-example",
-                SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000),
-            )
-            .expect("cid hit");
-        let entry = hit.entry();
-        assert_eq!(entry.source_pack_id(), Some("global-core"));
-        assert_eq!(entry.source_pack_manifest_cid(), Some("bafy-pack"));
-        assert_eq!(entry.source_pack_merkle_root(), Some("merkle-root"));
-        assert_eq!(entry.issued_by_proposal_id(), Some("AC-2026-241"));
-        assert_eq!(entry.review_reference(), Some("review-42"));
-        assert_eq!(entry.jurisdiction(), Some("US"));
-        assert_eq!(
-            entry.policy_tier(),
-            sorafs::gateway::DenylistPolicyTier::Permanent
-        );
-        assert!(entry.is_governance_backed());
-    }
-
-    #[test]
-    fn gateway_denylist_catalog_activates_default_packs_and_honours_opt_out() {
-        let dir = tempfile::tempdir().expect("catalog tempdir");
-        let core_path = dir.path().join("global-core.json");
-        let emergency_path = dir.path().join("global-emergency.json");
-        let catalog_path = dir.path().join("catalog.json");
-
-        std::fs::write(
-            &core_path,
-            r#"[{"kind":"cid","cid_utf8":"bafycore","reason":"core"}]"#,
-        )
-        .expect("write core pack");
-        std::fs::write(
-            &emergency_path,
-            r#"[{"kind":"cid","cid_utf8":"bafyemergency","reason":"emergency"}]"#,
-        )
-        .expect("write emergency pack");
-        std::fs::write(
-            &catalog_path,
-            format!(
-                r#"{{
-  "version": 1,
-  "packs": [
-    {{
-      "pack_id": "global-core",
-      "version": "2026.03.29",
-      "path": "{}",
-      "default_enabled": true,
-      "policy_tier": "standard"
-    }},
-    {{
-      "pack_id": "global-emergency",
-      "version": "2026.03.29",
-      "path": "{}",
-      "default_enabled": true,
-      "policy_tier": "emergency"
-    }}
-  ]
-}}"#,
-                core_path.display(),
-                emergency_path.display()
-            ),
-        )
-        .expect("write catalog");
-
-        let denylist = Arc::new(sorafs::gateway::GatewayDenylist::new());
-        let mut config = iroha_config::parameters::actual::SorafsGatewayDenylist::default();
-        config.catalog_path = Some(catalog_path);
-        config.opt_out_packs = vec!["global-emergency".to_string()];
-
-        let snapshot =
-            populate_gateway_denylist(&denylist, &config).expect("catalog snapshot should load");
-
-        assert_eq!(snapshot.packs.len(), 2);
-        assert_eq!(
-            snapshot
-                .packs
-                .iter()
-                .find(|pack| pack.pack_id == "global-core")
-                .map(|pack| pack.active),
-            Some(true)
-        );
-        assert_eq!(
-            snapshot
-                .packs
-                .iter()
-                .find(|pack| pack.pack_id == "global-emergency")
-                .map(|pack| pack.active),
-            Some(false)
-        );
-        assert!(
-            denylist.check_cid(b"bafycore", SystemTime::now()).is_some(),
-            "default-enabled pack must populate the live denylist"
-        );
-        assert!(
-            denylist
-                .check_cid(b"bafyemergency", SystemTime::now())
-                .is_none(),
-            "opted-out pack must stay inactive"
-        );
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn parse_optional_timestamp(value: Option<&str>) -> Result<Option<SystemTime>, String> {
-    let Some(raw) = value else {
-        return Ok(None);
-    };
-
-    let datetime = OffsetDateTime::parse(raw, &Rfc3339)
-        .map_err(|err| format!("invalid timestamp `{raw}`: {err}"))?;
-    let duration = datetime - OffsetDateTime::UNIX_EPOCH;
-    if duration.is_negative() {
-        return Err(format!("timestamp `{raw}` is before UNIX epoch"));
-    }
-    let std_duration: Duration = duration
-        .try_into()
-        .map_err(|err| format!("timestamp `{raw}` out of range: {err}"))?;
-    Ok(Some(SystemTime::UNIX_EPOCH + std_duration))
 }
 
 #[cfg(feature = "app_api")]
@@ -61536,10 +60572,6 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_site_bindings,
             #[cfg(feature = "app_api")]
             sorafs_gateway_policy: None,
-            #[cfg(feature = "app_api")]
-            sorafs_gateway_denylist: None,
-            #[cfg(feature = "app_api")]
-            sorafs_gateway_denylist_catalog: None,
             #[cfg(feature = "app_api")]
             sorafs_gateway_tls_state: None,
             #[cfg(feature = "app_api")]
@@ -95764,44 +94796,5 @@ mod peer_telemetry_tests {
             urls, expected,
             "configured URLs should override peer-derived telemetry targets"
         );
-    }
-}
-#[cfg(feature = "app_api")]
-fn gateway_denylist_policy_from_config(
-    config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
-) -> sorafs::gateway::DenylistPolicy {
-    sorafs::gateway::DenylistPolicy::new(
-        config.standard_ttl,
-        config.emergency_ttl,
-        config.emergency_review_window,
-        config.require_governance_reference,
-    )
-}
-
-#[cfg(feature = "app_api")]
-fn finalize_gateway_denylist_entry(
-    builder: sorafs::gateway::DenylistEntryBuilder,
-    meta: GatewayDenylistPolicyMeta,
-    policy: &sorafs::gateway::DenylistPolicy,
-) -> Result<sorafs::gateway::DenylistEntry, String> {
-    builder
-        .policy_tier(meta.tier)
-        .canon(meta.canon)
-        .governance_reference(meta.governance_reference)
-        .build_with_policy(policy)
-}
-
-#[cfg(feature = "app_api")]
-fn parse_policy_tier(value: Option<&str>) -> Result<sorafs::gateway::DenylistPolicyTier, String> {
-    let Some(label) = value.map(|raw| raw.trim().to_ascii_lowercase()) else {
-        return Ok(sorafs::gateway::DenylistPolicyTier::Standard);
-    };
-    match label.as_str() {
-        "standard" | "default" => Ok(sorafs::gateway::DenylistPolicyTier::Standard),
-        "emergency" => Ok(sorafs::gateway::DenylistPolicyTier::Emergency),
-        "permanent" => Ok(sorafs::gateway::DenylistPolicyTier::Permanent),
-        other => Err(format!(
-            "unsupported denylist policy tier `{other}`; expected standard|emergency|permanent"
-        )),
     }
 }

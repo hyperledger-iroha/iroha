@@ -144,7 +144,7 @@ const VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES: usize =
     iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
 const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
-    ((CONTRACT_CODE_ARTIFACT_MAX_BYTES + 2) / 3) * 4;
+    CONTRACT_CODE_ARTIFACT_MAX_BYTES.div_ceil(3) * 4;
 const CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES: usize =
     CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 128;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES: usize =
@@ -244,6 +244,10 @@ fn alias_setup_dependency_rank(intent: &AliasIntentV1) -> u8 {
 /// Returns an error when the plan version or hash is invalid, the plan is not
 /// executable, a frame is unknown or non-canonical, or its resource mapping is
 /// incomplete or inconsistent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered setup-plan verifier keeps every first-error check in protocol order"
+)]
 pub fn decode_and_verify_alias_setup_plan(
     plan: &AliasTransactionPlanV1,
 ) -> Result<Vec<InstructionBox>> {
@@ -513,6 +517,10 @@ pub fn decode_and_verify_alias_setup_plan_for_request(
 ///
 /// Returns an error when the plan is malformed, non-canonical, blocked,
 /// internally inconsistent, or carries a substituted lifecycle instruction.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the lifecycle verifier keeps its ordered V1 framing and quote checks together"
+)]
 pub fn decode_and_verify_alias_lifecycle_plan(
     plan: &AliasLifecycleTransactionPlanV1,
 ) -> Result<Option<InstructionBox>> {
@@ -608,8 +616,9 @@ pub fn decode_and_verify_alias_lifecycle_plan(
                 .quote
                 .as_ref()
                 .ok_or_else(|| eyre!("alias lifecycle renewal is missing its exact quote"))?;
+            let quote_guard_matches_operation = quote.guard == expected.quote_guard;
             if quote.target != expected.target
-                || quote.guard != expected.quote_guard
+                || !quote_guard_matches_operation
                 || quote.expires_at_ms != expected.target_expiry_ms
             {
                 return Err(eyre!(
@@ -915,6 +924,10 @@ impl AccountOnboardingPlanReceiptV1 {
 /// # Errors
 /// Returns an error if the receipt is stale, substituted, conflicting, or not
 /// canonically framed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the onboarding verifier preserves the receipt's ordered fail-closed checks"
+)]
 pub fn decode_and_verify_account_onboarding_plan_for_request(
     request: &AccountOnboardingPlanRequestV1,
     receipt: &AccountOnboardingPlanReceiptV1,
@@ -1593,6 +1606,10 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
+)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     pub max_governed_lanes: u32,
@@ -1619,6 +1636,10 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
+)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     pub max_outbound_messages_per_block: u32,
@@ -1730,6 +1751,10 @@ fn expected_sccp_registry_limits() -> SccpRegistryLimits {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the V1 resource-limit validator keeps ordered cross-field checks in one audit surface"
+)]
 fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
     macro_rules! require_nonzero {
         ($($field:ident),+ $(,)?) => {
@@ -1905,8 +1930,7 @@ fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
         capabilities.proof_submit_path.as_deref(),
         capabilities.native_message_submit_path.as_deref(),
     ) {
-        (None, None) => {}
-        (Some("/v1/bridge/proofs/submit"), Some("/v1/bridge/messages")) => {}
+        (None, None) | (Some("/v1/bridge/proofs/submit"), Some("/v1/bridge/messages")) => {}
         _ => {
             return Err(eyre!(
                 "SCCP capabilities must advertise both exact submit paths or neither"
@@ -2102,26 +2126,24 @@ fn validate_sccp_recent_projection(
     label: &str,
 ) -> Result<()> {
     let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) = &item.payload_projection;
-    let recipient_matches_target = match (target, &transfer.recipient) {
+    let recipient_matches_target = matches!(
+        (target, &transfer.recipient),
         (
             iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
-            | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+                | iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia
+                | iroha_data_model::bridge::SccpNetworkV1::BscMainnet
+                | iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
             iroha_sccp::SccpNormalizedCodecValueV1::EvmAddress20 { .. },
-        )
-        | (
+        ) | (
             iroha_data_model::bridge::SccpNetworkV1::TronMainnet
-            | iroha_data_model::bridge::SccpNetworkV1::TronNile
-            | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
+                | iroha_data_model::bridge::SccpNetworkV1::TronNile
+                | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
             iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { .. },
-        )
-        | (
+        ) | (
             iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
             iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
-        ) => true,
-        _ => false,
-    };
+        )
+    );
     if transfer.version != 1
         || transfer.source_domain != source.domain_id()
         || transfer.dest_domain != target.domain_id()
@@ -2162,6 +2184,10 @@ fn sccp_recent_quantity_from_atomic(amount: u128, label: &str) -> Result<Quantit
         .map_err(|error| eyre!("{label} amount is not an exact quantity: {error}"))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the recent-message decoder preserves canonical ordering and role checks in wire order"
+)]
 fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
     if messages.items.len() > 50 {
         return Err(eyre!(
@@ -3113,7 +3139,7 @@ fn decode_canonical_sccp_base64(encoded: &str, field: &str, maximum: usize) -> R
             "{field} length must be between 1 and {maximum} bytes"
         ));
     }
-    if encoded.len() % 4 != 0 {
+    if !encoded.len().is_multiple_of(4) {
         return Err(eyre!("{field} must use canonical padded base64"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
@@ -3413,6 +3439,10 @@ fn preflight_sccp_direct_transaction(
     Ok(tx_hash)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the bridge response decoder keeps all ordered request-binding checks in one V1 verifier"
+)]
 fn decode_sccp_bridge_submit_response(
     value: JsonValue,
     expectation: &SccpBridgeSubmitExpectation,
@@ -3861,7 +3891,7 @@ fn alias_text_cmp(left: &AccountAliasName, right: &AccountAliasName) -> std::cmp
 }
 
 fn decode_account_alias_resolution(
-    response: Response<Vec<u8>>,
+    response: &Response<Vec<u8>>,
     expected_alias: &AccountAliasName,
 ) -> Result<Option<AccountAliasResolutionV1>> {
     match response.status() {
@@ -3892,7 +3922,7 @@ fn decode_account_alias_resolution(
 }
 
 fn decode_account_alias_index_resolution(
-    response: Response<Vec<u8>>,
+    response: &Response<Vec<u8>>,
     expected_index: AliasIndex,
 ) -> Result<Option<AccountAliasIndexResolutionV1>> {
     match response.status() {
@@ -3923,7 +3953,7 @@ fn decode_account_alias_index_resolution(
 }
 
 fn decode_account_aliases_by_account(
-    response: Response<Vec<u8>>,
+    response: &Response<Vec<u8>>,
     request: &AccountAliasesByAccountRequestV1,
 ) -> Result<Option<AccountAliasesByAccountV1>> {
     match response.status() {
@@ -3966,7 +3996,7 @@ fn decode_account_aliases_by_account(
                     &format!("response.items[{index}].alias"),
                 )?;
                 if item.dataspace != alias.dataspace.as_ref()
-                    || item.domain.as_deref() != alias.domain.as_ref().map(|domain| domain.as_ref())
+                    || item.domain.as_deref() != alias.domain.as_ref().map(AsRef::as_ref)
                 {
                     return Err(eyre!(
                         "account aliases-by-account response item {index} has scope fields that differ from its alias"
@@ -7188,6 +7218,10 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument names one independent first-release verifier binding or limit"
+    )]
     fn validate_offline_readiness_verifier(
         readiness: &OfflineReadiness,
         verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
@@ -7271,6 +7305,10 @@ impl Client {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the artifact-set verifier keeps its authenticated digest and activation checks ordered"
+    )]
     fn validate_offline_readiness_artifact_set(readiness: &OfflineReadiness) -> Result<()> {
         let has_blocker = |code: &str| {
             readiness
@@ -7314,7 +7352,7 @@ impl Client {
                 "offline readiness response contains both artifact_set and an authenticated V4 registry blocker"
             ));
         }
-        let (Some(step_eq), Some(step_ep)) = recursive_verifiers else {
+        let (Some(vesta_verifier), Some(pallas_verifier)) = recursive_verifiers else {
             return Err(eyre!(
                 "offline readiness response contains artifact_set without both recursive verifiers"
             ));
@@ -7371,8 +7409,8 @@ impl Client {
             ));
         }
         for (field, verifier) in [
-            ("active_recursive_step_eq_verifier", step_eq),
-            ("active_recursive_step_ep_verifier", step_ep),
+            ("active_recursive_step_eq_verifier", vesta_verifier),
+            ("active_recursive_step_ep_verifier", pallas_verifier),
         ] {
             if verifier.activation_height != artifact_set.activation_height
                 || verifier.withdrawal_height != Some(artifact_set.withdrawal_height)
@@ -7393,6 +7431,10 @@ impl Client {
     /// # Errors
     /// Returns an error for transport failures, non-success responses, malformed negotiated
     /// representations, or a response that is not bound to the requested asset definition.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the readiness decoder keeps ordered first-release blocker and verifier checks together"
+    )]
     pub fn get_offline_readiness(
         &self,
         asset_definition_id: &AssetDefinitionId,
@@ -8578,6 +8620,10 @@ mod offline_client_tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the readiness test keeps the complete fail-closed verifier, artifact, and lineage substitution matrix together"
+    )]
     fn readiness_rejects_contract_verifier_and_lineage_substitution() {
         let requested = asset_definition_id("xor");
         let mut wrong_abi = first_release_readiness(&requested);
@@ -12042,6 +12088,10 @@ mod evidence_http_tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps the rejected-status fallback and committed-query binding in one fail-closed protocol flow"
+    )]
     fn pipeline_status_rejection_without_reason_uses_committed_query() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
@@ -16335,7 +16385,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .body(body),
         )?;
-        decode_account_alias_resolution(response, alias)
+        decode_account_alias_resolution(&response, alias)
     }
 
     /// Resolve a canonical account alias with canonical account authentication.
@@ -16363,7 +16413,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        decode_account_alias_resolution(response, alias)
+        decode_account_alias_resolution(&response, alias)
     }
 
     /// Resolve an exact alias index without account authentication.
@@ -16389,7 +16439,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .body(body),
         )?;
-        decode_account_alias_index_resolution(response, index)
+        decode_account_alias_index_resolution(&response, index)
     }
 
     /// Resolve an exact alias index with canonical account authentication.
@@ -16414,7 +16464,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        decode_account_alias_index_resolution(response, index)
+        decode_account_alias_index_resolution(&response, index)
     }
 
     /// List aliases bound to an account without account authentication.
@@ -16440,7 +16490,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON)
                 .body(body),
         )?;
-        decode_account_aliases_by_account(response, request)
+        decode_account_aliases_by_account(&response, request)
     }
 
     /// List aliases bound to an account with canonical account authentication.
@@ -16465,7 +16515,7 @@ impl Client {
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
-        decode_account_aliases_by_account(response, request)
+        decode_account_aliases_by_account(&response, request)
     }
 
     /// Account-signed GET `/v1/accounts/{account_id}/permissions` retaining the exact response.
@@ -16734,14 +16784,16 @@ impl Client {
                 "multisig proposal resolve response resolved account does not match the requested account"
             ));
         }
-        if request
+        let proposal_id_matches_request = request
             .proposal_id
             .as_ref()
-            .is_some_and(|expected| expected != &decoded.proposal_id)
-            || request
-                .instructions_hash
-                .as_ref()
-                .is_some_and(|expected| expected != &decoded.instructions_hash)
+            .is_none_or(|expected| expected == &decoded.proposal_id);
+        let instructions_hash_matches_request = request
+            .instructions_hash
+            .as_ref()
+            .is_none_or(|expected| expected == &decoded.instructions_hash);
+        if !proposal_id_matches_request
+            || !instructions_hash_matches_request
             || decoded.proposal_id != decoded.instructions_hash
         {
             return Err(eyre!(
@@ -20394,6 +20446,10 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the contract-call workflow keeps prepare, quote, bind, sign, and submit checks in order"
+    )]
     pub fn post_contract_call_json(
         &self,
         authority: &iroha_data_model::account::AccountId,
@@ -21255,7 +21311,7 @@ impl Client {
         Ok(messages)
     }
 
-    /// GET /v1/sccp/proofs/message/{message_id}.
+    /// GET `/v1/sccp/proofs/message/{message_id}`.
     /// Returns one finalized SCCP message bundle as JSON.
     ///
     /// # Errors
@@ -21294,7 +21350,7 @@ impl Client {
             .wrap_err("failed to render validated SCCP message bundle JSON")
     }
 
-    /// GET /v1/sccp/proofs/message/{message_id}.
+    /// GET `/v1/sccp/proofs/message/{message_id}`.
     /// Returns one canonical finalized SCCP message bundle.
     ///
     /// # Errors
@@ -24825,11 +24881,13 @@ mod tests {
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
                 LaneSwapMetadata, LaneVolatilityClass, NativeAmxReceipt, PERMISSIONED_TAG,
                 SumeragiAutonomousLaneExecution, SumeragiAutonomousLaneExecutionStage,
-                SumeragiAutonomousLaneExecutionStuckReason, SumeragiQcEntry, SumeragiQcSnapshot,
+                SumeragiAutonomousLaneExecutionStuckReason, SumeragiPipelineExecutionStatus,
+                SumeragiQcEntry, SumeragiQcSnapshot,
             },
             consensus_v2::{
                 ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
-                SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+                SumeragiV2HeightContextStatus, SumeragiV2LivenessStatus, SumeragiV2Status,
+                SumeragiV2StatusPhase,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
@@ -24855,8 +24913,8 @@ mod tests {
             moderation::{
                 SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
-                SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotContextV1,
-                SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1,
+                SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotCommitV1,
+                SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
                 SoraFsModerationVoteChoice,
             },
             pin_registry::ManifestDigest,
@@ -25714,13 +25772,13 @@ mod tests {
             .parse::<AccountAliasName>()
             .expect("canonical alias");
         assert!(
-            decode_account_alias_resolution(empty_response(StatusCode::NOT_FOUND), &alias)
+            decode_account_alias_resolution(&empty_response(StatusCode::NOT_FOUND), &alias)
                 .expect("404 is a typed miss")
                 .is_none()
         );
         assert!(
             decode_account_alias_index_resolution(
-                empty_response(StatusCode::NOT_FOUND),
+                &empty_response(StatusCode::NOT_FOUND),
                 AliasIndex(9),
             )
             .expect("404 is a typed index miss")
@@ -25731,7 +25789,7 @@ mod tests {
         let request = AccountAliasesByAccountRequestV1::try_new(&account, None, None)
             .expect("unfiltered request");
         assert!(
-            decode_account_aliases_by_account(empty_response(StatusCode::NOT_FOUND), &request)
+            decode_account_aliases_by_account(&empty_response(StatusCode::NOT_FOUND), &request)
                 .expect("404 is a typed list miss")
                 .is_none()
         );
@@ -25744,11 +25802,8 @@ mod tests {
         let request =
             AccountAliasesByAccountRequestV1::try_new(&account, Some("PayNet"), Some("Banka"))
                 .expect("scope labels normalize deterministically");
-        assert_eq!(
-            request.dataspace().map(|name| name.as_ref()),
-            Some("paynet")
-        );
-        assert_eq!(request.domain().map(|name| name.as_ref()), Some("banka"));
+        assert_eq!(request.dataspace().map(AsRef::as_ref), Some("paynet"));
+        assert_eq!(request.domain().map(AsRef::as_ref), Some("banka"));
         assert!(AccountAliasesByAccountRequestV1::try_new(&account, None, Some("banka")).is_err());
 
         let response = AccountAliasResolutionV1::try_new(
@@ -25796,7 +25851,7 @@ mod tests {
             .expect("encode substituted alias response"),
         );
         assert!(
-            decode_account_alias_resolution(substituted_alias, &alias)
+            decode_account_alias_resolution(&substituted_alias, &alias)
                 .expect_err("substituted alias selector must fail")
                 .to_string()
                 .contains("selector")
@@ -25813,7 +25868,7 @@ mod tests {
             .expect("encode substituted index response"),
         );
         assert!(
-            decode_account_alias_index_resolution(substituted_index, AliasIndex(9))
+            decode_account_alias_index_resolution(&substituted_index, AliasIndex(9))
                 .expect_err("substituted index selector must fail")
                 .to_string()
                 .contains("selector")
@@ -25839,7 +25894,7 @@ mod tests {
             .expect("encode substituted account response"),
         );
         assert!(
-            decode_account_aliases_by_account(substituted_account, &request)
+            decode_account_aliases_by_account(&substituted_account, &request)
                 .expect_err("substituted account selector must fail")
                 .to_string()
                 .contains("selector")
@@ -25847,6 +25902,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps the complete fail-closed canonicality and cross-field consistency payload matrix together"
+    )]
     fn typed_account_alias_reads_reject_noncanonical_or_inconsistent_payloads() {
         let alias = "merchant@banka.paynet"
             .parse::<AccountAliasName>()
@@ -25858,7 +25917,7 @@ mod tests {
             ),
         );
         assert!(
-            decode_account_alias_resolution(noncanonical_alias, &alias)
+            decode_account_alias_resolution(&noncanonical_alias, &alias)
                 .expect_err("non-canonical response alias must fail")
                 .to_string()
                 .contains("canonical")
@@ -25885,7 +25944,7 @@ mod tests {
             .expect("encode inconsistent list response"),
         );
         assert!(
-            decode_account_aliases_by_account(inconsistent_scope, &request)
+            decode_account_aliases_by_account(&inconsistent_scope, &request)
                 .expect_err("redundant scope substitution must fail")
                 .to_string()
                 .contains("scope fields")
@@ -25915,7 +25974,7 @@ mod tests {
             .expect("encode unsorted list response"),
         );
         assert!(
-            decode_account_aliases_by_account(unsorted, &request)
+            decode_account_aliases_by_account(&unsorted, &request)
                 .expect_err("non-deterministic response ordering must fail")
                 .to_string()
                 .contains("strict canonical alias order")
@@ -25937,7 +25996,7 @@ mod tests {
             .expect("encode wrong-total list response"),
         );
         assert!(
-            decode_account_aliases_by_account(wrong_total, &request)
+            decode_account_aliases_by_account(&wrong_total, &request)
                 .expect_err("response total must equal the filtered item count")
                 .to_string()
                 .contains("total")
@@ -25950,7 +26009,7 @@ mod tests {
             ),
         );
         assert!(
-            decode_account_alias_resolution(unknown_field, &alias)
+            decode_account_alias_resolution(&unknown_field, &alias)
                 .expect_err("unknown response fields must fail")
                 .to_string()
                 .contains("decode account-alias")
@@ -26774,7 +26833,7 @@ mod tests {
         );
 
         for hostile in [
-            r#"{}"#.to_owned(),
+            "{}".to_owned(),
             r#"{"code_b64":"AA"}"#.to_owned(),
             format!(r#"{{"code_b64":"{code_b64}","unexpected":true}}"#),
             format!(r#"{{"code_b64":"{code_b64}","code_b64":"{code_b64}"}}"#),
@@ -27001,7 +27060,7 @@ mod tests {
                 },
             },
             last_commit_qc: None,
-            liveness: Default::default(),
+            liveness: SumeragiV2LivenessStatus::default(),
         }
     }
 
@@ -27056,7 +27115,7 @@ mod tests {
         )
         .expect("construct lane relay envelope");
         let status = SumeragiDiagnosticsStatus {
-            pipeline_execution: Default::default(),
+            pipeline_execution: SumeragiPipelineExecutionStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
             tx_queue_retained_bytes: 3_072,
@@ -31915,9 +31974,9 @@ mod tests {
             let commit = moderation_ballot_commit_fixture();
             let commit_payload = to_bytes(&commit).expect("encode canonical commit");
             let transaction = client
-                .try_build_sorafs_moderation_transaction(
-                    SubmitSorafsModerationCommit::new(commit_payload.clone()),
-                )
+                .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(
+                    commit_payload.clone(),
+                ))
                 .expect("build exact moderation transaction");
             transaction
                 .verify_signature()
@@ -33251,14 +33310,16 @@ mod tests {
         let expected_hash = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
             let transaction = client.build_transaction(
-                [iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
-                    movement_id,
-                    iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
-                    iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
-                    "1".parse().expect("reserve quantity"),
-                    1,
-                    [0x65; 32],
-                )],
+                [
+                    iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
+                        movement_id,
+                        iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
+                        iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
+                        "1".parse().expect("reserve quantity"),
+                        1,
+                        [0x65; 32],
+                    ),
+                ],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
@@ -33294,8 +33355,7 @@ mod tests {
 
     #[test]
     fn sorafs_reserve_filters_carry_finalized_exclusive_cursors() {
-        let mut movement_url =
-            join_torii_url(&base_url(), "v1/sorafs/reserve/movements");
+        let mut movement_url = join_torii_url(&base_url(), "v1/sorafs/reserve/movements");
         SorafsReserveMovementReadbackFilter {
             finalized: SorafsReserveFinalizedAnchor {
                 expected_finalized_height: Some(7),
@@ -33889,6 +33949,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps the complete fixed and zero-valued SCCP capability-limit rejection matrix together"
+    )]
     fn sccp_capability_resource_limits_fail_closed() {
         let valid = sample_sccp_capabilities();
         validate_sccp_capabilities(&valid).expect("valid SCCP capability limits");
@@ -34351,6 +34415,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps the canonical SCCP recent-message bounds, alias, cursor, and payload mutation matrix together"
+    )]
     fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
         let valid = sample_sccp_recent_messages();
         validate_sccp_recent_messages(&valid).expect("valid recent response");
@@ -34903,6 +34971,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test keeps every signed destination-payload mutation in one pre-HTTP fail-closed matrix"
+    )]
     fn destination_direct_submit_rejects_payload_mutations_before_http() {
         use base64::Engine as _;
         use iroha_data_model::{

@@ -63,31 +63,6 @@ fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     }
 }
 
-async fn wait_for_approved_txs(
-    client: &Client,
-    baseline: u64,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        let status = tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || client.get_status()
-        })
-        .await
-        .expect("poll status")?;
-        if status.txs_approved > baseline {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-
-    Err(eyre!(
-        "{stage}: timed out waiting for txs_approved to advance beyond {baseline}"
-    ))
-}
-
 async fn wait_for_tx_terminal_status(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,

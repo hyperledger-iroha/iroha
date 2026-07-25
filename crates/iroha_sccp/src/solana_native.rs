@@ -610,6 +610,10 @@ pub fn sccp_solana_agave_public_signal_words_v1(
 ///
 /// Returns a fail-closed error for every malformed, mismatched, oversized,
 /// noncanonical, backend-substituted, or cryptographically invalid input.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the single ordered Agave proof validator preserves stable first-error precedence across anchor, statement, and pairing checks"
+)]
 pub fn verify_sccp_solana_agave_source_v1(
     proof: &SccpSolanaAgaveSourceProofV1,
     source_identity: &SccpSourceIdentityV1,

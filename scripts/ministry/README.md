@@ -60,9 +60,8 @@ This directory hosts helper scripts referenced by `docs/source/ministry/transpar
   are configured, allowing drill leads to archive the exact dashboard snapshots
   referenced in reports without manual copy/paste.
 - `moderation_payload_tool.py` — command-line helper that bundles red-team
-  payload fixtures (with SHA-256 manifest) and stages denylist patches copied
-  from `docs/source/sorafs_gateway_denylist_sample.json`, keeping evidence
-  directories consistent across drills.
+  payload fixtures with a SHA-256 manifest, keeping evidence directories
+  consistent across drills.
 - `cargo xtask ministry-transparency anchor --action <path> --governance-dir <dir>` —
   consumes the `transparency_release_action.json` emitted by the Python helper,
   encodes a canonical `TransparencyReleaseV1` Norito artefact, and drops both the

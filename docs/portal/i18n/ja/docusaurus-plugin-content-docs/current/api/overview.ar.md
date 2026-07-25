@@ -33,15 +33,14 @@ cargo xtask openapi
 
 Running the command above writes `docs/portal/static/openapi/torii.json` and
 feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+automatically. The generator builds the canonical projection from the in-memory Torii router and
+fails closed if the complete OpenAPI document cannot be produced. No placeholder
+specification can enter manifest creation, signing, synchronization, or versioning.
 
 ## Current status
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
+- **Spec source:** `cargo xtask openapi` queries the Torii router directly and
+  fails closed if the complete specification is unavailable.
 - **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
 - **Authentication:** The “Try it” sandbox now forwards requests through a
   constrained staging proxy. Operators must supply a Torii endpoint and bearer

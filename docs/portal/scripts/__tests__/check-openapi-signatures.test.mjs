@@ -8,12 +8,28 @@ import {createHash} from 'node:crypto';
 import {checkOpenApiSignatures} from '../check-openapi-signatures.mjs';
 import {signPayload} from './helpers/openapi-signing.mjs';
 
+function releaseSpecBuffer(route) {
+  return Buffer.from(
+    JSON.stringify({
+      openapi: '3.1.0',
+      info: {title: `Torii ${route}`, version: '1.0.0'},
+      paths: {
+        [route]: {
+          get: {responses: {'200': {description: 'ok'}}},
+        },
+      },
+      components: {schemas: {Fixture: {type: 'object'}}},
+    }),
+    'utf8',
+  );
+}
+
 test('checkOpenApiSignatures validates signed entries', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-'));
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const latestSpec = Buffer.from('{"route":"/v1/status"}', 'utf8');
+  const latestSpec = releaseSpecBuffer('/v1/status');
   const latestSha = sha256Hex(latestSpec);
   const latestSignature = signPayload(latestSpec);
   await writeAsset(join(staticDir, 'torii.json'), latestSpec);
@@ -30,7 +46,7 @@ test('checkOpenApiSignatures validates signed entries', async () => {
 
   const versionLabel = '2025-q3';
   const versionRelative = join('versions', versionLabel, 'torii.json').split('\\').join('/');
-  const versionSpec = Buffer.from('{"route":"/v1/blocks"}', 'utf8');
+  const versionSpec = releaseSpecBuffer('/v1/blocks');
   const versionSha = sha256Hex(versionSpec);
   const versionSignature = signPayload(versionSpec);
   await writeAllowedSigners(staticDir, [
@@ -82,12 +98,66 @@ test('checkOpenApiSignatures validates signed entries', async () => {
   assert.deepEqual(summary.skippedLabels, []);
 });
 
+test('checkOpenApiSignatures rejects a signed empty OpenAPI stub', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-empty-stub-'));
+  const staticDir = join(tempRoot, 'static', 'openapi');
+  await mkdir(staticDir, {recursive: true});
+
+  const spec = Buffer.from(
+    JSON.stringify({
+      openapi: '3.1.0',
+      info: {title: 'Torii stub', version: '1.0.0'},
+      paths: {},
+      components: {},
+    }),
+    'utf8',
+  );
+  const sha256 = sha256Hex(spec);
+  const signature = signPayload(spec);
+  await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
+  await writeAsset(join(staticDir, 'torii.json'), spec);
+  await writeJson(
+    join(staticDir, 'manifest.json'),
+    buildManifest({
+      path: 'torii.json',
+      payload: spec,
+      sha256,
+      blake3: 'ab'.repeat(32),
+      signature,
+    }),
+  );
+  await writeJson(join(staticDir, 'versions.json'), {
+    versions: [],
+    generatedAt: new Date().toISOString(),
+    entries: [
+      buildVersionEntry({
+        label: 'latest',
+        path: 'torii.json',
+        payload: spec,
+        sha256,
+        blake3: 'ab'.repeat(32),
+        manifestPath: 'manifest.json',
+        signature,
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      checkOpenApiSignatures({
+        staticDir,
+        versionsFile: join(staticDir, 'versions.json'),
+      }),
+    /empty\/stub specifications are forbidden/i,
+  );
+});
+
 test('checkOpenApiSignatures fails when manifests are missing signatures', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'openapi-signatures-fail-'));
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/gov"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/gov');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -149,7 +219,7 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/metrics"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/metrics');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -203,7 +273,7 @@ test('checkOpenApiSignatures still validates unsigned label metadata', async () 
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/current');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -250,7 +320,7 @@ test('checkOpenApiSignatures does not let unsigned allowlist bypass signed entri
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/current');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -297,7 +367,7 @@ test('checkOpenApiSignatures rejects signed metadata smuggled into unsigned labe
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/current');
   const sha = sha256Hex(spec);
   const allowedSignature = signPayload(spec);
   const forbiddenSignature = signPayload(spec, {
@@ -496,7 +566,7 @@ test('checkOpenApiSignatures rejects missing and whitespace version entry labels
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/entry-label"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/entry-label');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -545,7 +615,7 @@ test('checkOpenApiSignatures rejects signed flag type confusion', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/signed-type"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/signed-type');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -593,7 +663,7 @@ test('checkOpenApiSignatures rejects versions signature metadata on unsigned lab
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/current');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -653,7 +723,7 @@ test('checkOpenApiSignatures rejects malformed signed version entry metadata', a
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/entry-metadata"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/entry-metadata');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -706,7 +776,7 @@ test('checkOpenApiSignatures rejects invalid versions byte counts', async () => 
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/entry-bytes"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/entry-bytes');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -758,7 +828,7 @@ test('checkOpenApiSignatures rejects malformed blake3 metadata', async () => {
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/blake3"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/blake3');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -823,7 +893,7 @@ test('checkOpenApiSignatures rejects malformed manifest signature metadata', asy
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/manifest-signature"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/manifest-signature');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -868,7 +938,7 @@ test('checkOpenApiSignatures rejects non-object manifest signature metadata', as
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/manifest-signature-type"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/manifest-signature-type');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -912,7 +982,7 @@ test('checkOpenApiSignatures rejects allowed signed manifests on unsigned labels
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/current"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/current');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1013,7 +1083,7 @@ test('checkOpenApiSignatures rejects incomplete manifest generator metadata', as
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/manifest-metadata"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/manifest-metadata');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1068,7 +1138,7 @@ test('checkOpenApiSignatures rejects unsafe manifest artifact paths', async () =
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/artifact-path"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/artifact-path');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1118,7 +1188,7 @@ test('checkOpenApiSignatures rejects malformed manifest artifact metadata', asyn
     const staticDir = join(tempRoot, 'static', 'openapi');
     await mkdir(staticDir, {recursive: true});
 
-    const spec = Buffer.from('{"route":"/v1/artifact-metadata"}', 'utf8');
+    const spec = releaseSpecBuffer('/v1/artifact-metadata');
     const sha = sha256Hex(spec);
     const signature = signPayload(spec);
     await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1167,7 +1237,7 @@ test('checkOpenApiSignatures rejects spec paths escaping static openapi director
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/escape"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/escape');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1205,7 +1275,7 @@ test('checkOpenApiSignatures rejects manifest paths escaping static openapi dire
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/escape-manifest"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/escape-manifest');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1250,7 +1320,7 @@ test('checkOpenApiSignatures rejects absolute spec paths', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/absolute"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/absolute');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   const absoluteSpecPath = join(tempRoot, 'outside', 'torii.json');
@@ -1289,7 +1359,7 @@ test('checkOpenApiSignatures rejects windows drive manifest paths', async () => 
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/windows"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/windows');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1325,7 +1395,7 @@ test('checkOpenApiSignatures rejects drive-relative spec paths', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/drive-relative"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/drive-relative');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1362,7 +1432,7 @@ test('checkOpenApiSignatures rejects backslash traversal spec paths', async () =
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/backslash-traversal"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/backslash-traversal');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1399,7 +1469,7 @@ test('checkOpenApiSignatures rejects duplicate entry labels', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/duplicate"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/duplicate');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1460,7 +1530,7 @@ test('checkOpenApiSignatures fails when versions list lacks entries', async () =
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/metrics"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/metrics');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1505,7 +1575,7 @@ test('checkOpenApiSignatures rejects byte mismatches', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/consensus"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/consensus');
   const specBytes = spec.length;
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
@@ -1552,7 +1622,7 @@ test('checkOpenApiSignatures rejects signature metadata mismatches', async () =>
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/peers"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/peers');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
@@ -1600,7 +1670,7 @@ test('checkOpenApiSignatures enforces allowed signer list', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/peers"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/peers');
   const sha = sha256Hex(spec);
   const allowedSignature = signPayload(spec);
   await writeAllowedSigners(staticDir, [allowedSignature.publicKeyHex]);
@@ -1648,7 +1718,7 @@ test('checkOpenApiSignatures rejects signed entries when no signer is provisione
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/peers"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/peers');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, []);
@@ -1692,7 +1762,7 @@ test('checkOpenApiSignatures rejects invalid signatures', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/blocks"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/blocks');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   const invalidSignature = {
@@ -1743,7 +1813,7 @@ test('checkOpenApiSignatures rejects malformed signature hex before verification
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const spec = Buffer.from('{"route":"/v1/blocks"}', 'utf8');
+  const spec = releaseSpecBuffer('/v1/blocks');
   const sha = sha256Hex(spec);
   const signature = signPayload(spec);
   const malformedSignature = {

@@ -1,4 +1,4 @@
-//! Gateway policy orchestration for GAR enforcement, denylists, and rate limiting.
+//! Gateway policy orchestration for GAR enforcement and rate limiting.
 
 use std::{
     net::SocketAddr,
@@ -14,17 +14,10 @@ use iroha_data_model::{
 };
 use iroha_logger::debug;
 
-use super::{
-    denylist::{
-        DenylistHit, DenylistKind, GatewayDenylist, PerceptualMatch, PerceptualMatchBasis,
-        PerceptualObservation,
-    },
-    rate_limit::{ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError},
+use super::rate_limit::{
+    ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError,
 };
-use crate::sorafs::{
-    AdmissionRegistry,
-    gateway::{DenylistEntryBuilder, PerceptualFamilyEntry},
-};
+use crate::sorafs::AdmissionRegistry;
 
 /// Policy configuration controlling the enforcement surface.
 #[derive(Clone, Debug)]
@@ -73,8 +66,6 @@ pub enum PolicyViolation {
         /// Identifier of the provider that failed the check.
         provider_id: [u8; 32],
     },
-    /// Request or resource matches a denylist entry.
-    Denylisted(Box<DenylistHit>),
     /// Rate limiting rejected the client.
     RateLimited(RateLimitError),
     /// Request TTL exceeds the GAR-configured override.
@@ -117,7 +108,6 @@ pub struct RequestContext<'a> {
     manifest_digest: Option<&'a [u8; 32]>,
     content_cid: Option<&'a [u8]>,
     manifest_envelope_present: bool,
-    perceptual: Option<PerceptualObservation<'a>>,
     client: &'a ClientFingerprint,
     wall_time: SystemTime,
     monotonic_now: Instant,
@@ -142,7 +132,6 @@ impl<'a> RequestContext<'a> {
             manifest_digest: None,
             content_cid: None,
             manifest_envelope_present: false,
-            perceptual: None,
             client,
             wall_time,
             monotonic_now,
@@ -162,24 +151,17 @@ impl<'a> RequestContext<'a> {
         self
     }
 
-    /// Attach the manifest digest to enable denylist checks.
+    /// Attach the manifest digest to the GAR event context.
     #[must_use]
     pub fn with_manifest_digest(mut self, digest: &'a [u8; 32]) -> Self {
         self.manifest_digest = Some(digest);
         self
     }
 
-    /// Attach the content identifier (CID) for denylist enforcement.
+    /// Attach the content identifier (CID) to the GAR event context.
     #[must_use]
     pub fn with_content_cid(mut self, cid: &'a [u8]) -> Self {
         self.content_cid = Some(cid);
-        self
-    }
-
-    /// Attach perceptual fingerprint metadata for denylist enforcement.
-    #[must_use]
-    pub fn with_perceptual_observation(mut self, observation: PerceptualObservation<'a>) -> Self {
-        self.perceptual = Some(observation);
         self
     }
 
@@ -206,12 +188,6 @@ impl<'a> RequestContext<'a> {
     #[must_use]
     pub fn content_cid(&self) -> Option<&'a [u8]> {
         self.content_cid
-    }
-
-    /// Perceptual fingerprint metadata provided by the request.
-    #[must_use]
-    pub fn perceptual_observation(&self) -> Option<PerceptualObservation<'a>> {
-        self.perceptual
     }
 
     /// Whether a manifest envelope was supplied alongside the request.
@@ -350,19 +326,6 @@ impl PolicyViolation {
             Self::MissingProviderId => ("provider", "missing_id"),
             Self::AdmissionUnavailable => ("admission", "unavailable"),
             Self::ProviderNotAdmitted { .. } => ("admission", "not_admitted"),
-            Self::Denylisted(hit) => {
-                let hit = hit.as_ref();
-                let detail = match hit.kind() {
-                    DenylistKind::Provider(_) => "provider",
-                    DenylistKind::ManifestDigest(_) => "manifest_digest",
-                    DenylistKind::Cid(_) => "cid",
-                    DenylistKind::Url(_) => "url",
-                    DenylistKind::AccountId(_) => "account_id",
-                    DenylistKind::AccountAlias(_) => "account_alias",
-                    DenylistKind::PerceptualFamily { .. } => "perceptual_family",
-                };
-                ("denylist", detail)
-            }
             Self::RateLimited(error) => match error {
                 RateLimitError::Limited { .. } => ("rate_limit", "limited"),
                 RateLimitError::Banned { .. } => ("rate_limit", "banned"),
@@ -499,12 +462,11 @@ fn enforce_cdn_policy(
     None
 }
 
-/// Policy orchestrator performing GAR, denylist, and rate limiting checks.
+/// Policy orchestrator performing GAR and rate limiting checks.
 #[derive(Debug)]
 pub struct GatewayPolicy {
     config: GatewayPolicyConfig,
     admission: Option<Arc<AdmissionRegistry>>,
-    denylist: Arc<GatewayDenylist>,
     rate_limiter: GatewayRateLimiter,
     cdn_rate_limiter: Option<GatewayRateLimiter>,
 }
@@ -515,7 +477,6 @@ impl GatewayPolicy {
     pub fn new(
         config: GatewayPolicyConfig,
         admission: Option<Arc<AdmissionRegistry>>,
-        denylist: Arc<GatewayDenylist>,
         rate_limiter: GatewayRateLimiter,
     ) -> Self {
         let cdn_rate_limiter =
@@ -523,7 +484,6 @@ impl GatewayPolicy {
         Self {
             config,
             admission,
-            denylist,
             rate_limiter,
             cdn_rate_limiter,
         }
@@ -531,13 +491,10 @@ impl GatewayPolicy {
 
     /// Construct a policy using default configuration.
     #[must_use]
-    pub fn new_default(
-        admission: Option<Arc<AdmissionRegistry>>,
-        denylist: Arc<GatewayDenylist>,
-    ) -> Self {
+    pub fn new_default(admission: Option<Arc<AdmissionRegistry>>) -> Self {
         let config = GatewayPolicyConfig::default();
         let rate_limiter = GatewayRateLimiter::new(config.rate_limit.clone());
-        Self::new(config, admission, denylist, rate_limiter)
+        Self::new(config, admission, rate_limiter)
     }
 
     /// Evaluate the supplied request context and return the policy decision.
@@ -545,33 +502,6 @@ impl GatewayPolicy {
     pub fn evaluate(&self, ctx: &RequestContext<'_>) -> PolicyDecision {
         if self.config.require_manifest_envelope && !ctx.manifest_envelope_present() {
             return PolicyDecision::Deny(PolicyViolation::ManifestEnvelopeMissing);
-        }
-
-        if let Some(provider_id) = ctx.provider_id() {
-            if let Some(hit) = self.denylist.check_provider(provider_id, ctx.wall_time()) {
-                return PolicyDecision::Deny(PolicyViolation::Denylisted(Box::new(hit)));
-            }
-        }
-
-        if let Some(digest) = ctx.manifest_digest() {
-            if let Some(hit) = self.denylist.check_manifest_digest(digest, ctx.wall_time()) {
-                return PolicyDecision::Deny(PolicyViolation::Denylisted(Box::new(hit)));
-            }
-        }
-
-        if let Some(cid) = ctx.content_cid() {
-            if let Some(hit) = self.denylist.check_cid(cid, ctx.wall_time()) {
-                return PolicyDecision::Deny(PolicyViolation::Denylisted(Box::new(hit)));
-            }
-        }
-
-        if let Some(observation) = ctx.perceptual_observation() {
-            if let Some(hit) = self
-                .denylist
-                .check_perceptual(&observation, ctx.wall_time())
-            {
-                return PolicyDecision::Deny(PolicyViolation::Denylisted(Box::new(hit)));
-            }
         }
 
         if self.config.enforce_admission {
@@ -623,25 +553,10 @@ pub fn build_gar_violation_event(
     violation: &PolicyViolation,
 ) -> SorafsGarViolation {
     let mut provider_id = ctx.provider_id().map(|id| ProviderId::new(*id));
-    let mut manifest_digest = ctx
+    let manifest_digest = ctx
         .manifest_digest()
         .map(|digest| ManifestDigest::new(*digest));
     let manifest_cid_b64 = ctx.content_cid().map(|cid| BASE64_STD.encode(cid));
-    let mut denylisted_cid_b64: Option<String> = None;
-    let mut denylisted_url: Option<String> = None;
-    let mut denylisted_account_id: Option<String> = None;
-    let mut denylisted_account_alias: Option<String> = None;
-    let mut denylisted_perceptual_family_hex: Option<String> = None;
-    let mut denylisted_perceptual_variant_hex: Option<String> = None;
-    let mut denylisted_perceptual_hash_hex: Option<String> = None;
-    let mut denylisted_perceptual_embedding_hex: Option<String> = None;
-    let mut perceptual_hamming_distance: Option<u8> = None;
-    let mut perceptual_hamming_radius: Option<u8> = None;
-    let mut jurisdiction: Option<String> = None;
-    let mut reason: Option<String> = None;
-    let mut entry_alias: Option<String> = None;
-    let mut issued_at_unix: Option<u64> = None;
-    let mut expires_at_unix: Option<u64> = None;
     let mut retry_after_seconds: Option<u64> = None;
     let mut region = ctx.region().map(ToOwned::to_owned);
     let host = ctx.canonical_host().map(ToOwned::to_owned);
@@ -668,79 +583,6 @@ pub fn build_gar_violation_event(
                 SorafsGarPolicy::Admission,
                 SorafsGarPolicyDetail::ProviderNotAdmitted,
             )
-        }
-        PolicyViolation::Denylisted(hit) => {
-            let hit = hit.as_ref();
-            let detail = match hit.kind() {
-                DenylistKind::Provider(id) => {
-                    provider_id = Some(ProviderId::new(*id));
-                    SorafsGarPolicyDetail::DenylistedProvider
-                }
-                DenylistKind::ManifestDigest(digest) => {
-                    manifest_digest = Some(ManifestDigest::new(*digest));
-                    SorafsGarPolicyDetail::DenylistedManifestDigest
-                }
-                DenylistKind::Cid(cid) => {
-                    let encoded = BASE64_STD.encode(cid);
-                    denylisted_cid_b64 = Some(encoded);
-                    SorafsGarPolicyDetail::DenylistedCid
-                }
-                DenylistKind::Url(url) => {
-                    denylisted_url = Some(url.clone());
-                    SorafsGarPolicyDetail::DenylistedUrl
-                }
-                DenylistKind::AccountId(account) => {
-                    denylisted_account_id = Some(account.clone());
-                    SorafsGarPolicyDetail::DenylistedAccountId
-                }
-                DenylistKind::AccountAlias(alias) => {
-                    denylisted_account_alias = Some(alias.clone());
-                    SorafsGarPolicyDetail::DenylistedAccountAlias
-                }
-                DenylistKind::PerceptualFamily {
-                    family_id,
-                    variant_id,
-                } => {
-                    denylisted_perceptual_family_hex = Some(family_id.encode_hex::<String>());
-                    denylisted_perceptual_variant_hex =
-                        variant_id.map(|id| id.encode_hex::<String>());
-                    if let Some(perceptual) = hit.perceptual_match() {
-                        match perceptual.basis() {
-                            PerceptualMatchBasis::Hash {
-                                expected,
-                                hamming_distance,
-                                radius,
-                                ..
-                            } => {
-                                denylisted_perceptual_hash_hex =
-                                    Some(expected.encode_hex::<String>());
-                                perceptual_hamming_distance = Some(*hamming_distance);
-                                perceptual_hamming_radius = Some(*radius);
-                            }
-                            PerceptualMatchBasis::Embedding { expected, .. } => {
-                                denylisted_perceptual_embedding_hex =
-                                    Some(expected.encode_hex::<String>());
-                            }
-                        }
-                    }
-                    SorafsGarPolicyDetail::DenylistedPerceptualFamily
-                }
-            };
-
-            let entry = hit.entry();
-            jurisdiction = entry.jurisdiction().map(ToOwned::to_owned);
-            reason = entry.reason().map(ToOwned::to_owned);
-            entry_alias = entry.alias().map(ToOwned::to_owned);
-            issued_at_unix = entry
-                .issued_at()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs());
-            expires_at_unix = entry
-                .expires_at()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_secs());
-
-            (SorafsGarPolicy::Denylist, detail)
         }
         PolicyViolation::RateLimited(error) => {
             let detail = match error {
@@ -833,21 +675,6 @@ pub fn build_gar_violation_event(
         policy_labels,
         observed_ttl_seconds,
         rate_ceiling_rps,
-        jurisdiction,
-        reason,
-        entry_alias,
-        issued_at_unix,
-        expires_at_unix,
-        denylisted_cid_b64,
-        denylisted_url,
-        denylisted_account_id,
-        denylisted_account_alias,
-        denylisted_perceptual_family_hex,
-        denylisted_perceptual_variant_hex,
-        denylisted_perceptual_hash_hex,
-        denylisted_perceptual_embedding_hex,
-        perceptual_hamming_distance,
-        perceptual_hamming_radius,
         retry_after_seconds,
         occurred_at_unix,
     }
@@ -865,9 +692,8 @@ mod tests {
 
     #[test]
     fn policy_denies_missing_manifest_envelope() {
-        let denylist = Arc::new(GatewayDenylist::new());
         let admission = Some(Arc::new(AdmissionRegistry::empty()));
-        let policy = GatewayPolicy::new_default(admission, denylist);
+        let policy = GatewayPolicy::new_default(admission);
         let client = ClientFingerprint::from_identifier("client");
         let provider = sample_provider_id();
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
@@ -882,9 +708,8 @@ mod tests {
 
     #[test]
     fn policy_denies_unknown_provider() {
-        let denylist = Arc::new(GatewayDenylist::new());
         let admission = Some(Arc::new(AdmissionRegistry::empty()));
-        let policy = GatewayPolicy::new_default(admission, denylist);
+        let policy = GatewayPolicy::new_default(admission);
         let client = ClientFingerprint::from_identifier("client");
         let other_provider = [0x55; 32];
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
@@ -899,8 +724,7 @@ mod tests {
 
     #[test]
     fn policy_denies_when_admission_registry_is_unavailable() {
-        let denylist = Arc::new(GatewayDenylist::new());
-        let policy = GatewayPolicy::new_default(None, denylist);
+        let policy = GatewayPolicy::new_default(None);
         let client = ClientFingerprint::from_identifier("client");
         let provider = sample_provider_id();
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
@@ -917,8 +741,7 @@ mod tests {
 
     #[test]
     fn policy_does_not_fail_open_without_registry_or_provider_id() {
-        let denylist = Arc::new(GatewayDenylist::new());
-        let policy = GatewayPolicy::new_default(None, denylist);
+        let policy = GatewayPolicy::new_default(None);
         let client = ClientFingerprint::from_identifier("client");
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
             .with_manifest_envelope(true);
@@ -931,7 +754,6 @@ mod tests {
 
     #[test]
     fn policy_denies_rate_limited_client() {
-        let denylist = Arc::new(GatewayDenylist::new());
         let admission = None;
         let rate_limit = GatewayRateLimitConfig {
             max_requests: Some(1),
@@ -946,7 +768,6 @@ mod tests {
         let policy = GatewayPolicy::new(
             config.clone(),
             admission,
-            denylist,
             GatewayRateLimiter::new(config.rate_limit),
         );
         let client = ClientFingerprint::from_identifier("client");
@@ -986,31 +807,6 @@ mod tests {
     }
 
     #[test]
-    fn gar_violation_event_for_denylisted_url() {
-        let client = ClientFingerprint::from_identifier("client");
-        let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
-            .with_manifest_envelope(true);
-        let entry = DenylistEntryBuilder::default()
-            .jurisdiction("US")
-            .reason("restricted jurisdiction")
-            .build();
-        let denylist = GatewayDenylist::from_entries([(
-            DenylistKind::Url("https://example.com".to_owned()),
-            entry.clone(),
-        )]);
-        let hit = denylist
-            .check_url("https://example.com", SystemTime::now())
-            .expect("denylist hit must exist");
-        let violation = PolicyViolation::Denylisted(Box::new(hit));
-        let event = build_gar_violation_event(&ctx, &violation);
-        assert_eq!(event.policy, SorafsGarPolicy::Denylist);
-        assert_eq!(event.detail, SorafsGarPolicyDetail::DenylistedUrl);
-        assert_eq!(event.denylisted_url.as_deref(), Some("https://example.com"));
-        assert_eq!(event.jurisdiction.as_deref(), Some("US"));
-        assert_eq!(event.reason.as_deref(), Some("restricted jurisdiction"));
-    }
-
-    #[test]
     fn gar_violation_event_for_rate_limit_violation() {
         let client = ClientFingerprint::from_identifier("client");
         let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
@@ -1042,65 +838,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn gar_violation_event_for_perceptual_family() {
-        let denylist = Arc::new(GatewayDenylist::new());
-        let metadata = DenylistEntryBuilder::default()
-            .reason("Perceptual block")
-            .build();
-        let family_id = [0x11; 16];
-        let variant_id = [0x22; 16];
-        let canonical_hash = [0xAA; 32];
-        let entry = PerceptualFamilyEntry::new(family_id, metadata)
-            .with_variant_id(Some(variant_id))
-            .with_perceptual_hash(Some(canonical_hash), 4);
-        denylist.upsert_perceptual(entry);
-        let policy = GatewayPolicy::new_default(None, denylist.clone());
-        let client = ClientFingerprint::from_identifier("client");
-        let mut observed_hash = canonical_hash;
-        observed_hash[0] ^= 0x01;
-        let observation = PerceptualObservation::new(Some(&observed_hash), None);
-        let ctx = RequestContext::new(&client, SystemTime::now(), Instant::now())
-            .with_manifest_envelope(true)
-            .with_perceptual_observation(observation);
-        let decision = policy.evaluate(&ctx);
-        let violation = match decision {
-            PolicyDecision::Deny(PolicyViolation::Denylisted(hit)) => {
-                PolicyViolation::Denylisted(hit)
-            }
-            other => panic!("unexpected decision: {other:?}"),
-        };
-        let event = build_gar_violation_event(&ctx, &violation);
-        assert_eq!(
-            event.detail,
-            SorafsGarPolicyDetail::DenylistedPerceptualFamily
-        );
-        assert_eq!(
-            event.denylisted_perceptual_family_hex,
-            Some(hex::encode(family_id))
-        );
-        assert_eq!(
-            event.denylisted_perceptual_variant_hex,
-            Some(hex::encode(variant_id))
-        );
-        assert_eq!(
-            event.denylisted_perceptual_hash_hex,
-            Some(hex::encode(canonical_hash))
-        );
-        assert_eq!(event.perceptual_hamming_distance, Some(1));
-        assert_eq!(event.perceptual_hamming_radius, Some(4));
-        assert_eq!(
-            event.policy_labels.first().map(String::as_str),
-            Some("denylist")
-        );
-        assert_eq!(
-            event.policy_labels.get(1).map(String::as_str),
-            Some("perceptual_family")
-        );
-    }
-
     fn policy_with_cdn(cdn: GarCdnPolicyV1) -> GatewayPolicy {
-        let denylist = Arc::new(GatewayDenylist::new());
         let config = GatewayPolicyConfig {
             enforce_admission: false,
             require_manifest_envelope: false,
@@ -1110,7 +848,6 @@ mod tests {
         GatewayPolicy::new(
             config.clone(),
             None,
-            denylist,
             GatewayRateLimiter::new(config.rate_limit),
         )
     }

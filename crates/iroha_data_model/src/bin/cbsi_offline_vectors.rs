@@ -1,7 +1,7 @@
 //! Regenerate the canonical CBSI Offline Cash interop fixture shared by the wallets.
 //!
 //! The app-packaged JSON shape is retained, but every canonical archive is built
-//! from the current Kagemusha V2/V4 types. No deleted OfflineNote compatibility
+//! from the current Kagemusha V2/V4 types. No deleted `OfflineNote` compatibility
 //! model participates in this producer. Every account literal is encoded for
 //! Taira discriminant 369 and every balance is the exact `sbd#cbsi` definition.
 //!

@@ -3264,16 +3264,6 @@ pub mod sorafs {
         "/v1/sorafs/cid/{cid}",
         RouteProjections::SDK,
     );
-    /// Read the configured denylist catalog.
-    pub const DENYLIST_CATALOG: RouteDescriptor = documented_get(
-        "sorafs.denylist_catalog.read",
-        "/v1/sorafs/denylist/catalog",
-    );
-    /// Read one configured denylist pack.
-    pub const DENYLIST_PACK: RouteDescriptor = documented_get(
-        "sorafs.denylist_pack.read",
-        "/v1/sorafs/denylist/packs/{pack_id}",
-    );
     /// Read one stored manifest.
     pub const STORAGE_MANIFEST: RouteDescriptor = documented_get(
         "sorafs.storage_manifest.read",
@@ -3554,8 +3544,6 @@ pub mod sorafs {
         REPLICATION,
         STORAGE_STATE,
         CID_LOOKUP,
-        DENYLIST_CATALOG,
-        DENYLIST_PACK,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
         STORAGE_PIN,
@@ -4555,8 +4543,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::REPLICATION,
     sorafs::STORAGE_STATE,
     sorafs::CID_LOOKUP,
-    sorafs::DENYLIST_CATALOG,
-    sorafs::DENYLIST_PACK,
     sorafs::STORAGE_MANIFEST,
     sorafs::STORAGE_PLAN,
     sorafs::STORAGE_PIN,

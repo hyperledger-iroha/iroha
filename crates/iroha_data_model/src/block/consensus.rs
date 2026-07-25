@@ -5578,8 +5578,13 @@ mod tests {
         // Keep both variants so this forged encoder has the same discriminant
         // layout as `QuorumPolicy`; the signed payload probes the nominal
         // quantity boundary on the NPoS variant.
-        let _permissioned = ForgedQuorumPolicy::PermissionedCount(1);
-        let encoded = ForgedQuorumPolicy::NposStake(Numeric::new(-1_i32, 0)).encode();
+        let permissioned = ForgedQuorumPolicy::PermissionedCount(1);
+        let forged_stake = ForgedQuorumPolicy::NposStake(Numeric::new(-1_i32, 0));
+        assert_ne!(
+            core::mem::discriminant(&permissioned),
+            core::mem::discriminant(&forged_stake)
+        );
+        let encoded = forged_stake.encode();
         assert!(
             QuorumPolicy::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as NPoS total stake"
@@ -5845,6 +5850,10 @@ mod tests {
             .expect("decode Rust-owned grouped Native AMX lane commitment")
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "this ordered fail-closed fixture validator follows the complete Native AMX evidence pipeline and preserves first-error intent across its canonical anchors"
+    )]
     fn validate_grouped_native_amx_application_evidence(
         document: &norito::json::Value,
     ) -> Result<(), &'static str> {
@@ -5981,8 +5990,10 @@ mod tests {
                 .find(|leg| leg.lane_id == leaf.lane_id && leg.dataspace_id == leaf.dataspace_id)
                 .ok_or("manifest participant route is missing from receipt")?;
             let descriptor = &leg.participant_proposal.descriptor;
+            let participant_height_matches_descriptor =
+                descriptor.lane_block_height == leaf.participant_height;
             if descriptor.lane_incarnation != leaf.lane_incarnation
-                || descriptor.lane_block_height != leaf.participant_height
+                || !participant_height_matches_descriptor
                 || descriptor.lane_block_view != leaf.participant_view
                 || descriptor.previous_lane_block_height != leaf.predecessor_height
                 || descriptor.previous_lane_block_descriptor_hash
@@ -6963,6 +6974,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the complete proposal mutation matrix documents every canonical descriptor, replay, quorum, and proposal-preimage binding in one protocol vector"
+    )]
     fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
         let proposal = sample_lane_block_proposal();
         let mut cases = Vec::<(&str, LaneBlockProposalV1)>::new();

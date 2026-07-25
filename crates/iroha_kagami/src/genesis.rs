@@ -14,7 +14,7 @@ mod npos;
 mod pop;
 pub mod profile;
 mod sign;
-pub(crate) use sign::bind_staged_sumeragi_v2_context;
+pub use sign::bind_staged_sumeragi_v2_context;
 mod validate;
 
 pub use generate::{
@@ -29,7 +29,7 @@ pub use profile::{
 
 /// Deterministic role used to authorize restricted-dataspace reads at the
 /// universal Torii ingress hop for a private localnet profile.
-pub(crate) fn private_dataspace_reader_role_id(alias: &str, dataspace: DataSpaceId) -> RoleId {
+pub fn private_dataspace_reader_role_id(alias: &str, dataspace: DataSpaceId) -> RoleId {
     format!(
         "private_{alias}_dataspace_{}_restricted_reader",
         dataspace.as_u64()

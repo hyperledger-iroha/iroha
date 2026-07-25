@@ -1209,12 +1209,15 @@ mod tests {
     const PROVIDER_ID: [u8; 32] = [0x22; 32];
     const MANIFEST_DIGEST: [u8; 32] = [0x11; 32];
 
+    type ProofOutcome = (PotrReceiptV1, [u8; 32], [u8; 32]);
+    type RepairReport = (RepairReportV1, [u8; 32]);
+
     #[derive(Debug, Default)]
     struct RecordingRepair {
         proof_failures_remaining: AtomicU64,
         failures_remaining: AtomicU64,
-        proof_outcomes: Mutex<BTreeMap<[u8; 32], (PotrReceiptV1, [u8; 32], [u8; 32])>>,
-        reports: Mutex<BTreeMap<[u8; 32], (RepairReportV1, [u8; 32])>>,
+        proof_outcomes: Mutex<BTreeMap<[u8; 32], ProofOutcome>>,
+        reports: Mutex<BTreeMap<[u8; 32], RepairReport>>,
     }
 
     impl RecordingRepair {

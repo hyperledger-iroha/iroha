@@ -621,7 +621,11 @@ mod contract_deployment_bootstrap_tests {
             &authority,
             &non_initial_upload
         ));
+    }
 
+    #[test]
+    fn deployment_self_bootstrap_rejects_adversarial_sequences() {
+        let authority = account(1);
         let mut reordered = bootstrap_prefix(
             Account::new(authority.clone()),
             authority.clone(),
@@ -673,7 +677,11 @@ mod contract_deployment_bootstrap_tests {
             &authority,
             &atomic_deployment
         ));
+    }
 
+    #[test]
+    fn deployment_self_bootstrap_rejects_decorated_accounts() {
+        let authority = account(1);
         let mut metadata = Metadata::default();
         metadata.insert("bootstrap".parse().expect("metadata key"), "forbidden");
         let decorated_accounts = [
@@ -1895,10 +1903,6 @@ pub mod sorafs {
     }
 
     /// Authoritative repair-task pages are public operational state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
     pub fn visit_find_sorafs_repair_tasks<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairTasks,
@@ -1906,10 +1910,6 @@ pub mod sorafs {
     }
 
     /// Authoritative repair counters are public operational state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
     pub fn visit_find_sorafs_repair_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairStatus,
@@ -1917,10 +1917,6 @@ pub mod sorafs {
     }
 
     /// Committed repair-ledger event pages are public operational state.
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-    )]
     pub fn visit_find_sorafs_repair_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairEvents,
@@ -2288,6 +2284,10 @@ pub mod sorafs {
     }
 
     /// A complete snapshot includes every juror eligibility record and requires moderation access.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
     pub fn visit_find_sorafs_moderation_snapshot<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsModerationSnapshot,
@@ -3747,6 +3747,10 @@ pub mod asset_definition {
         );
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping the exhaustive permission association matrix in one match makes this security boundary auditable"
+    )]
     pub(crate) fn is_permission_asset_definition_associated(
         permission: &Permission,
         asset_definition_id: &AssetDefinitionId,
@@ -6413,10 +6417,7 @@ mod sorafs_permission_tests {
     #[test]
     fn complete_moderation_snapshot_is_manager_only() {
         let query = FindSorafsModerationSnapshot::new(8, 16);
-        assert_denied_without_permission(
-            query.clone(),
-            sorafs::visit_find_sorafs_moderation_snapshot,
-        );
+        assert_denied_without_permission(query, sorafs::visit_find_sorafs_moderation_snapshot);
         assert_allowed_with_permission(
             query,
             PermissionObject::from(CanManageSorafsModeration),

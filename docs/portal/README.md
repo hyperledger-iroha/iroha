@@ -47,13 +47,11 @@ build whenever the Docusaurus graph changes.
 | `npm run test:tryit-proxy` | Execute the proxy unit tests via Node’s test runner (`node --test`). |
 
 The OpenAPI sync script builds the workspace `xtask` binary directly from the
-checked-in Cargo manifests. The repository intentionally does not track its
-root `Cargo.lock`, so clean-checkout tooling must not pass `--locked`; Rust
-dependency selection is bounded by those manifests, the pinned toolchain, and
-the pinned CI image rather than by a committed lockfile. The script emits a deterministic JSON file into
-`static/openapi/` and expects Torii to expose a live spec. Use `--allow-stub`
-only for an emergency placeholder; stubs are not accepted as canonical
-artifacts.
+checked-in Cargo manifests and root `Cargo.lock`, using `--locked --offline`
+with the pinned toolchain. The script emits a deterministic JSON file into
+`static/openapi/` and requires Torii to expose a structurally complete live
+specification. Missing, empty, or placeholder specifications fail before
+manifest creation, signing, synchronization, or version publication.
 
 ## Docs versioning & OpenAPI snapshots
 

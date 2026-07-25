@@ -2221,11 +2221,9 @@ mod tests {
             .get("leaf_bytes_hex")
             .and_then(Value::as_str)
             .expect("canonical leaf bytes");
-        let replacement = if leaf_bytes.starts_with("00") {
-            format!("ff{}", &leaf_bytes[2..])
-        } else {
-            format!("00{}", &leaf_bytes[2..])
-        };
+        let (first_byte, remaining_bytes) = leaf_bytes.split_at(2);
+        let replacement_prefix = if first_byte == "00" { "ff" } else { "00" };
+        let replacement = format!("{replacement_prefix}{remaining_bytes}");
         proof.insert("leaf_bytes_hex".into(), Value::from(replacement));
         let error = verify_por_item(&Value::Object(wrong_witness))
             .expect_err("internally invalid PoR witness must fail closed");

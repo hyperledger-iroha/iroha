@@ -29,9 +29,9 @@
   },
   {
     "id": "D1",
-    "description": "Load with GAR denylist trigger",
+    "description": "Load denied by governed gateway compliance",
     "status": 451,
-    "error": "denylisted",
-    "policy": "denylist"
+    "error": "gateway_compliance_denied",
+    "policy": "gateway_compliance"
   }
 ]

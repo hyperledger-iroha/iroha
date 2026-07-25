@@ -12,7 +12,7 @@
 )]
 
 macro_rules! norito_json {
-    ({ $($key:literal : $value:expr),* $(,)? }) => {{
+    ({ $($key:literal : $value:expr),+ $(,)? }) => {{
         let mut object = norito::json::Map::new();
         $(
             object.insert(
@@ -440,6 +440,10 @@ pub struct JsKotodamaCompileRequest {
 }
 
 /// Compile Kotodama with the canonical Rust compiler without blocking the Node event loop.
+#[allow(
+    clippy::trailing_empty_array,
+    reason = "the N-API macro conditionally emits its fixed ABI descriptor shape; changing the exported signature would break the JavaScript API"
+)]
 #[napi(js_name = "compileKotodama")]
 pub async fn compile_kotodama(
     request: JsKotodamaCompileRequest,
@@ -3285,25 +3289,24 @@ fn resolve_fixture_timestamps(
         Some(value) => js_number_to_u64(value, "generatedAtUnix")?,
         None => now.saturating_sub(60),
     };
-    let expires = match opts.expires_at_unix {
-        Some(value) => js_number_to_u64(value, "expiresAtUnix")?,
-        None => {
-            let expires = generated
-                .checked_add(SORAFS_ALIAS_POSITIVE_TTL_SECS)
-                .ok_or_else(|| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        "default expiresAtUnix exceeds JavaScript safe integer range",
-                    )
-                })?;
-            if expires > JS_MAX_SAFE_INTEGER_U64 {
-                return Err(napi::Error::new(
+    let expires = if let Some(value) = opts.expires_at_unix {
+        js_number_to_u64(value, "expiresAtUnix")?
+    } else {
+        let expires = generated
+            .checked_add(SORAFS_ALIAS_POSITIVE_TTL_SECS)
+            .ok_or_else(|| {
+                napi::Error::new(
                     napi::Status::InvalidArg,
                     "default expiresAtUnix exceeds JavaScript safe integer range",
-                ));
-            }
-            expires
+                )
+            })?;
+        if expires > JS_MAX_SAFE_INTEGER_U64 {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "default expiresAtUnix exceeds JavaScript safe integer range",
+            ));
         }
+        expires
     };
     if expires <= generated {
         return Err(napi::Error::new(
@@ -6721,7 +6724,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map_err(norito_to_napi)
 }
 
-/// Derive the canonical V1 SoraFS orderbook order id from owner bytes and nonce.
+/// Derive the canonical `V1` `SoraFS` orderbook order ID from owner bytes and nonce.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn sorafs_derive_orderbook_order_id(
@@ -14413,6 +14416,10 @@ pub struct JsTransactionPayload {
 }
 
 /// Exact unsigned transaction draft used by the fee quote-to-sign flow.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the payload-prefixed field names are the stable public JavaScript transaction-draft API"
+)]
 #[napi(object)]
 pub struct JsTransactionPayloadDraft {
     /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
@@ -16080,8 +16087,7 @@ mod tests {
 
         for (field, options) in cases {
             let error = alias_policy_from_js(Some(&options))
-                .err()
-                .expect("policy field above JavaScript's safe integer limit must be rejected");
+                .expect_err("policy field above JavaScript's safe integer limit must be rejected");
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
@@ -16100,8 +16106,7 @@ mod tests {
         );
 
         let error = parse_sorafs_generated_at_unix(maximum + 1)
-            .err()
-            .expect("timestamp above JavaScript's safe integer limit must be rejected");
+            .expect_err("timestamp above JavaScript's safe integer limit must be rejected");
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("generated_at_unix"));
         assert!(error.reason.contains("safe integer"));
@@ -16134,8 +16139,7 @@ mod tests {
                 ttl_ms,
                 None,
             )
-            .err()
-            .expect("transaction timestamp above the safe integer limit must be rejected");
+            .expect_err("transaction timestamp above the safe integer limit must be rejected");
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
@@ -16162,14 +16166,12 @@ mod tests {
             (
                 "creation_time_ms",
                 normalize_private_kaigi_creation_time_ms(Some(maximum + 1))
-                    .err()
-                    .expect("creation time above the safe integer limit must be rejected"),
+                    .expect_err("creation time above the safe integer limit must be rejected"),
             ),
             (
                 "ended_at_ms",
                 normalize_private_kaigi_ended_at_ms(Some(maximum + 1))
-                    .err()
-                    .expect("end time above the safe integer limit must be rejected"),
+                    .expect_err("end time above the safe integer limit must be rejected"),
             ),
         ] {
             assert_eq!(error.status, napi::Status::InvalidArg);
@@ -16191,8 +16193,7 @@ mod tests {
             None,
             None,
         )
-        .err()
-        .expect("invalid authority must fail after accepting safe timestamp inputs");
+        .expect_err("invalid authority must fail after accepting safe timestamp inputs");
         assert!(!accepted_error.reason.contains("safe integer"));
 
         for (field, start_timestamp_ms, period_ms) in [
@@ -16207,8 +16208,7 @@ mod tests {
                 None,
                 None,
             )
-            .err()
-            .expect("trigger timestamp above the safe integer limit must be rejected");
+            .expect_err("trigger timestamp above the safe integer limit must be rejected");
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
@@ -16347,8 +16347,7 @@ mod tests {
             ),
         ] {
             let error = resolve_fixture_timestamps(&options, 0)
-                .err()
-                .expect("timestamp above JavaScript's safe integer limit must be rejected");
+                .expect_err("timestamp above JavaScript's safe integer limit must be rejected");
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
@@ -16396,8 +16395,7 @@ mod tests {
             ),
         ] {
             let error = resolve_fixture_epochs(&options)
-                .err()
-                .expect("epoch above JavaScript's safe integer limit must be rejected");
+                .expect_err("epoch above JavaScript's safe integer limit must be rejected");
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(error.reason.contains(field));
             assert!(error.reason.contains("safe integer"));
@@ -16521,13 +16519,7 @@ mod tests {
         }
     }
 
-    use std::{
-        fs,
-        io::Cursor,
-        path::PathBuf,
-        str::FromStr,
-        sync::{Arc, OnceLock},
-    };
+    use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -25367,7 +25359,7 @@ seiyaku Privacy {
         let extra_variant = norito_json!({
             "Register": norito_json!({
                 "Account": account_json.clone(),
-                "Compatibility": norito_json!({})
+                "Compatibility": norito::json::Value::Object(norito::json::Map::new())
             })
         });
         assert!(value_to_instruction(extra_variant).is_err());
@@ -25376,7 +25368,7 @@ seiyaku Privacy {
             "Register": norito_json!({
                 "Account": account_json
             }),
-            "SetParameter": norito_json!({})
+            "SetParameter": norito::json::Value::Object(norito::json::Map::new())
         });
         let error = value_to_instruction(extra_envelope)
             .expect_err("Register envelope must reject sibling instructions");

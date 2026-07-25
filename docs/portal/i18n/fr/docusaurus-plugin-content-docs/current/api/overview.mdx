@@ -22,12 +22,11 @@ cargo xtask openapi
 L'exécution de la commande ci-dessus écrit `docs/portal/static/openapi/torii.json` et
 alimente l'intégration `docusaurus-plugin-openapi-docs` donc cette section est mise à jour
 automatiquement. Le générateur fait tourner un routeur Torii en mémoire et tente de
-interroger son point de terminaison OpenAPI ; si cela échoue (par exemple, l'initialisation du routeur
-erreurs), une spécification d'espace réservé déterministe est émise à la place.
+Le générateur construit la projection canonique depuis le routeur Torii et
+échoue de manière fermée si le document OpenAPI complet ne peut pas être produit.
 
-## Statut actuel- **Source spécifique :** `cargo xtask openapi` interroge directement le routeur Torii ; le
-  Le stub de secours n'est émis que lorsque le routeur ne parvient pas à exposer un OpenAPI
-  documenter.
+## Statut actuel- **Source spécifique :** `cargo xtask openapi` interroge directement le routeur Torii et
+  échoue si la spécification complète n'est pas disponible.
 - **Déterminisme :** La sortie JSON est canonique pour garantir une différence stable dans CI.
 - **Authentification :** Le bac à sable « Try it » transmet désormais les requêtes via un
   proxy intermédiaire contraint. Les opérateurs doivent fournir un point de terminaison et un support Torii.
@@ -76,4 +75,3 @@ npm run start
 > ⚠️ Le proxy est destiné à l'accès en staging/démo. Déploiements en production
 > devrait fonctionner derrière une entrée renforcée et réutiliser la même politique de limitation de débit dans
 > recto du Torii.
-

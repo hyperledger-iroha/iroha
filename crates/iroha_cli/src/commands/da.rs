@@ -1854,7 +1854,7 @@ fn build_rent_ledger_plan(
     accounts: da::DaRentLedgerAccounts<'_>,
     asset_definition: &AssetDefinitionId,
 ) -> Result<Value> {
-    let plan = da::build_da_rent_ledger_plan(&projection, &accounts, asset_definition)?;
+    let plan = da::build_da_rent_ledger_plan(&projection, &accounts, asset_definition);
     render_rent_ledger_plan(quote_path, &plan)
 }
 

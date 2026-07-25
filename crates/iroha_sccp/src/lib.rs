@@ -1392,7 +1392,7 @@ fn sha256_bytes(payload: &[u8]) -> H256 {
 
 fn solana_destination_account_roles_are_valid_v1(
     runtime: SccpSolanaDestinationRuntimeAccountsV1,
-    deployment: SccpSolanaDestinationDeploymentV1,
+    deployment: &SccpSolanaDestinationDeploymentV1,
 ) -> bool {
     let accounts = [
         runtime.payer,
@@ -1412,7 +1412,7 @@ fn solana_destination_account_roles_are_valid_v1(
 
 fn sccp_solana_payload_amount_to_spl_base_units_v1(
     payload_amount: u128,
-    deployment: SccpSolanaDestinationDeploymentV1,
+    deployment: &SccpSolanaDestinationDeploymentV1,
 ) -> Option<u64> {
     if deployment.taira_to_token_multiplier != SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER {
         return None;
@@ -1451,6 +1451,10 @@ fn solana_destination_proof_body_bytes_v1(
 
 /// Validate one sealed Solana destination proof-account value.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "this fail-closed V1 validator keeps the proof-account body, header, chunk, public-input, payload, and deployment bindings in one auditable protocol boundary"
+)]
 pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
     account: &SccpSolanaDestinationProofAccountV1,
 ) -> bool {
@@ -1461,7 +1465,7 @@ pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
         || account.amount == 0
         || !solana_destination_account_roles_are_valid_v1(
             account.runtime_accounts,
-            account.deployment,
+            &account.deployment,
         )
         || sccp_groth16_bn254_verifying_key_hash_v1(account.deployment.verifying_key)
             != Some(account.deployment.verifier_key_hash)
@@ -1504,7 +1508,7 @@ pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
         return false;
     }
 
-    if sccp_solana_payload_amount_to_spl_base_units_v1(account.payload_amount, account.deployment)
+    if sccp_solana_payload_amount_to_spl_base_units_v1(account.payload_amount, &account.deployment)
         != Some(account.amount)
     {
         return false;
@@ -1515,10 +1519,11 @@ pub fn sccp_solana_destination_proof_account_is_well_formed_v1(
         return false;
     };
     let SccpPayloadV1::Transfer(transfer) = &payload;
+    let payload_amount_matches_transfer = transfer.amount == account.payload_amount;
     if canonical_sccp_payload_bytes(&payload).ok().as_deref()
         != Some(account.canonical_payload_bytes.as_slice())
         || !sccp_payload_matches_exact_xor_destination_route_v1(&payload, SCCP_DOMAIN_SOLANA)
-        || transfer.amount != account.payload_amount
+        || !payload_amount_matches_transfer
         || transfer.route_revision != account.route_revision
         || transfer.recipient.as_slice() != account.runtime_accounts.payer
         || payload_hash(&account.canonical_payload_bytes) != account.public_inputs.payload_hash
@@ -4192,6 +4197,10 @@ fn build_sccp_verified_destination_call_v1(
     })
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the canonical eleven-word signal array is owned by the parsed proof and moved directly into the returned V1 call without cloning"
+)]
 fn build_sccp_verified_solana_destination_call_v1(
     bundle: &TairaSccpMessageProofV1,
     artifact: &SccpGroth16Bn254ProofArtifactV1,
@@ -4215,7 +4224,7 @@ fn build_sccp_verified_solana_destination_call_v1(
     {
         return None;
     }
-    let amount = sccp_solana_payload_amount_to_spl_base_units_v1(transfer.amount, deployment)?;
+    let amount = sccp_solana_payload_amount_to_spl_base_units_v1(transfer.amount, &deployment)?;
     let mut proof_account = SccpSolanaDestinationProofAccountV1 {
         version: 1,
         network: SccpNetworkV1::SolanaTestnet,
@@ -6563,18 +6572,18 @@ mod tests {
             _ => unreachable!("Solana fixture must use the Solana deployment"),
         };
         assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(3, deployment),
+            sccp_solana_payload_amount_to_spl_base_units_v1(3, &deployment),
             Some(3)
         );
         assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(u128::from(u64::MAX) + 1, deployment,),
+            sccp_solana_payload_amount_to_spl_base_units_v1(u128::from(u64::MAX) + 1, &deployment,),
             None
         );
 
         let mut wrong_multiplier = deployment;
         wrong_multiplier.taira_to_token_multiplier = SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER;
         assert_eq!(
-            sccp_solana_payload_amount_to_spl_base_units_v1(3, wrong_multiplier),
+            sccp_solana_payload_amount_to_spl_base_units_v1(3, &wrong_multiplier),
             None
         );
 

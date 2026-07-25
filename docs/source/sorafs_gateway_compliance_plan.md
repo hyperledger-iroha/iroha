@@ -1,22 +1,21 @@
 ---
 title: Gateway Compliance, Moderation & Transparency
-summary: SFM-4 implementation status for gateway denylist enforcement, GAR policy, proof tokens, honey-audit evidence, and remaining compliance services.
+summary: SFM-4 implementation status for governed compliance catalogs, GAR policy, proof tokens, honey-audit evidence, and remaining compliance services.
 ---
 
 # Gateway Compliance, Moderation & Transparency
 
 ## Current Status
 
-SFM-4 is partially implemented. The gateway enforcement path, denylist helpers,
-GAR policy payloads, proof-token utilities, honey-audit probing, operator bundle
-tooling, payload-free rollout evidence gate, and gateway-scoped governed
-compliance controller core exist. The core admits bounded threshold-signed,
-predecessor-bound catalogs; persists candidate, acknowledgement, promotion,
-last-known-good, rollback, toggle, appeal-override, and history state; and
-evaluates legal/safety holds before accepted appeals and baseline policy. It
-also defines an address-pinned runtime feed-transport boundary with HTTPS
-allowlists, public-address validation, DNS revalidation, SPKI pins, redirect,
-size, time, and decompression limits.
+SFM-4 is partially implemented. The gateway enforcement path, GAR policy
+payloads, proof-token utilities, honey-audit probing, payload-free rollout
+evidence gate, and gateway-scoped governed compliance controller core exist.
+The core admits bounded threshold-signed, predecessor-bound catalogs; persists
+candidate, acknowledgement, promotion, last-known-good, rollback, toggle,
+appeal-override, and history state; and evaluates legal/safety holds before
+accepted appeals and baseline policy. It also defines an address-pinned runtime
+feed-transport boundary with HTTPS allowlists, public-address validation, DNS
+revalidation, SPKI pins, redirect, size, time, and decompression limits.
 
 `iroha_config` now carries the non-secret controller policy, feed allowlists and
 pins, resource bounds, checkpoint path, governed signer identities, and the
@@ -33,9 +32,10 @@ stage, acknowledgement, promotion, and rollback mutations. Live SoraFS content
 serving evaluates the promoted catalog for manifest digest, canonical CID, and
 provider subjects across global, configured-region, and configured-gateway
 scopes. Missing, stale, or poisoned serving state fails closed. Enabling the
-governed controller also rejects every obsolete unsigned denylist path,
-catalog, pack, and jurisdiction bootstrap source, so no configured local
-authority can compete with the signed durable catalog.
+governed controller also rejects every obsolete unsigned bootstrap path and
+local catalog source, so no configured local authority can compete with the
+signed durable catalog. V1 has no local compliance packs, file-backed
+compliance authority, catalog-mutation CLI, or unsigned compatibility route.
 
 Real authenticated feed and ACME adapters for the standard daemon, finalized
 accepted-appeal and legal/safety-hold catalog producers, independently audited
@@ -48,9 +48,9 @@ evidence and cannot mark gateway compliance ready.
 
 ## Shipped Foundations
 
-- `GatewayDenylist` supports provider, manifest digest, CID, URL, account id,
-  account alias, and perceptual-family entries with TTL pruning, policy tiers,
-  governance provenance, and active-pack metadata.
+- The promoted catalog evaluator supports provider, manifest digest, CID, URL,
+  account id, account alias, and perceptual-family rules with TTL pruning,
+  policy tiers, and governance provenance.
 - `GatewayComplianceController` provides canonical Norito feed/catalog,
   signature, acknowledgement, rollback, and checkpoint contracts; deterministic
   normalization and merging; strict Ed25519 threshold/revocation checks;
@@ -97,14 +97,14 @@ evidence and cannot mark gateway compliance ready.
   when governed serving state cannot be trusted.
 - Controller configuration requires a canonical region identity and a gateway
   identity naming one active, non-revoked configured gateway signer. The same
-  configuration parser and the Torii construction boundary reject all legacy
-  unsigned denylist bootstrap sources whenever the governed controller is
-  enabled.
+  configuration parser and the Torii construction boundary reject every local
+  unsigned bootstrap source whenever the governed controller is enabled.
 - `GatewayPolicy` evaluates manifest-envelope requirements, provider admission,
-  denylist hits, rate limits, GAR CDN policy, TTL overrides, purge tags,
-  moderation slugs, rate ceilings, geofences, and legal holds.
-- Torii SoraFS endpoints reject denylisted manifests, CIDs, providers, and
-  perceptual matches with structured error bodies and telemetry labels.
+  promoted-catalog decisions, rate limits, GAR CDN policy, TTL overrides, purge
+  tags, moderation slugs, rate ceilings, geofences, and legal holds.
+- Torii SoraFS endpoints reject manifests, CIDs, providers, and perceptual
+  matches blocked by the promoted catalog with structured error bodies and
+  telemetry labels.
 - `GarPolicyPayloadV1`, `GarCdnPolicyV1`, `GarModerationDirectiveV1`,
   `GarModerationAction`, and `GarEnforcementReceiptV1` provide deterministic
   Norito policy and enforcement evidence payloads.
@@ -113,9 +113,6 @@ evidence and cannot mark gateway compliance ready.
 - `sorafs_car::policy::run_honey_probe` and
   `sorafs_cli moderation honey-audit` verify denied gateway responses,
   cache-version binding, and optional moderation proof-token evidence.
-- `cargo xtask sorafs-gateway denylist pack|diff|verify` produces and validates
-  deterministic denylist bundles, Merkle roots, Norito payloads, and diff
-  reports for governance evidence.
 - `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates
   payload-free SFM-4 promotion evidence for feed promotion, controller runtime,
   moderation-toggle canaries, gateway reload, enforcement probes, honey-audit
@@ -130,8 +127,8 @@ evidence and cannot mark gateway compliance ready.
   transparency, observability, and governance artifacts must carry the same
   `bundle_digest_hex` as a valid feed-promotion artifact in the same bundle, so
   promotion evidence cannot mix probes, dashboards, approvals, or controller
-  and toggle reports from different denylist bundle runs. Feed-promotion
-  artifacts must also carry `policy_digest_hex`, and governance approval
+  and toggle reports from different governed catalog promotion runs.
+  Feed-promotion artifacts must also carry `policy_digest_hex`, and governance approval
   artifacts must match that promoted policy digest before promotion. Bundle and
   policy mismatches are recorded on the offending artifact in the JSON summary
   before required-kind validity is reported.
@@ -236,37 +233,15 @@ evidence and cannot mark gateway compliance ready.
   `false`, validates every generated payload through the SFM-4 rollout gate
   contract before writing, and writes canaries atomically without following
   output symlinks.
-- `ci/check_sorafs_gateway_denylist.sh` guards the denylist bundle tooling.
 
 ## Operator Commands
 
-Pack a denylist bundle:
-
-```sh
-cargo xtask sorafs-gateway denylist pack \
-  --input docs/examples/sorafs_gateway_denylist.json \
-  --out artifacts/sorafs_gateway/denylist \
-  --label global-core
-```
-
-Compare two bundles:
-
-```sh
-cargo xtask sorafs-gateway denylist diff \
-  --old artifacts/sorafs_gateway/denylist/previous.json \
-  --new artifacts/sorafs_gateway/denylist/current.json \
-  --report-json artifacts/sorafs_gateway/denylist_diff.json
-```
-
-Verify a bundle before promotion:
-
-```sh
-cargo xtask sorafs-gateway denylist verify \
-  --bundle artifacts/sorafs_gateway/denylist/current.json \
-  --norito artifacts/sorafs_gateway/denylist/current.to \
-  --root artifacts/sorafs_gateway/denylist/current_root.txt \
-  --report-json artifacts/sorafs_gateway/denylist_verify.json
-```
+Catalog control is API-only in V1. Operators inspect authenticated feed and
+status reads, submit a bounded canonical catalog to `stage`, collect distinct
+gateway acknowledgements, call `promote`, and use `rollback` only for the
+durable last-known-good catalog. Catalog construction and threshold signing
+remain external to Torii; no local pack, diff, verify, or mutation CLI is
+supported.
 
 Run a moderation honey audit:
 
@@ -320,13 +295,13 @@ python3 scripts/build_sorafs_gateway_compliance_canary.py \
   @scripts/examples/sorafs_gateway_compliance_governance_approval_canary.args.example
 ```
 
-Rollout evidence must remain payload-free. The gate rejects raw denylist feeds,
+Rollout evidence must remain payload-free. The gate rejects raw compliance feeds,
 probe response bodies, GAR receipts, appeal payloads, moderation-toggle
 payloads, signed transactions, tokens, private keys, and response bodies;
 operators should provide only digests, counts, stable labels, booleans, and
 reviewed artifact paths. Every downstream controller/toggle/reload/probe/audit/
 appeal/transparency/observability/governance artifact must bind back to the
-promoted denylist bundle with
+promoted signed catalog with
 `bundle_digest_hex`; governance approval artifacts must also bind to the
 promoted feed policy with `policy_digest_hex`. If those bindings do not match a
 valid feed-promotion artifact, the gate marks the downstream artifact invalid
@@ -360,8 +335,8 @@ Gateway policy decisions fail closed for:
 
 - missing manifest envelopes when envelopes are required;
 - missing or unadmitted providers when admission enforcement is enabled;
-- denylisted providers, manifest digests, CIDs, URLs, accounts, aliases, or
-  perceptual fingerprints;
+- providers, manifest digests, CIDs, URLs, accounts, aliases, or perceptual
+  fingerprints blocked by the promoted compliance catalog;
 - client or CDN rate-limit violations;
 - GAR TTL, purge-tag, moderation-slug, geofence, or legal-hold violations.
 
@@ -397,7 +372,6 @@ parsing response strings.
 Focused local checks for the shipped surface are:
 
 ```sh
-ci/check_sorafs_gateway_denylist.sh
 python3 -m pytest -q \
   scripts/tests/check_sorafs_gateway_tls_runtime_contract_test.py \
   scripts/tests/build_sorafs_gateway_compliance_canary_test.py \
