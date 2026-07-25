@@ -30,9 +30,9 @@ use sorafs_manifest::{
     GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
     PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SignedReputationSnapshotV1,
-    SoraFsAppealFinanceReportV1,
-    SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
-    SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
+    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
+    SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
     repair::GcAuditEventV1,
@@ -3656,7 +3656,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         );
         result
     }
-
 }
 
 fn reputation_snapshot_json(
@@ -4195,7 +4194,6 @@ fn appeal_finance_settlement_receipt_json(
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -4208,6 +4206,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::codec::Encode;
+    use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1, XorQuantity,
     };
@@ -4215,14 +4214,12 @@ mod tests {
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
         GcAuditPayloadV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     };
-    use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
         GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
-        MODERATION_LEDGER_PUBLICATION_VERSION_V1,
-        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationProviderInputV1,
-        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationScoringEvidenceV1,
-        ReputationSnapshotSignatureV1, ReputationWeightsV1,
+        MODERATION_LEDGER_PUBLICATION_VERSION_V1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationWeightsV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
@@ -4588,7 +4585,6 @@ mod tests {
         let encoded = norito::to_bytes(&receipt).expect("encode appeal finance settlement receipt");
         (receipt, encoded)
     }
-
 
     #[test]
     fn governance_car_queue_pending_count_tracks_unassembled_segments() {

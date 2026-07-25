@@ -1,9 +1,0 @@
-# Reviewed feed-promotion canary inputs for the SFM-4 gateway compliance gate.
---kind feed_promotion
---out artifacts/sorafs_gateway/feed-promotion-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
---now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---policy-digest-hex cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

@@ -73,11 +73,14 @@ predecessor-bound recorder policy, one globally contiguous sequence, typed
 payload-free committed events, and a fixed-view finalized query. PoR terminals
 and stream-token outcomes have exact append instructions; canonical capacity
 dispute registration and resolution update the dispute record and journal
-atomically. This is source implementation only. Integrated validation,
-authenticated Torii/OpenAPI and SDK transaction/query projections, committed
-PDP/PoTR/repair/orderbook/reserve producers, the durable finalized-cursor
-ingest/reconciliation/outbox service, external threshold signing, and reviewed
-deployment evidence remain open. The existing local
+    atomically. This is source implementation only. Typed proof-outcome, repair,
+    orderbook, and reserve finalized feeds already exist; durable PoR and counted
+    stream-token journal append producers remain open. The deterministic
+    multi-feed projector exists in `sorafs_node` but is not exported, configured,
+    or supervised, and it lacks a durable signing-material outbox. Authenticated
+    dedicated Torii/OpenAPI and SDK projections, runtime
+    ingest/reconciliation, external threshold signing, and reviewed deployment
+    evidence remain open. The existing local
 `/v1/sorafs/reputation/*` snapshot checkpoint is not the production committed
 journal projection.
 
@@ -663,12 +666,11 @@ valid contract digest and exactly one valid policy digest before downstream
 contract-bound or policy-bound artifacts can satisfy final promotion, and the
 plan docs plus static rollout contract pin the singleton-anchor behavior.
 
-SoraFS SFM-4 gateway-compliance rollout summaries now also reject mixed active
-feed-promotion anchors. The gateway-compliance evidence gate requires exactly
-one valid feed-promotion bundle digest and exactly one valid policy digest
-before bundle-bound or policy-bound artifacts can satisfy final promotion, and
-the plan docs plus static rollout contract pin the fail-closed singleton-anchor
-behavior.
+SoraFS SFM-4 gateway-compliance rollout summaries reject mixed active catalog
+promotion anchors. The gateway-compliance evidence gate requires exactly one
+valid `catalog_digest_hex` before any catalog-bound artifact can satisfy final
+promotion, and its summaries expose that singleton through
+`valid_catalog_digests`.
 
 SoraFS SF-5a gateway-load rollout summaries now reject mixed active load
 promotion anchors. The gateway-load evidence gate requires exactly one valid
@@ -3168,11 +3170,6 @@ excluded from the first release.
   command examples; the rollout static contract scans canonical and localized
   copies for stale `OPS-XXXX`/`SNS-DF-XXXX` tickets, dated 2025 cutover
   examples, date-coded DNS tags, and reopened kickoff wording.
-- SoraFS gateway denylist update removals now fail closed when a requested
-  descriptor is absent from the reviewed base bundle; the former
-  `--allow-missing-removals` patching waiver is removed from the CLI/docs, and
-  the rollout static contract plus Rust negative test pin that missing-removal
-  descriptors abort before any output bundle is written.
 - SoraFS gateway direct-mode enable now keeps `require_manifest_envelope`,
   `enforce_admission`, and `enforce_capabilities` enabled in the emitted Torii
   snippet, validates canonical provider/manifest digests, recomputes expected
@@ -3407,7 +3404,7 @@ excluded from the first release.
 	  checked-in SoraFS canary atomic writer, the transparency deployment-context
 	  artifact rewriter, the orchestrator fixture generator, and the Android
 	  codegen replay writer, plus the shell-gate adoption, SDK parity,
-	  gateway-denylist, reference-header, release-packager, and docs pin-release
+	  gateway-compliance, reference-header, release-packager, and docs pin-release
 	  writers to fsync output parent directories after descriptor writes or
 	  atomic replacement, with sanitized negative controls for
 	  parent-fsync failures before release evidence can be treated as durable.
@@ -3634,9 +3631,9 @@ excluded from the first release.
   plus symlinked output-parent components, before invoking `sorafs_cli` or
   adoption checks, with focused adversarial wrapper coverage for each output
   class. The gateway self-cert wrapper now applies the same fail-closed
-  preflight to the attestation output directory, manifest verification summary,
-  and denylist diff report before xtask/CLI evidence writers run, with fake
-  xtask-backed negative tests for symlinked outputs and parent aliases. The
+  preflight to the attestation output directory and manifest verification
+  summary before evidence writers run, with negative tests for symlinked
+  outputs and parent aliases. The
   SoraFS CLI release signing wrapper now rejects symlinked or non-regular
   bundle, detached-signature, sign-summary, and verify-summary outputs, plus
   symlinked parent chains, before signing or verification runs. It also rejects
@@ -5357,15 +5354,19 @@ excluded from the first release.
   `chunk_digests_blake3`, and `chunks` by `limit` (default 50, max 500) while
   preserving full plan counts and returned/truncation metadata for operator
   probes.
-- SFM-4a gateway moderation foundations now include bounded Torii denylist
-  catalog readback: `/v1/sorafs/denylist/catalog` accepts `limit` (default 50,
-  max 500), bounds returned `packs`, `opt_out_packs`, and `extra_packs`, and
-  preserves full counts/truncation metadata while
-  `/v1/sorafs/denylist/packs/{pack_id}` serves exact pack metadata. Torii CID
-  lookup and `/.well-known/sorafs/manifest` metadata now also accept `limit`
-  (default 50, max 500) for embedded site-file listings, preserve full file
-  counts/returned counts/truncation flags, and keep `manifest_b64` plus gateway
-  content serving complete. `sorafs_node` now also admits validated moderation
+- SFM-4a gateway moderation foundations now use only the governed compliance
+  controller. Canonically authenticated operator routes fetch bounded configured
+  feeds and expose controller status, then stage, acknowledge, promote, or roll
+  back predecessor-bound threshold-signed catalogs. Competing process-local
+  catalog/pack routes and mutation surfaces are absent. Serving evaluates the
+  active catalog fail-closed at every content boundary: a governed denial is
+  HTTP 451 `gateway_compliance_denied` with its bounded decision source and
+  catalog digest, while unavailable, stale, conflicting, or poisoned controller
+  state is HTTP 503 `gateway_compliance_unavailable`. Torii CID lookup and
+  `/.well-known/sorafs/manifest` metadata accept `limit` (default 50, max 500)
+  for embedded site-file listings, preserve full file counts/returned
+  counts/truncation flags, and keep `manifest_b64` plus gateway content serving
+  complete. `sorafs_node` now also admits validated moderation
   reproducibility and adversarial corpus manifests into a local model registry
   snapshot, rejects reproducibility manifests with zero digests, duplicate
   model IDs or model artefact/weights digests, unsupported non-17 model opsets,
@@ -5766,133 +5767,37 @@ excluded from the first release.
   evidence gate, collection planner, and payload-free canary artifact builder,
   the local quarantine operator role gate, or the documented production
   role-provisioning runbook.
-- SFM-4 gateway compliance now has a payload-free rollout evidence gate:
-  `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates feed
-  promotion, controller runtime, moderation-toggle canaries, gateway reload,
-  enforcement probes, honey-audit denial evidence, appeal override, SFM-4c
-  transparency publication, observability, and governance approval artifacts
-  before reporting `ready`. The gate fails closed on stale artifacts,
-  non-config-backed controller runtime reports, mismatched controller feed
-  counts, non-`iroha_config` moderation-toggle reports, mismatched
-  approved-toggle counts, unsafe external moderation-toggle URL evidence,
-  missing toggle approval workflow, missing toggle
-  expiry/cache-invalidation/audit/rollback checks, missing multi-gateway
-  acknowledgements, missing denylist reason coverage, oversized route/reload
-  latency, non-integer route/reload latency evidence, missing honey probes,
-  critical alerts, non-`iroha_config`
-  governance sources, and raw denylist feeds, probe responses, GAR receipts,
-  appeal payloads, moderation-toggle payloads, signed transactions, tokens,
-  secrets, or response bodies. The gate also requires controller,
-  moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
-  observability, and governance evidence to bind back to the valid
-  feed-promotion `bundle_digest_hex` in the same evidence bundle, requires
-  governance approval `policy_digest_hex` to match a valid feed-promotion
-  `policy_digest_hex`, and bundle/policy mismatches mark the offending artifact
-  invalid through the shared scalar binding error recorder before required-kind
-  validity is reported. The aggregate production-readiness gate now also
-  rechecks bundle-bound and policy-bound artifact fingerprints against
-  `valid_bundle_digests` and `valid_policy_digests` before final promotion. The
-  lane checker now also has direct adversarial coverage that forges the
-  `bundle_digest_hex` on every bundle-bound downstream kind, so controller,
-  moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
-  observability, and governance artifacts must all fail on their own artifact
-  rows when they drift from the promoted feed bundle. The
-  feed-promotion artifact now binds `gateway_ack_count` and
-  `denylist_entry_count` to the unique canonical `gateways[].name` and
-  `denylist_entries[].name` inventories, requires reviewed
-  `gateway-compliance-gateway-*` and `gateway-denylist-entry-*` labels without
-  non-production markers, and rejects duplicate gateway acknowledgement or
-  denylist-entry entries before promotion can report ready.
-  The controller-runtime artifact now requires `controller_instance_id` to match
-  a reviewed lowercase `gateway-compliance-controller-*` label without
-  non-production markers, binds
-  `external_feed_count`, `fetched_feed_count`, `normalized_feed_count`, and
-  `signed_feed_count` to the unique canonical `feeds[].name` inventory, requires
-  coverage for the reviewed OFAC, EU sanctions, malware, CSAM hash, legal-hold,
-  regional-blocklist, and appeal-override feeds, and rejects duplicate or
-  unknown feed entries before promotion can report ready. The moderation-toggle
-  artifact also binds
-  `toggle_count` and `approved_toggle_count` to the unique canonical
-  `toggles[].name` inventory, requires the reviewed provider-deny,
-  appeal-override, legal-hold, and regional-emergency toggle paths, and rejects
-  duplicate or unknown toggle entries before promotion can report ready. The gateway-reload artifact now binds
-  `reload_ack_count` to the unique canonical `gateways[].name` inventory,
-  requires reviewed `gateway-compliance-gateway-*` labels without
-  non-production markers, and rejects duplicate gateway acknowledgement entries
-  before promotion can report ready while requiring
-  `max_reload_latency_ms` to be positive integer-unit evidence before the
-  reload-latency ceiling applies. The enforcement-probe artifact also binds
-  `denial_reason_count` to the unique canonical `denial_reasons_observed`
-  inventory and binds `route_count` and `passed_route_count`
-  to the unique canonical `routes[].name` inventory, requires the reviewed
-  manifest/CID/provider route probes, and rejects duplicate or unknown
-  denial-reason and route entries before promotion can report ready while
-  requiring `routes[].latency_ms` to be positive integer-unit evidence before
-  the route-latency ceiling applies and every enforcement route response to
-  carry a `body_blake3_hex` digest. The
-  honey-audit artifact now binds
-  `honey_probe_count` to the unique canonical `probes[].name` inventory,
-  requires reviewed `gateway-honey-probe-*` labels without non-production
-  markers, and rejects duplicate probe entries before promotion can report ready. The
-  observability artifact also binds `metric_count` to the unique canonical
-  `metrics` inventory, requires the reviewed gateway compliance metrics
-  inventory, and rejects duplicate or unknown metric entries before promotion can
-  report ready. Gateway-compliance summaries also export the reviewed
-  observability `metrics` inventory plus `metric_count_values`, and the
-  aggregate production-readiness gate tethers both fields to observability
-  artifact fingerprints before final promotion can report ready. The
-  matching collection planner accepts
-  reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
-	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
-	  a dry-run-visible verifier command, selected-kind `evidence_contract`, and
-	  operator example args; it now validates the schema-closed collection-plan
-  envelope plus canonical nested required-kind, threshold, external-evidence,
-  checker-backed evidence-contract, and command-step shapes before dry-run
-  output or verifier execution. The gateway denylist CI guard now copies sample and
-	  evidence JSON, writes generated old-snapshot JSON, discovers bundles, and
-	  reads generated diff/evidence reports through symlink-checked no-follow
-	  descriptors plus complete byte-write loops and descriptor fsync before those artifacts can feed
-	  promotion checks. A new
-  `scripts/build_sorafs_gateway_compliance_canary.py` helper now builds
-  payload-free full-surface gateway-compliance canaries from reviewed deployment
-  facts across feed-promotion, controller-runtime, moderation-toggle,
-  gateway-reload, enforcement-probe, honey-audit, appeal-override,
-  transparency-publication, observability, and governance-approval evidence,
-  requires every positive proof claim explicitly, requires reviewed controller
-  `--feed` names whose unique inventory matches `--feed-count` and covers every
-  required controller feed, requires reviewed moderation `--toggle` names whose
-  unique inventory matches `--toggle-count` and covers every required toggle
-  path, requires reviewed enforcement `--denial-reason` labels covering the
-  required denial inventory, requires explicit `--route-body-blake3-hex`
-  evidence for enforcement routes, requires reviewed observability `--metric` names
-  matching the required metrics inventory, rejects duplicate or unknown
-  verified-claim, feed, toggle, denial-reason, and metric inputs before writing,
-  admits moderation-toggle `--toggle-api-url` values through the shared URL
-  preflight so userinfo, query strings, encoded traversal, encoded separators,
-  encoded drive prefixes, and secret-looking URL
-  host/path components cannot enter canary evidence, forces raw feed/toggle,
-  catalog, probe-response, appeal-payload, receipt, and response-body flags to
-  `false`, now has focused missing-field regressions proving those
-  payload-safety flags and `critical_alerts_firing` must be explicitly encoded
-  as `false`, validates each generated artifact through the SFM-4 checker
-  contract, and writes atomically without following output symlinks. The
-  governed controller now survives construction in Torii `AppState`; six
-  canonical X-Iroha-signed, role-gated feed/status/stage/acknowledge/promote/
-  rollback routes expose it; and live manifest/CID/provider serving evaluates
-  the promoted catalog across global, configured-region, and configured-gateway
-  scopes. Missing or invalid serving state fails closed, and enabling the
-  controller forbids every obsolete unsigned denylist bootstrap source.
-  Remaining SFM-4 gateway compliance production work is independently audited
-  standard-daemon feed and ACME adapters, finalized appeal/hold catalog
+- SFM-4 gateway compliance has one payload-free rollout evidence gate.
+  `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates
+  `catalog_promotion`, controller runtime, moderation toggles, gateway reload,
+  enforcement probes, honey-audit probes, precedence, SFM-4c transparency
+  publication, observability, and governance approval before reporting
+  `ready`. The catalog promotion is the sole anchor: it binds
+  `catalog_digest_hex`, `catalog_entry_count`/`catalog_entries`,
+  `catalog_change_count`/`catalog_changes`,
+  `predecessor_catalog_digest_hex`, `predecessor_catalog_sequence`, and
+  independently administered `gateway_acknowledgements`. Every downstream
+  artifact binds that same `catalog_digest_hex`; summaries expose
+  `valid_catalog_digests`, and mixed, missing, stale, duplicate, or
+  predecessor-inconsistent anchors fail closed.
+  Enforcement evidence must show HTTP 451
+  `gateway_compliance_denied` with a bounded decision source of
+  `baseline` or `legal_safety_hold`; unavailable, stale, conflicting, or
+  poisoned controller state is a distinct fail-closed service error. Evidence
+  never contains raw feeds, catalogs, request/response bodies, appeal payloads,
+  signed transactions, tokens, credentials, or signing material. The matching
+  collection planner and canary builder accept the canonical
+  `min_catalog_entries` and `min_catalog_changes` thresholds and reject every
+  retired kind, field, option, route, and competing local policy tool.
+  The governed controller is constructed in Torii `AppState`; six canonical
+  X-Iroha-signed, role-gated feed/status/stage/acknowledge/promote/rollback
+  routes expose it, and manifest/CID/provider serving evaluates only the
+  promoted catalog across global, configured-region, and configured-gateway
+  scopes. Remaining SFM-4 production work is independently audited
+  standard-daemon feed and ACME adapters, finalized precedence/hold catalog
   producers, external threshold signing, deployed SFM-4c receipt publication,
-  and captured staged multi-gateway evidence that passes this gate. The
-  rollout-gate static contract pins that single authenticated route family and
-  rejects obsolete or competing controller, moderation-toggle, appeal-override,
-  feed-sync/history, and promotion route spellings while preserving local
-  denylist bundle tooling, GAR/proof-token helpers, honey-audit evidence, and
-  rollout evidence checkers. It also scans CLI sources for unshipped separately
-  packaged service spellings while preserving local denylist, GAR/proof-token,
-  transparency source-entry, canary, and proof labels;
+  and genuine staged evidence from both independently administered regional
+  gateways.
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
   `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and

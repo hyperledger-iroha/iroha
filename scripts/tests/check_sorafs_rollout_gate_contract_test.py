@@ -2180,29 +2180,6 @@ def test_sorafs_transparency_publication_canary_requires_publisher_identity() ->
     assert "transparency_publication_canary_fails_missing_publisher_identity" in cli
 
 
-def test_sorafs_gateway_update_denylist_has_no_missing_removal_override() -> None:
-    cli = read(IROHA_CLI_SORAFS_RS)
-    update_args = cli.split("pub struct GatewayUpdateDenylistArgs", 1)[1].split(
-        "pub struct GatewayTemplateConfigArgs", 1
-    )[0]
-    update_run = cli.split("impl Run for GatewayUpdateDenylistArgs", 1)[1].split(
-        "impl Run for GatewayTemplateConfigArgs", 1
-    )[0]
-
-    assert "allow-missing-removals" not in update_args
-    assert "allow_missing_removals" not in cli
-    assert "pass --allow-missing-removals" not in cli
-    assert "not found in base denylist" in update_run
-    assert "denylist_update_rejects_missing_removal_descriptor" in cli
-
-    stale_docs = [
-        str(path.relative_to(REPO_ROOT))
-        for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_cli*.md"))
-        if "allow-missing-removals" in read(path)
-    ]
-    assert stale_docs == []
-
-
 def test_sorafs_direct_mode_enable_keeps_gateway_enforcement_closed() -> None:
     cli = read(IROHA_CLI_SORAFS_RS)
     enable_run = cli.split("impl Run for GatewayDirectModeEnableArgs", 1)[1].split(
@@ -7023,7 +7000,13 @@ def test_sorafs_hedging_docs_do_not_reopen_generated_fixture_work() -> None:
     missing_current: list[str] = []
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_hedging_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
+        source = read(path)
+        if path != SORAFS_HEDGING_PLAN:
+            metadata, _, parse_error = parse_localized_markdown_front_matter(source)
+            assert parse_error is None, f"{path}: {parse_error}"
+            if metadata.get("status") == "needs-translation":
+                continue
+        normalized = re.sub(r"\s+", " ", source)
         matched = [phrase for phrase in stale_phrases if phrase in normalized]
         if matched:
             stale[str(path.relative_to(REPO_ROOT))] = matched
@@ -7584,13 +7567,10 @@ def test_gateway_compliance_runner_plan_envelope_is_schema_closed() -> None:
         in helper
     )
     assert "plan_errors = validate_plan_json(rendered_plan, plan, args)" in runner
-    assert "test_plan_json_shape_is_validated" in runner_test
-    assert "test_plan_json_nested_shapes_are_validated" in runner_test
-    assert (
-        "test_plan_json_rejects_unrequired_external_evidence_and_contracts"
-        in runner_test
-    )
-    assert "test_execution_rejects_plan_validation_drift_before_running" in runner_test
+    assert "test_plan_validation_rejects_scope_tampering" in runner_test
+    assert "test_plan_validation_rejects_legacy_anchor_field" in runner_test
+    assert "test_unrequired_evidence_fails_closed" in runner_test
+    assert "test_production_runner_verifies_canonical_inputs" in runner_test
 
 
 def test_ai_prescreen_runner_plan_envelope_is_schema_closed() -> None:
@@ -8384,62 +8364,6 @@ def test_sorafs_orchestrator_sdk_parity_gate_uses_no_follow_io() -> None:
     assert ': >"${RESULTS_TSV}"' not in sdk_gate
 
 
-def test_sorafs_gateway_denylist_gate_uses_no_follow_io() -> None:
-    denylist_gate = read(REPO_ROOT / "ci" / "check_sorafs_gateway_denylist.sh")
-
-    assert "copy_file_no_follow()" in denylist_gate
-    assert "require_nonempty_file()" in denylist_gate
-    assert "first_bundle_json()" in denylist_gate
-    assert "run_xtask()" in denylist_gate
-    assert 'cargo run -p xtask --bin xtask --quiet -- "$@"' in denylist_gate
-    assert "cargo run -p iroha_cli --bin iroha3 --quiet --" in denylist_gate
-    assert '-c "${ROOT_DIR}/defaults/client.toml"' in denylist_gate
-    assert "app sorafs gateway evidence" in denylist_gate
-    assert '--denylist "${new_json}"' in denylist_gate
-    assert "def read_open_flags() -> int" in denylist_gate
-    assert "def write_open_flags() -> int" in denylist_gate
-    assert "def validate_path" in denylist_gate
-    assert "def require_regular_file" in denylist_gate
-    assert "def write_all(fd: int, chunk: bytes) -> None" in denylist_gate
-    assert denylist_gate.count("def sync_output_parent(") >= 2
-    assert "view = memoryview(chunk)" in denylist_gate
-    assert "written = os.write(fd, view)" in denylist_gate
-    assert "if written <= 0:" in denylist_gate
-    assert "write_all(write_fd, chunk)" in denylist_gate
-    assert "os.fsync(write_fd)" in denylist_gate
-    assert "sync_output_parent(target)" in denylist_gate
-    assert "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)" in denylist_gate
-    assert "write_all(fd, rendered)" in denylist_gate
-    assert "os.fsync(fd)" in denylist_gate
-    assert "sync_output_parent(path)" in denylist_gate
-    assert "old_only_entry = {" in denylist_gate
-    assert "Retired CI denylist diff control" in denylist_gate
-    assert 'getattr(os, "O_NOFOLLOW", 0)' in denylist_gate
-    assert "path.lstat()" in denylist_gate
-    assert "stat.S_ISREG(path_stat.st_mode)" in denylist_gate
-    assert "os.open(source, read_open_flags())" in denylist_gate
-    assert "os.open(target, write_open_flags(), 0o666)" in denylist_gate
-    assert "os.open(path, read_open_flags())" in denylist_gate
-    assert "os.open(path, write_open_flags(), 0o666)" in denylist_gate
-    assert "os.fstat(fd).st_size" in denylist_gate
-    assert 'copy_file_no_follow "${SAMPLE_JSON}" "${new_json}"' in denylist_gate
-    assert 'copy_file_no_follow "${evidence_json}" "${evidence_copy_path}"' in denylist_gate
-    assert 'old_bundle="$(first_bundle_json "${old_out}" "old denylist")"' in denylist_gate
-    assert 'new_bundle="$(first_bundle_json "${new_out}" "new denylist")"' in denylist_gate
-    assert "require_nonempty_file \"${diff_report}\" \"diff report\"" in denylist_gate
-    assert "with open(" not in denylist_gate
-    assert "json.load(open(" not in denylist_gate
-    assert "json.dump(payload" not in denylist_gate
-    assert "cargo xtask sorafs-gateway" not in denylist_gate
-    assert 'cp "${SAMPLE_JSON}" "${new_json}"' not in denylist_gate
-    assert 'cp "${evidence_json}" "${evidence_copy_path}"' not in denylist_gate
-    assert "os.write(write_fd, chunk)" not in denylist_gate
-    assert "parent.is_symlink()" not in denylist_gate
-    assert "parent must not be a symlink" not in denylist_gate
-    assert '[[ ! -s "${diff_report}" ]]' not in denylist_gate
-    assert 'ls "${old_out}"/*.json | head -n1' not in denylist_gate
-
-
 def test_sorafs_reference_ffi_header_gate_uses_no_follow_io() -> None:
     header_gate = read(REPO_ROOT / "ci" / "check_sorafs_reference_ffi_header.sh")
 
@@ -8736,7 +8660,6 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     assert "--public-key-hex" not in gateway_self_cert
     assert '[[ -n "$gateway_target" ]] || missing+=("--gateway")' in gateway_self_cert
     assert "defaults to harness fixture target" not in gateway_self_cert
-    assert 'prepare_output_file_path "denylist diff report"' in gateway_self_cert
     assert "must not be a symlink" in gateway_self_cert
     assert "parent must not be a symlink" in gateway_self_cert
     assert 'prepare_output_dir_path "probe artifact directory"' in gateway_probe
@@ -22604,7 +22527,13 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     missing_current: dict[str, list[str]] = {}
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_hedging_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
+        source = read(path)
+        if path != SORAFS_HEDGING_PLAN:
+            metadata, _, parse_error = parse_localized_markdown_front_matter(source)
+            assert parse_error is None, f"{path}: {parse_error}"
+            if metadata.get("status") == "needs-translation":
+                continue
+        normalized = re.sub(r"\s+", " ", source)
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
@@ -25411,18 +25340,11 @@ def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None
 
     required_current = (
         "`iroha_config` now carries the non-secret controller policy",
-        "Torii accepts runtime-injected ACME and authenticated feed transports",
-        "This controller/runtime integration ships locally.",
         "Torii now exposes six canonical, account-signed, governed-operator routes",
-        "Live SoraFS content serving evaluates the promoted catalog",
-        "Enabling the governed controller also rejects every obsolete unsigned denylist path, catalog, pack, and jurisdiction bootstrap source",
         "Real authenticated feed and ACME adapters for the standard daemon",
-        "finalized accepted-appeal and legal/safety-hold catalog producers",
-        "deployment across two independently administered regional gateways remain open.",
-        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
         "Configuration, runtime dependency transfer, fail-closed startup checks, durable controller construction, authenticated control routes, live serving enforcement, and unsigned-bootstrap mutual exclusion already ship locally and must not be reopened as missing work.",
         "Connect finalized accepted-appeal outcomes and legal/safety-hold producers to signed catalog construction and cache invalidation.",
-        "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
+        "Wire deployed GAR receipts and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
         "Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence gate before promoting gateway compliance changes to production.",
     )
     stale_claims = (
@@ -25459,22 +25381,19 @@ def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -
     )
     required_current = (
         "`iroha_config` now carries the non-secret controller policy",
-        "Torii accepts runtime-injected ACME and authenticated feed transports",
-        "This controller/runtime integration ships locally.",
         "Torii now exposes six canonical, account-signed, governed-operator routes",
-        "Live SoraFS content serving evaluates the promoted catalog",
-        "Enabling the governed controller also rejects every obsolete unsigned denylist path, catalog, pack, and jurisdiction bootstrap source",
         "Real authenticated feed and ACME adapters for the standard daemon",
-        "finalized accepted-appeal and legal/safety-hold catalog producers",
-        "deployment across two independently administered regional gateways remain open.",
-        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
-        "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
+        "legal/safety hold > accepted appeal > baseline",
+        "no local pack, diff, verify, or mutation CLI is supported",
+        "Wire deployed GAR receipts and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
     )
     stale: dict[str, list[str]] = {}
     missing: dict[str, list[str]] = {}
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_compliance_plan*.md")):
         normalized = re.sub(r"\s+", " ", read(path))
+        if "status: needs-translation" in normalized:
+            continue
         matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
         missing_current = [
             phrase for phrase in required_current if phrase not in normalized
@@ -25490,26 +25409,24 @@ def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -
 
 def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
     required_current = (
-        "payload-free SFM-4 promotion evidence for feed promotion, controller runtime, moderation-toggle canaries, gateway reload",
-        "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
+        "payload-free SFM-4 promotion evidence for catalog promotion, controller runtime, governed moderation controls, gateway reload",
+        "The checker exports its exact top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "including a checker-backed `evidence_contract` map with the schema and required payload fields for each selected evidence kind.",
-        "Controller, moderation-toggle, reload, enforcement, honey-audit, appeal, transparency, observability, and governance artifacts must carry the same `bundle_digest_hex` as a valid feed-promotion artifact",
-        "Feed-promotion artifacts also bind `gateway_ack_count` and `denylist_entry_count` to the unique canonical `gateways[].name` and `denylist_entries[].name` inventories, require reviewed `gateway-compliance-gateway-*` and `gateway-denylist-entry-*` labels without non-production markers, and reject duplicate gateway acknowledgement or denylist-entry entries before promotion can report ready.",
-        "Controller-runtime artifacts also require `controller_instance_id` to match a reviewed lowercase `gateway-compliance-controller-*` label without non-production markers, bind `external_feed_count`, `fetched_feed_count`, `normalized_feed_count`, and `signed_feed_count` to the unique canonical `feeds[].name` inventory, require coverage for the reviewed `ofac`, `eu-sanctions`, `malware`, `csam-hash`, `legal-hold`, `regional-blocklist`, and `appeal-overrides` controller feeds, and reject duplicate or unknown feed entries before promotion can report ready.",
-        "Moderation-toggle artifacts also bind `toggle_count` and `approved_toggle_count` to the unique canonical `toggles[].name` inventory and require coverage for the reviewed `provider-deny`, `appeal-override`, `legal-hold`, and `regional-emergency` toggle paths. Duplicate or unknown toggle entries are rejected before promotion can report ready.",
-        "Gateway-reload artifacts also bind `reload_ack_count` to the unique canonical `gateways[].name` inventory, require reviewed `gateway-compliance-gateway-*` labels without non-production markers, and reject duplicate gateway acknowledgement entries before promotion can report ready.",
-        "Enforcement-probe artifacts also bind `denial_reason_count` to the unique canonical `denial_reasons_observed` inventory and bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory, require the reviewed `manifest`, `cid`, and `provider` route probes, and reject duplicate or unknown denial-reason and route entries before promotion can report ready.",
-        "Honey-audit artifacts also bind `honey_probe_count` to the unique canonical `probes[].name` inventory, require reviewed `gateway-honey-probe-*` labels without non-production markers, and reject duplicate probe entries before promotion can report ready.",
+        "Every non-promotion artifact must carry the same lowercase `catalog_digest_hex` as the single valid `catalog_promotion` artifact.",
+        "at least two signed acknowledgements from gateways with distinct `administration_id` values.",
+        "record exact HTTP 451 responses with `error = \"gateway_compliance_denied\"`",
+        "legal_safety_hold > accepted_appeal > baseline",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed gateway compliance metrics inventory, and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
-        "Aggregate promotion also rechecks the lane-proven digest relationships: bundle-bound artifact fingerprints must match `valid_bundle_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`.",
-        "Gateway compliance rollout summaries must expose exactly one active feed-promotion bundle digest and exactly one active policy digest; mixed valid bundle or policy anchors fail closed before final promotion can report ready.",
-        "Gateway compliance payload-safety artifacts must explicitly set `raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`, `raw_catalog_included`, `raw_probe_responses_included`, `raw_appeal_payload_included`, `raw_receipts_included`, `critical_alerts_firing`, and `response_bodies_included` to `false` before promotion can report ready.",
+        "catalog-bound artifact fingerprints must match `valid_catalog_digests`",
+        "Removed local payload flags, local catalog/report fields, legacy response headers, and unknown fields are rejected",
     )
     missing_current: dict[str, list[str]] = {}
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_compliance_plan*.md")):
         normalized = re.sub(r"\s+", " ", read(path))
+        if "status: needs-translation" in normalized:
+            continue
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
@@ -25518,203 +25435,64 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
 
     checker = read(SCRIPTS_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py")
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
-    validation_helper = read(SCRIPTS_DIR / "sorafs_evidence_validation.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_gateway_compliance_rollout_evidence_test.py"
     )
     assert "require_string_inventory_count_match" in checker
     assert "require_safe_url" in checker
-    assert "EVIDENCE_URL_FIELD_ERROR" in checker
-    assert "URI-scheme-like host/path tokens" in validation_helper
-    assert "https://C%3A.gateway.example/v1/toggles" in checker_test
-    assert "https://http%3A.gateway.example/v1/toggles" in checker_test
-    assert "def require_only_required_values(" in checker
-    assert "must not include unknown values" in checker
-    assert "REQUIRED_CONTROLLER_FEEDS" in checker
+    assert "CATALOG_BOUND_KINDS" in checker
+    assert "valid_catalog_digests" in checker
+    assert "catalog_promotion" in checker
+    assert "predecessor_catalog_digest_hex" in checker
+    assert "predecessor_catalog_sequence" in checker
+    assert "promoted_catalog_digest_hex" in checker
+    assert "catalog_entry_count" in checker
+    assert "catalog_entries" in checker
+    assert "catalog_change_count" in checker
+    assert "catalog_changes" in checker
+    assert "gateway_acknowledgements" in checker
+    assert "administration_id" in checker
+    assert "gateway_compliance_denied" in checker
+    assert "status_code must be exactly 451" in checker
+    assert "REQUIRED_DENIAL_SOURCES" in checker
+    assert "REQUIRED_PRECEDENCE_CASES" in checker
+    assert "reject_legacy_fields" in checker
     assert "CONTROLLER_INSTANCE_ID_PATTERN" in checker
-    assert "FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS" in checker
-    assert "require_controller_instance_id(payload, errors)" in checker
-    assert "gateway-compliance-controller-" in checker
     assert "GATEWAY_LABEL_PATTERN" in checker
-    assert "DENYLIST_ENTRY_LABEL_PATTERN" in checker
+    assert "CATALOG_ENTRY_LABEL_PATTERN" in checker
     assert "HONEY_PROBE_LABEL_PATTERN" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
-    assert "def require_inventory_label(" in checker
-    assert "pattern=GATEWAY_LABEL_PATTERN" in checker
-    assert "pattern=DENYLIST_ENTRY_LABEL_PATTERN" in checker
-    assert "pattern=HONEY_PROBE_LABEL_PATTERN" in checker
-    assert "REQUIRED_MODERATION_TOGGLES" in checker
+    assert "REQUIRED_CONTROLLER_SOURCES" in checker
+    assert "REQUIRED_MODERATION_CONTROLS" in checker
     assert "REQUIRED_ENFORCEMENT_ROUTES" in checker
-    assert '        "feeds",' in checker
-    assert '        "toggles",' in checker
-    assert '        "gateways",' in checker
-    assert '        "gateway_ack_count",' in checker
-    assert '        "denylist_entries",' in checker
-    assert '        "route_count",' in checker
-    assert '        "passed_route_count",' in checker
-    assert '        "denial_reason_count",' in checker
-    assert '        "honey_probe_count",' in checker
-    assert '        "probes",' in checker
-    assert (
-        "require_string_inventory_count_match(\n"
-        "        payload,\n"
-        "        \"denial_reasons_observed\",\n"
-        "        \"denial_reason_count\","
-    ) in checker
-    assert (
-        "require_minimum_int(\n"
-        "        payload,\n"
-        "        \"route_count\",\n"
-        "        len(REQUIRED_ENFORCEMENT_ROUTES),"
-        in checker
-    )
-    assert (
-        "require_string_coverage(\n"
-        "        payload,\n"
-        "        \"routes\",\n"
-        "        \"name\",\n"
-        "        REQUIRED_ENFORCEMENT_ROUTES,"
-    ) in checker
-    assert (
-        "require_minimum_int(\n"
-        "        payload,\n"
-        "        \"external_feed_count\",\n"
-        "        len(REQUIRED_CONTROLLER_FEEDS),"
-    ) in checker
-    assert (
-        "require_string_coverage(\n"
-        "        payload,\n"
-        "        \"feeds\",\n"
-        "        \"name\",\n"
-        "        REQUIRED_CONTROLLER_FEEDS,"
-    ) in checker
-    assert (
-        "require_minimum_int(\n"
-        "        payload,\n"
-        "        \"toggle_count\",\n"
-        "        len(REQUIRED_MODERATION_TOGGLES),"
-    ) in checker
-    assert (
-        "require_string_coverage(\n"
-        "        payload,\n"
-        "        \"toggles\",\n"
-        "        \"name\",\n"
-        "        REQUIRED_MODERATION_TOGGLES,"
-    ) in checker
-    assert (
-        "require_string_inventory_count_match(payload, \"metrics\", \"metric_count\", errors)"
-        in checker
-    )
-    assert 'require_false(payload, "raw_feeds_included", errors)' in checker
-    assert 'require_false(payload, "feed_payloads_included", errors)' in checker
-    assert 'require_false(payload, "raw_toggle_payloads_included", errors)' in checker
-    assert 'require_false(payload, "raw_catalog_included", errors)' in checker
-    assert 'require_false(payload, "raw_probe_responses_included", errors)' in checker
-    assert 'require_false(payload, "raw_appeal_payload_included", errors)' in checker
-    assert 'require_false(payload, "raw_receipts_included", errors)' in checker
     assert 'require_false(payload, "critical_alerts_firing", errors)' in checker
-    assert 'require_false(payload, "response_bodies_included", errors)' in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
-    assert "test_payload_safety_flags_are_required" in checker_test
-    assert "test_controller_runtime_feed_count_must_match_unique_feeds" in checker_test
-    assert "test_controller_runtime_instance_id_must_be_canonical" in checker_test
-    assert (
-        "test_controller_runtime_instance_id_rejects_non_production_markers"
-        in checker_test
-    )
-    assert (
-        "test_controller_runtime_instance_id_rejects_generic_controller_family"
-        in checker_test
-    )
-    assert (
-        "test_controller_runtime_instance_id_accepts_gateway_prefixed_label"
-        in checker_test
-    )
-    assert "test_controller_runtime_feeds_must_not_duplicate" in checker_test
-    assert "test_controller_runtime_must_cover_required_feeds" in checker_test
-    assert (
-        "test_controller_runtime_feeds_must_not_include_unknown_values"
-        in checker_test
-    )
-    assert "test_feed_promotion_ack_count_must_match_unique_gateways" in checker_test
-    assert "test_feed_promotion_gateways_must_not_duplicate" in checker_test
-    assert "test_feed_promotion_gateways_must_use_production_family" in checker_test
-    assert "test_feed_promotion_gateways_reject_placeholder_marker" in checker_test
-    assert (
-        "test_feed_promotion_denylist_entry_count_must_match_unique_entries"
-        in checker_test
-    )
-    assert "test_feed_promotion_denylist_entries_must_not_duplicate" in checker_test
-    assert (
-        "test_feed_promotion_denylist_entries_must_use_production_family"
-        in checker_test
-    )
-    assert (
-        "test_feed_promotion_denylist_entries_reject_placeholder_marker"
-        in checker_test
-    )
-    assert "test_moderation_toggle_count_must_match_unique_toggles" in checker_test
-    assert "test_moderation_toggle_toggles_must_not_duplicate" in checker_test
-    assert "test_moderation_toggle_must_cover_required_toggles" in checker_test
-    assert (
-        "test_moderation_toggle_toggles_must_not_include_unknown_values"
-        in checker_test
-    )
-    assert "test_moderation_toggle_url_must_be_safe_without_leaking" in checker_test
-    assert "test_gateway_reload_ack_count_must_match_unique_gateways" in checker_test
-    assert "test_gateway_reload_gateways_must_not_duplicate" in checker_test
-    assert "test_gateway_reload_gateways_must_use_production_family" in checker_test
-    assert "test_gateway_reload_gateways_reject_placeholder_marker" in checker_test
-    assert "test_enforcement_route_count_must_match_unique_routes" in checker_test
-    assert "test_enforcement_routes_must_cover_required_route_inventory" in checker_test
-    assert "test_enforcement_routes_must_not_duplicate" in checker_test
-    assert "test_enforcement_routes_must_not_include_unknown_values" in checker_test
-    assert "test_enforcement_route_body_hash_is_required" in checker_test
-    assert 'path=f"routes[{index}].body_blake3_hex"' in checker
-    assert "test_enforcement_requires_denial_reason_count" in checker_test
-    assert "test_enforcement_denial_reason_count_must_match_unique_reasons" in checker_test
-    assert "test_enforcement_denial_reasons_must_not_duplicate" in checker_test
-    assert (
-        "test_enforcement_denial_reasons_must_not_include_unknown_values"
-        in checker_test
-    )
-    assert "test_honey_audit_probe_count_must_match_unique_probes" in checker_test
-    assert "test_honey_audit_probes_must_not_duplicate" in checker_test
-    assert "test_honey_audit_probes_must_use_production_family" in checker_test
-    assert "test_honey_audit_probes_reject_placeholder_marker" in checker_test
-    assert "test_observability_metrics_must_not_duplicate" in checker_test
-    assert (
-        "test_observability_metrics_must_not_include_unknown_values"
-        in checker_test
-    )
-    assert (
-        "test_all_bundle_bound_artifacts_reject_feed_bundle_mismatch"
-        in checker_test
-    )
-    assert "POLICY_BOUND_FIXTURES" in checker_test
-    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
-    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
-    assert (
-        "test_all_policy_bound_artifacts_reject_feed_promotion_policy_mismatch"
-        in checker_test
-    )
+    assert "test_removed_fields_fail_closed" in checker_test
+    assert "test_removed_denial_code_fails_closed" in checker_test
+    assert "test_denial_status_must_be_exact_http_451" in checker_test
+    assert "test_denial_digest_is_required_and_lowercase" in checker_test
+    assert "test_unknown_denial_source_fails_closed" in checker_test
+    assert "test_split_gateway_catalog_fails_closed" in checker_test
+    assert "test_gateway_acknowledgements_require_independent_administrations" in checker_test
+    assert "test_stale_artifact_fails_closed" in checker_test
+    assert "test_predecessor_and_promotion_binding_fail_closed" in checker_test
+    assert "test_signature_quorum_and_uniqueness_fail_closed" in checker_test
+    assert "test_precedence_is_exact" in checker_test
     assert "def require_single_active_digest(" in checker
     assert "{label} must contain exactly one active digest" in checker
-    assert 'label="valid_bundle_digests"' in checker
+    assert 'label="valid_catalog_digests"' in checker
     assert 'label="valid_policy_digests"' in checker
-    assert "test_multiple_valid_bundle_anchors_fail_closed" in checker_test
-    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert '("gateway_compliance", "metrics"): ("observability",)' in aggregate_checker
     assert (
         '("gateway_compliance", "metric_count_values"): ("observability",)'
         in aggregate_checker
     )
     assert "validate_gateway_compliance_bound_artifact_metadata" in aggregate_checker
-    assert "GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS" in aggregate_checker
+    assert "GATEWAY_COMPLIANCE_CATALOG_BOUND_KINDS" in aggregate_checker
     assert "GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS" in aggregate_checker
     assert (
-        "gateway_compliance bundle-bound artifact fingerprints must match "
+        "gateway_compliance catalog-bound artifact fingerprints must match "
         in aggregate_checker
     )
     assert (
@@ -25725,7 +25503,7 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert (
-        "test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest"
+        "test_gateway_compliance_catalog_bound_artifacts_must_match_catalog_digest"
         in readiness_test
     )
     assert (
@@ -25762,120 +25540,27 @@ def test_gateway_compliance_canary_builder_is_checked_in() -> None:
     docs = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
 
     assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
-    assert "CONTROLLER_TRUE_CLAIMS" in builder
-    assert "MODERATION_TRUE_CLAIMS" in builder
-    assert "REQUIRED_CONTROLLER_FEEDS" in builder
-    assert "REQUIRED_MODERATION_TOGGLES" in builder
-    assert "REQUIRED_DENIAL_REASONS" in builder
-    assert "REQUIRED_ENFORCEMENT_ROUTES" in builder
-    assert "--route-body-blake3-hex" in builder
-    assert '"body_blake3_hex": args.route_body_blake3_hex' in builder
-    assert "REQUIRED_METRICS" in builder
-    assert "DEFAULT_GATEWAYS" in builder
-    assert "DEFAULT_DENYLIST_ENTRIES" in builder
-    assert "DEFAULT_HONEY_PROBES" in builder
-    assert "GATEWAY_LABEL_PATTERN" in builder
-    assert "DENYLIST_ENTRY_LABEL_PATTERN" in builder
-    assert "HONEY_PROBE_LABEL_PATTERN" in builder
-    assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
-    assert "validate_default_inventories(errors)" in builder
-    assert "validate_static_inventory_labels(" in builder
-    assert "FORBIDDEN_PAYLOAD_CLAIMS" in builder
-    assert "validate_evidence_payload(payload, validation_options(args))" in builder
+    assert "--probe-artifact" in builder
+    assert "--non-production-fixture" in builder
+    assert "load_probe_artifact" in builder
+    assert "validate_evidence_payload(" in builder
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
-    assert "\"config_source\": \"iroha_config\"" in builder
-    assert "runner_url_arg_is_plan_safe" in builder
-    assert "CANARY_URL_ARG_ERROR" in builder
-    assert "URI-scheme-like host/path tokens" in builder
-    assert "https://C%3A.gateway-compliance.internal/toggles" in builder_test
-    assert "https://http%3A.gateway-compliance.internal/toggles" in builder_test
-    assert "raw_feeds_included" in builder
-    assert "raw_toggle_payloads_included" in builder
-    assert "validate_feed_names" in builder
-    assert "validate_controller_instance_id_arg" in builder
-    assert "validate_toggle_names" in builder
-    assert "validate_metric_names" in builder
-    assert "test_generated_canaries_pass_full_gateway_gate" in builder_test
-    assert (
-        "test_fixed_inventory_labels_must_use_production_family_before_write"
-        in builder_test
-    )
-    assert (
-        "test_fixed_inventory_labels_reject_non_production_markers_before_write"
-        in builder_test
-    )
-    assert "test_builds_payload_free_observability_canary" in builder_test
-    assert (
-        "test_toggle_api_url_rejects_encoded_or_secret_bearing_values_without_leaking"
-        in builder_test
-    )
-    assert "test_enforcement_probe_requires_route_body_digest" in builder_test
-    assert "test_missing_controller_feed_inventory_fails_closed" in builder_test
-    assert "test_controller_runtime_requires_complete_required_feeds" in builder_test
-    assert (
-        "test_controller_runtime_feed_count_must_match_required_feeds"
-        in builder_test
-    )
-    assert "test_controller_instance_id_must_be_canonical" in builder_test
-    assert (
-        "test_controller_instance_id_rejects_generic_controller_family"
-        in builder_test
-    )
-    assert (
-        "test_controller_instance_id_rejects_non_production_markers"
-        in builder_test
-    )
-    assert (
-        "test_controller_instance_id_accepts_gateway_prefixed_future_label"
-        in builder_test
-    )
-    assert "test_duplicate_controller_feed_inventory_fails_closed" in builder_test
-    assert "test_unknown_controller_feed_inventory_fails_closed" in builder_test
-    assert "test_missing_moderation_toggle_inventory_fails_closed" in builder_test
-    assert (
-        "test_moderation_toggle_requires_complete_required_toggles"
-        in builder_test
-    )
-    assert (
-        "test_moderation_toggle_count_must_match_required_toggles"
-        in builder_test
-    )
-    assert "test_duplicate_moderation_toggle_inventory_fails_closed" in builder_test
-    assert "test_unknown_moderation_toggle_inventory_fails_closed" in builder_test
-    assert "test_missing_verified_claim_fails_closed" in builder_test
-    assert "test_unknown_verified_claim_fails_closed" in builder_test
-    assert (
-        "test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write"
-        in builder_test
-    )
-    assert "test_duplicate_denial_reason_inventory_fails_closed" in builder_test
-    assert "test_unknown_denial_reason_inventory_fails_closed" in builder_test
-    assert "test_duplicate_metric_inventory_fails_closed" in builder_test
-    assert "test_unknown_metric_inventory_fails_closed" in builder_test
+    assert "test_builder_never_synthesizes_verified_claims" in builder_test
+    assert "test_non_production_fixture_is_explicit_and_not_promotable" in builder_test
+    assert "test_invalid_probe_artifacts_fail_before_write" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
-    assert "test_output_directory_is_rejected" in builder_test
     assert "--kind controller_runtime" in controller_example
-    assert "--feed ofac" in controller_example
-    assert "--verified-claim rollback_plan_verified" in controller_example
+    assert "--probe-artifact" in controller_example
     assert "--kind moderation_toggle" in toggle_example
-    assert "--toggle provider-deny" in toggle_example
-    assert "--verified-claim rollback_verified" in toggle_example
+    assert "--probe-artifact" in toggle_example
     assert "--kind enforcement_probe" in enforcement_example
-    assert "--route-body-blake3-hex" in enforcement_example
+    assert "--probe-artifact" in enforcement_example
     assert "--kind observability" in observability_example
-    for metric_name in (
-        "torii_sorafs_gateway_compliance_requests_total",
-        "torii_sorafs_gateway_compliance_serving_decisions_total",
-        "torii_sorafs_gateway_compliance_failures_total",
-        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
-        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
-        "torii_sorafs_gateway_compliance_ready",
-    ):
-        assert f"--metric {metric_name}" in observability_example
+    assert "--probe-artifact" in observability_example
     assert "build_sorafs_gateway_compliance_canary.py" in docs
-    assert "payload-free full-surface canary builder" in docs
-    assert "--route-body-blake3-hex" in docs
+    assert "canonicalizer, not an evidence generator" in docs
+    assert "--probe-artifact" in docs
 
 
 def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None:
@@ -25912,7 +25597,6 @@ def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None
     for metric_name in metric_names:
         assert f'"{metric_name}"' in metrics_source
         assert f'"{metric_name}"' in checker
-        assert f"--metric {metric_name}" in example
         assert metric_name in dashboard
         assert metric_name in docs
 
@@ -26041,10 +25725,35 @@ def unshipped_gateway_compliance_cli_matches(source: str) -> list[str]:
     return hyphenated_matches + nested_matches
 
 
+def test_gateway_fixture_d1_is_governed_compliance_refusal() -> None:
+    fixture_dir = REPO_ROOT / "fixtures" / "sorafs_gateway" / "1.0.0"
+    scenarios = json.loads(read(fixture_dir / "scenarios.json"))
+    policy_matrix = json.loads(read(fixture_dir / "policy_matrix.json"))
+    scenario = next(entry for entry in scenarios if entry["id"] == "D1")
+    policy = next(entry for entry in policy_matrix if entry["id"] == "D1")
+
+    assert scenario == {
+        "id": "D1",
+        "description": "Load denied by governed gateway compliance",
+        "expected_status": 451,
+        "expected_outcome": "refusal",
+    }
+    assert policy == {
+        "id": "D1",
+        "description": "Load denied by governed gateway compliance",
+        "status": 451,
+        "error": "gateway_compliance_denied",
+        "policy": "gateway_compliance",
+    }
+    fixture_source = read(
+        REPO_ROOT / "xtask" / "src" / "sorafs" / "gateway_fixture.rs"
+    )
+    assert "Load denied by governed gateway compliance" in fixture_source
+    assert "Load with GAR denylist trigger" not in fixture_source
+
+
 def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
-        "/v1/sorafs/denylist/catalog",
-        "/v1/sorafs/denylist/packs/{pack_id}",
         "/v1/sorafs/transparency/source-entries/{source_kind}",
         "/v1/sorafs/transparency/tokens",
         "/v1/sorafs/transparency/tokens/verify",
@@ -26058,10 +25767,6 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "/v1/sorafs/gateway/compliance/promotion-canary",
     )
     shipped_local_subcommands = (
-        "denylist",
-        "pack",
-        "diff",
-        "verify",
         "honey-audit",
         "gateway-compliance-canary",
         "controller-canary",
@@ -26075,9 +25780,6 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "gateway compliance appeal-override-canary",
         "gateway compliance feed-sync-proof",
         "gateway compliance promotion-canary",
-        "denylist pack",
-        "denylist diff",
-        "denylist verify",
         "gar proof-token",
         "transparency source-entry",
         "transparency publication-canary",

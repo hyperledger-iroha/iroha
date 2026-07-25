@@ -5366,6 +5366,8 @@ export interface SorafsTaikaiCacheOptions {
 export interface SorafsGatewayFetchOptions {
   manifestEnvelopeB64?: string;
   manifestCidHex?: string;
+  /** Expected cache version advertised by successful gateway responses. */
+  cacheVersion?: string;
   clientId?: string;
   telemetryRegion?: string;
   rolloutPhase?:
@@ -5577,13 +5579,10 @@ export interface SorafsGatewayFetchAttemptFailure {
   message?: string;
   reason?: Record<string, unknown>;
   policyBlock?: {
-    observedStatus: number;
-    canonicalStatus: number;
-    code?: string;
-    cacheVersion?: string;
-    denylistVersion?: string;
-    proofTokenPresent?: boolean;
-    message?: string | null;
+    observedStatus: 451;
+    code: "gateway_compliance_denied";
+    source: "baseline" | "legal_safety_hold";
+    catalogDigestHex: string;
   };
 }
 

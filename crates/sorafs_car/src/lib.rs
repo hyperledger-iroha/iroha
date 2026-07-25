@@ -53,8 +53,6 @@ pub mod fixtures;
 #[cfg(feature = "manifest")]
 pub mod gateway;
 pub mod local_fetch;
-#[cfg(feature = "manifest")]
-pub mod moderation;
 pub mod multi_fetch;
 pub mod policy;
 #[cfg(feature = "manifest")]
@@ -1844,7 +1842,7 @@ pub struct ChunkFetchSpec {
     pub taikai_segment_hint: Option<TaikaiSegmentHint>,
 }
 
-/// Prototype chunk store used during SoraFS node ingestion.
+/// Canonical chunk store used during SoraFS node ingestion.
 ///
 /// Captures chunk metadata, payload digests, and the two-level (64 KiB / 4 KiB) PoR sampling tree.
 /// With the `manifest` feature it also builds the canonical global 4 KiB / 256 KiB PDP v1 tree.

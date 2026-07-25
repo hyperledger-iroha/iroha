@@ -3120,7 +3120,6 @@ fn build_gateway_fetch_request(
         blinded_cid_b64: None,
         salt_epoch: None,
         expected_cache_version: None,
-        moderation_token_key_b64: None,
     };
     Ok(GatewayFetchRequest {
         plan: car_plan_from_source_archive_plan(source_plan)?,

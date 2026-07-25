@@ -1019,7 +1019,7 @@ fn default_scenarios() -> Vec<ReplayScenario> {
         },
         ReplayScenario {
             id: "D1",
-            description: "GAR denylist refusal",
+            description: "Governed gateway compliance refusal",
             expected_status: 451,
             expected_reason: ScenarioOutcome::Refusal,
         },

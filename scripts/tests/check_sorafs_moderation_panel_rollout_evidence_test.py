@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_moderation_panel_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -146,7 +148,12 @@ def evidence_viewer() -> dict:
         "transparency_report_exported": True,
         "daily_digest_published": True,
         "payload_redaction_verified": True,
-        "denylisted_digest_blocked": True,
+        "gateway_compliance_denial_enforced": {
+            "status_code": 451,
+            "code": "gateway_compliance_denied",
+            "source": "baseline",
+            "catalog_digest_hex": DIGEST,
+        },
         "unauthorized_access_rejected": True,
         "stale_url_rejected": True,
         "session_replay_rejected": True,
@@ -1179,6 +1186,116 @@ def test_route_latency_is_required_for_route_artifacts(tmp_path: Path) -> None:
             "routes[0].latency_ms must be a non-negative integer"
             in artifact["errors"]
         )
+
+
+def viewer_validation_errors(payload: dict) -> list[str]:
+    kind, errors = MODULE.validate_evidence_payload(
+        payload,
+        MODULE.ValidationOptions(
+            now_unix=NOW_UNIX,
+            max_canary_age_secs=MODULE.DEFAULT_MAX_CANARY_AGE_SECS,
+            max_event_lag_secs=MODULE.DEFAULT_MAX_EVENT_LAG_SECS,
+            max_route_latency_ms=MODULE.DEFAULT_MAX_ROUTE_LATENCY_MS,
+            min_panel_size=MODULE.DEFAULT_MIN_PANEL_SIZE,
+            min_peers=MODULE.DEFAULT_MIN_PEERS,
+        ),
+    )
+    assert kind == "evidence_viewer"
+    return errors
+
+
+def test_evidence_viewer_rejects_removed_local_denylist_claim() -> None:
+    payload = evidence_viewer()
+    del payload["gateway_compliance_denial_enforced"]
+    payload["denylisted_digest_blocked"] = True
+
+    errors = viewer_validation_errors(payload)
+
+    assert (
+        "evidence_viewer is missing required fields: "
+        "gateway_compliance_denial_enforced"
+        in errors
+    )
+    assert (
+        "evidence_viewer contains unknown fields: denylisted_digest_blocked"
+        in errors
+    )
+
+
+def test_evidence_viewer_gateway_compliance_claim_must_be_observed_object() -> None:
+    payload = evidence_viewer()
+    payload["gateway_compliance_denial_enforced"] = True
+
+    errors = viewer_validation_errors(payload)
+
+    assert "gateway_compliance_denial_enforced must be an object" in errors
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    (
+        (
+            "status_code",
+            403,
+            (
+                "gateway_compliance_denial_enforced.status_code "
+                "must be exactly 451"
+            ),
+        ),
+        (
+            "code",
+            "denylisted",
+            (
+                "gateway_compliance_denial_enforced.code must be exactly "
+                "gateway_compliance_denied"
+            ),
+        ),
+        (
+            "source",
+            "accepted_appeal",
+            (
+                "gateway_compliance_denial_enforced.source "
+                "is not a recognized denying source"
+            ),
+        ),
+        (
+            "catalog_digest_hex",
+            DIGEST.upper(),
+            (
+                "gateway_compliance_denial_enforced.catalog_digest_hex "
+                "must be 64 lowercase hex characters"
+            ),
+        ),
+    ),
+)
+def test_evidence_viewer_gateway_compliance_claim_is_canonical(
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    payload = evidence_viewer()
+    payload["gateway_compliance_denial_enforced"][field] = value
+
+    errors = viewer_validation_errors(payload)
+
+    assert expected_error in errors
+
+
+def test_evidence_viewer_gateway_compliance_claim_is_schema_closed() -> None:
+    payload = evidence_viewer()
+    claim = payload["gateway_compliance_denial_enforced"]
+    claim["error"] = claim.pop("code")
+
+    errors = viewer_validation_errors(payload)
+
+    assert (
+        "gateway_compliance_denial_enforced is missing required fields: code"
+        in errors
+    )
+    assert (
+        "gateway_compliance_denial_enforced contains unknown fields: error"
+        in errors
+    )
 
 
 def test_evidence_viewer_rejects_long_lived_urls(tmp_path: Path) -> None:

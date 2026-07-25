@@ -1,4 +1,4 @@
-//! SoraFS node scaffolding.
+//! SoraFS provider-node services and durable protocol implementations.
 
 #![deny(missing_docs)]
 #![allow(

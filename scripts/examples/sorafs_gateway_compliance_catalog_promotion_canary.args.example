@@ -1,0 +1,5 @@
+# Canonicalize a real, payload-free catalog-promotion probe. No claim is synthesized.
+--kind catalog_promotion
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/catalog-promotion.json
+--out artifacts/sorafs_gateway/catalog-promotion-canary.json
+--now-unix 1800100000

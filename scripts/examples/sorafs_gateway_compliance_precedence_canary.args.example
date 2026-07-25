@@ -1,0 +1,5 @@
+# Canonicalize a real baseline/appeal/hold precedence probe. No claim is synthesized.
+--kind precedence
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/precedence.json
+--out artifacts/sorafs_gateway/precedence-canary.json
+--now-unix 1800100000

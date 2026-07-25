@@ -171,6 +171,14 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
     let summary_bytes = fs::read(&summary_path).expect("summary exists");
     let summary: Value = json::from_slice(&summary_bytes).expect("summary parses");
     let pop = &summary["pops"][0];
+    let beta_edge_config = pop["beta_edge_config"].as_str().expect("beta edge config");
+    let beta_edge =
+        fs::read_to_string(out_dir.join(beta_edge_config)).expect("read beta edge config");
+    assert!(beta_edge.contains("name: sora-cache-version"));
+    assert!(
+        !beta_edge.contains("sora-denylist-version"),
+        "retired local denylist header must not be required"
+    );
     let pq_summary = pop["pq_summary"].as_str().expect("pq summary");
     let hardening = pop["hardening_summary"]
         .as_str()

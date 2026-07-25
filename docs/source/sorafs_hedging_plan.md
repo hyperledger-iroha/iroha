@@ -30,7 +30,8 @@ operator outcomes.
 The source bridge surface also exposes the same reference validator through
 `sorafs_reference_validate_hedging_json`, Connect C/JNI
 `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM, Java
-Android, and Swift SDK wrappers. The bridge source ABI is now 12; packaged
+Android, and Swift SDK wrappers. The bridge source and checked C header both
+declare the sole first-release ABI, version 21; packaged
 native artifacts still need to be regenerated before SDK release consumption.
 `scripts/check_sorafs_hedging_rollout_evidence.py` now provides the SFM-5
 promotion gate for staged rollout evidence. It requires feed-collector,

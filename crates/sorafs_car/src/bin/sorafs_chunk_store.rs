@@ -1,4 +1,4 @@
-//! CLI helper for ingesting payloads with the SoraFS chunk store prototype.
+//! CLI helper for ingesting payloads with the canonical SoraFS chunk store.
 
 use std::{
     env, fs,

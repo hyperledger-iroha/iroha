@@ -347,7 +347,7 @@ def default_gate_metadata(
                 "metrics": list(MODULE.GATEWAY_COMPLIANCE_REQUIRED_METRICS),
             }
         )
-        add_hex_list("valid_bundle_digests", "bundle_digest_hex")
+        add_hex_list("valid_catalog_digests", "catalog_digest_hex")
         add_policy()
     elif gate_name == "gateway_load":
         metadata["metric_count_values"] = [len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)]
@@ -1022,6 +1022,18 @@ def write_complete_lane_fixture_summary(
             "provider-a",
             "--summary-out",
             str(summary),
+        )
+    elif gate_name == "gateway_compliance":
+        fixture_module.write_complete_evidence(evidence_root)
+        exit_code = fixture_module.MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_root),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(fixture_module.NOW),
+            ]
         )
     else:
         fixture_module.write_complete_evidence(evidence_root)
@@ -6343,14 +6355,14 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
         (
             "gateway_compliance",
-            "valid_bundle_digests",
-            ("feed_promotion",),
-            "bundle_digest_hex",
+            "valid_catalog_digests",
+            ("catalog_promotion",),
+            "catalog_digest_hex",
         ),
         (
             "gateway_compliance",
             "valid_policy_digests",
-            ("feed_promotion",),
+            ("catalog_promotion",),
             "policy_digest_hex",
         ),
         (
@@ -6904,7 +6916,32 @@ def test_gateway_compliance_policy_metadata_for_gate_passes(tmp_path: Path) -> N
     assert run_gate(tmp_path, "--require-gate", "gateway_compliance") == 0
 
 
-def test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest(
+def test_gateway_compliance_legacy_bundle_anchor_is_rejected(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    payload["valid_bundle_digests"] = payload.pop("valid_catalog_digests")
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_compliance: valid_bundle_digests is not allowed in payload-free "
+        "lane summary"
+    ) in errors
+
+
+def test_gateway_compliance_catalog_bound_artifacts_must_match_catalog_digest(
     tmp_path: Path,
 ) -> None:
     payload = gate_summary("gateway_compliance")
@@ -6912,7 +6949,7 @@ def test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest(
     add_fingerprint_metadata(
         payload,
         kind_name="controller_runtime",
-        bundle_digest_hex=other_digest,
+        catalog_digest_hex=other_digest,
     )
     summary = tmp_path / "summary.json"
     write_json(tmp_path / "gateway_compliance.json", payload)
@@ -6930,8 +6967,8 @@ def test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest(
 
     errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
     assert (
-        "gateway_compliance bundle-bound artifact fingerprints must match "
-        "valid_bundle_digests"
+        "gateway_compliance catalog-bound artifact fingerprints must match "
+        "valid_catalog_digests"
     ) in errors
 
 

@@ -256,10 +256,14 @@ They are not an independent authoritative event journal.
   `reputation/latest.to` and `reputation/latest.json` pointers with BLAKE3
   sidecars. This is the existing local snapshot publication store, not the
   authoritative input journal and not yet a committed-ledger Torii projection.
-- `NodeHandle::build_reserve_adjusted_reputation_material` only builds an
-  unsigned snapshot plus complete replay evidence; it cannot mutate or publish
-  reputation state. Governance must sign that material and submit the resulting
-  envelope through the signed admission method.
+- `crates/sorafs_node/src/reputation.rs` contains a deterministic
+  `ReputationIngestService` that joins proof, journal, repair, orderbook, reserve,
+  and provider pages at one finalized height/hash/timestamp and derives unsigned
+  signing material. The module is not currently exported from
+  `sorafs_node::lib`, configured, or supervised, so neither its implementation
+  nor its tests are in the crate graph. Before production use it also needs
+  public restart-safe per-feed query cursors and a durable unsigned-material
+  outbox with acknowledgement and committed-publication reconciliation.
 - Torii exposes the local reputation surface at
   `POST /v1/sorafs/reputation/latest`,
   `GET /v1/sorafs/reputation/latest`, and
@@ -396,7 +400,10 @@ They are not an independent authoritative event journal.
   snapshot publications. Lag notifications use `event = "lagged"` frames so
   clients can resynchronize through `GET /v1/sorafs/reputation/events`.
 - SDK helpers:
-  - Rust: `ReputationClient::latest()`, `::provider(provider_id)`, `verify_provider_record`.
+  - Rust currently has generic signed native transaction/query submission for
+    the journal ISIs and `FindSorafsReputationJournalEvents`; there is no
+    dedicated `ReputationClient`. Dedicated committed-projection builders remain
+    release work.
   - Implemented locally in JS/TS:
     `getSorafsReputationLatest`, `getSorafsReputationProvider`,
     `getSorafsReputationSnapshot`, `getSorafsReputationWeights`,
