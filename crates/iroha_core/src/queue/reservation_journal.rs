@@ -73,9 +73,7 @@ impl LaneQueueReservationJournalLimits {
                 "lane reservation journal compaction threshold must be nonzero",
             ));
         }
-        if self.max_frame_payload_bytes == 0
-            || self.max_frame_payload_bytes > u64::from(u32::MAX)
-        {
+        if self.max_frame_payload_bytes == 0 || self.max_frame_payload_bytes > u64::from(u32::MAX) {
             return Err(invalid_input(
                 "lane reservation journal frame payload limit must be in 1..=u32::MAX",
             ));
@@ -97,9 +95,7 @@ impl LaneQueueReservationJournalLimits {
         })?;
         let bootstrap_payload_bytes = u64::try_from(bootstrap_payload.len())
             .map_err(|_| invalid_input("lane reservation journal bootstrap exceeds u64"))?;
-        if bootstrap_payload_bytes == 0
-            || bootstrap_payload_bytes > self.max_frame_payload_bytes
-        {
+        if bootstrap_payload_bytes == 0 || bootstrap_payload_bytes > self.max_frame_payload_bytes {
             return Err(invalid_input(
                 "lane reservation journal frame limit cannot hold the V5 bootstrap payload",
             ));
@@ -111,11 +107,6 @@ impl LaneQueueReservationJournalLimits {
         if bootstrap_frame_bytes > self.max_file_bytes {
             return Err(invalid_input(
                 "lane reservation journal file limit cannot hold the V5 bootstrap frame",
-            ));
-        }
-        if bootstrap_frame_bytes > self.max_bytes_before_compact {
-            return Err(invalid_input(
-                "lane reservation journal compaction threshold cannot be smaller than its V5 bootstrap frame",
             ));
         }
         Ok(self)
@@ -700,11 +691,7 @@ fn ensure_replay_ownership_bound(
             .iter()
             .map(|record| record.key.signed_transaction_hash),
     );
-    owned.extend(
-        committed
-            .iter()
-            .map(|key| key.signed_transaction_hash),
-    );
+    owned.extend(committed.iter().map(|key| key.signed_transaction_hash));
     for barrier in release_barriers {
         owned.extend(
             barrier
@@ -1352,12 +1339,8 @@ fn frame_checksum(version: &[u8; 2], len: &[u8; 4], len_guard: &[u8; 4], payload
 fn encode_compacted_journal(
     snapshot: Option<&LaneQueueReservationJournalFrameV5>,
 ) -> io::Result<Vec<u8>> {
-    let limits = LaneQueueReservationJournalLimits::new(
-        u64::MAX,
-        u64::from(u32::MAX),
-        u64::MAX,
-        usize::MAX,
-    );
+    let limits =
+        LaneQueueReservationJournalLimits::new(u64::MAX, u64::from(u32::MAX), u64::MAX, usize::MAX);
     encode_compacted_journal_with_limits(snapshot, limits)
 }
 
@@ -1365,8 +1348,7 @@ fn encode_compacted_journal_with_limits(
     snapshot: Option<&LaneQueueReservationJournalFrameV5>,
     limits: LaneQueueReservationJournalLimits,
 ) -> io::Result<Vec<u8>> {
-    let mut encoded =
-        encode_frame_with_limit(&bootstrap_frame(), limits.max_frame_payload_bytes)?;
+    let mut encoded = encode_frame_with_limit(&bootstrap_frame(), limits.max_frame_payload_bytes)?;
     if let Some(snapshot) = snapshot {
         encoded.extend_from_slice(&encode_frame_with_limit(
             snapshot,
@@ -1454,8 +1436,7 @@ fn ensure_durable_v5_bootstrap(
     path: &Path,
     limits: LaneQueueReservationJournalLimits,
 ) -> io::Result<()> {
-    let expected =
-        encode_frame_with_limit(&bootstrap_frame(), limits.max_frame_payload_bytes)?;
+    let expected = encode_frame_with_limit(&bootstrap_frame(), limits.max_frame_payload_bytes)?;
     let mut file = open_regular_read_write(path)?;
     let identity = verify_open_regular_path(path, &file)?;
     let parent = open_regular_parent(path)?;
@@ -1612,13 +1593,7 @@ fn scan_frames(
         if frame_checksum(&version_bytes, &len_bytes, &len_guard, &payload).as_ref() != &checksum {
             return Err(invalid_data("lane reservation journal checksum mismatch"));
         }
-        let frame = norito::decode_from_bytes::<LaneQueueReservationJournalFrameV5>(&payload)
-            .map_err(io::Error::other)?;
-        if norito::to_bytes(&frame).map_err(io::Error::other)? != payload {
-            return Err(invalid_data(
-                "lane reservation journal payload is not canonically encoded",
-            ));
-        }
+        let frame = decode_frame(&payload, limits)?;
         match &frame {
             LaneQueueReservationJournalFrameV5::Bootstrap { .. }
                 if position == 0 && !saw_bootstrap =>
@@ -1659,7 +1634,60 @@ fn truncate_suffix(file: &mut File, valid_end: u64, path: &Path) -> io::Result<(
     validate_file_snapshot(path, file, identity, valid_end, &parent, parent_identity)
 }
 
-fn for_each_frame<F>(path: &Path, mut handle: F) -> io::Result<()>
+fn decode_frame(
+    payload: &[u8],
+    limits: LaneQueueReservationJournalLimits,
+) -> io::Result<LaneQueueReservationJournalFrameV5> {
+    let configured_payload_limit =
+        usize::try_from(limits.max_frame_payload_bytes).unwrap_or(usize::MAX);
+    if payload.is_empty() || payload.len() > configured_payload_limit {
+        return Err(invalid_data(
+            "lane reservation journal payload exceeds the configured frame limit",
+        ));
+    }
+    norito::core::from_bytes_view(payload).map_err(|error| {
+        invalid_data(format!(
+            "lane reservation journal payload is not a canonical uncompressed archive: {error}"
+        ))
+    })?;
+    let payload_budget = payload.len();
+    let aggregate_element_budget =
+        payload_budget.saturating_mul(FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT);
+    let aggregate_allocation_budget = payload_budget
+        .checked_mul(FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT)
+        .and_then(|bytes| bytes.checked_add(FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES))
+        .ok_or_else(|| {
+            invalid_data("lane reservation journal payload allocation budget overflow")
+        })?;
+    let decode_limits = norito::DecodeLimits::new(
+        payload_budget,
+        payload_budget,
+        aggregate_element_budget,
+        aggregate_allocation_budget,
+        128,
+    );
+    let frame = norito::decode_from_bytes_with_limits::<LaneQueueReservationJournalFrameV5>(
+        payload,
+        decode_limits,
+    )
+    .map_err(|error| {
+        invalid_data(format!(
+            "lane reservation journal payload cannot be decoded: {error}"
+        ))
+    })?;
+    if norito::to_bytes(&frame).map_err(io::Error::other)? != payload {
+        return Err(invalid_data(
+            "lane reservation journal payload is not canonically encoded",
+        ));
+    }
+    Ok(frame)
+}
+
+fn for_each_frame<F>(
+    path: &Path,
+    limits: LaneQueueReservationJournalLimits,
+    mut handle: F,
+) -> io::Result<()>
 where
     F: FnMut(LaneQueueReservationJournalFrameV5) -> io::Result<()>,
 {
@@ -1668,7 +1696,8 @@ where
     let parent = open_regular_parent(path)?;
     let parent_identity = verify_open_regular_parent(path, &parent)?;
     let len = file.metadata()?.len();
-    let (frames, scanned_len) = scan_frames(&mut file, len, None)?;
+    ensure_file_bound(len, limits)?;
+    let (frames, scanned_len) = scan_frames(&mut file, len, limits, None)?;
     validate_file_snapshot(path, &file, identity, scanned_len, &parent, parent_identity)?;
     for frame in frames {
         if !matches!(frame, LaneQueueReservationJournalFrameV5::Bootstrap { .. }) {
@@ -1899,7 +1928,10 @@ fn reject_missing_canonical_with_compaction_temp(path: &Path) -> io::Result<()> 
     Ok(())
 }
 
-fn reconcile_compaction_temp(path: &Path) -> io::Result<()> {
+fn reconcile_compaction_temp(
+    path: &Path,
+    limits: LaneQueueReservationJournalLimits,
+) -> io::Result<()> {
     let tmp = path.with_extension("reservation-compact.tmp");
     let metadata = match fs::symlink_metadata(&tmp) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -1914,15 +1946,16 @@ fn reconcile_compaction_temp(path: &Path) -> io::Result<()> {
             "lane reservation compaction temp must be a direct single-link regular file",
         ));
     }
+    ensure_file_bound(metadata.len(), limits)?;
 
-    let replay = replay_path(path)?;
+    let replay = replay_path(path, limits)?;
     let snapshot = canonical_snapshot(
         replay.records(),
         replay.committed(),
         replay.release_barriers(),
         replay.completed_releases(),
     )?;
-    let expected = encode_compacted_journal(snapshot.as_ref())?;
+    let expected = encode_compacted_journal_with_limits(snapshot.as_ref(), limits)?;
     let temp_len = metadata.len();
     let expected_len = u64::try_from(expected.len())
         .map_err(|_| invalid_data("lane reservation compacted journal exceeds u64"))?;
@@ -2086,6 +2119,21 @@ fn open_regular_read(path: &Path) -> io::Result<File> {
     let file = File::open(path)?;
     verify_open_regular_path(path, &file)?;
     Ok(file)
+}
+
+fn ensure_file_bound(file_len: u64, limits: LaneQueueReservationJournalLimits) -> io::Result<()> {
+    if file_len > limits.max_file_bytes {
+        Err(invalid_data(format!(
+            "lane reservation journal file size {file_len} exceeds configured limit {}",
+            limits.max_file_bytes
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn invalid_input(error: impl ToString) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
 }
 
 fn invalid_data(error: impl ToString) -> io::Error {

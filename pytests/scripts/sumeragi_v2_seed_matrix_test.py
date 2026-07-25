@@ -257,7 +257,10 @@ if [[ $# -eq 3 \
   exit 0
 fi
 if [[ "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
-  || "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ]]; then
+  || "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
+  || ( "${{1-}}" == "-I" \
+    && "${{2-}}" == "-S" \
+    && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then
   exec "$SEED_MATRIX_REAL_PYTHON3" "$@"
 fi
 printf 'unexpected mocked python3 invocation: %s\n' "$*" >&2
@@ -721,7 +724,10 @@ def test_mocked_seed_matrix_rejects_source_drift_before_completion(
         f"""#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
-  || "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" ]]; then
+  || "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
+  || ( "${{1-}}" == "-I" \
+    && "${{2-}}" == "-S" \
+    && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then
   exec "$SEED_MATRIX_REAL_PYTHON3" "$@"
 fi
 if [[ $# -ne 3 \

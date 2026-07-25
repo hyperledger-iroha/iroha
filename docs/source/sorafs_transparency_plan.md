@@ -107,11 +107,21 @@ moderation ledger publication service described by the original plan.
   schema, one population per private subject per cycle, per-subject clipping,
   conservative joint-vector sensitivity, exact integer discrete-Laplace
   sampling, and atomic composition-budget/release-chain/cycle/source-removal/
-  outbox persistence. DP modes always emit the full configured population
-  inventory; DP-with-suppression replaces sub-threshold contributions with the
-  fixed zero vector before noise, while suppression-only mode is explicitly
-  non-DP and may omit sub-threshold buckets. Caller-supplied aggregate payload
-  and policy publication helpers exist only in unit-test builds.
+  outbox persistence. The sampler constructs the normalized zero mass, fair
+  conditional sign, and geometric magnitude with integer-only XOF rejection
+  sampling. Its geometric and rejection loops terminate almost surely and have
+  no finite retry or random-draw cutoff. Governed epsilon/sensitivity and
+  complete release dimensions are admitted against conservative expected-work
+  bounds before publication; those per-release input bounds do not truncate the
+  unbounded support of the noise distribution. Mapping the latent signed noise
+  into the public `u64` metric range is deterministic differential-privacy
+  post-processing: once a tail reaches either public boundary, every further
+  magnitude maps to that same boundary. DP modes always emit the full configured
+  population inventory; DP-with-suppression replaces sub-threshold contributions
+  with the fixed zero vector before noise, while suppression-only mode is
+  explicitly non-DP and may omit sub-threshold buckets. Caller-supplied
+  aggregate payload and policy publication helpers exist only in unit-test
+  builds.
 - `PrivacyAggregateScheduleConfig` provides due-cycle scheduling for the
   aggregate worker. The configured method derives
   deterministic release ids from the stable governed query id plus exact cycle

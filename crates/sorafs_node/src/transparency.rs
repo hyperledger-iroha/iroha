@@ -3157,12 +3157,12 @@ pub enum PrivacyAggregateWorkerError {
     },
     /// Governed release dimensions exceed the deterministic whole-cycle work budget.
     #[error(
-        "privacy aggregate release noise complexity {estimated_draws} exceeds limit {max_draws}"
+        "privacy aggregate release expected XOF work {estimated_draws} exceeds limit {max_draws}"
     )]
     NoiseReleaseComplexityExceedsResourceLimit {
-        /// Conservative expected uniform draws for the complete release.
+        /// Conservative expected 128-bit XOF draws for the complete release.
         estimated_draws: u128,
-        /// Maximum accepted expected uniform draws.
+        /// Maximum accepted expected 128-bit XOF draws.
         max_draws: u128,
     },
     /// A worker-owned public metadata key was supplied by a caller.
@@ -3534,8 +3534,7 @@ impl ExactNoiseSampler {
         // integer rejection sample; no floating-point approximation is used.
         // Its privacy loss is -ln(q) = ln(1 + N/(ΔD)) <= N/(ΔD), so the
         // governed rational ε conservatively bounds the complete vector.
-        let law =
-            exact_discrete_laplace_law(epsilon_numerator, epsilon_denominator, sensitivity)?;
+        let law = exact_discrete_laplace_law(epsilon_numerator, epsilon_denominator, sensitivity)?;
         if self.uniform_below(law.zero_denominator)? < law.zero_numerator {
             return Ok(value);
         }
@@ -3557,9 +3556,7 @@ impl ExactNoiseSampler {
                 };
                 next
             };
-            if self.uniform_below(law.continuation_denominator)?
-                >= law.continuation_numerator
-            {
+            if self.uniform_below(law.continuation_denominator)? >= law.continuation_numerator {
                 return Ok(adjusted);
             }
         }
@@ -4583,10 +4580,12 @@ mod tests {
             let mut hasher = blake3::Hasher::new_keyed(&[0x5A; 32]);
             hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
             hasher.update(context);
-            let mut remaining_draws = MAX_DISCRETE_LAPLACE_RELEASE_RANDOM_DRAWS_V1;
-            ExactNoiseSampler::new(hasher.finalize_xof(), &mut remaining_draws)
-                .sample_discrete_laplace(4, 5, 1)
-                .expect("bounded exact sample")
+            let center = u64::MAX / 2;
+            i128::from(
+                ExactNoiseSampler::new(hasher.finalize_xof())
+                    .apply_discrete_laplace(center, 4, 5, 1)
+                    .expect("exact sample"),
+            ) - i128::from(center)
         }
 
         let sample_a = sample(b"aggregate-a/metric-a");
@@ -4598,6 +4597,27 @@ mod tests {
                 sample(b"aggregate-b/metric-b")
             ),
             "independent contexts must not collapse to one repeated sample pair"
+        );
+    }
+
+    #[test]
+    fn exact_discrete_laplace_normalizes_zero_before_sampling_sign() {
+        let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
+
+        // q = 1/2 gives P(0) = (1-q)/(1+q) = 1/3, followed by a
+        // conditional fair sign and P(|Z|=k | Z!=0) = (1-q)q^(k-1).
+        // Sampling a sign after a geometric magnitude starting at zero would
+        // instead assign P(0)=1-q=1/2 and is not this distribution.
+        assert_eq!(law.continuation_numerator, 1);
+        assert_eq!(law.continuation_denominator, 2);
+        assert_eq!(law.zero_numerator, 1);
+        assert_eq!(law.zero_denominator, 3);
+        assert_ne!(
+            (law.zero_numerator, law.zero_denominator,),
+            (
+                law.continuation_denominator - law.continuation_numerator,
+                law.continuation_denominator,
+            )
         );
     }
 
@@ -4616,10 +4636,12 @@ mod tests {
             let mut hasher = blake3::Hasher::new_keyed(&[0xA5; 32]);
             hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
             hasher.update(&sample_index.to_le_bytes());
-            let mut remaining_draws = MAX_DISCRETE_LAPLACE_RELEASE_RANDOM_DRAWS_V1;
-            let sample = ExactNoiseSampler::new(hasher.finalize_xof(), &mut remaining_draws)
-                .sample_discrete_laplace(1, 1, 1)
-                .expect("bounded exact sample");
+            let center = u64::MAX / 2;
+            let sample = i128::from(
+                ExactNoiseSampler::new(hasher.finalize_xof())
+                    .apply_discrete_laplace(center, 1, 1, 1)
+                    .expect("exact sample"),
+            ) - i128::from(center);
             signed_sum += sample;
             match sample.cmp(&0) {
                 std::cmp::Ordering::Less => negative += 1,
@@ -4639,6 +4661,35 @@ mod tests {
         assert!(positive.abs_diff(negative) < 500);
         assert!(tail_one > tail_two && tail_two > tail_three && tail_three > 0);
         assert!(signed_sum.unsigned_abs() < u128::from(SAMPLE_COUNT / 4));
+    }
+
+    #[test]
+    fn exact_discrete_laplace_folds_only_at_the_public_integer_boundary() {
+        fn sample(sample_index: u64, value: u64) -> u64 {
+            let mut hasher = blake3::Hasher::new_keyed(&[0x3C; 32]);
+            hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
+            hasher.update(&sample_index.to_le_bytes());
+            ExactNoiseSampler::new(hasher.finalize_xof())
+                .apply_discrete_laplace(value, 1, 1, 1)
+                .expect("exact sample")
+        }
+
+        let center = u64::MAX / 2;
+        let positive_context = (0..1_024)
+            .find(|index| sample(*index, center) > center)
+            .expect("deterministic corpus contains positive noise");
+        let negative_context = (0..1_024)
+            .find(|index| sample(*index, center) < center)
+            .expect("deterministic corpus contains negative noise");
+
+        assert_eq!(sample(positive_context, u64::MAX), u64::MAX);
+        assert_eq!(sample(negative_context, 0), 0);
+        let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
+        assert!(
+            law.continuation_numerator > 0
+                && law.continuation_numerator < law.continuation_denominator,
+            "every finite latent tail length has nonzero probability"
+        );
     }
 
     #[test]
@@ -4946,7 +4997,6 @@ mod tests {
         let config = privacy_config();
         let sensitivity = privacy_vector_sensitivity(&config).expect("valid sensitivity");
         let private_source_digest = [0x44; 32];
-        let mut at_limit_draws = MAX_DISCRETE_LAPLACE_RELEASE_RANDOM_DRAWS_V1;
         let at_u64_max = apply_metric_noise(
             u128::from(u64::MAX),
             &config,
@@ -4955,10 +5005,8 @@ mod tests {
             "aggregate-a",
             "moderation_actions",
             &private_source_digest,
-            &mut at_limit_draws,
         )
         .expect("noise at the public integer bound");
-        let mut above_limit_draws = MAX_DISCRETE_LAPLACE_RELEASE_RANDOM_DRAWS_V1;
         let above_u64_max = apply_metric_noise(
             u128::MAX,
             &config,
@@ -4967,7 +5015,6 @@ mod tests {
             "aggregate-a",
             "moderation_actions",
             &private_source_digest,
-            &mut above_limit_draws,
         )
         .expect("wide sum is deterministically clamped");
 

@@ -89,7 +89,10 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
+use reservation_journal::{
+    LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal,
+    LaneQueueReservationJournalLimits,
+};
 #[cfg(test)]
 use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
@@ -2859,7 +2862,23 @@ impl Queue {
         path: impl AsRef<Path>,
         max_bytes_before_compact: u64,
     ) -> Result<LaneQueueReservationReplaySummary, LaneQueueReservationError> {
-        let (journal, replay) = LaneQueueReservationJournal::open(path, max_bytes_before_compact)?;
+        let max_frame_payload_bytes = self.max_retained_bytes.get().min(u64::from(u32::MAX));
+        let max_file_bytes = max_bytes_before_compact
+            .checked_add(self.max_retained_bytes.get())
+            .and_then(|bytes| bytes.checked_add(max_frame_payload_bytes))
+            .ok_or_else(|| {
+                LaneQueueReservationError::Journal(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "lane reservation journal file limit overflow",
+                ))
+            })?;
+        let limits = LaneQueueReservationJournalLimits::new(
+            max_bytes_before_compact,
+            max_frame_payload_bytes,
+            max_file_bytes,
+            self.capacity.get(),
+        );
+        let (journal, replay) = LaneQueueReservationJournal::open_with_limits(path, limits)?;
         let mut restored = HashMap::with_capacity(replay.records().len());
         for record in replay.records() {
             record

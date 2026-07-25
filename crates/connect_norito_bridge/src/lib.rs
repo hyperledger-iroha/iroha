@@ -54468,7 +54468,10 @@ mod sorafs_tests {
         assert_eq!(rc, 0, "bridge signer call should succeed");
         let signed = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize).to_vec() };
         assert!(!signed.is_empty(), "signed payload should be returned");
-        assert_ne!(signed, payload, "signature must change the encoded payload");
+        assert_eq!(
+            signed, payload,
+            "signing the canonical fixture with its deterministic key must be byte-identical"
+        );
         if !signed_ptr.is_null() {
             connect_norito_free(signed_ptr);
         }

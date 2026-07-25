@@ -5683,6 +5683,34 @@ pub struct SumeragiV2RuntimeLimits {
     pub historical_recovery_max_retry_tier: NonZeroU32,
     /// Sidecar chunks transferred during one bounded adapter service turn.
     pub sidecar_service_burst: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies retained globally.
+    pub merge_sidecar_inbound_session_capacity: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
+    pub merge_sidecar_inbound_sessions_per_peer: NonZeroUsize,
+    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes: NonZeroUsize,
+    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes_per_peer: NonZeroUsize,
+    /// Deferred global blocks waiting for exact certified sidecars.
+    pub merge_sidecar_deferred_block_capacity: NonZeroUsize,
+    /// Maximum future carrier-height distance admitted for deferred sidecars.
+    pub merge_sidecar_future_block_distance: NonZeroU64,
+    /// Base timeout before retrying an incomplete certified sidecar request.
+    pub merge_sidecar_request_timeout: Duration,
+    /// Concurrent response sessions retained for one authenticated source.
+    pub merge_sidecar_outbound_sessions_per_source: NonZeroUsize,
+    /// Response bytes retained for one authenticated source.
+    pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
+    /// Idempotency request gates retained for one authenticated source.
+    pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
+    /// Lifetime of a completed/rejected server request gate.
+    pub merge_sidecar_server_request_gate_ttl: Duration,
+    /// Durable merge-signing decisions retained before committed-frontier GC.
+    pub merge_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical merge-signing decision.
+    pub merge_signing_guard_record_bytes: NonZeroUsize,
+    /// Aggregate bytes retained in the merge-signing journal.
+    pub merge_signing_guard_total_bytes: NonZeroUsize,
     /// Durable Native AMX signing decisions retained at one height.
     pub native_amx_signing_guard_record_capacity: NonZeroUsize,
     /// Runtime byte ceiling for one canonical Native AMX signing record.
@@ -5709,6 +5737,34 @@ impl Default for SumeragiV2RuntimeLimits {
             historical_recovery_max_retry_tier:
                 defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
             sidecar_service_burst: defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            merge_sidecar_inbound_session_capacity:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY,
+            merge_sidecar_inbound_sessions_per_peer:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER,
+            merge_sidecar_inbound_assembly_bytes:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES,
+            merge_sidecar_inbound_assembly_bytes_per_peer:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER,
+            merge_sidecar_deferred_block_capacity:
+                defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY,
+            merge_sidecar_future_block_distance:
+                defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE,
+            merge_sidecar_request_timeout:
+                defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT,
+            merge_sidecar_outbound_sessions_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE,
+            merge_sidecar_outbound_bytes_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
+            merge_sidecar_server_request_gates_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
+            merge_sidecar_server_request_gate_ttl:
+                defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL,
+            merge_signing_guard_record_capacity:
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY,
+            merge_signing_guard_record_bytes:
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES,
+            merge_signing_guard_total_bytes:
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES,
             native_amx_signing_guard_record_capacity:
                 defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
             native_amx_signing_guard_record_bytes:
@@ -5998,6 +6054,168 @@ impl Sumeragi {
                 maximum: maximum_service_burst,
             });
         }
+        let merge_sidecar_inbound_session_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+            self.limits.merge_sidecar_inbound_session_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+            merge_sidecar_inbound_session_capacity,
+            2,
+        )?;
+        let merge_sidecar_inbound_sessions_per_peer = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            self.limits.merge_sidecar_inbound_sessions_per_peer.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            merge_sidecar_inbound_sessions_per_peer,
+            2,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            merge_sidecar_inbound_sessions_per_peer,
+            merge_sidecar_inbound_session_capacity,
+        )?;
+        let merge_sidecar_inbound_assembly_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+            self.limits.merge_sidecar_inbound_assembly_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+            merge_sidecar_inbound_assembly_bytes,
+            canonical_size(
+                "Sumeragi v2 merge-sidecar inbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+            )?,
+        )?;
+        let merge_sidecar_inbound_assembly_bytes_per_peer = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            self.limits
+                .merge_sidecar_inbound_assembly_bytes_per_peer
+                .get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            merge_sidecar_inbound_assembly_bytes_per_peer,
+            canonical_size(
+                "Sumeragi v2 per-peer merge-sidecar inbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+            )?,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            merge_sidecar_inbound_assembly_bytes_per_peer,
+            merge_sidecar_inbound_assembly_bytes,
+        )?;
+        let merge_sidecar_deferred_block_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+            self.limits.merge_sidecar_deferred_block_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+            merge_sidecar_deferred_block_capacity,
+            2,
+        )?;
+        let merge_sidecar_future_block_distance = canonical_bounded_u64(
+            "sumeragi.limits.merge_sidecar_future_block_distance",
+            self.limits.merge_sidecar_future_block_distance.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX,
+        )?;
+        let merge_sidecar_request_timeout_ms = canonical_duration_ms(
+            "sumeragi.limits.merge_sidecar_request_timeout_ms",
+            self.limits.merge_sidecar_request_timeout,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_request_timeout_ms",
+            merge_sidecar_request_timeout_ms,
+            defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS,
+        )?;
+        let merge_sidecar_outbound_sessions_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_outbound_sessions_per_source",
+            self.limits.merge_sidecar_outbound_sessions_per_source.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE_MAX,
+        )?;
+        let merge_sidecar_outbound_bytes_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+            self.limits.merge_sidecar_outbound_bytes_per_source.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+            merge_sidecar_outbound_bytes_per_source,
+            canonical_size(
+                "Sumeragi v2 merge-sidecar outbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN,
+            )?,
+        )?;
+        let merge_sidecar_server_request_gates_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+            self.limits
+                .merge_sidecar_server_request_gates_per_source
+                .get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+            merge_sidecar_server_request_gates_per_source,
+            merge_sidecar_outbound_sessions_per_source,
+        )?;
+        let merge_sidecar_server_request_gate_ttl_ms = canonical_duration_ms(
+            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
+            self.limits.merge_sidecar_server_request_gate_ttl,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
+            merge_sidecar_server_request_gate_ttl_ms,
+            defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
+            merge_sidecar_server_request_gate_ttl_ms,
+            merge_sidecar_request_timeout_ms,
+        )?;
+        let merge_signing_guard_record_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_record_capacity",
+            self.limits.merge_signing_guard_record_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX,
+        )?;
+        let merge_signing_guard_record_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_record_bytes",
+            self.limits.merge_signing_guard_record_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_signing_guard_record_bytes",
+            merge_signing_guard_record_bytes,
+            canonical_size(
+                "Sumeragi v2 merge-signing record byte minimum",
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN,
+            )?,
+        )?;
+        let merge_signing_guard_total_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_total_bytes",
+            self.limits.merge_signing_guard_total_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX,
+        )?;
+        let merge_signing_guard_minimum_total_bytes = merge_signing_guard_record_bytes
+            .checked_add(64 * 1024)
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 merge-signing aggregate byte minimum",
+            ))?;
+        require_minimum(
+            "sumeragi.limits.merge_signing_guard_total_bytes",
+            merge_signing_guard_total_bytes,
+            merge_signing_guard_minimum_total_bytes.max(
+                u64::try_from(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MIN)
+                    .expect("static merge-signing minimum fits u64"),
+            ),
+        )?;
         let native_amx_signing_guard_record_capacity = canonical_bounded_size(
             "sumeragi.limits.native_amx_signing_guard_record_capacity",
             self.limits.native_amx_signing_guard_record_capacity.get(),
