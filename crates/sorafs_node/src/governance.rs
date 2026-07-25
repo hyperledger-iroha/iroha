@@ -5788,8 +5788,6 @@ mod tests {
         }
     }
 
-    }
-
     #[test]
     fn filesystem_publisher_rejects_malformed_runtime_dag_index() {
         let temp = tempdir().expect("tempdir");
@@ -6168,8 +6166,6 @@ mod tests {
         ] {
             assert!(!object.contains_key(retired), "retired field {retired}");
         }
-    }
-
     }
 
     #[test]
