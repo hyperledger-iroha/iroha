@@ -115,17 +115,7 @@ Tip: You can combine these with `jq` for consistency checks.
 
 ### SoraFS gateway helpers
 
-Validate operator-maintained denylist files before deploying them to Torii:
-
-```bash
-iroha app sorafs gateway lint-denylist --path docs/source/sorafs_gateway_denylist_sample.json
-```
-
-The command checks required fields for each entry type (provider, manifest digest, CID, URL,
-account ID, and alias), enforces canonical hex/base64 encoding, validates timestamps, and reports a
-per-kind summary so operators can catch mistakes before rolling out new lists.
-
-Generate a TOML snippet with default gateway settings (rate limits, denylist path, ACME hosts):
+Generate a TOML snippet with default gateway settings (rate limits and ACME hosts):
 
 ```bash
 iroha app sorafs gateway template-config --host gateway-a.example.com --host gateway-b.example.com

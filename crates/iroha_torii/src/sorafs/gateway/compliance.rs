@@ -16,7 +16,7 @@ use std::{
     path::{Component, Path, PathBuf},
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
 };
@@ -61,8 +61,8 @@ const ROLLBACK_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-rollback-v
 const TRUST_POLICY_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-trust-policy-v1";
 const CATALOG_DIGEST_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-catalog-digest-v1";
 const FEED_DIGEST_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-feed-v1";
-
-static ATOMIC_STORE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const CHECKPOINT_STORE_GENERATION_DOMAIN_V1: &[u8] =
+    b"sorafs-gateway-compliance-checkpoint-store-generation-v1";
 
 /// One strong Ed25519 identity authorized by policy.
 #[derive(
@@ -1063,6 +1063,10 @@ pub struct GatewayComplianceDecision {
     pub reference_id: Option<String>,
     /// Serving catalog digest, when a catalog is active.
     pub catalog_digest: Option<[u8; 32]>,
+    /// Monotonic serving-catalog sequence.
+    pub catalog_sequence: u64,
+    /// Exclusive serving-catalog expiry as a Unix second.
+    pub catalog_valid_until_unix: u64,
 }
 
 /// Durable promotion or rollback record.
@@ -1162,6 +1166,8 @@ pub struct GatewayComplianceIdempotencyRecordV1 {
 pub struct GatewayComplianceCheckpointV1 {
     /// Schema version.
     pub version: u8,
+    /// Monotonic durable mutation revision. Exact idempotency replays do not advance it.
+    pub revision: u64,
     /// Bound trust-policy digest.
     pub policy_digest: [u8; 32],
     /// Most recently promoted predecessor-chain head.
@@ -1184,6 +1190,7 @@ impl GatewayComplianceCheckpointV1 {
     fn empty(policy_digest: [u8; 32]) -> Self {
         Self {
             version: GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1,
+            revision: 0,
             policy_digest,
             chain_head: None,
             serving: None,
@@ -1196,48 +1203,144 @@ impl GatewayComplianceCheckpointV1 {
     }
 }
 
-/// Durable checkpoint backend. Implementations must replace bytes atomically.
+/// Opaque generation of the exact durable checkpoint bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayComplianceStoreGeneration {
+    /// No checkpoint exists.
+    Absent,
+    /// Domain-separated digest of the exact checkpoint bytes.
+    Present([u8; 32]),
+}
+
+/// One exact snapshot loaded under an active checkpoint-store lease.
+#[derive(Debug)]
+pub struct GatewayComplianceStoreSnapshot {
+    /// Opaque exact-byte generation.
+    pub generation: GatewayComplianceStoreGeneration,
+    /// Exact checkpoint bytes, or `None` when the checkpoint is absent.
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Process-lifetime exclusive lease over one durable checkpoint backend.
+pub trait GatewayComplianceStoreLease: Debug + Send + Sync {
+    /// Load the exact current checkpoint snapshot.
+    fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError>;
+
+    /// Atomically replace the checkpoint only when its exact generation matches.
+    fn compare_and_store(
+        &self,
+        expected: GatewayComplianceStoreGeneration,
+        bytes: &[u8],
+    ) -> Result<GatewayComplianceStoreGeneration, GatewayComplianceError>;
+}
+
+/// Durable checkpoint backend. A controller must hold its exclusive lease for
+/// its complete lifetime.
 pub trait GatewayComplianceStore: Debug + Send + Sync {
-    /// Load the last committed checkpoint, if present.
-    fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError>;
-    /// Atomically replace the committed checkpoint.
-    fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError>;
+    /// Acquire the one active process-lifetime lease.
+    fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError>;
 }
 
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct TestGatewayComplianceStore {
-    bytes: std::sync::Mutex<Option<Vec<u8>>>,
+    state: Arc<std::sync::Mutex<TestGatewayComplianceStoreState>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestGatewayComplianceStoreState {
+    bytes: Option<Vec<u8>>,
+    leased: bool,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestGatewayComplianceStoreLease {
+    state: Arc<std::sync::Mutex<TestGatewayComplianceStoreState>>,
+}
+
+#[cfg(test)]
+impl Drop for TestGatewayComplianceStoreLease {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.leased = false;
+        }
+    }
 }
 
 #[cfg(test)]
 impl GatewayComplianceStore for TestGatewayComplianceStore {
-    fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError> {
-        self.bytes
+    fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
+        let mut state = self
+            .state
             .lock()
-            .map(|guard| guard.clone())
-            .map_err(|_| GatewayComplianceError::StatePoisoned)
-    }
-
-    fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError> {
-        *self
-            .bytes
-            .lock()
-            .map_err(|_| GatewayComplianceError::StatePoisoned)? = Some(bytes.to_vec());
-        Ok(())
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        if state.leased {
+            return Err(GatewayComplianceError::LeaseHeld);
+        }
+        state.leased = true;
+        drop(state);
+        Ok(Box::new(TestGatewayComplianceStoreLease {
+            state: Arc::clone(&self.state),
+        }))
     }
 }
 
-/// Filesystem store with no-follow temp creation, fsync, and atomic rename.
+#[cfg(test)]
+impl GatewayComplianceStoreLease for TestGatewayComplianceStoreLease {
+    fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        Ok(checkpoint_store_snapshot(state.bytes.clone()))
+    }
+
+    fn compare_and_store(
+        &self,
+        expected: GatewayComplianceStoreGeneration,
+        bytes: &[u8],
+    ) -> Result<GatewayComplianceStoreGeneration, GatewayComplianceError> {
+        if bytes.len() > MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1 {
+            return Err(GatewayComplianceError::ResourceLimit {
+                resource: "compliance checkpoint bytes",
+                found: bytes.len(),
+                maximum: MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
+            });
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        if checkpoint_store_generation(state.bytes.as_deref()) != expected {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        state.bytes = Some(bytes.to_vec());
+        Ok(checkpoint_store_generation(Some(bytes)))
+    }
+}
+
+/// Filesystem store with an exclusive stable-file lease, exact-byte CAS,
+/// no-follow temp creation, fsync, and atomic replacement.
 #[derive(Debug, Clone)]
 pub struct FileGatewayComplianceStore {
     path: PathBuf,
     max_bytes: usize,
+    #[cfg(test)]
+    test_hook: Arc<FileGatewayComplianceStoreTestHook>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct FileGatewayComplianceStoreTestHook {
+    before_persist_replacement: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 impl FileGatewayComplianceStore {
     /// Construct an absolute-path store. The parent directory must be
-    /// provisioned ahead of startup and must not traverse symlinks.
+    /// provisioned ahead of startup, must not traverse symlinks, and must not
+    /// be group- or world-writable.
     pub fn new(path: PathBuf) -> Result<Self, GatewayComplianceError> {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err(GatewayComplianceError::Persistence(
@@ -1247,67 +1350,94 @@ impl FileGatewayComplianceStore {
         let parent = path.parent().ok_or_else(|| {
             GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
         })?;
-        validate_existing_directory_chain(parent)?;
+        validate_checkpoint_parent(parent)?;
         Ok(Self {
             path,
             max_bytes: MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
+            #[cfg(test)]
+            test_hook: Arc::new(FileGatewayComplianceStoreTestHook::default()),
         })
+    }
+
+    #[cfg(test)]
+    fn replace_before_next_persist(&self, bytes: Vec<u8>) {
+        *self
+            .test_hook
+            .before_persist_replacement
+            .lock()
+            .expect("file checkpoint test hook lock") = Some(bytes);
     }
 }
 
+#[derive(Debug)]
+struct FileGatewayComplianceStoreLease {
+    path: PathBuf,
+    max_bytes: usize,
+    _lock_file: File,
+    #[cfg(test)]
+    test_hook: Arc<FileGatewayComplianceStoreTestHook>,
+}
+
 impl GatewayComplianceStore for FileGatewayComplianceStore {
-    fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError> {
-        let metadata = match fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(persistence_io("inspect checkpoint", error)),
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(GatewayComplianceError::Persistence(
-                "compliance checkpoint must be a regular non-symlink file".into(),
-            ));
-        }
-        let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if length > self.max_bytes {
-            return Err(GatewayComplianceError::ResourceLimit {
-                resource: "compliance checkpoint bytes",
-                found: length,
-                maximum: self.max_bytes,
-            });
-        }
+    fn try_acquire(&self) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
+        let parent = self.path.parent().ok_or_else(|| {
+            GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
+        })?;
+        validate_checkpoint_parent(parent)?;
+        let lock_path = checkpoint_lock_path(&self.path)?;
+        validate_output_file(&lock_path)?;
+
         let mut options = OpenOptions::new();
-        options.read(true);
+        options.read(true).write(true).create(true);
         set_no_follow(&mut options);
-        let file = options
-            .open(&self.path)
-            .map_err(|error| persistence_io("open checkpoint", error))?;
-        let opened = file
-            .metadata()
-            .map_err(|error| persistence_io("inspect opened checkpoint", error))?;
-        if !opened.is_file() || !same_file_identity(&metadata, &opened) {
-            return Err(GatewayComplianceError::Persistence(
-                "compliance checkpoint changed while opening".into(),
-            ));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o640);
         }
-        let mut bytes = Vec::with_capacity(length);
-        file.take(
-            u64::try_from(self.max_bytes)
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
-        )
-        .read_to_end(&mut bytes)
-        .map_err(|error| persistence_io("read checkpoint", error))?;
-        if bytes.len() > self.max_bytes {
-            return Err(GatewayComplianceError::ResourceLimit {
-                resource: "compliance checkpoint bytes",
-                found: bytes.len(),
-                maximum: self.max_bytes,
-            });
+        let lock_file = options
+            .open(&lock_path)
+            .map_err(|error| persistence_io("open checkpoint lease file", error))?;
+        validate_opened_file(
+            &lock_path,
+            &lock_file,
+            "checkpoint lease file changed while opening",
+        )?;
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(GatewayComplianceError::LeaseHeld);
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(persistence_io("lock checkpoint lease file", error));
+            }
         }
-        Ok(Some(bytes))
+        validate_opened_file(
+            &lock_path,
+            &lock_file,
+            "checkpoint lease file changed after locking",
+        )?;
+
+        Ok(Box::new(FileGatewayComplianceStoreLease {
+            path: self.path.clone(),
+            max_bytes: self.max_bytes,
+            _lock_file: lock_file,
+            #[cfg(test)]
+            test_hook: Arc::clone(&self.test_hook),
+        }))
+    }
+}
+
+impl GatewayComplianceStoreLease for FileGatewayComplianceStoreLease {
+    fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
+        read_checkpoint_snapshot(&self.path, self.max_bytes)
     }
 
-    fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError> {
+    fn compare_and_store(
+        &self,
+        expected: GatewayComplianceStoreGeneration,
+        bytes: &[u8],
+    ) -> Result<GatewayComplianceStoreGeneration, GatewayComplianceError> {
         if bytes.len() > self.max_bytes {
             return Err(GatewayComplianceError::ResourceLimit {
                 resource: "compliance checkpoint bytes",
@@ -1318,58 +1448,119 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
         let parent = self.path.parent().ok_or_else(|| {
             GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
         })?;
-        validate_existing_directory_chain(parent)?;
-        validate_output_file(&self.path)?;
-        let counter = ATOMIC_STORE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-        let filename = self
-            .path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| {
-                GatewayComplianceError::Persistence(
-                    "compliance checkpoint filename is not UTF-8".into(),
-                )
-            })?;
-        let temporary = parent.join(format!(".{filename}.tmp-{}-{counter}", std::process::id()));
-        let result = (|| {
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            set_no_follow(&mut options);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt as _;
-                options.mode(0o640);
-            }
-            let mut file = options
-                .open(&temporary)
-                .map_err(|error| persistence_io("create checkpoint temp file", error))?;
-            let metadata = file
-                .metadata()
-                .map_err(|error| persistence_io("inspect checkpoint temp file", error))?;
-            if !metadata.is_file() || hard_link_count(&metadata) != 1 {
-                return Err(GatewayComplianceError::Persistence(
-                    "compliance checkpoint temp must be an unlinked regular file".into(),
-                ));
-            }
-            file.write_all(bytes)
-                .map_err(|error| persistence_io("write checkpoint temp file", error))?;
-            file.sync_all()
-                .map_err(|error| persistence_io("fsync checkpoint temp file", error))?;
-            drop(file);
-            validate_existing_directory_chain(parent)?;
-            validate_output_file(&self.path)?;
-            fs::rename(&temporary, &self.path)
-                .map_err(|error| persistence_io("replace checkpoint", error))?;
-            #[cfg(unix)]
-            File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| persistence_io("fsync checkpoint directory", error))?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
+        let current_generation = read_checkpoint_snapshot(&self.path, self.max_bytes)?.generation;
+        if current_generation != expected {
+            return Err(GatewayComplianceError::CheckpointConflict);
         }
-        result
+        validate_checkpoint_parent(parent)?;
+        validate_output_file(&self.path)?;
+        let filename = self.path.file_name().ok_or_else(|| {
+            GatewayComplianceError::Persistence("compliance checkpoint path has no filename".into())
+        })?;
+        let mut prefix = std::ffi::OsString::from(".");
+        prefix.push(filename);
+        prefix.push(".tmp-");
+        let mut temporary = tempfile::Builder::new()
+            .prefix(&prefix)
+            .tempfile_in(parent)
+            .map_err(|error| persistence_io("create checkpoint temp file", error))?;
+        #[cfg(unix)]
+        temporary
+            .as_file()
+            .set_permissions({
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::Permissions::from_mode(0o640)
+            })
+            .map_err(|error| persistence_io("set checkpoint temp permissions", error))?;
+        let temporary_metadata = temporary
+            .as_file()
+            .metadata()
+            .map_err(|error| persistence_io("inspect checkpoint temp file", error))?;
+        if !temporary_metadata.is_file() || hard_link_count(&temporary_metadata) != 1 {
+            return Err(GatewayComplianceError::Persistence(
+                "compliance checkpoint temp must be an unlinked regular file".into(),
+            ));
+        }
+        temporary
+            .write_all(bytes)
+            .map_err(|error| persistence_io("write checkpoint temp file", error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| persistence_io("fsync checkpoint temp file", error))?;
+        validate_checkpoint_parent(parent)?;
+        validate_output_file(&self.path)?;
+        #[cfg(test)]
+        if let Some(replacement) = self
+            .test_hook
+            .before_persist_replacement
+            .lock()
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?
+            .take()
+        {
+            fs::write(&self.path, replacement)
+                .map_err(|error| persistence_io("run checkpoint test hook", error))?;
+        }
+        let current_generation = read_checkpoint_snapshot(&self.path, self.max_bytes)?.generation;
+        if current_generation != expected {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        // The stable lease serializes compliant writers. Standard filesystem
+        // APIs do not provide an atomic compare-bytes-and-rename operation, so
+        // a non-cooperating same-user writer can still race this final check
+        // and be overwritten. Post-replacement exact-byte verification catches
+        // interference that changes the final durable result, but cannot
+        // observe an intervening value overwritten by the rename.
+
+        let persisted = temporary
+            .persist(&self.path)
+            .map_err(|error| persistence_io("replace checkpoint", error.error))?;
+        let persisted_metadata = persisted
+            .metadata()
+            .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+        let path_metadata = fs::symlink_metadata(&self.path)
+            .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+        if !persisted_metadata.is_file()
+            || path_metadata.file_type().is_symlink()
+            || !path_metadata.is_file()
+            || hard_link_count(&persisted_metadata) != 1
+            || hard_link_count(&path_metadata) != 1
+            || !same_file_identity(&persisted_metadata, &path_metadata)
+        {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        #[cfg(unix)]
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+
+        let generation = checkpoint_store_generation(Some(bytes));
+        let durable = read_checkpoint_snapshot(&self.path, self.max_bytes)
+            .map_err(|_| GatewayComplianceError::CheckpointConflict)?;
+        if durable.generation != generation || durable.bytes.as_deref() != Some(bytes) {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        Ok(generation)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GatewayComplianceControllerState {
+    checkpoint: GatewayComplianceCheckpointV1,
+    generation: GatewayComplianceStoreGeneration,
+}
+
+impl std::ops::Deref for GatewayComplianceControllerState {
+    type Target = GatewayComplianceCheckpointV1;
+
+    fn deref(&self) -> &Self::Target {
+        &self.checkpoint
+    }
+}
+
+impl std::ops::DerefMut for GatewayComplianceControllerState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.checkpoint
     }
 }
 
@@ -1377,8 +1568,9 @@ impl GatewayComplianceStore for FileGatewayComplianceStore {
 #[derive(Debug)]
 pub struct GatewayComplianceController {
     config: GatewayComplianceControllerConfig,
-    store: Arc<dyn GatewayComplianceStore>,
-    state: RwLock<GatewayComplianceCheckpointV1>,
+    lease: Box<dyn GatewayComplianceStoreLease>,
+    state: RwLock<GatewayComplianceControllerState>,
+    fenced: AtomicBool,
 }
 
 impl GatewayComplianceController {
@@ -1389,15 +1581,21 @@ impl GatewayComplianceController {
     ) -> Result<Self, GatewayComplianceError> {
         config.validate()?;
         let policy_digest = config.trust_policy.canonical_digest()?;
-        let state = match store.load()? {
+        let lease = store.try_acquire()?;
+        let snapshot = lease.load()?;
+        let checkpoint = match snapshot.bytes {
             Some(bytes) => decode_checkpoint(&bytes)?,
             None => GatewayComplianceCheckpointV1::empty(policy_digest),
         };
-        validate_checkpoint(&state, &config, 1)?;
+        validate_checkpoint(&checkpoint, &config, 1)?;
         Ok(Self {
             config,
-            store,
-            state: RwLock::new(state),
+            lease,
+            state: RwLock::new(GatewayComplianceControllerState {
+                checkpoint,
+                generation: snapshot.generation,
+            }),
+            fenced: AtomicBool::new(false),
         })
     }
 
@@ -1851,6 +2049,8 @@ impl GatewayComplianceController {
                 source: GatewayComplianceDecisionSource::LegalSafetyHold,
                 reference_id: Some(hold.hold_id.clone()),
                 catalog_digest: Some(catalog_digest),
+                catalog_sequence: catalog.payload.sequence,
+                catalog_valid_until_unix: catalog.payload.valid_until_unix,
             });
         }
         if let Some(appeal) = catalog.payload.appeal_overrides.iter().find(|appeal| {
@@ -1868,6 +2068,8 @@ impl GatewayComplianceController {
                 source: GatewayComplianceDecisionSource::AcceptedAppeal,
                 reference_id: Some(appeal.appeal_id.clone()),
                 catalog_digest: Some(catalog_digest),
+                catalog_sequence: catalog.payload.sequence,
+                catalog_valid_until_unix: catalog.payload.valid_until_unix,
             });
         }
         if let Some(rule) = catalog.payload.baseline_rules.iter().find(|rule| {
@@ -1893,6 +2095,8 @@ impl GatewayComplianceController {
                 source: GatewayComplianceDecisionSource::Baseline,
                 reference_id: Some(rule.rule_id.clone()),
                 catalog_digest: Some(catalog_digest),
+                catalog_sequence: catalog.payload.sequence,
+                catalog_valid_until_unix: catalog.payload.valid_until_unix,
             });
         }
         Ok(GatewayComplianceDecision {
@@ -1900,42 +2104,72 @@ impl GatewayComplianceController {
             source: GatewayComplianceDecisionSource::NoMatch,
             reference_id: None,
             catalog_digest: Some(catalog_digest),
+            catalog_sequence: catalog.payload.sequence,
+            catalog_valid_until_unix: catalog.payload.valid_until_unix,
         })
     }
 
     /// Return a payload-safe state snapshot for authenticated control/read APIs.
     pub fn checkpoint(&self) -> Result<GatewayComplianceCheckpointV1, GatewayComplianceError> {
-        Ok(self.read_state()?.clone())
+        Ok(self.read_state()?.checkpoint.clone())
     }
 
     fn read_state(
         &self,
-    ) -> Result<std::sync::RwLockReadGuard<'_, GatewayComplianceCheckpointV1>, GatewayComplianceError>
-    {
-        self.state
+    ) -> Result<
+        std::sync::RwLockReadGuard<'_, GatewayComplianceControllerState>,
+        GatewayComplianceError,
+    > {
+        if self.fenced.load(AtomicOrdering::Acquire) {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        let guard = self
+            .state
             .read()
-            .map_err(|_| GatewayComplianceError::StatePoisoned)
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        if self.fenced.load(AtomicOrdering::Acquire) {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        Ok(guard)
     }
 
     fn write_state(
         &self,
     ) -> Result<
-        std::sync::RwLockWriteGuard<'_, GatewayComplianceCheckpointV1>,
+        std::sync::RwLockWriteGuard<'_, GatewayComplianceControllerState>,
         GatewayComplianceError,
     > {
-        self.state
+        if self.fenced.load(AtomicOrdering::Acquire) {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        let guard = self
+            .state
             .write()
-            .map_err(|_| GatewayComplianceError::StatePoisoned)
+            .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+        if self.fenced.load(AtomicOrdering::Acquire) {
+            return Err(GatewayComplianceError::CheckpointConflict);
+        }
+        Ok(guard)
     }
 
     fn commit(
         &self,
-        guard: &mut std::sync::RwLockWriteGuard<'_, GatewayComplianceCheckpointV1>,
-        next: GatewayComplianceCheckpointV1,
+        guard: &mut std::sync::RwLockWriteGuard<'_, GatewayComplianceControllerState>,
+        mut next: GatewayComplianceControllerState,
     ) -> Result<(), GatewayComplianceError> {
-        validate_checkpoint(&next, &self.config, 1)?;
-        let bytes = encode_bounded(&next, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)?;
-        self.store.store(&bytes)?;
+        next.checkpoint.revision = guard.checkpoint.revision.checked_add(1).ok_or_else(|| {
+            GatewayComplianceError::InvalidCheckpoint("checkpoint revision overflow".into())
+        })?;
+        validate_checkpoint(&next.checkpoint, &self.config, 1)?;
+        let bytes = encode_bounded(&next.checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)?;
+        next.generation = match self.lease.compare_and_store(guard.generation, &bytes) {
+            Ok(generation) => generation,
+            Err(GatewayComplianceError::CheckpointConflict) => {
+                self.fenced.store(true, AtomicOrdering::Release);
+                return Err(GatewayComplianceError::CheckpointConflict);
+            }
+            Err(error) => return Err(error),
+        };
         **guard = next;
         Ok(())
     }
@@ -2678,6 +2912,17 @@ fn validate_checkpoint(
             "unsupported checkpoint version".into(),
         ));
     }
+    let durable_mutation_count =
+        u64::try_from(checkpoint.idempotency_records.len()).map_err(|_| {
+            GatewayComplianceError::InvalidCheckpoint(
+                "checkpoint mutation inventory length overflow".into(),
+            )
+        })?;
+    if checkpoint.revision != durable_mutation_count {
+        return Err(GatewayComplianceError::InvalidCheckpoint(
+            "checkpoint revision must equal its durable mutation inventory length".into(),
+        ));
+    }
     if checkpoint.policy_digest != config.trust_policy.canonical_digest()? {
         return Err(GatewayComplianceError::PolicyDigestMismatch);
     }
@@ -3328,6 +3573,28 @@ fn hash_canonical<T: norito::NoritoSerialize>(
     Ok(*hasher.finalize().as_bytes())
 }
 
+fn checkpoint_store_generation(bytes: Option<&[u8]>) -> GatewayComplianceStoreGeneration {
+    let Some(bytes) = bytes else {
+        return GatewayComplianceStoreGeneration::Absent;
+    };
+    let mut hasher = Hasher::new();
+    hasher.update(CHECKPOINT_STORE_GENERATION_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(bytes.len())
+            .expect("bounded checkpoint length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(bytes);
+    GatewayComplianceStoreGeneration::Present(*hasher.finalize().as_bytes())
+}
+
+fn checkpoint_store_snapshot(bytes: Option<Vec<u8>>) -> GatewayComplianceStoreSnapshot {
+    GatewayComplianceStoreSnapshot {
+        generation: checkpoint_store_generation(bytes.as_deref()),
+        bytes,
+    }
+}
+
 fn encode_bounded<T: norito::NoritoSerialize>(
     value: &T,
     maximum: usize,
@@ -3351,6 +3618,85 @@ fn encode_bounded<T: norito::NoritoSerialize>(
         });
     }
     Ok(bytes)
+}
+
+fn checkpoint_lock_path(path: &Path) -> Result<PathBuf, GatewayComplianceError> {
+    let parent = path.parent().ok_or_else(|| {
+        GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
+    })?;
+    let filename = path.file_name().ok_or_else(|| {
+        GatewayComplianceError::Persistence("compliance checkpoint path has no filename".into())
+    })?;
+    let mut lock_name = std::ffi::OsString::from(".");
+    lock_name.push(filename);
+    lock_name.push(".lock");
+    Ok(parent.join(lock_name))
+}
+
+fn read_checkpoint_snapshot(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
+    let parent = path.parent().ok_or_else(|| {
+        GatewayComplianceError::Persistence("compliance checkpoint path has no parent".into())
+    })?;
+    validate_checkpoint_parent(parent)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(checkpoint_store_snapshot(None));
+        }
+        Err(error) => return Err(persistence_io("inspect checkpoint", error)),
+    };
+    validate_checkpoint_file_metadata(&metadata)?;
+    let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    if length > max_bytes {
+        return Err(GatewayComplianceError::ResourceLimit {
+            resource: "compliance checkpoint bytes",
+            found: length,
+            maximum: max_bytes,
+        });
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|error| persistence_io("open checkpoint", error))?;
+    validate_opened_file(path, &file, "compliance checkpoint changed while opening")?;
+    let mut bytes = Vec::with_capacity(length);
+    file.take(
+        u64::try_from(max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+    )
+    .read_to_end(&mut bytes)
+    .map_err(|error| persistence_io("read checkpoint", error))?;
+    if bytes.len() > max_bytes {
+        return Err(GatewayComplianceError::ResourceLimit {
+            resource: "compliance checkpoint bytes",
+            found: bytes.len(),
+            maximum: max_bytes,
+        });
+    }
+    Ok(checkpoint_store_snapshot(Some(bytes)))
+}
+
+fn validate_checkpoint_parent(path: &Path) -> Result<(), GatewayComplianceError> {
+    validate_existing_directory_chain(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let metadata = fs::symlink_metadata(path)
+            .map_err(|error| persistence_io("inspect checkpoint parent", error))?;
+        if metadata.permissions().mode() & 0o022 != 0 {
+            return Err(GatewayComplianceError::Persistence(
+                "checkpoint parent must not be group- or world-writable".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianceError> {
@@ -3378,17 +3724,78 @@ fn validate_existing_directory_chain(path: &Path) -> Result<(), GatewayComplianc
     Ok(())
 }
 
+fn validate_checkpoint_file_metadata(
+    metadata: &fs::Metadata,
+) -> Result<(), GatewayComplianceError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() || hard_link_count(metadata) != 1 {
+        return Err(GatewayComplianceError::Persistence(
+            "compliance checkpoint must be a single-link regular non-symlink file".into(),
+        ));
+    }
+    validate_file_permissions(metadata, "compliance checkpoint")
+}
+
 fn validate_output_file(path: &Path) -> Result<(), GatewayComplianceError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+        Ok(metadata)
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || hard_link_count(&metadata) != 1 =>
+        {
             Err(GatewayComplianceError::Persistence(
-                "checkpoint output must be absent or a regular non-symlink file".into(),
+                "checkpoint output must be absent or a single-link regular non-symlink file".into(),
             ))
         }
-        Ok(_) => Ok(()),
+        Ok(metadata) => validate_file_permissions(&metadata, "checkpoint output"),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(persistence_io("inspect checkpoint output", error)),
     }
+}
+
+fn validate_opened_file(
+    path: &Path,
+    file: &File,
+    changed_message: &'static str,
+) -> Result<(), GatewayComplianceError> {
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|error| persistence_io("inspect opened file path", error))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| persistence_io("inspect opened file", error))?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_file()
+        || !opened_metadata.is_file()
+        || hard_link_count(&path_metadata) != 1
+        || hard_link_count(&opened_metadata) != 1
+        || !same_file_identity(&path_metadata, &opened_metadata)
+    {
+        return Err(GatewayComplianceError::Persistence(changed_message.into()));
+    }
+    validate_file_permissions(&path_metadata, "opened checkpoint file")?;
+    validate_file_permissions(&opened_metadata, "opened checkpoint file")
+}
+
+#[cfg(unix)]
+fn validate_file_permissions(
+    metadata: &fs::Metadata,
+    label: &'static str,
+) -> Result<(), GatewayComplianceError> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(GatewayComplianceError::Persistence(format!(
+            "{label} must not be group- or world-writable"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_file_permissions(
+    _metadata: &fs::Metadata,
+    _label: &'static str,
+) -> Result<(), GatewayComplianceError> {
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -3587,6 +3994,12 @@ pub enum GatewayComplianceError {
     /// Durable storage failed.
     #[error("gateway compliance persistence failed: {0}")]
     Persistence(String),
+    /// Another controller already owns the process-lifetime checkpoint lease.
+    #[error("gateway compliance checkpoint lease is already held")]
+    LeaseHeld,
+    /// Exact checkpoint bytes changed or a durable replacement became indeterminate.
+    #[error("gateway compliance checkpoint generation conflict")]
+    CheckpointConflict,
     /// In-process state lock was poisoned.
     #[error("gateway compliance state lock poisoned")]
     StatePoisoned,
@@ -3612,35 +4025,113 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct MemoryStore {
-        bytes: Mutex<Option<Vec<u8>>>,
-        fail_next_store: AtomicBool,
+        state: Arc<Mutex<MemoryStoreState>>,
+        fail_next_store: Arc<AtomicBool>,
+        fail_after_store: Arc<AtomicBool>,
+    }
+
+    #[derive(Debug, Default)]
+    struct MemoryStoreState {
+        bytes: Option<Vec<u8>>,
+        leased: bool,
+    }
+
+    #[derive(Debug)]
+    struct MemoryStoreLease {
+        state: Arc<Mutex<MemoryStoreState>>,
+        fail_next_store: Arc<AtomicBool>,
+        fail_after_store: Arc<AtomicBool>,
+    }
+
+    impl Drop for MemoryStoreLease {
+        fn drop(&mut self) {
+            if let Ok(mut state) = self.state.lock() {
+                state.leased = false;
+            }
+        }
     }
 
     impl MemoryStore {
         fn fail_next_store(&self) {
             self.fail_next_store.store(true, TestAtomicOrdering::SeqCst);
         }
+
+        fn fail_after_store(&self) {
+            self.fail_after_store
+                .store(true, TestAtomicOrdering::SeqCst);
+        }
+
+        fn durable_bytes(&self) -> Option<Vec<u8>> {
+            self.state.lock().expect("memory store lock").bytes.clone()
+        }
+
+        fn force_store(&self, bytes: Vec<u8>) {
+            self.state.lock().expect("memory store lock").bytes = Some(bytes);
+        }
     }
 
     impl GatewayComplianceStore for MemoryStore {
-        fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError> {
-            self.bytes
+        fn try_acquire(
+            &self,
+        ) -> Result<Box<dyn GatewayComplianceStoreLease>, GatewayComplianceError> {
+            let mut state = self
+                .state
                 .lock()
-                .map(|guard| guard.clone())
-                .map_err(|_| GatewayComplianceError::StatePoisoned)
+                .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+            if state.leased {
+                return Err(GatewayComplianceError::LeaseHeld);
+            }
+            state.leased = true;
+            drop(state);
+            Ok(Box::new(MemoryStoreLease {
+                state: Arc::clone(&self.state),
+                fail_next_store: Arc::clone(&self.fail_next_store),
+                fail_after_store: Arc::clone(&self.fail_after_store),
+            }))
+        }
+    }
+
+    impl GatewayComplianceStoreLease for MemoryStoreLease {
+        fn load(&self) -> Result<GatewayComplianceStoreSnapshot, GatewayComplianceError> {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+            Ok(checkpoint_store_snapshot(state.bytes.clone()))
         }
 
-        fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError> {
+        fn compare_and_store(
+            &self,
+            expected: GatewayComplianceStoreGeneration,
+            bytes: &[u8],
+        ) -> Result<GatewayComplianceStoreGeneration, GatewayComplianceError> {
+            if bytes.len() > MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1 {
+                return Err(GatewayComplianceError::ResourceLimit {
+                    resource: "compliance checkpoint bytes",
+                    found: bytes.len(),
+                    maximum: MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
+                });
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| GatewayComplianceError::StatePoisoned)?;
+            if checkpoint_store_generation(state.bytes.as_deref()) != expected {
+                return Err(GatewayComplianceError::CheckpointConflict);
+            }
             if self.fail_next_store.swap(false, TestAtomicOrdering::SeqCst) {
                 return Err(GatewayComplianceError::Persistence(
                     "injected test store failure".into(),
                 ));
             }
-            *self
-                .bytes
-                .lock()
-                .map_err(|_| GatewayComplianceError::StatePoisoned)? = Some(bytes.to_vec());
-            Ok(())
+            state.bytes = Some(bytes.to_vec());
+            if self
+                .fail_after_store
+                .swap(false, TestAtomicOrdering::SeqCst)
+            {
+                return Err(GatewayComplianceError::CheckpointConflict);
+            }
+            Ok(checkpoint_store_generation(Some(bytes)))
         }
     }
 
@@ -3924,6 +4415,8 @@ mod tests {
             first_digest
         );
 
+        assert_eq!(controller.checkpoint().expect("checkpoint").revision, 4);
+        drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover checkpoint");
         assert_eq!(
@@ -3970,15 +4463,9 @@ mod tests {
         let promoted = controller
             .promote(staged.catalog_digest, 1, NOW + 20, promote_binding)
             .expect("promote");
-        assert_eq!(
-            controller
-                .checkpoint()
-                .expect("checkpoint")
-                .idempotency_records
-                .len(),
-            4
-        );
+        assert_eq!(controller.checkpoint().expect("checkpoint").revision, 4);
 
+        drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover checkpoint");
         assert_eq!(
@@ -4003,10 +4490,9 @@ mod tests {
             recovered
                 .checkpoint()
                 .expect("checkpoint after replays")
-                .idempotency_records
-                .len(),
+                .revision,
             4,
-            "exact replays must not append or evict replay records"
+            "exact replays must not advance the durable revision"
         );
     }
 
@@ -4039,6 +4525,8 @@ mod tests {
         let checkpoint = controller.checkpoint().expect("checkpoint");
         assert_eq!(checkpoint.acknowledgements.len(), 1);
         assert_eq!(checkpoint.idempotency_records.len(), 4);
+        assert_eq!(checkpoint.revision, 4);
+        drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover checkpoint");
         assert_eq!(
@@ -4121,7 +4609,7 @@ mod tests {
     }
 
     #[test]
-    fn persistence_failure_commits_neither_state_nor_replay_binding() {
+    fn crash_before_durable_replace_commits_neither_state_nor_replay_binding() {
         let store = Arc::new(MemoryStore::default());
         let controller =
             GatewayComplianceController::new(config(), store.clone()).expect("controller");
@@ -4135,7 +4623,8 @@ mod tests {
         let checkpoint = controller.checkpoint().expect("in-memory checkpoint");
         assert!(checkpoint.candidate.is_none());
         assert!(checkpoint.idempotency_records.is_empty());
-        assert!(store.load().expect("durable store").is_none());
+        assert_eq!(checkpoint.revision, 0);
+        assert!(store.durable_bytes().is_none());
 
         assert_eq!(
             controller
@@ -4144,6 +4633,88 @@ mod tests {
                 .recorded_at_unix,
             NOW + 5
         );
+        assert_eq!(controller.checkpoint().expect("checkpoint").revision, 1);
+    }
+
+    #[test]
+    fn memory_store_allows_one_controller_lease_until_drop() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("first controller");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store.clone()),
+            Err(GatewayComplianceError::LeaseHeld)
+        ));
+
+        drop(controller);
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("lease after controller drop");
+        assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 0);
+    }
+
+    #[test]
+    fn stale_generation_fences_controller_without_overwriting_durable_bytes() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        controller
+            .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
+            .expect("first durable stage");
+
+        let poisoned = b"out-of-band-checkpoint-replacement".to_vec();
+        store.force_store(poisoned.clone());
+        assert!(matches!(
+            controller.stage_catalog(catalog, NOW + 6, indexed_mutation_binding(2)),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert!(matches!(
+            controller.checkpoint(),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert_eq!(store.durable_bytes(), Some(poisoned));
+    }
+
+    #[test]
+    fn crash_after_durable_replace_recovers_exactly_once_and_fences_old_controller() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let binding = indexed_mutation_binding(1);
+        let catalog_digest = catalog.payload.catalog_digest().expect("catalog digest");
+
+        store.fail_after_store();
+        assert!(matches!(
+            controller.stage_catalog(catalog.clone(), NOW + 5, binding),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert!(matches!(
+            controller.checkpoint(),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        let durable = decode_checkpoint(
+            &store
+                .durable_bytes()
+                .expect("replacement reached durable memory store"),
+        )
+        .expect("durable checkpoint");
+        assert_eq!(durable.revision, 1);
+        assert_eq!(durable.idempotency_records.len(), 1);
+
+        drop(controller);
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("recover durable replacement");
+        assert_eq!(
+            recovered
+                .stage_catalog(catalog, NOW + 7_200, binding)
+                .expect("exact replay after indeterminate response"),
+            GatewayComplianceMutationResultV1 {
+                catalog_digest,
+                recorded_at_unix: NOW + 5,
+            }
+        );
+        assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 1);
     }
 
     #[test]
@@ -4171,9 +4742,12 @@ mod tests {
                     }
                 })
                 .collect();
+        checkpoint.revision = u64::try_from(MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1)
+            .expect("registry bound fits u64");
         let bytes = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
             .expect("encode full registry");
-        store.store(&bytes).expect("store full registry");
+        drop(controller);
+        store.force_store(bytes);
 
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover full registry");
@@ -4224,9 +4798,46 @@ mod tests {
         checkpoint
             .idempotency_records
             .push(checkpoint.idempotency_records[0].clone());
+        checkpoint.revision = checkpoint
+            .revision
+            .checked_add(1)
+            .expect("test checkpoint revision");
         let bytes = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
             .expect("encode poisoned checkpoint");
-        store.store(&bytes).expect("store poisoned checkpoint");
+        drop(controller);
+        store.force_store(bytes);
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_revision_rollback_and_truncated_bytes_on_restart() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        controller
+            .stage_catalog(
+                sign_catalog(payload(1, None)),
+                NOW + 5,
+                indexed_mutation_binding(1),
+            )
+            .expect("stage");
+        let mut checkpoint = controller.checkpoint().expect("checkpoint");
+        assert_eq!(checkpoint.revision, 1);
+        checkpoint.revision = 0;
+        let rolled_back_revision =
+            encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
+                .expect("encode revision rollback");
+        drop(controller);
+        store.force_store(rolled_back_revision);
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store.clone()),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
+        ));
+
+        store.force_store(vec![0x4E, 0x52, 0x54]);
         assert!(matches!(
             GatewayComplianceController::new(config(), store),
             Err(GatewayComplianceError::InvalidCheckpoint(_))
@@ -4470,6 +5081,13 @@ mod tests {
         assert_eq!(decision.source, GatewayComplianceDecisionSource::NoMatch);
         assert_eq!(decision.disposition, GatewayComplianceDisposition::Allow);
         assert!(decision.catalog_digest.is_some());
+        let checkpoint = controller.checkpoint().expect("test checkpoint");
+        let serving = checkpoint.serving.as_ref().expect("serving catalog");
+        assert_eq!(decision.catalog_sequence, serving.payload.sequence);
+        assert_eq!(
+            decision.catalog_valid_until_unix,
+            serving.payload.valid_until_unix
+        );
     }
 
     #[test]
@@ -4737,6 +5355,8 @@ mod tests {
                 .expect("exact replay"),
             rollback_result
         );
+        let revision = controller.checkpoint().expect("checkpoint").revision;
+        drop(controller);
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover rollback state");
         assert_eq!(
@@ -4744,6 +5364,13 @@ mod tests {
                 .rollback(&rollback, NOW + 7_200, mutation_binding(0xC1))
                 .expect("exact rollback replay after restart"),
             rollback_result
+        );
+        assert_eq!(
+            recovered
+                .checkpoint()
+                .expect("recovered checkpoint")
+                .revision,
+            revision
         );
     }
 
@@ -4794,7 +5421,8 @@ mod tests {
         checkpoint.history[0].serving_digest = [0xBA; 32];
         let encoded = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
             .expect("encode tampered checkpoint");
-        store.store(&encoded).expect("store tampered checkpoint");
+        drop(controller);
+        store.force_store(encoded);
         assert!(matches!(
             GatewayComplianceController::new(config(), store),
             Err(GatewayComplianceError::InvalidCheckpoint(_))
@@ -4812,9 +5440,12 @@ mod tests {
         checkpoint
             .idempotency_records
             .retain(|record| record.operation != GatewayComplianceMutationKindV1::Promote);
+        checkpoint.revision = u64::try_from(checkpoint.idempotency_records.len())
+            .expect("test checkpoint record count");
         let encoded = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
             .expect("encode tampered checkpoint");
-        store.store(&encoded).expect("store tampered checkpoint");
+        drop(controller);
+        store.force_store(encoded);
         assert!(matches!(
             GatewayComplianceController::new(config(), store),
             Err(GatewayComplianceError::InvalidCheckpoint(_))
@@ -4980,6 +5611,174 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn file_store_lease_restart_and_exact_replay_are_durable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let store =
+            Arc::new(FileGatewayComplianceStore::new(path.clone()).expect("file checkpoint store"));
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("first controller");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store.clone()),
+            Err(GatewayComplianceError::LeaseHeld)
+        ));
+
+        let catalog = sign_catalog(payload(1, None));
+        let binding = indexed_mutation_binding(1);
+        let staged = controller
+            .stage_catalog(catalog.clone(), NOW + 5, binding)
+            .expect("stage");
+        assert_eq!(controller.checkpoint().expect("checkpoint").revision, 1);
+        let target_metadata = fs::symlink_metadata(&path).expect("checkpoint metadata");
+        assert!(target_metadata.is_file());
+        assert_eq!(hard_link_count(&target_metadata), 1);
+        assert!(
+            fs::read_dir(&root)
+                .expect("checkpoint directory")
+                .all(|entry| !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp-")),
+            "same-directory temporary files must not survive a successful replacement"
+        );
+
+        drop(controller);
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("restart controller");
+        assert_eq!(
+            recovered
+                .stage_catalog(catalog, NOW + 7_200, binding)
+                .expect("exact restart replay"),
+            staged
+        );
+        assert_eq!(recovered.checkpoint().expect("checkpoint").revision, 1);
+    }
+
+    #[test]
+    fn file_store_exact_byte_cas_fences_stale_controller() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let store =
+            Arc::new(FileGatewayComplianceStore::new(path.clone()).expect("file checkpoint store"));
+        let controller = GatewayComplianceController::new(config(), store).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        controller
+            .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
+            .expect("first stage");
+
+        let replacement = b"external-exact-byte-replacement";
+        fs::write(&path, replacement).expect("replace checkpoint outside controller");
+        assert!(matches!(
+            controller.stage_catalog(catalog, NOW + 6, indexed_mutation_binding(2)),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert!(matches!(
+            controller.checkpoint(),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert_eq!(fs::read(path).expect("durable replacement"), replacement);
+    }
+
+    #[test]
+    fn file_store_rechecks_generation_immediately_before_persist() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let store =
+            Arc::new(FileGatewayComplianceStore::new(path.clone()).expect("file checkpoint store"));
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        controller
+            .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
+            .expect("first stage");
+
+        let replacement = b"replacement-during-write-preparation".to_vec();
+        store.replace_before_next_persist(replacement.clone());
+        assert!(matches!(
+            controller.stage_catalog(catalog, NOW + 6, indexed_mutation_binding(2)),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert!(matches!(
+            controller.checkpoint(),
+            Err(GatewayComplianceError::CheckpointConflict)
+        ));
+        assert_eq!(
+            fs::read(&path).expect("replacement must not be overwritten"),
+            replacement
+        );
+        assert!(
+            fs::read_dir(&root)
+                .expect("checkpoint directory")
+                .all(|entry| !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp-")),
+            "prepared temporary file must be removed after a generation conflict"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_rejects_hardlinked_checkpoint() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let alias = root.join("checkpoint.alias");
+        fs::write(&path, b"seed").expect("seed checkpoint");
+        fs::hard_link(&path, &alias).expect("hardlink checkpoint");
+        let store =
+            FileGatewayComplianceStore::new(path.clone()).expect("file checkpoint store config");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), Arc::new(store)),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+        assert_eq!(fs::read(path).expect("checkpoint"), b"seed");
+        assert_eq!(fs::read(alias).expect("checkpoint alias"), b"seed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_rejects_group_or_world_writable_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let unsafe_parent = root.join("unsafe");
+        fs::create_dir(&unsafe_parent).expect("unsafe checkpoint directory");
+        fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777))
+            .expect("set unsafe directory permissions");
+        assert!(matches!(
+            FileGatewayComplianceStore::new(unsafe_parent.join("checkpoint.to")),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_store_rejects_symlink_lease_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = fs::canonicalize(temp.path()).expect("canonical tempdir");
+        let path = root.join("checkpoint.to");
+        let lock_path = checkpoint_lock_path(&path).expect("checkpoint lock path");
+        let target = root.join("lease-target");
+        fs::write(&target, b"do-not-lock").expect("seed lease target");
+        symlink(&target, &lock_path).expect("create lease symlink");
+        let store = FileGatewayComplianceStore::new(path).expect("store config");
+        assert!(matches!(
+            store.try_acquire(),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+        assert_eq!(fs::read(target).expect("lease target"), b"do-not-lock");
+    }
+
     #[cfg(unix)]
     #[test]
     fn file_store_rejects_symlink_checkpoint() {
@@ -4992,8 +5791,9 @@ mod tests {
         let link = root.join("checkpoint.to");
         symlink(&target, &link).expect("create symlink");
         let store = FileGatewayComplianceStore::new(link).expect("store config");
+        let lease = store.try_acquire().expect("checkpoint lease");
         assert!(matches!(
-            store.store(b"replacement"),
+            lease.compare_and_store(GatewayComplianceStoreGeneration::Absent, b"replacement"),
             Err(GatewayComplianceError::Persistence(_))
         ));
         assert_eq!(fs::read(target).expect("read target"), b"old");

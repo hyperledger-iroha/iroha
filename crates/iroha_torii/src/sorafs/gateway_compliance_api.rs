@@ -118,6 +118,25 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_feed(
     method: Method,
     uri: Uri,
 ) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response = handle_get_sorafs_gateway_compliance_feed_inner(
+        State(state),
+        Path(feed_id),
+        headers,
+        method,
+        uri,
+    )
+    .await;
+    observe_gateway_compliance_control_response(&observation_state, "feed", response).await
+}
+
+async fn handle_get_sorafs_gateway_compliance_feed_inner(
+    State(state): State<SharedAppState>,
+    Path(feed_id): Path<String>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+) -> Response {
     if let Err(response) =
         authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
     {
@@ -150,6 +169,18 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_status(
     method: Method,
     uri: Uri,
 ) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response =
+        handle_get_sorafs_gateway_compliance_status_inner(State(state), headers, method, uri).await;
+    observe_gateway_compliance_control_response(&observation_state, "status", response).await
+}
+
+async fn handle_get_sorafs_gateway_compliance_status_inner(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+) -> Response {
     if let Err(response) =
         authorize_gateway_compliance_request(&state, &headers, &method, &uri, &[])
     {
@@ -168,16 +199,33 @@ pub(crate) async fn handle_get_sorafs_gateway_compliance_status(
         Err(response) => return response,
     };
     match result {
-        Ok(checkpoint) => match status_response(&checkpoint, observed_at_unix) {
-            Ok(status) => no_store_response(JsonBody(status).into_response()),
-            Err(error) => gateway_compliance_error_response(error),
-        },
+        Ok(checkpoint) => {
+            record_gateway_compliance_checkpoint_snapshot(&state, &checkpoint, observed_at_unix);
+            match status_response(&checkpoint, observed_at_unix) {
+                Ok(status) => no_store_response(JsonBody(status).into_response()),
+                Err(error) => gateway_compliance_error_response(error),
+            }
+        }
         Err(error) => gateway_compliance_error_response(error),
     }
 }
 
 /// Durably stage one exact canonical threshold-signed catalog.
 pub(crate) async fn handle_post_sorafs_gateway_compliance_stage(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response =
+        handle_post_sorafs_gateway_compliance_stage_inner(State(state), headers, method, uri, body)
+            .await;
+    observe_gateway_compliance_control_response(&observation_state, "stage", response).await
+}
+
+async fn handle_post_sorafs_gateway_compliance_stage_inner(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     method: Method,
@@ -227,6 +275,25 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_stage(
 
 /// Durably record one exact canonical signed regional-gateway acknowledgement.
 pub(crate) async fn handle_post_sorafs_gateway_compliance_acknowledge(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response = handle_post_sorafs_gateway_compliance_acknowledge_inner(
+        State(state),
+        headers,
+        method,
+        uri,
+        body,
+    )
+    .await;
+    observe_gateway_compliance_control_response(&observation_state, "acknowledge", response).await
+}
+
+async fn handle_post_sorafs_gateway_compliance_acknowledge_inner(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     method: Method,
@@ -293,6 +360,25 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_promote(
     uri: Uri,
     body: Bytes,
 ) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response = handle_post_sorafs_gateway_compliance_promote_inner(
+        State(state),
+        headers,
+        method,
+        uri,
+        body,
+    )
+    .await;
+    observe_gateway_compliance_control_response(&observation_state, "promote", response).await
+}
+
+async fn handle_post_sorafs_gateway_compliance_promote_inner(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
     if let Err(response) =
         authorize_gateway_compliance_request(&state, &headers, &method, &uri, &body)
     {
@@ -338,6 +424,25 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_promote(
 /// Atomically roll the serving pointer back to the last-known-good catalog
 /// after verifying the exact threshold-signed rollback authorization.
 pub(crate) async fn handle_post_sorafs_gateway_compliance_rollback(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let observation_state = Arc::clone(&state);
+    let response = handle_post_sorafs_gateway_compliance_rollback_inner(
+        State(state),
+        headers,
+        method,
+        uri,
+        body,
+    )
+    .await;
+    observe_gateway_compliance_control_response(&observation_state, "rollback", response).await
+}
+
+async fn handle_post_sorafs_gateway_compliance_rollback_inner(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     method: Method,
@@ -395,6 +500,142 @@ pub(crate) async fn handle_post_sorafs_gateway_compliance_rollback(
     match result {
         Ok(result) => action_response(StatusCode::OK, "rollback", result, binding.key_digest),
         Err(error) => gateway_compliance_error_response(error),
+    }
+}
+
+async fn observe_gateway_compliance_control_response(
+    state: &SharedAppState,
+    operation: &'static str,
+    response: Response,
+) -> Response {
+    let status = response.status();
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_gateway_compliance_request(
+            operation,
+            gateway_compliance_control_outcome(status),
+        );
+        if !status.is_success() {
+            metrics.record_sorafs_gateway_compliance_failure(
+                "control",
+                gateway_compliance_control_failure_class(status),
+            );
+        }
+    });
+    if status.is_success() && matches!(operation, "promote" | "rollback") {
+        refresh_gateway_compliance_control_snapshot(state).await;
+    }
+    response
+}
+
+fn gateway_compliance_control_outcome(status: StatusCode) -> &'static str {
+    match status {
+        status if status.is_success() => "success",
+        StatusCode::UNAUTHORIZED => "authentication_failed",
+        StatusCode::FORBIDDEN => "authorization_failed",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE => "unavailable",
+        status if status.is_client_error() => "invalid_request",
+        _ => "internal_error",
+    }
+}
+
+fn gateway_compliance_control_failure_class(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::UNAUTHORIZED => "authentication",
+        StatusCode::FORBIDDEN => "authorization",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::BAD_GATEWAY => "upstream",
+        StatusCode::SERVICE_UNAVAILABLE => "unavailable",
+        status if status.is_client_error() => "invalid_request",
+        _ => "internal",
+    }
+}
+
+async fn refresh_gateway_compliance_control_snapshot(state: &SharedAppState) {
+    if !state.telemetry.allows_metrics() {
+        return;
+    }
+    let observed_at_unix = match current_unix_second() {
+        Ok(observed_at_unix) => observed_at_unix,
+        Err(response) => {
+            record_gateway_compliance_snapshot_failure(
+                state,
+                gateway_compliance_control_failure_class(response.status()),
+            );
+            return;
+        }
+    };
+    let Some(controller) = state.sorafs_gateway_compliance_controller.clone() else {
+        record_gateway_compliance_snapshot_failure(state, "unavailable");
+        return;
+    };
+    let result = run_gateway_compliance_blocking(move || controller.checkpoint()).await;
+    match result {
+        Ok(Ok(checkpoint)) => {
+            record_gateway_compliance_checkpoint_snapshot(state, &checkpoint, observed_at_unix);
+        }
+        Ok(Err(error)) => {
+            record_gateway_compliance_snapshot_failure(
+                state,
+                gateway_compliance_snapshot_error_class(&error),
+            );
+        }
+        Err(response) => {
+            record_gateway_compliance_snapshot_failure(
+                state,
+                gateway_compliance_control_failure_class(response.status()),
+            );
+        }
+    }
+}
+
+fn record_gateway_compliance_checkpoint_snapshot(
+    state: &SharedAppState,
+    checkpoint: &GatewayComplianceCheckpointV1,
+    observed_at_unix: u64,
+) {
+    let (sequence, valid_until_unix, ready) =
+        gateway_compliance_checkpoint_snapshot(checkpoint, observed_at_unix);
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_gateway_compliance_serving_catalog(sequence, valid_until_unix, ready);
+    });
+}
+
+fn gateway_compliance_checkpoint_snapshot(
+    checkpoint: &GatewayComplianceCheckpointV1,
+    observed_at_unix: u64,
+) -> (Option<u64>, Option<u64>, bool) {
+    let serving = checkpoint.serving.as_ref();
+    let ready = serving.is_some_and(|catalog| {
+        catalog.payload.generated_at_unix <= observed_at_unix
+            && observed_at_unix < catalog.payload.valid_until_unix
+    });
+    (
+        serving.map(|catalog| catalog.payload.sequence),
+        serving.map(|catalog| catalog.payload.valid_until_unix),
+        ready,
+    )
+}
+
+fn record_gateway_compliance_snapshot_failure(state: &SharedAppState, class: &'static str) {
+    state.telemetry.with_metrics(|metrics| {
+        metrics.mark_sorafs_gateway_compliance_unready();
+        metrics.record_sorafs_gateway_compliance_failure("control", class);
+    });
+}
+
+fn gateway_compliance_snapshot_error_class(error: &GatewayComplianceError) -> &'static str {
+    match error {
+        GatewayComplianceError::CatalogNotFresh => "expired_catalog",
+        GatewayComplianceError::NoServingCatalog => "unavailable",
+        GatewayComplianceError::Persistence(_)
+        | GatewayComplianceError::InvalidCheckpoint(_)
+        | GatewayComplianceError::LeaseHeld
+        | GatewayComplianceError::CheckpointConflict
+        | GatewayComplianceError::StatePoisoned => "persistence",
+        _ => "internal",
     }
 }
 
@@ -586,10 +827,8 @@ fn status_response(
     .unwrap_or(u64::MAX);
     let rejected_acknowledgement_count =
         acknowledgement_count.saturating_sub(accepted_acknowledgement_count);
-    let serving_ready = checkpoint.serving.as_ref().is_some_and(|catalog| {
-        catalog.payload.generated_at_unix <= observed_at_unix
-            && observed_at_unix < catalog.payload.valid_until_unix
-    });
+    let (_, _, serving_ready) =
+        gateway_compliance_checkpoint_snapshot(checkpoint, observed_at_unix);
 
     Ok(GatewayComplianceStatusResponseV1 {
         schema: "sorafs.gateway.compliance.status.v1".to_owned(),
@@ -957,15 +1196,16 @@ fn no_store_response(mut response: Response) -> Response {
 
 fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response {
     use GatewayComplianceError::{
-        CatalogEquivocation, CatalogNotFresh, Decompression, DnsRebinding, DuplicateSigner,
-        Encoding, FetchTimeout, GatewayEquivocation, GatewayQuorumNotMet, HistoryFull,
-        IdempotencyConflict, IdempotencyRegistryFull, InvalidAcknowledgement, InvalidCatalog,
-        InvalidCheckpoint, InvalidFeed, InvalidPolicy, InvalidPredecessor, InvalidRollback,
-        InvalidSignature, MissingRequiredFeed, MutationTimeInvalid, NoLastKnownGood,
-        NoServingCatalog, NoStagedCatalog, NonCanonical, NonPublicAddress, Persistence,
-        PolicyDigestMismatch, PromotionTargetMismatch, QuorumNotMet, ResourceLimit, RevokedSigner,
-        RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow, TooManyRedirects,
-        TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl, UntrustedSigner,
+        CatalogEquivocation, CatalogNotFresh, CheckpointConflict, Decompression, DnsRebinding,
+        DuplicateSigner, Encoding, FetchTimeout, GatewayEquivocation, GatewayQuorumNotMet,
+        HistoryFull, IdempotencyConflict, IdempotencyRegistryFull, InvalidAcknowledgement,
+        InvalidCatalog, InvalidCheckpoint, InvalidFeed, InvalidPolicy, InvalidPredecessor,
+        InvalidRollback, InvalidSignature, LeaseHeld, MissingRequiredFeed, MutationTimeInvalid,
+        NoLastKnownGood, NoServingCatalog, NoStagedCatalog, NonCanonical, NonPublicAddress,
+        Persistence, PolicyDigestMismatch, PromotionTargetMismatch, QuorumNotMet, ResourceLimit,
+        RevokedSigner, RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow,
+        TooManyRedirects, TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl,
+        UntrustedSigner,
     };
 
     let (status, code, message) = match &error {
@@ -1000,6 +1240,16 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
             StatusCode::SERVICE_UNAVAILABLE,
             "controller_clock_rejected",
             "the gateway compliance controller rejected a zero or regressed operation clock",
+        ),
+        LeaseHeld => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "checkpoint_lease_held",
+            "the gateway compliance checkpoint is owned by another active controller",
+        ),
+        CheckpointConflict => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "checkpoint_conflict",
+            "the gateway compliance checkpoint changed and the controller is unavailable",
         ),
         DuplicateSigner(_)
         | UntrustedSigner(_)
@@ -1127,6 +1377,14 @@ mod tests {
             gateway_compliance_error_response(GatewayComplianceError::IdempotencyConflict).status(),
             StatusCode::CONFLICT
         );
+        assert_eq!(
+            gateway_compliance_error_response(GatewayComplianceError::LeaseHeld).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            gateway_compliance_error_response(GatewayComplianceError::CheckpointConflict).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         let signature_response =
             gateway_compliance_error_response(GatewayComplianceError::InvalidSignature {
                 signer_id: "catalog-a".to_owned(),
@@ -1140,11 +1398,56 @@ mod tests {
     }
 
     #[test]
+    fn control_response_metrics_use_closed_status_vocabularies() {
+        assert_eq!(
+            gateway_compliance_control_outcome(StatusCode::ACCEPTED),
+            "success"
+        );
+        for (status, outcome, failure_class) in [
+            (
+                StatusCode::UNAUTHORIZED,
+                "authentication_failed",
+                "authentication",
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                "authorization_failed",
+                "authorization",
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "invalid_request",
+            ),
+            (StatusCode::NOT_FOUND, "not_found", "not_found"),
+            (StatusCode::CONFLICT, "conflict", "conflict"),
+            (StatusCode::BAD_GATEWAY, "unavailable", "upstream"),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unavailable",
+                "unavailable",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "internal",
+            ),
+        ] {
+            assert_eq!(gateway_compliance_control_outcome(status), outcome);
+            assert_eq!(
+                gateway_compliance_control_failure_class(status),
+                failure_class
+            );
+        }
+    }
+
+    #[test]
     fn status_projection_never_serializes_catalog_or_signature_payloads() {
         let catalog = signed_catalog();
         let catalog_digest = catalog.payload.catalog_digest().expect("catalog digest");
         let checkpoint = GatewayComplianceCheckpointV1 {
             version: GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1,
+            revision: 1,
             policy_digest: [0xA5; 32],
             chain_head: Some(catalog.clone()),
             serving: Some(catalog.clone()),
@@ -1200,8 +1503,9 @@ mod tests {
     #[test]
     fn status_readiness_is_false_before_generation_and_at_expiry() {
         let catalog = signed_catalog();
-        let checkpoint = GatewayComplianceCheckpointV1 {
+        let mut checkpoint = GatewayComplianceCheckpointV1 {
             version: GATEWAY_COMPLIANCE_CHECKPOINT_VERSION_V1,
+            revision: 0,
             policy_digest: [0xA5; 32],
             chain_head: Some(catalog.clone()),
             serving: Some(catalog),
@@ -1211,6 +1515,10 @@ mod tests {
             history: Vec::new(),
             idempotency_records: Vec::new(),
         };
+        assert_eq!(
+            gateway_compliance_checkpoint_snapshot(&checkpoint, 1_700_000_000),
+            (Some(1), Some(1_700_003_600), true)
+        );
         assert!(
             !status_response(&checkpoint, 1_699_999_999)
                 .expect("status before generation")
@@ -1220,6 +1528,15 @@ mod tests {
             !status_response(&checkpoint, 1_700_003_600)
                 .expect("status at exclusive expiry")
                 .serving_ready
+        );
+        assert_eq!(
+            gateway_compliance_checkpoint_snapshot(&checkpoint, 1_700_003_600),
+            (Some(1), Some(1_700_003_600), false)
+        );
+        checkpoint.serving = None;
+        assert_eq!(
+            gateway_compliance_checkpoint_snapshot(&checkpoint, 1_700_000_020),
+            (None, None, false)
         );
     }
 

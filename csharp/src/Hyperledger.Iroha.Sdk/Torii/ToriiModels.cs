@@ -4089,269 +4089,6 @@ public sealed record class ToriiSoraFsPinRegisterResponse
     }
 }
 
-[JsonConverter(typeof(ToriiSoraFsDenylistPackSummaryJsonConverter))]
-public sealed record class ToriiSoraFsDenylistPackSummary
-{
-    private string packId = string.Empty;
-    private string? version;
-    private string? policyTier;
-    private string? manifestCid;
-    private string? merkleRoot;
-    private string? issuedByProposalId;
-    private string? reviewReference;
-    private string? jurisdiction;
-    private string? issuedAt;
-    private string? expiresAt;
-    private long entryCount;
-
-    [JsonPropertyName("pack_id")]
-    public string PackId
-    {
-        get => packId;
-        init => packId = ToriiSoraFsDirectMetadata.RequireExactNonEmptyText(value, nameof(PackId));
-    }
-
-    [JsonPropertyName("version")]
-    public string? Version
-    {
-        get => version;
-        init => version = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Version));
-    }
-
-    [JsonPropertyName("default_enabled")]
-    public bool DefaultEnabled { get; init; }
-
-    [JsonPropertyName("active")]
-    public bool Active { get; init; }
-
-    [JsonPropertyName("policy_tier")]
-    public string? PolicyTier
-    {
-        get => policyTier;
-        init => policyTier = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(PolicyTier));
-    }
-
-    [JsonPropertyName("manifest_cid")]
-    public string? ManifestCid
-    {
-        get => manifestCid;
-        init => manifestCid = ToriiSoraFsDirectMetadata.RequireOptionalContentCid(value, nameof(ManifestCid));
-    }
-
-    [JsonPropertyName("merkle_root")]
-    public string? MerkleRoot
-    {
-        get => merkleRoot;
-        init => merkleRoot = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(MerkleRoot));
-    }
-
-    [JsonPropertyName("issued_by_proposal_id")]
-    public string? IssuedByProposalId
-    {
-        get => issuedByProposalId;
-        init => issuedByProposalId = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(IssuedByProposalId));
-    }
-
-    [JsonPropertyName("review_reference")]
-    public string? ReviewReference
-    {
-        get => reviewReference;
-        init => reviewReference = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(ReviewReference));
-    }
-
-    [JsonPropertyName("jurisdiction")]
-    public string? Jurisdiction
-    {
-        get => jurisdiction;
-        init => jurisdiction = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Jurisdiction));
-    }
-
-    [JsonPropertyName("issued_at")]
-    public string? IssuedAt
-    {
-        get => issuedAt;
-        init => issuedAt = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(IssuedAt));
-    }
-
-    [JsonPropertyName("expires_at")]
-    public string? ExpiresAt
-    {
-        get => expiresAt;
-        init => expiresAt = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(ExpiresAt));
-    }
-
-    [JsonPropertyName("entry_count")]
-    public long EntryCount
-    {
-        get => entryCount;
-        init => entryCount = ToriiSoraFsDirectMetadata.RequireNonNegative(value, nameof(EntryCount));
-    }
-}
-
-[JsonConverter(typeof(ToriiSoraFsDenylistCatalogResponseJsonConverter))]
-public sealed record class ToriiSoraFsDenylistCatalogResponse
-{
-    private long version;
-    private string? jurisdiction;
-    private string[] optOutPacks = Array.Empty<string>();
-    private string[] extraPacks = Array.Empty<string>();
-    private ToriiSoraFsDenylistPackSummary[] packs = Array.Empty<ToriiSoraFsDenylistPackSummary>();
-
-    [JsonPropertyName("version")]
-    public long Version
-    {
-        get => version;
-        init => version = ToriiSoraFsDirectMetadata.RequirePositive(value, nameof(Version));
-    }
-
-    [JsonPropertyName("jurisdiction")]
-    public string? Jurisdiction
-    {
-        get => jurisdiction;
-        init => jurisdiction = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Jurisdiction));
-    }
-
-    [JsonPropertyName("opt_out_packs")]
-    public IReadOnlyList<string> OptOutPacks
-    {
-        get => ToriiListSnapshots.CopyRequired(optOutPacks);
-        init => optOutPacks = ToriiSoraFsDirectMetadata.CopyRequiredExactNonEmptyTextList(
-            value,
-            nameof(OptOutPacks));
-    }
-
-    [JsonPropertyName("extra_packs")]
-    public IReadOnlyList<string> ExtraPacks
-    {
-        get => ToriiListSnapshots.CopyRequired(extraPacks);
-        init => extraPacks = ToriiSoraFsDirectMetadata.CopyRequiredExactNonEmptyTextList(
-            value,
-            nameof(ExtraPacks));
-    }
-
-    [JsonPropertyName("packs")]
-    public IReadOnlyList<ToriiSoraFsDenylistPackSummary> Packs
-    {
-        get => ToriiListSnapshots.CopyRequired(packs);
-        init => packs = ToriiSoraFsDirectMetadata.CopyRequiredDenylistPackSummaries(value, nameof(Packs));
-    }
-}
-
-[JsonConverter(typeof(ToriiSoraFsDenylistPackResponseJsonConverter))]
-public sealed record class ToriiSoraFsDenylistPackResponse
-{
-    private string packId = string.Empty;
-    private string? version;
-    private string? policyTier;
-    private string? manifestCid;
-    private string? merkleRoot;
-    private string? issuedByProposalId;
-    private string? reviewReference;
-    private string? jurisdiction;
-    private string? issuedAt;
-    private string? expiresAt;
-    private long entryCount;
-    private string sourcePath = string.Empty;
-
-    [JsonPropertyName("pack_id")]
-    public string PackId
-    {
-        get => packId;
-        init => packId = ToriiSoraFsDirectMetadata.RequireExactNonEmptyText(value, nameof(PackId));
-    }
-
-    [JsonPropertyName("version")]
-    public string? Version
-    {
-        get => version;
-        init => version = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Version));
-    }
-
-    [JsonPropertyName("default_enabled")]
-    public bool DefaultEnabled { get; init; }
-
-    [JsonPropertyName("active")]
-    public bool Active { get; init; }
-
-    [JsonPropertyName("policy_tier")]
-    public string? PolicyTier
-    {
-        get => policyTier;
-        init => policyTier = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(PolicyTier));
-    }
-
-    [JsonPropertyName("manifest_cid")]
-    public string? ManifestCid
-    {
-        get => manifestCid;
-        init => manifestCid = ToriiSoraFsDirectMetadata.RequireOptionalContentCid(value, nameof(ManifestCid));
-    }
-
-    [JsonPropertyName("merkle_root")]
-    public string? MerkleRoot
-    {
-        get => merkleRoot;
-        init => merkleRoot = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(MerkleRoot));
-    }
-
-    [JsonPropertyName("issued_by_proposal_id")]
-    public string? IssuedByProposalId
-    {
-        get => issuedByProposalId;
-        init => issuedByProposalId = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(IssuedByProposalId));
-    }
-
-    [JsonPropertyName("review_reference")]
-    public string? ReviewReference
-    {
-        get => reviewReference;
-        init => reviewReference = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(ReviewReference));
-    }
-
-    [JsonPropertyName("jurisdiction")]
-    public string? Jurisdiction
-    {
-        get => jurisdiction;
-        init => jurisdiction = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Jurisdiction));
-    }
-
-    [JsonPropertyName("issued_at")]
-    public string? IssuedAt
-    {
-        get => issuedAt;
-        init => issuedAt = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(IssuedAt));
-    }
-
-    [JsonPropertyName("expires_at")]
-    public string? ExpiresAt
-    {
-        get => expiresAt;
-        init => expiresAt = ToriiSoraFsDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(ExpiresAt));
-    }
-
-    [JsonPropertyName("entry_count")]
-    public long EntryCount
-    {
-        get => entryCount;
-        init => entryCount = ToriiSoraFsDirectMetadata.RequireNonNegative(value, nameof(EntryCount));
-    }
-
-    [JsonPropertyName("source_path")]
-    public string SourcePath
-    {
-        get => sourcePath;
-        init => sourcePath = ToriiSoraFsDirectMetadata.RequireExactNonEmptyText(value, nameof(SourcePath));
-    }
-}
-
 internal static class ToriiSoraFsDirectMetadata
 {
     internal static long RequireNonNegative(long value, string paramName)
@@ -4359,17 +4096,6 @@ internal static class ToriiSoraFsDirectMetadata
         if (value < 0)
         {
             throw new ArgumentOutOfRangeException(paramName, value, "Value must be non-negative.");
-        }
-
-        return value;
-    }
-
-    internal static long RequirePositive(long value, string paramName)
-    {
-        RequireNonNegative(value, paramName);
-        if (value == 0)
-        {
-            throw new ArgumentOutOfRangeException(paramName, value, "Value must be positive.");
         }
 
         return value;
@@ -4398,11 +4124,6 @@ internal static class ToriiSoraFsDirectMetadata
         }
 
         return text;
-    }
-
-    internal static string? RequireOptionalContentCid(string? value, string paramName)
-    {
-        return value is null ? null : RequireContentCid(value, paramName);
     }
 
     internal static string RequireExactNonEmptyText(string? value, string paramName)
@@ -4476,30 +4197,6 @@ internal static class ToriiSoraFsDirectMetadata
         return copy;
     }
 
-    internal static string[] CopyRequiredExactNonEmptyTextList(
-        IReadOnlyList<string>? values,
-        string paramName)
-    {
-        if (values is null)
-        {
-            return Array.Empty<string>();
-        }
-
-        var copy = new string[values.Count];
-        for (var index = 0; index < values.Count; index++)
-        {
-            var value = values[index];
-            if (value is null)
-            {
-                throw new ArgumentException("List elements must not be null.", $"{paramName}[{index}]");
-            }
-
-            copy[index] = RequireExactNonEmptyText(value, $"{paramName}[{index}]");
-        }
-
-        return copy;
-    }
-
     internal static ToriiSoraFsFileEntry[] CopyRequiredFileEntries(
         IReadOnlyList<ToriiSoraFsFileEntry>? values,
         string paramName)
@@ -4519,30 +4216,6 @@ internal static class ToriiSoraFsDirectMetadata
             }
 
             copy[index] = RequireFileEntry(value, $"{paramName}[{index}]");
-        }
-
-        return copy;
-    }
-
-    internal static ToriiSoraFsDenylistPackSummary[] CopyRequiredDenylistPackSummaries(
-        IReadOnlyList<ToriiSoraFsDenylistPackSummary>? values,
-        string paramName)
-    {
-        if (values is null)
-        {
-            return Array.Empty<ToriiSoraFsDenylistPackSummary>();
-        }
-
-        var copy = new ToriiSoraFsDenylistPackSummary[values.Count];
-        for (var index = 0; index < values.Count; index++)
-        {
-            var value = values[index];
-            if (value is null)
-            {
-                throw new ArgumentException("List elements must not be null.", $"{paramName}[{index}]");
-            }
-
-            copy[index] = RequireDenylistPackSummary(value, $"{paramName}[{index}]");
         }
 
         return copy;
@@ -4589,36 +4262,6 @@ internal static class ToriiSoraFsDirectMetadata
         RequireNonNegative(value.Size, $"{paramName}.{nameof(ToriiSoraFsFileEntry.Size)}");
         RequireNonNegative(value.FirstChunk, $"{paramName}.{nameof(ToriiSoraFsFileEntry.FirstChunk)}");
         RequireNonNegative(value.ChunkCount, $"{paramName}.{nameof(ToriiSoraFsFileEntry.ChunkCount)}");
-        return value;
-    }
-
-    private static ToriiSoraFsDenylistPackSummary RequireDenylistPackSummary(
-        ToriiSoraFsDenylistPackSummary value,
-        string paramName)
-    {
-        RequireExactNonEmptyText(value.PackId, $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.PackId)}");
-        RequireOptionalExactNonEmptyText(value.Version, $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.Version)}");
-        RequireOptionalExactNonEmptyText(
-            value.PolicyTier,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.PolicyTier)}");
-        RequireOptionalContentCid(value.ManifestCid, $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.ManifestCid)}");
-        RequireOptionalExactNonEmptyText(
-            value.MerkleRoot,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.MerkleRoot)}");
-        RequireOptionalExactNonEmptyText(
-            value.IssuedByProposalId,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.IssuedByProposalId)}");
-        RequireOptionalExactNonEmptyText(
-            value.ReviewReference,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.ReviewReference)}");
-        RequireOptionalExactNonEmptyText(
-            value.Jurisdiction,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.Jurisdiction)}");
-        RequireOptionalExactNonEmptyText(value.IssuedAt, $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.IssuedAt)}");
-        RequireOptionalExactNonEmptyText(
-            value.ExpiresAt,
-            $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.ExpiresAt)}");
-        RequireNonNegative(value.EntryCount, $"{paramName}.{nameof(ToriiSoraFsDenylistPackSummary.EntryCount)}");
         return value;
     }
 

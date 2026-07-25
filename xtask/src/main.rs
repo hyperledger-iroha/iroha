@@ -155,7 +155,6 @@ fn main() {
 enum CommandKind {
     OpenApi {
         outputs: Vec<PathBuf>,
-        allow_stub: bool,
         manifest: PathBuf,
         signing_key: Option<PathBuf>,
         signature_envelope: Option<PathBuf>,
@@ -1141,14 +1140,12 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
     match command {
         CommandKind::OpenApi {
             outputs,
-            allow_stub,
             manifest,
             signing_key,
             signature_envelope,
             unsigned_manifest,
         } => generate_openapi(
             outputs,
-            allow_stub,
             manifest,
             signing_key,
             signature_envelope,
@@ -2036,7 +2033,6 @@ where
         }
         "openapi" => {
             let mut outputs = Vec::new();
-            let mut allow_stub = false;
             let mut manifest_path: Option<PathBuf> = None;
             let mut signing_key: Option<PathBuf> = None;
             let mut signature_envelope: Option<PathBuf> = None;
@@ -2050,7 +2046,6 @@ where
                         };
                         outputs.push(normalize_path(Path::new(&path))?);
                     }
-                    "--allow-stub" => allow_stub = true,
                     "--manifest" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --manifest".into());
@@ -2095,7 +2090,6 @@ where
 
             Ok(CommandKind::OpenApi {
                 outputs,
-                allow_stub,
                 manifest: manifest_path.unwrap_or_else(default_openapi_manifest_path),
                 signing_key,
                 signature_envelope,
@@ -9824,38 +9818,12 @@ where
 
 fn generate_openapi(
     outputs: Vec<PathBuf>,
-    allow_stub: bool,
     manifest: PathBuf,
     signing_key: Option<PathBuf>,
     signature_envelope: Option<PathBuf>,
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let spec = match try_generate_router_openapi() {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            if allow_stub {
-                eprintln!(
-                    "warning: Torii did not expose an OpenAPI document; emitting stub specification"
-                );
-                build_stub_spec()
-            } else {
-                return Err("Torii did not expose an OpenAPI document; rerun with --allow-stub to emit the placeholder spec".into());
-            }
-        }
-        Err(err) => {
-            if allow_stub {
-                eprintln!(
-                    "warning: failed to generate OpenAPI from Torii router ({err}); emitting stub specification"
-                );
-                build_stub_spec()
-            } else {
-                return Err(format!(
-                    "failed to generate OpenAPI from Torii router: {err}. rerun with --allow-stub to emit the placeholder spec"
-                )
-                .into());
-            }
-        }
-    };
+    let spec = require_release_router_openapi(try_generate_router_openapi())?;
 
     let formatted = json::to_string_pretty(&spec)?;
     let emits_manifest = signing_key.is_some() || signature_envelope.is_some() || unsigned_manifest;
@@ -9927,6 +9895,80 @@ fn generate_openapi(
     Ok(())
 }
 
+fn require_release_router_openapi(
+    generated: Result<Option<Value>, Box<dyn Error>>,
+) -> Result<Value, Box<dyn Error>> {
+    let spec = generated
+        .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
+        .ok_or("Torii did not expose an OpenAPI document; generation failed closed")?;
+    validate_release_openapi_spec(&spec)?;
+    Ok(spec)
+}
+
+fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
+    let document = spec
+        .as_object()
+        .ok_or("release OpenAPI document must be a JSON object")?;
+    let version = document
+        .get("openapi")
+        .and_then(Value::as_str)
+        .ok_or("release OpenAPI document is missing the openapi version")?;
+    if !version.starts_with("3.") {
+        return Err(format!(
+            "release OpenAPI document uses unsupported version `{version}`; expected OpenAPI 3.x"
+        )
+        .into());
+    }
+
+    let info = document
+        .get("info")
+        .and_then(Value::as_object)
+        .ok_or("release OpenAPI document is missing the info object")?;
+    for field in ["title", "version"] {
+        if !info
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(format!(
+                "release OpenAPI document info.{field} must be a non-empty string"
+            )
+            .into());
+        }
+    }
+
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .ok_or("release OpenAPI document is missing the paths object")?;
+    if paths.is_empty() {
+        return Err(
+            "release OpenAPI document must define at least one path; empty/stub specifications are forbidden"
+                .into(),
+        );
+    }
+
+    let schemas = document
+        .get("components")
+        .and_then(Value::as_object)
+        .and_then(|components| components.get("schemas"))
+        .and_then(Value::as_object)
+        .ok_or("release OpenAPI document is missing components.schemas")?;
+    if schemas.is_empty() {
+        return Err(
+            "release OpenAPI document must define at least one component schema; empty/stub specifications are forbidden"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    let spec = norito::json::from_slice::<Value>(spec_bytes)
+        .map_err(|err| format!("failed to parse release OpenAPI document as JSON: {err}"))?;
+    validate_release_openapi_spec(&spec)
+}
+
 #[derive(Serialize, Deserialize)]
 struct OpenApiManifest {
     version: u32,
@@ -9986,6 +10028,7 @@ fn write_openapi_manifest(
             spec_path.display()
         )
     })?;
+    validate_release_openapi_bytes(&spec_bytes)?;
     let signature = sign_manifest_payload(&spec_bytes, signing_key)?;
     write_openapi_manifest_from_bytes(
         spec_path,
@@ -10008,6 +10051,7 @@ fn write_openapi_manifest_with_signature(
             spec_path.display()
         )
     })?;
+    validate_release_openapi_bytes(&spec_bytes)?;
     verify_manifest_signature(&signature, &spec_bytes)?;
     write_openapi_manifest_from_bytes(
         spec_path,
@@ -10029,6 +10073,7 @@ fn write_openapi_manifest_unsigned(
             spec_path.display()
         )
     })?;
+    validate_release_openapi_bytes(&spec_bytes)?;
     write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, None, provenance)
 }
 
@@ -10039,6 +10084,7 @@ fn write_openapi_manifest_from_bytes(
     signature: Option<SignatureEnvelope>,
     provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
+    validate_release_openapi_bytes(spec_bytes)?;
     validate_openapi_generator_provenance(provenance, signature.is_none())?;
     if signature.is_some() && provenance.dirty {
         return Err(
@@ -10085,6 +10131,7 @@ fn verify_openapi_manifest(
             spec_path.display()
         )
     })?;
+    validate_release_openapi_bytes(&spec_bytes)?;
     let manifest_text = fs::read_to_string(manifest_path).map_err(|err| {
         format!(
             "failed to read {} for manifest verification: {err}",
@@ -10884,6 +10931,35 @@ mod openapi_tests {
 
     use super::*;
 
+    const RELEASE_OPENAPI_FIXTURE: &[u8] = br#"{
+  "openapi": "3.1.0",
+  "info": {"title": "Torii fixture", "version": "1.0.0"},
+  "paths": {"/health": {"get": {"responses": {"200": {"description": "ok"}}}}},
+  "components": {"schemas": {"Health": {"type": "object"}}}
+}"#;
+    const ALTERED_RELEASE_OPENAPI_FIXTURE: &[u8] = br#"{
+  "openapi": "3.1.0",
+  "info": {"title": "Torii fixture", "version": "1.0.1"},
+  "paths": {"/status": {"get": {"responses": {"200": {"description": "ok"}}}}},
+  "components": {"schemas": {"Status": {"type": "object"}}}
+}"#;
+
+    fn write_release_openapi_fixture(path: &Path) {
+        fs::write(path, RELEASE_OPENAPI_FIXTURE).expect("write release OpenAPI fixture");
+    }
+
+    fn empty_openapi_stub() -> Value {
+        norito::json::from_slice(
+            br#"{
+  "openapi": "3.1.0",
+  "info": {"title": "Torii fixture", "version": "1.0.0"},
+  "paths": {},
+  "components": {}
+}"#,
+        )
+        .expect("parse empty OpenAPI fixture")
+    }
+
     fn clean_generator_provenance() -> OpenApiGeneratorProvenance {
         OpenApiGeneratorProvenance {
             commit: Some("11".repeat(20)),
@@ -10925,6 +11001,133 @@ mod openapi_tests {
     }
 
     #[test]
+    fn openapi_cli_rejects_removed_stub_escape_hatch() {
+        let args = ["xtask", "openapi", "--allow-stub"];
+        let err = match parse_command(args.into_iter().map(String::from)) {
+            Ok(_) => panic!("the removed stub escape hatch must stay unavailable"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("unknown flag for openapi"),
+            "unexpected removed-flag error: {err}"
+        );
+    }
+
+    #[test]
+    fn router_generation_failures_and_empty_documents_fail_closed() {
+        let missing = require_release_router_openapi(Ok(None))
+            .expect_err("missing router document must fail closed");
+        assert!(missing.to_string().contains("generation failed closed"));
+
+        let failed = require_release_router_openapi(Err("router setup failed".into()))
+            .expect_err("router generation error must fail closed");
+        assert!(
+            failed
+                .to_string()
+                .contains("failed to generate OpenAPI from Torii router")
+        );
+
+        let empty = require_release_router_openapi(Ok(Some(empty_openapi_stub())))
+            .expect_err("an empty OpenAPI document must never be accepted");
+        assert!(
+            empty
+                .to_string()
+                .contains("empty/stub specifications are forbidden")
+        );
+    }
+
+    #[test]
+    fn manifest_writers_reject_empty_openapi_before_output() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("torii.json");
+        let stub_bytes =
+            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI");
+        fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
+        let key_path = tmp.path().join("key.hex");
+        fs::write(&key_path, hex::encode([0x42_u8; 32])).expect("write key");
+        let detached = sign_manifest_payload(&stub_bytes, &key_path).expect("sign fixture payload");
+
+        for (name, result, manifest_path) in [
+            {
+                let manifest_path = tmp.path().join("signed.json");
+                let result = write_openapi_manifest(
+                    &spec_path,
+                    &manifest_path,
+                    &key_path,
+                    &clean_generator_provenance(),
+                );
+                ("signed", result, manifest_path)
+            },
+            {
+                let manifest_path = tmp.path().join("detached.json");
+                let result = write_openapi_manifest_with_signature(
+                    &spec_path,
+                    &manifest_path,
+                    detached,
+                    &clean_generator_provenance(),
+                );
+                ("detached", result, manifest_path)
+            },
+            {
+                let manifest_path = tmp.path().join("unsigned.json");
+                let result = write_openapi_manifest_unsigned(
+                    &spec_path,
+                    &manifest_path,
+                    &clean_generator_provenance(),
+                );
+                ("unsigned", result, manifest_path)
+            },
+        ] {
+            let err = result.expect_err("empty OpenAPI must not produce a manifest");
+            assert!(
+                err.to_string()
+                    .contains("empty/stub specifications are forbidden"),
+                "unexpected {name} manifest error: {err}"
+            );
+            assert!(
+                !manifest_path.exists(),
+                "{name} manifest must not be created for an empty OpenAPI document"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_verifier_rejects_digest_matching_empty_openapi() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("torii.json");
+        let stub_bytes =
+            norito::json::to_vec(&empty_openapi_stub()).expect("serialize empty OpenAPI");
+        fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
+        let manifest_path = tmp.path().join("manifest.json");
+        let manifest = OpenApiManifest {
+            version: 1,
+            generated_unix_ms: 1,
+            generator_commit: Some("11".repeat(20)),
+            generator_dirty: false,
+            generator_source_sha256_hex: None,
+            artifact: OpenApiArtifact {
+                path: "torii.json".to_owned(),
+                bytes: stub_bytes.len() as u64,
+                sha256_hex: hex::encode(Sha256::digest(&stub_bytes)),
+                blake3_hex: blake3::hash(&stub_bytes).to_hex().to_string(),
+                signature: None,
+            },
+        };
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+        )
+        .expect("write matching manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("digest-matching empty OpenAPI must not verify");
+        assert!(
+            err.to_string()
+                .contains("empty/stub specifications are forbidden")
+        );
+    }
+
+    #[test]
     fn manifest_signature_round_trip() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
@@ -10941,7 +11144,7 @@ mod openapi_tests {
     fn detached_signature_envelope_writes_manifest() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
 
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x22u8; 32]);
@@ -11026,7 +11229,7 @@ mod openapi_tests {
     fn unsigned_openapi_manifest_verifies_when_allowed() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
 
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
@@ -11047,12 +11250,12 @@ mod openapi_tests {
     fn unsigned_openapi_manifest_still_checks_payload_integrity() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
 
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
-        fs::write(&spec_path, b"{\"ok\":false}").expect("tamper spec");
+        fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("tamper spec");
 
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect_err("allowing unsigned manifests must not allow stale digests");
@@ -11067,7 +11270,7 @@ mod openapi_tests {
     fn dirty_unsigned_openapi_manifest_records_explicit_source_provenance() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         let dirty = OpenApiGeneratorProvenance {
             commit: None,
@@ -11187,7 +11390,7 @@ mod openapi_tests {
     fn signed_openapi_manifest_rejects_dirty_source_provenance() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let key_path = tmp.path().join("key.hex");
         fs::write(&key_path, hex::encode([0x77_u8; 32])).expect("write signing key");
         let manifest_path = tmp.path().join("manifest.json");
@@ -11285,13 +11488,13 @@ mod openapi_tests {
     fn detached_signature_envelope_must_match_spec_bytes() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
 
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x55u8; 32]);
         fs::write(&key_path, key_hex).expect("write key");
 
-        let other_payload = b"{\"ok\":false}";
+        let other_payload = ALTERED_RELEASE_OPENAPI_FIXTURE;
         let signature = sign_manifest_payload(other_payload, &key_path).expect("sign payload");
         let manifest_path = tmp.path().join("manifest.json");
 
@@ -11317,7 +11520,7 @@ mod openapi_tests {
     fn openapi_allow_unsigned_still_rejects_invalid_signature() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
 
         let key_path = tmp.path().join("key.hex");
         let key_hex = hex::encode([0x66u8; 32]);
@@ -11447,7 +11650,7 @@ mod openapi_tests {
     fn openapi_manifest_rejects_unsafe_artifact_path() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("torii.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
@@ -11476,7 +11679,7 @@ mod openapi_tests {
         for artifact_path in ["versions\\current\\torii.json", "C:/outside/torii.json", ""] {
             let tmp = tempdir().expect("tempdir");
             let spec_path = tmp.path().join("torii.json");
-            fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+            write_release_openapi_fixture(&spec_path);
             let manifest_path = tmp.path().join("manifest.json");
             write_openapi_manifest_unsigned(
                 &spec_path,
@@ -11509,7 +11712,7 @@ mod openapi_tests {
     fn openapi_manifest_rejects_artifact_file_name_mismatch() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("torii.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
             .expect("write unsigned manifest");
@@ -11545,7 +11748,7 @@ mod openapi_tests {
     fn manifest_signature_must_be_allowlisted() {
         let tmp = tempdir().expect("tempdir");
         let spec_path = tmp.path().join("spec.json");
-        fs::write(&spec_path, b"{\"ok\":true}").expect("write spec");
+        write_release_openapi_fixture(&spec_path);
 
         let signing_key_path = tmp.path().join("signing.key");
         let signing_key_hex = hex::encode([0x33u8; 32]);
@@ -11930,10 +12133,6 @@ async fn fetch_openapi_from_router(router: Router, candidates: &[&str]) -> Optio
         }
     }
     None
-}
-
-fn build_stub_spec() -> Value {
-    iroha_torii::openapi::stub_spec()
 }
 
 fn generate_vote_tally_bundle(
@@ -12593,10 +12792,10 @@ fn print_usage() {
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
     eprintln!(
-        "  cargo xtask openapi [--output <path>] [--allow-stub] [--sign <key>|--signature-envelope <path>|--unsigned-manifest]"
+        "  cargo xtask openapi [--output <path>] [--sign <key>|--signature-envelope <path>|--unsigned-manifest]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. Defaults to docs/portal/static/openapi/torii.json; use --allow-stub only for emergency stub output"
+        "    Generate the Torii OpenAPI spec from a live Torii router. Generation fails closed if Torii does not return a complete release document. Defaults to docs/portal/static/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -13193,14 +13392,6 @@ mod tests {
     use norito::json::Value;
 
     use super::*;
-    #[test]
-    fn stub_spec_contains_minimal_metadata() {
-        let spec = build_stub_spec();
-        assert_eq!(spec["openapi"], norito::json!("3.1.0"));
-        assert_eq!(spec["info"]["title"], norito::json!("Iroha Torii API"));
-        assert!(spec["paths"].as_object().unwrap().is_empty());
-    }
-
     #[test]
     fn vote_tally_default_path_points_into_fixtures() {
         let default = default_vote_tally_path();

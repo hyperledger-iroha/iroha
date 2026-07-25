@@ -22,14 +22,13 @@ cargo xtask openapi
 Executar o comando acima escreve `docs/portal/static/openapi/torii.json` e
 alimenta a integração `docusaurus-plugin-openapi-docs`, portanto esta seção é atualizada
 automaticamente. O gerador ativa um roteador Torii na memória e tenta
-consulte seu terminal OpenAPI; se isso falhar (por exemplo, inicialização do roteador
-erros) uma especificação de espaço reservado determinística é emitida em seu lugar.
+O gerador cria a projeção canônica a partir do roteador Torii e falha de forma
+fechada se o documento OpenAPI completo não puder ser produzido.
 
 ## Status atual
 
-- **Fonte de especificações:** `cargo xtask openapi` consulta o roteador Torii diretamente; o
-  O stub de fallback só é emitido quando o roteador não consegue expor um OpenAPI
-  documento.
+- **Fonte de especificações:** `cargo xtask openapi` consulta o roteador Torii
+  diretamente e falha se a especificação completa não estiver disponível.
 - **Determinismo:** a saída JSON é canonizada para garantir uma comparação estável no CI.
 - **Autenticação:** O sandbox “Try it” agora encaminha solicitações por meio de um
   proxy de teste restrito. Os operadores devem fornecer um endpoint e um portador Torii

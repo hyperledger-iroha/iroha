@@ -218,9 +218,6 @@ Optional:
   --trusted-signing-fingerprint <hex>
   --release-manifest-verifier <path>
   --trusted-release-manifest-verifier-sha256 <hex>
-  --denylist-old <bundle.json>    Previously published denylist bundle for diff evidence.
-  --denylist-new <bundle.json>    Newly generated denylist bundle for diff evidence.
-  --denylist-report <path>        Override path for diff JSON (default: <out>/denylist_diff.json).
   --help                          Show this help message and exit.
 
 Self-asserted signature bundles and OIDC token hashes are not accepted
@@ -255,9 +252,6 @@ trusted_signing_fingerprint=""
 release_manifest_verifier=""
 trusted_release_manifest_verifier_sha256=""
 config_path=""
-denylist_old_bundle=""
-denylist_new_bundle=""
-denylist_report=""
 
 cli_workspace=""
 cli_signing_key=""
@@ -270,9 +264,6 @@ cli_public_key=""
 cli_trusted_signing_fingerprint=""
 cli_release_manifest_verifier=""
 cli_trusted_release_manifest_verifier_sha256=""
-cli_denylist_old=""
-cli_denylist_new=""
-cli_denylist_report=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -347,24 +338,6 @@ while [[ $# -gt 0 ]]; do
       trusted_release_manifest_verifier_sha256="$cli_trusted_release_manifest_verifier_sha256"
       shift 2
       ;;
-    --denylist-old)
-      require_option_value "$1" "${2-}"
-      cli_denylist_old="$(abs_path "$2")"
-      denylist_old_bundle="$cli_denylist_old"
-      shift 2
-      ;;
-    --denylist-new)
-      require_option_value "$1" "${2-}"
-      cli_denylist_new="$(abs_path "$2")"
-      denylist_new_bundle="$cli_denylist_new"
-      shift 2
-      ;;
-    --denylist-report)
-      require_option_value "$1" "${2-}"
-      cli_denylist_report="$(abs_path "$2")"
-      denylist_report="$cli_denylist_report"
-      shift 2
-      ;;
     --help|-h)
       usage
       exit 0
@@ -397,9 +370,6 @@ if [[ -n "${config_path}" ]]; then
         [[ -z "$trusted_release_manifest_verifier_sha256" ]] &&
           trusted_release_manifest_verifier_sha256="$value"
         ;;
-      denylist_old_bundle) [[ -z "$denylist_old_bundle" ]] && denylist_old_bundle="$(abs_path "$value")" ;;
-      denylist_new_bundle) [[ -z "$denylist_new_bundle" ]] && denylist_new_bundle="$(abs_path "$value")" ;;
-      denylist_report) [[ -z "$denylist_report" ]] && denylist_report="$(abs_path "$value")" ;;
       workspace) [[ -z "$workspace" ]] && workspace="$(cd "$value" && pwd)" ;;
       *)
         echo "error: unknown config key '${key}' in ${config_path}" >&2
@@ -423,10 +393,6 @@ fi
   release_manifest_verifier="$cli_release_manifest_verifier"
 [[ -n "$cli_trusted_release_manifest_verifier_sha256" ]] &&
   trusted_release_manifest_verifier_sha256="$cli_trusted_release_manifest_verifier_sha256"
-[[ -n "$cli_denylist_old" ]] && denylist_old_bundle="$cli_denylist_old"
-[[ -n "$cli_denylist_new" ]] && denylist_new_bundle="$cli_denylist_new"
-[[ -n "$cli_denylist_report" ]] && denylist_report="$cli_denylist_report"
-
 if [[ -z "$workspace" ]]; then
   workspace="${PWD}"
 fi
@@ -504,34 +470,3 @@ cmd=(
   cd "${workspace}"
   run_xtask "${cmd[@]}"
 )
-
-if [[ -n "${denylist_old_bundle}" || -n "${denylist_new_bundle}" ]]; then
-  if [[ -z "${denylist_old_bundle}" || -z "${denylist_new_bundle}" ]]; then
-    echo "warning: both --denylist-old and --denylist-new are required to run the diff. Skipping." >&2
-  else
-    if [[ ! -f "${denylist_old_bundle}" ]]; then
-      echo "error: denylist old bundle not found at ${denylist_old_bundle}" >&2
-      exit 1
-    fi
-    if [[ ! -f "${denylist_new_bundle}" ]]; then
-      echo "error: denylist new bundle not found at ${denylist_new_bundle}" >&2
-      exit 1
-    fi
-    diff_report_path="${denylist_report}"
-    if [[ -z "${diff_report_path}" ]]; then
-      diff_report_path="${output_dir}/denylist_diff.json"
-    else
-      diff_report_path="$(abs_output_path "${diff_report_path}")"
-    fi
-    prepare_output_file_path "denylist diff report" "${diff_report_path}"
-    echo "Generating denylist diff evidence..."
-    (
-      cd "${workspace}"
-      run_xtask sorafs-gateway denylist diff \
-        --old "${denylist_old_bundle}" \
-        --new "${denylist_new_bundle}" \
-        --report-json "${diff_report_path}"
-    )
-    echo "Denylist diff report written to ${diff_report_path}"
-  fi
-fi

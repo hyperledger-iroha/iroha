@@ -376,8 +376,9 @@ to Torii or storing it alongside calibration evidence.
 
 ## Adversarial corpus validator
 
-Gateway denylist automation also needs to vet the perceptual corpus bundles
-referenced in MINFO-1c. Use the companion command to lint those registries:
+Governed compliance catalog producers also need to vet the perceptual corpus
+bundles referenced in MINFO-1c. Use the companion command to lint those
+registries:
 
 ```bash
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
@@ -390,13 +391,14 @@ equivalents, enforces `ADVERSARIAL_CORPUS_VERSION_V1`, ensures every manifest
 contains at least one family with at least one variant, and rejects entries that
 omit perceptual hashes/embeddings or attempt to set a Hamming radius above 32.
 When validation succeeds the CLI prints the issued-at timestamp, cohort label,
-and family/variant counts so operators can record the evidence before updating
-gateway denylists or publishing the manifest alongside GAR tickets.
+and family/variant counts so operators can record the evidence before an
+external governed producer constructs and signs the next catalog.
 
 ## Honey-token audit
 
-Use the new `moderation honey-audit` helper to probe gateways with known
-denylisted digests and capture cache-version evidence:
+Use the `moderation honey-audit` helper to probe gateways with digests known to
+be blocked by the promoted compliance catalog and capture catalog-sequence
+evidence:
 
 ```bash
 iroha app sorafs moderation honey-audit \
@@ -410,86 +412,28 @@ iroha app sorafs moderation honey-audit \
 ```
 
 - The command fails if any provider returns success or omits/mismatches the
-  cache/denylist version advertised by policy. `--require-proof` enforces the
+  catalog version advertised by policy. `--require-proof` enforces the
   presence of verified moderation proofs when the gateway publishes them.
 - Outputs include a machine-readable JSON summary plus an optional Markdown
   digest for governance packets.
-- `fetch` now accepts `--expected-cache-version` and `--moderation-key-b64`;
-  when provided, the orchestrator rejects responses that are missing the
-  declared cache/denylist version and surfaces verified Proof-of-Denylist
-  tokens alongside the policy evidence.
+- `fetch` accepts `--expected-cache-version` and `--moderation-key-b64`; when
+  provided, the orchestrator rejects responses that are missing the declared
+  catalog version and surfaces verified moderation proof tokens alongside the
+  policy evidence.
 
-## Gateway denylist Merkle registry
+## Gateway compliance control
 
-MINFO-6 introduces a Merkle-anchored registry for denylist bundles so gateways
-and auditors can prove inclusion of specific entries. The CLI exposes two
-helpers under `sorafs gateway merkle`:
+V1 gateway compliance control is exposed only through authenticated Torii
+routes: feed and status reads plus account-signed `stage`, `acknowledge`,
+`promote`, and `rollback` mutations under
+`/v1/sorafs/gateway/compliance`. The controller accepts bounded,
+predecessor-bound, threshold-signed catalogs and keeps durable candidate,
+acknowledgement, promoted, last-known-good, and history state.
 
-```bash
-iroha app sorafs gateway merkle snapshot \
-  --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
-  --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_snapshot.json
-
-iroha app sorafs gateway merkle proof \
-  --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
-  --index 5 \
-  --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_proof_entry_5.json
-
-iroha app sorafs gateway merkle proof \
-  --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
-  --descriptor provider:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
-  --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_proof_provider.json
-```
-
-- `merkle snapshot` parses the JSON bundle, validates every entry using the
-  existing denylist policy rules, computes deterministic leaf hashes, and emits
-  the Merkle root alongside the per-entry descriptors. The command prints a
-  summary to stdout and writes the full JSON artefact to `--json-out` (defaults
-  to `artifacts/sorafs_gateway/denylist_merkle_snapshot.json`). The artefact
-  mirrors the CLI output with:
-  - `root_hex` — the BLAKE3 Merkle root that governance anchors.
-  - `leaf_count` — number of entries included in the snapshot.
-  - `entries[]` — `{index, kind, descriptor, hash_hex, policy_tier}` for every
-    entry so auditors can map registry indexes back to the source file.
-- `account_id` entries are validated locally as encoded account literals
-  (canonical I105 only). Alias, UAID, opaque, and
-  `@domain` literals are rejected by the validator.
-- `merkle proof` recomputes the tree for the given denylist and produces a
-  membership proof for the zero-based `--index` requested. The JSON artefact
-  stores the root, the entry metadata, and the audit path (sibling hashes,
-  direction, and duplicate markers) so hosts can replay the proof without
-  re-running the CLI. The proof command prints a condensed view showing which
-  entry was proven and the sibling sequence for quick inspection.
-  - Prefer `--descriptor <kind:value>` when you copy the descriptor directly
-    from the snapshot output (for example `provider:AAAA…`). The CLI resolves
-    the descriptor to the correct index and emits the same proof artefact,
-    avoiding manual counting.
-- Pass `--norito-out=<path>` to either command to persist a Norito-encoded
-  artefact (`.to`) alongside the JSON copy. The snapshot/proof payloads are
-  encoded with `GATEWAY_MERKLE_SCHEMA_VERSION` so GAR automation and gateways
-  can transmit proofs directly over Norito channels without scraping stdout.
-
-Use `gateway update-denylist` to apply additions/removals and emit artefacts in
-one run:
-
-
-- Records are revalidated, descriptors are canonicalised (provider/manifest
-  digests are upper-cased), duplicates are rejected unless
-  `--allow-replacement` is supplied, and the command aborts if the resulting
-  denylist would be empty.
-- Removals accept descriptors straight from the snapshot (case-insensitive for
-  provider/manifest digests). Missing removal descriptors are errors; use
-  `--force` to overwrite an existing `--out` path.
-- The command prints the BLAKE3 digest and Merkle root for the updated bundle
-  and optionally writes snapshot + Norito + evidence artefacts in one call so
-  governance packets and GAR/CDN rollouts can attach a single deterministic
-  bundle.
-
-Both commands default to the sample denylist at
-`docs/source/sorafs_gateway_denylist_sample.json`, so CI pipelines can dry-run
-the tooling. Attach the snapshot and proof artefacts to the canon evidence
-bundle whenever new entries are published so governance votes and GAR tickets
-have reproducible Merkle roots.
+The SoraFS CLI does not construct, diff, verify, update, or install local
+compliance packs. Catalog normalization and threshold signing happen in
+governed external producers; operators use the authenticated API and retain
+payload-free promotion evidence.
 
 ## Appeal pricing quotes
 

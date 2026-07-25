@@ -49,61 +49,6 @@ internal static class ToriiSoraFsJson
         ValidateNonNegativeInt64(file.ChunkCount, $"{context}.chunk_count");
     }
 
-    internal static void ValidateDenylistCatalogResponse(
-        ToriiSoraFsDenylistCatalogResponse response,
-        string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ValidatePositiveInt64(response.Version, $"{context}.version");
-        RequireOptionalExactNonEmptyText(response.Jurisdiction, $"{context}.jurisdiction");
-        ValidateTextList(response.OptOutPacks, $"{context}.opt_out_packs");
-        ValidateTextList(response.ExtraPacks, $"{context}.extra_packs");
-        ValidateItems(response.Packs, $"{context}.packs", ValidateDenylistPackSummary);
-    }
-
-    internal static void ValidateDenylistPackSummary(ToriiSoraFsDenylistPackSummary? response, string context)
-    {
-        if (response is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        ValidateDenylistPackFields(
-            response.PackId,
-            response.Version,
-            response.PolicyTier,
-            response.ManifestCid,
-            response.MerkleRoot,
-            response.IssuedByProposalId,
-            response.ReviewReference,
-            response.Jurisdiction,
-            response.IssuedAt,
-            response.ExpiresAt,
-            response.EntryCount,
-            context);
-    }
-
-    internal static void ValidateDenylistPackResponse(ToriiSoraFsDenylistPackResponse response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ValidateDenylistPackFields(
-            response.PackId,
-            response.Version,
-            response.PolicyTier,
-            response.ManifestCid,
-            response.MerkleRoot,
-            response.IssuedByProposalId,
-            response.ReviewReference,
-            response.Jurisdiction,
-            response.IssuedAt,
-            response.ExpiresAt,
-            response.EntryCount,
-            context);
-        RequireExactNonEmptyText(response.SourcePath, $"{context}.source_path");
-    }
-
     internal static void ValidatePinAlias(ToriiSoraFsPinAlias? response, string context)
     {
         if (response is null)
@@ -318,138 +263,6 @@ internal static class ToriiSoraFsJson
         }
 
         throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
-    internal static ToriiSoraFsDenylistPackSummary ReadDenylistPackSummary(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        var fields = ReadDenylistPackFields(ref reader, context);
-        var response = CreateWithDirectMetadataContext(
-            () => new ToriiSoraFsDenylistPackSummary
-            {
-                PackId = RequireString(fields.PackId, context, "pack_id"),
-                Version = fields.Version,
-                DefaultEnabled = RequireBool(fields.DefaultEnabled, context, "default_enabled"),
-                Active = RequireBool(fields.Active, context, "active"),
-                PolicyTier = fields.PolicyTier,
-                ManifestCid = fields.ManifestCid,
-                MerkleRoot = fields.MerkleRoot,
-                IssuedByProposalId = fields.IssuedByProposalId,
-                ReviewReference = fields.ReviewReference,
-                Jurisdiction = fields.Jurisdiction,
-                IssuedAt = fields.IssuedAt,
-                ExpiresAt = fields.ExpiresAt,
-                EntryCount = RequireInt64(fields.EntryCount, context, "entry_count"),
-            },
-            context);
-        ValidateDenylistPackSummary(response, context);
-        return response;
-    }
-
-    internal static ToriiSoraFsDenylistCatalogResponse ReadDenylistCatalogResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? version = null;
-        string? jurisdiction = null;
-        List<string>? optOutPacks = null;
-        List<string>? extraPacks = null;
-        List<ToriiSoraFsDenylistPackSummary>? packs = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                var response = CreateWithDirectMetadataContext(
-                    () => new ToriiSoraFsDenylistCatalogResponse
-                    {
-                        Version = RequireInt64(version, context, "version"),
-                        Jurisdiction = jurisdiction,
-                        OptOutPacks = RequireList(optOutPacks, context, "opt_out_packs"),
-                        ExtraPacks = RequireList(extraPacks, context, "extra_packs"),
-                        Packs = RequireList(packs, context, "packs"),
-                    },
-                    context);
-                ValidateDenylistCatalogResponse(response, context);
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "version":
-                    version = ReadInt64(ref reader, $"{context}.version");
-                    break;
-                case "jurisdiction":
-                    jurisdiction = ReadOptionalString(ref reader, $"{context}.jurisdiction");
-                    break;
-                case "opt_out_packs":
-                    optOutPacks = ReadStringList(ref reader, $"{context}.opt_out_packs");
-                    break;
-                case "extra_packs":
-                    extraPacks = ReadStringList(ref reader, $"{context}.extra_packs");
-                    break;
-                case "packs":
-                    packs = ReadItems(ref reader, $"{context}.packs", ReadDenylistPackSummary);
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
-    internal static ToriiSoraFsDenylistPackResponse ReadDenylistPackResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        var fields = ReadDenylistPackFields(ref reader, context);
-        var response = CreateWithDirectMetadataContext(
-            () => new ToriiSoraFsDenylistPackResponse
-            {
-                PackId = RequireString(fields.PackId, context, "pack_id"),
-                Version = fields.Version,
-                DefaultEnabled = RequireBool(fields.DefaultEnabled, context, "default_enabled"),
-                Active = RequireBool(fields.Active, context, "active"),
-                PolicyTier = fields.PolicyTier,
-                ManifestCid = fields.ManifestCid,
-                MerkleRoot = fields.MerkleRoot,
-                IssuedByProposalId = fields.IssuedByProposalId,
-                ReviewReference = fields.ReviewReference,
-                Jurisdiction = fields.Jurisdiction,
-                IssuedAt = fields.IssuedAt,
-                ExpiresAt = fields.ExpiresAt,
-                EntryCount = RequireInt64(fields.EntryCount, context, "entry_count"),
-                SourcePath = RequireString(fields.SourcePath, context, "source_path"),
-            },
-            context);
-        ValidateDenylistPackResponse(response, context);
-        return response;
     }
 
     internal static ToriiSoraFsChunkerHandle ReadChunkerHandle(ref Utf8JsonReader reader, string context)
@@ -836,74 +649,6 @@ internal static class ToriiSoraFsJson
         writer.WriteEndObject();
     }
 
-    internal static void WriteDenylistPackSummary(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistPackSummary response,
-        string context)
-    {
-        ValidateDenylistPackSummary(response, context);
-        WriteDenylistPackFields(writer, new DenylistPackFields(
-            response.PackId,
-            response.Version,
-            response.DefaultEnabled,
-            response.Active,
-            response.PolicyTier,
-            response.ManifestCid,
-            response.MerkleRoot,
-            response.IssuedByProposalId,
-            response.ReviewReference,
-            response.Jurisdiction,
-            response.IssuedAt,
-            response.ExpiresAt,
-            response.EntryCount,
-            sourcePath: null));
-    }
-
-    internal static void WriteDenylistCatalogResponse(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistCatalogResponse response,
-        string context)
-    {
-        ValidateDenylistCatalogResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteNumber("version", response.Version);
-        ToriiVpnJson.WriteNullableString(writer, "jurisdiction", response.Jurisdiction);
-        WriteStringList(writer, "opt_out_packs", response.OptOutPacks);
-        WriteStringList(writer, "extra_packs", response.ExtraPacks);
-        writer.WritePropertyName("packs");
-        writer.WriteStartArray();
-        for (var index = 0; index < response.Packs.Count; index++)
-        {
-            WriteDenylistPackSummary(writer, response.Packs[index], $"{context}.packs[{index}]");
-        }
-        writer.WriteEndArray();
-        writer.WriteEndObject();
-    }
-
-    internal static void WriteDenylistPackResponse(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistPackResponse response,
-        string context)
-    {
-        ValidateDenylistPackResponse(response, context);
-        WriteDenylistPackFields(writer, new DenylistPackFields(
-            response.PackId,
-            response.Version,
-            response.DefaultEnabled,
-            response.Active,
-            response.PolicyTier,
-            response.ManifestCid,
-            response.MerkleRoot,
-            response.IssuedByProposalId,
-            response.ReviewReference,
-            response.Jurisdiction,
-            response.IssuedAt,
-            response.ExpiresAt,
-            response.EntryCount,
-            response.SourcePath));
-    }
-
     internal static void WriteChunkerHandle(Utf8JsonWriter writer, ToriiSoraFsChunkerHandle response, string context)
     {
         ValidateChunkerHandle(response, context);
@@ -994,123 +739,6 @@ internal static class ToriiSoraFsJson
 
     private delegate T ReadItem<T>(ref Utf8JsonReader reader, string context);
 
-    private static void ValidateDenylistPackFields(
-        string? packId,
-        string? version,
-        string? policyTier,
-        string? manifestCid,
-        string? merkleRoot,
-        string? issuedByProposalId,
-        string? reviewReference,
-        string? jurisdiction,
-        string? issuedAt,
-        string? expiresAt,
-        long entryCount,
-        string context)
-    {
-        RequireExactNonEmptyText(packId, $"{context}.pack_id");
-        RequireOptionalExactNonEmptyText(version, $"{context}.version");
-        RequireOptionalExactNonEmptyText(policyTier, $"{context}.policy_tier");
-        if (manifestCid is not null)
-        {
-            ValidateContentCid(manifestCid, $"{context}.manifest_cid");
-        }
-        RequireOptionalExactNonEmptyText(merkleRoot, $"{context}.merkle_root");
-        RequireOptionalExactNonEmptyText(issuedByProposalId, $"{context}.issued_by_proposal_id");
-        RequireOptionalExactNonEmptyText(reviewReference, $"{context}.review_reference");
-        RequireOptionalExactNonEmptyText(jurisdiction, $"{context}.jurisdiction");
-        RequireOptionalExactNonEmptyText(issuedAt, $"{context}.issued_at");
-        RequireOptionalExactNonEmptyText(expiresAt, $"{context}.expires_at");
-        ValidateNonNegativeInt64(entryCount, $"{context}.entry_count");
-    }
-
-    private static DenylistPackFields ReadDenylistPackFields(ref Utf8JsonReader reader, string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var fields = new DenylistPackFields();
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                return fields;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "pack_id":
-                    fields.PackId = ReadOptionalString(ref reader, $"{context}.pack_id");
-                    break;
-                case "version":
-                    fields.Version = ReadOptionalString(ref reader, $"{context}.version");
-                    break;
-                case "default_enabled":
-                    fields.DefaultEnabled = ReadBool(ref reader, $"{context}.default_enabled");
-                    break;
-                case "active":
-                    fields.Active = ReadBool(ref reader, $"{context}.active");
-                    break;
-                case "policy_tier":
-                    fields.PolicyTier = ReadOptionalString(ref reader, $"{context}.policy_tier");
-                    break;
-                case "manifest_cid":
-                    fields.ManifestCid = ReadOptionalString(ref reader, $"{context}.manifest_cid");
-                    break;
-                case "merkle_root":
-                    fields.MerkleRoot = ReadOptionalString(ref reader, $"{context}.merkle_root");
-                    break;
-                case "issued_by_proposal_id":
-                    fields.IssuedByProposalId = ReadOptionalString(ref reader, $"{context}.issued_by_proposal_id");
-                    break;
-                case "review_reference":
-                    fields.ReviewReference = ReadOptionalString(ref reader, $"{context}.review_reference");
-                    break;
-                case "jurisdiction":
-                    fields.Jurisdiction = ReadOptionalString(ref reader, $"{context}.jurisdiction");
-                    break;
-                case "issued_at":
-                    fields.IssuedAt = ReadOptionalString(ref reader, $"{context}.issued_at");
-                    break;
-                case "expires_at":
-                    fields.ExpiresAt = ReadOptionalString(ref reader, $"{context}.expires_at");
-                    break;
-                case "entry_count":
-                    fields.EntryCount = ReadInt64(ref reader, $"{context}.entry_count");
-                    break;
-                case "source_path":
-                    fields.SourcePath = ReadOptionalString(ref reader, $"{context}.source_path");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
     private static List<T>? ReadItems<T>(ref Utf8JsonReader reader, string context, ReadItem<T> readItem)
     {
         if (reader.TokenType == JsonTokenType.Null)
@@ -1186,19 +814,6 @@ internal static class ToriiSoraFsJson
         throw new JsonException($"{context} array is incomplete.");
     }
 
-    private static void ValidateTextList(IReadOnlyList<string>? values, string context)
-    {
-        if (values is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        for (var index = 0; index < values.Count; index++)
-        {
-            RequireExactNonEmptyText(values[index], $"{context}[{index}]");
-        }
-    }
-
     private static string? ReadOptionalString(ref Utf8JsonReader reader, string field)
     {
         return ToriiAccountFaucetJson.ReadOptionalString(ref reader, field);
@@ -1207,16 +822,6 @@ internal static class ToriiSoraFsJson
     private static string ReadRequiredString(ref Utf8JsonReader reader, string field)
     {
         return ReadOptionalString(ref reader, field) ?? throw new JsonException($"{field} must be a non-empty string.");
-    }
-
-    private static bool ReadBool(ref Utf8JsonReader reader, string field)
-    {
-        return reader.TokenType switch
-        {
-            JsonTokenType.True => true,
-            JsonTokenType.False => false,
-            _ => throw new JsonException($"{field} must be a boolean."),
-        };
     }
 
     private static long ReadInt64(ref Utf8JsonReader reader, string field)
@@ -1230,16 +835,6 @@ internal static class ToriiSoraFsJson
     }
 
     private static long RequireInt64(long? value, string context, string propertyName)
-    {
-        if (!value.HasValue)
-        {
-            throw new JsonException($"{context}.{propertyName} must not be null.");
-        }
-
-        return value.Value;
-    }
-
-    private static bool RequireBool(bool? value, string context, string propertyName)
     {
         if (!value.HasValue)
         {
@@ -1429,15 +1024,6 @@ internal static class ToriiSoraFsJson
         }
     }
 
-    private static void ValidatePositiveInt64(long value, string field)
-    {
-        ValidateNonNegativeInt64(value, field);
-        if (value == 0)
-        {
-            throw new JsonException($"{field} must be positive.");
-        }
-    }
-
     private static bool ContainsControlCharacter(string value)
     {
         foreach (var character in value)
@@ -1485,9 +1071,6 @@ internal static class ToriiSoraFsJson
         {
             _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsFileEntry.Path), "path", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsCidLookupResponse.Files), "files", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsDenylistCatalogResponse.OptOutPacks), "opt_out_packs", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsDenylistCatalogResponse.ExtraPacks), "extra_packs", out var mapped) => mapped,
-            _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsDenylistCatalogResponse.Packs), "packs", out var mapped) => mapped,
             _ when TryMapNestedField(paramName, nameof(ToriiSoraFsPinRegisterResponse.Alias), "alias", out var mapped) => mapped,
             nameof(ToriiSoraFsFileEntry.Path) => "path",
             nameof(ToriiSoraFsFileEntry.Offset) => "offset",
@@ -1498,18 +1081,6 @@ internal static class ToriiSoraFsJson
             nameof(ToriiSoraFsCidLookupResponse.ManifestDigestHex) => "manifest_digest_hex",
             nameof(ToriiSoraFsCidLookupResponse.ManifestIdHex) => "manifest_id_hex",
             nameof(ToriiSoraFsCidLookupResponse.IndexDocument) => "index_document",
-            nameof(ToriiSoraFsDenylistPackSummary.PackId) => "pack_id",
-            nameof(ToriiSoraFsDenylistPackSummary.Version) => "version",
-            nameof(ToriiSoraFsDenylistPackSummary.PolicyTier) => "policy_tier",
-            nameof(ToriiSoraFsDenylistPackSummary.ManifestCid) => "manifest_cid",
-            nameof(ToriiSoraFsDenylistPackSummary.MerkleRoot) => "merkle_root",
-            nameof(ToriiSoraFsDenylistPackSummary.IssuedByProposalId) => "issued_by_proposal_id",
-            nameof(ToriiSoraFsDenylistPackSummary.ReviewReference) => "review_reference",
-            nameof(ToriiSoraFsDenylistPackSummary.Jurisdiction) => "jurisdiction",
-            nameof(ToriiSoraFsDenylistPackSummary.IssuedAt) => "issued_at",
-            nameof(ToriiSoraFsDenylistPackSummary.ExpiresAt) => "expires_at",
-            nameof(ToriiSoraFsDenylistPackSummary.EntryCount) => "entry_count",
-            nameof(ToriiSoraFsDenylistPackResponse.SourcePath) => "source_path",
             nameof(ToriiSoraFsPinRegisterResponse.ChunkerHandle) => "chunker_handle",
             nameof(ToriiSoraFsPinRegisterResponse.SubmittedEpoch) => "submitted_epoch",
             nameof(ToriiSoraFsPinRegisterResponse.ContentLength) => "content_length",
@@ -1567,96 +1138,6 @@ internal static class ToriiSoraFsJson
         }
 
         return suffix[..(dot + 1)] + MapDirectMetadataField(suffix[(dot + 1)..]);
-    }
-
-    private static void WriteDenylistPackFields(Utf8JsonWriter writer, DenylistPackFields fields)
-    {
-        writer.WriteStartObject();
-        writer.WriteString("pack_id", fields.PackId);
-        ToriiVpnJson.WriteNullableString(writer, "version", fields.Version);
-        writer.WriteBoolean("default_enabled", fields.DefaultEnabled.GetValueOrDefault());
-        writer.WriteBoolean("active", fields.Active.GetValueOrDefault());
-        ToriiVpnJson.WriteNullableString(writer, "policy_tier", fields.PolicyTier);
-        ToriiVpnJson.WriteNullableString(writer, "manifest_cid", fields.ManifestCid);
-        ToriiVpnJson.WriteNullableString(writer, "merkle_root", fields.MerkleRoot);
-        ToriiVpnJson.WriteNullableString(writer, "issued_by_proposal_id", fields.IssuedByProposalId);
-        ToriiVpnJson.WriteNullableString(writer, "review_reference", fields.ReviewReference);
-        ToriiVpnJson.WriteNullableString(writer, "jurisdiction", fields.Jurisdiction);
-        ToriiVpnJson.WriteNullableString(writer, "issued_at", fields.IssuedAt);
-        ToriiVpnJson.WriteNullableString(writer, "expires_at", fields.ExpiresAt);
-        writer.WriteNumber("entry_count", fields.EntryCount.GetValueOrDefault());
-        if (fields.SourcePath is not null)
-        {
-            writer.WriteString("source_path", fields.SourcePath);
-        }
-        writer.WriteEndObject();
-    }
-
-    private sealed class DenylistPackFields
-    {
-        public DenylistPackFields()
-        {
-        }
-
-        public DenylistPackFields(
-            string? packId,
-            string? version,
-            bool defaultEnabled,
-            bool active,
-            string? policyTier,
-            string? manifestCid,
-            string? merkleRoot,
-            string? issuedByProposalId,
-            string? reviewReference,
-            string? jurisdiction,
-            string? issuedAt,
-            string? expiresAt,
-            long entryCount,
-            string? sourcePath)
-        {
-            PackId = packId;
-            Version = version;
-            DefaultEnabled = defaultEnabled;
-            Active = active;
-            PolicyTier = policyTier;
-            ManifestCid = manifestCid;
-            MerkleRoot = merkleRoot;
-            IssuedByProposalId = issuedByProposalId;
-            ReviewReference = reviewReference;
-            Jurisdiction = jurisdiction;
-            IssuedAt = issuedAt;
-            ExpiresAt = expiresAt;
-            EntryCount = entryCount;
-            SourcePath = sourcePath;
-        }
-
-        public string? PackId { get; set; }
-
-        public string? Version { get; set; }
-
-        public bool? DefaultEnabled { get; set; }
-
-        public bool? Active { get; set; }
-
-        public string? PolicyTier { get; set; }
-
-        public string? ManifestCid { get; set; }
-
-        public string? MerkleRoot { get; set; }
-
-        public string? IssuedByProposalId { get; set; }
-
-        public string? ReviewReference { get; set; }
-
-        public string? Jurisdiction { get; set; }
-
-        public string? IssuedAt { get; set; }
-
-        public string? ExpiresAt { get; set; }
-
-        public long? EntryCount { get; set; }
-
-        public string? SourcePath { get; set; }
     }
 }
 
@@ -1796,71 +1277,5 @@ internal sealed class ToriiSoraFsPinRegisterResponseJsonConverter :
         JsonSerializerOptions options)
     {
         ToriiSoraFsJson.WritePinRegisterResponse(writer, value, "SoraFS pin register response");
-    }
-}
-
-internal sealed class ToriiSoraFsDenylistPackSummaryJsonConverter :
-    JsonConverter<ToriiSoraFsDenylistPackSummary>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiSoraFsDenylistPackSummary Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiSoraFsJson.ReadDenylistPackSummary(ref reader, "SoraFS denylist pack summary");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistPackSummary value,
-        JsonSerializerOptions options)
-    {
-        ToriiSoraFsJson.WriteDenylistPackSummary(writer, value, "SoraFS denylist pack summary");
-    }
-}
-
-internal sealed class ToriiSoraFsDenylistCatalogResponseJsonConverter :
-    JsonConverter<ToriiSoraFsDenylistCatalogResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiSoraFsDenylistCatalogResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiSoraFsJson.ReadDenylistCatalogResponse(ref reader, "SoraFS denylist catalog response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistCatalogResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiSoraFsJson.WriteDenylistCatalogResponse(writer, value, "SoraFS denylist catalog response");
-    }
-}
-
-internal sealed class ToriiSoraFsDenylistPackResponseJsonConverter :
-    JsonConverter<ToriiSoraFsDenylistPackResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiSoraFsDenylistPackResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiSoraFsJson.ReadDenylistPackResponse(ref reader, "SoraFS denylist pack response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiSoraFsDenylistPackResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiSoraFsJson.WriteDenylistPackResponse(writer, value, "SoraFS denylist pack response");
     }
 }

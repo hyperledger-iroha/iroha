@@ -1142,17 +1142,6 @@ fn minimal_config_snapshot() {
                             30s,
                         ),
                     },
-                    denylist: SorafsGatewayDenylist {
-                        path: None,
-                        catalog_path: None,
-                        opt_out_packs: [],
-                        extra_packs: [],
-                        jurisdiction: None,
-                        standard_ttl: 15552000s,
-                        emergency_ttl: 2592000s,
-                        emergency_review_window: 604800s,
-                        require_governance_reference: true,
-                    },
                     rollout_phase: Canary,
                     anonymity_policy: Some(
                         GuardPq,

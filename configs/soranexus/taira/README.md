@@ -77,9 +77,6 @@ config rather than wrapper-local defaults:
   frontend; point it at the explicit public Torii base URL you want the UI to
   query.
 - `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file. Enable it only through the rendered validator config's `[sorafs.gateway.site_bindings]` table; Torii reads, validates, and caches the document once at startup.
-- `sorafs_gateway_denylist.catalog.json`: default-on SoraFS denylist pack catalog.
-- `sorafs_gateway_denylist.global-core.json`: baseline governance-backed illegal-content pack.
-- `sorafs_gateway_denylist.global-emergency.json`: emergency-response denylist pack.
 - `taira-irohad.service`: sample systemd unit that starts the validator from
   the shipped Taira config and genesis.
 - `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
@@ -572,25 +569,13 @@ gateway is `<alias>.mon.taira.sora.net`, for example
 fallback and `https://taira.sora.org/soradns/<alias>/...` available only as the
 legacy Torii compatibility path.
 
-### Default denylist packs
+### Governed gateway compliance
 
-Taira now loads a default-on denylist pack catalog from:
-
-- `configs/soranexus/taira/sorafs_gateway_denylist.catalog.json`
-
-The shipped catalog enables these packs by default:
-
-- `global-core`
-- `global-emergency`
-
-Operators can opt out of a pack via `[sorafs.gateway.denylist].opt_out_packs`
-or add explicit subscriptions via `extra_packs`.
-
-The governance trail for denylist updates should use the existing Ministry /
-Parliament flow and the examples already shipped in the repo:
-
-- `docs/examples/ministry/agenda_proposal_example.json`
-- `docs/examples/ministry/referendum_packet_example.json`
+Taira does not load local denylist files or packs. Gateway serving policy comes
+only from the threshold-signed, predecessor-bound compliance catalog configured
+under `[sorafs.gateway.compliance]`. Catalog construction, acknowledgement,
+promotion, rollback, and appeal/hold precedence remain operator-controlled; no
+repository bootstrap file authorizes live Taira mutation.
 
 Taira's public edge also needs to accept the storage payload upload that
 precedes root serving. The current SoraFS storage pin API sends the full staged

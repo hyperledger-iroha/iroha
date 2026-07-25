@@ -8,6 +8,23 @@ import {join, resolve} from 'node:path';
 import {isIsoTimestamp, verifyOpenApiVersions} from '../verify-openapi-versions.mjs';
 import {validateOpenApiGeneratorProvenance} from '../lib/openapi-provenance.mjs';
 
+function releaseSpec(marker) {
+  return JSON.stringify(
+    {
+      openapi: '3.1.0',
+      info: {title: `Torii ${marker}`, version: '1.0.0'},
+      paths: {
+        [`/${marker}`]: {
+          get: {responses: {'200': {description: 'ok'}}},
+        },
+      },
+      components: {schemas: {Fixture: {type: 'object'}}},
+    },
+    null,
+    2,
+  );
+}
+
 test('OpenAPI provenance accepts explicit dirty unsigned state and legacy clean state', () => {
   assert.deepEqual(
     validateOpenApiGeneratorProvenance({
@@ -223,7 +240,7 @@ test('verifyOpenApiVersions rejects signed entries without blake3', async () => 
 test('verifyOpenApiVersions rejects diverging latest/current aliases', async () => {
   const context = await setupFixture();
   const currentSpecPath = join(context.outputDir, 'versions', 'current', 'torii.json');
-  const divergentContent = JSON.stringify({generated: 'current-only'}, null, 2);
+  const divergentContent = releaseSpec('current-only');
   const divergentBuffer = Buffer.from(divergentContent, 'utf8');
   const divergentSha = createHash('sha256').update(divergentBuffer).digest('hex');
   const divergentBlake3 = 'bb278ba70b4eeb85dc30fa2d0ef67d47';
@@ -250,6 +267,25 @@ test('verifyOpenApiVersions rejects diverging latest/current aliases', async () 
   await assert.rejects(
     () => verifyOpenApiVersions(context),
     /latest .*current .*digest/i,
+  );
+});
+
+test('verifyOpenApiVersions rejects an empty OpenAPI stub', async () => {
+  const context = await setupFixture();
+  await writeFile(
+    join(context.outputDir, 'torii.json'),
+    JSON.stringify({
+      openapi: '3.1.0',
+      info: {title: 'Torii stub', version: '1.0.0'},
+      paths: {},
+      components: {},
+    }),
+    'utf8',
+  );
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /empty\/stub specifications are forbidden/i,
   );
 });
 
@@ -302,7 +338,7 @@ async function setupFixture(manifestMutator) {
   await mkdir(currentDir, {recursive: true});
   await mkdir(archivedDir, {recursive: true});
 
-  const specContent = JSON.stringify({generated: true}, null, 2);
+  const specContent = releaseSpec('generated');
   const specBytes = Buffer.from(specContent, 'utf8');
   const sha256 = createHash('sha256').update(specBytes).digest('hex');
   const timestamp = '2025-11-10T04:39:40.260Z';

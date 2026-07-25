@@ -8,6 +8,23 @@ import {dirname, join, resolve} from 'node:path';
 import {defaultRepoRoot, parseArgs, syncOpenApi} from '../sync-openapi.mjs';
 import {signPayload} from './helpers/openapi-signing.mjs';
 
+function releaseSpec(marker) {
+  return JSON.stringify(
+    {
+      openapi: '3.1.0',
+      info: {title: `Torii ${marker}`, version: '1.0.0'},
+      paths: {
+        [`/${marker}`]: {
+          get: {responses: {'200': {description: 'ok'}}},
+        },
+      },
+      components: {schemas: {Fixture: {type: 'object'}}},
+    },
+    null,
+    2,
+  );
+}
+
 test('default repository root contains the Cargo workspace', async () => {
   await access(join(defaultRepoRoot, 'Cargo.toml'));
 });
@@ -77,12 +94,49 @@ test('syncOpenApi rejects current without latest before generation or tracked wr
   assert.equal(await readFile(sentinelPath, 'utf8'), 'unchanged');
 });
 
+test('syncOpenApi rejects an empty generated stub before tracked writes', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-empty-stub-'));
+  const outputDir = join(tempRoot, 'static', 'openapi');
+  const versionsDir = join(outputDir, 'versions');
+  const sentinelPath = join(outputDir, 'sentinel.txt');
+  await mkdir(outputDir, {recursive: true});
+  await writeFile(sentinelPath, 'unchanged', 'utf8');
+
+  await assert.rejects(
+    () =>
+      syncOpenApi(
+        {version: 'current', latest: true, mirrors: [], requireSigned: false},
+        {
+          repoRoot: tempRoot,
+          outputDir,
+          versionsDir,
+          async generateSpec(_, outputFile) {
+            await writeFile(
+              outputFile,
+              JSON.stringify({
+                openapi: '3.1.0',
+                info: {title: 'Torii stub', version: '1.0.0'},
+                paths: {},
+                components: {},
+              }),
+              'utf8',
+            );
+          },
+        },
+      ),
+    /empty\/stub specifications are forbidden/i,
+  );
+
+  assert.equal(await readFile(sentinelPath, 'utf8'), 'unchanged');
+  await assert.rejects(() => access(join(versionsDir, 'current')));
+});
+
 test('syncOpenApi mirrors specs into multiple version directories', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
 
-  const fakeSpec = JSON.stringify({generated: true}, null, 2);
+  const fakeSpec = releaseSpec('generated');
 
   const manifestDir = join(outputDir);
   await mkdir(manifestDir, {recursive: true});
@@ -175,7 +229,7 @@ test('syncOpenApi rejects unsigned publications by default', async () => {
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const versionDir = join(versionsDir, '2025-q4');
-  const existingSpec = JSON.stringify({generated: 'existing'});
+  const existingSpec = releaseSpec('existing');
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), existingSpec, 'utf8');
 
@@ -193,7 +247,7 @@ test('syncOpenApi rejects unsigned publications by default', async () => {
           versionsDir,
           async generateSpec(_, outputFile) {
             await mkdir(dirname(outputFile), {recursive: true});
-            await writeFile(outputFile, JSON.stringify({generated: true}), 'utf8');
+            await writeFile(outputFile, releaseSpec('generated'), 'utf8');
           },
         },
     ),
@@ -211,7 +265,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unsigned-allowed-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const fakeSpec = JSON.stringify({generated: true});
+  const fakeSpec = releaseSpec('generated');
   await writeCanonicalManifest(outputDir, fakeSpec, {signature: null});
   await writeAllowedSigners(outputDir, []);
 
@@ -251,15 +305,15 @@ test('syncOpenApi rejects a forged signature before changing tracked snapshots',
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const versionDir = join(versionsDir, '2025-q4');
-  const existingSpec = JSON.stringify({generated: 'existing'});
+  const existingSpec = releaseSpec('existing');
   const existingManifest = JSON.stringify({sentinel: true});
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const freshSpec = releaseSpec('fresh');
 
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), existingSpec, 'utf8');
   await writeFile(join(versionDir, 'manifest.json'), existingManifest, 'utf8');
   await writeCanonicalManifest(outputDir, freshSpec, {
-    signature: signatureFor(JSON.stringify({generated: 'different'})),
+    signature: signatureFor(releaseSpec('different')),
   });
 
   await assert.rejects(
@@ -280,8 +334,8 @@ test('syncOpenApi rejects an artifact byte-count mismatch before changing tracke
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const versionDir = join(versionsDir, '2025-q4');
-  const existingSpec = JSON.stringify({generated: 'existing'});
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const existingSpec = releaseSpec('existing');
+  const freshSpec = releaseSpec('fresh');
 
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), existingSpec, 'utf8');
@@ -310,8 +364,8 @@ test('syncOpenApi rejects a valid signature from an unapproved key before tracke
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const versionDir = join(versionsDir, '2025-q4');
-  const existingSpec = JSON.stringify({generated: 'existing'});
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const existingSpec = releaseSpec('existing');
+  const freshSpec = releaseSpec('fresh');
   const manifestSignature = signatureFor(freshSpec);
   const otherSignature = signatureFor(freshSpec, {privateKeyHex: '01'.repeat(32)});
 
@@ -337,8 +391,8 @@ test('syncOpenApi rejects signed publication when no signer is provisioned', asy
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const versionDir = join(versionsDir, '2025-q4');
-  const existingSpec = JSON.stringify({generated: 'existing'});
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const existingSpec = releaseSpec('existing');
+  const freshSpec = releaseSpec('fresh');
 
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), existingSpec, 'utf8');
@@ -365,7 +419,7 @@ test('syncOpenApi accepts an operator-provided signer allowlist override', async
   const versionsDir = join(outputDir, 'versions');
   const operatorDir = join(tempRoot, 'operator');
   const operatorAllowlist = join(operatorDir, 'allowed_signers.json');
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const freshSpec = releaseSpec('fresh');
   const manifestSignature = signatureFor(freshSpec);
 
   await writeCanonicalManifest(outputDir, freshSpec, {signature: manifestSignature});
@@ -396,8 +450,8 @@ test('syncOpenApi refuses to overwrite or mirror an existing historical version'
     const outputDir = join(tempRoot, 'static', 'openapi');
     const versionsDir = join(outputDir, 'versions');
     const historicalDir = join(versionsDir, '2025-q2');
-    const historicalSpec = JSON.stringify({generated: 'historical'});
-    const freshSpec = JSON.stringify({generated: 'fresh'});
+    const historicalSpec = releaseSpec('historical');
+    const freshSpec = releaseSpec('fresh');
     await mkdir(historicalDir, {recursive: true});
     await writeFile(join(historicalDir, 'torii.json'), historicalSpec, 'utf8');
     await writeCanonicalManifest(outputDir, freshSpec, {signature: null});
@@ -426,8 +480,8 @@ test('syncOpenApi validates every historical entry before any tracked write', as
   const versionsDir = join(outputDir, 'versions');
   const currentDir = join(versionsDir, 'current');
   const invalidHistoricalSpec = join(versionsDir, '2025-q2', 'torii.json');
-  const oldSpec = JSON.stringify({generated: 'old'});
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const oldSpec = releaseSpec('old');
+  const freshSpec = releaseSpec('fresh');
 
   await writeCanonicalManifest(outputDir, freshSpec, {signature: null});
   await writeFile(join(outputDir, 'torii.json'), oldSpec, 'utf8');
@@ -473,12 +527,12 @@ test('syncOpenApi rejects symlinks in the artifact tree before tracked writes', 
   const versionsDir = join(outputDir, 'versions');
   const historicalDir = join(versionsDir, '2025-q2');
   const externalSpec = join(tempRoot, 'external-torii.json');
-  const freshSpec = JSON.stringify({generated: 'fresh'});
+  const freshSpec = releaseSpec('fresh');
 
   await writeCanonicalManifest(outputDir, freshSpec, {signature: null});
   await writeAllowedSigners(outputDir, []);
   await mkdir(historicalDir, {recursive: true});
-  await writeFile(externalSpec, JSON.stringify({generated: 'external'}), 'utf8');
+  await writeFile(externalSpec, releaseSpec('external'), 'utf8');
   await symlink(externalSpec, join(historicalDir, 'torii.json'));
   const manifestBefore = await readFile(join(outputDir, 'manifest.json'));
 
@@ -501,8 +555,8 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   const versionsDir = join(outputDir, 'versions');
   const currentDir = join(versionsDir, 'current');
   const historicalDir = join(versionsDir, '2025-q2');
-  const spec = JSON.stringify({generated: 'stable'});
-  const historicalSpec = JSON.stringify({generated: 'historical'});
+  const spec = releaseSpec('stable');
+  const historicalSpec = releaseSpec('historical');
   const generatedAt = '2025-01-01T00:00:00.123Z';
   const historicalUpdatedAt = '2024-06-01T00:00:00.000Z';
 
@@ -577,8 +631,8 @@ test('syncOpenApi replaces the mutable current manifest from the validated canon
   const versionDir = join(versionsDir, 'current');
   await mkdir(versionDir, {recursive: true});
 
-  const staleSpec = JSON.stringify({generated: 'old'}, null, 2);
-  const freshSpec = JSON.stringify({generated: 'new'}, null, 2);
+  const staleSpec = releaseSpec('old');
+  const freshSpec = releaseSpec('new');
   const staleSha = createHash('sha256').update(Buffer.from(staleSpec, 'utf8')).digest('hex');
   await writeFile(
     join(versionDir, 'manifest.json'),

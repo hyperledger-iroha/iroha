@@ -20703,9 +20703,6 @@ pub struct SorafsGateway {
     /// Rolling-window rate limiting configuration.
     #[config(nested)]
     pub rate_limit: SorafsGatewayRateLimit,
-    /// Denylist bootstrap configuration.
-    #[config(nested)]
-    pub denylist: SorafsGatewayDenylist,
     /// ACME automation configuration.
     #[config(nested)]
     pub acme: SorafsGatewayAcme,
@@ -20733,7 +20730,6 @@ impl Default for SorafsGateway {
             salt_schedule_dir: None,
             site_bindings: SorafsGatewaySiteBindings::default(),
             rate_limit: SorafsGatewayRateLimit::default(),
-            denylist: SorafsGatewayDenylist::default(),
             acme: SorafsGatewayAcme::default(),
             compliance: SorafsGatewayCompliance::default(),
             rollout_phase: defaults::sorafs::gateway::rollout_phase(),
@@ -20753,7 +20749,6 @@ impl SorafsGateway {
             salt_schedule_dir,
             site_bindings,
             rate_limit,
-            denylist,
             acme,
             compliance,
             rollout_phase,
@@ -20776,20 +20771,6 @@ impl SorafsGateway {
             })
         });
 
-        if compliance.enabled
-            && (denylist.path.is_some()
-                || denylist.catalog_path.is_some()
-                || !denylist.opt_out_packs.is_empty()
-                || !denylist.extra_packs.is_empty()
-                || denylist.jurisdiction.is_some())
-        {
-            emitter.emit(
-                Report::new(ParseError::InvalidToriiConfig).attach(
-                    "torii.sorafs.gateway.denylist bootstrap sources are forbidden when the governed compliance controller is enabled",
-                ),
-            );
-        }
-
         actual::SorafsGateway {
             require_manifest_envelope,
             enforce_admission,
@@ -20798,7 +20779,6 @@ impl SorafsGateway {
             site_bindings: site_bindings.parse(),
             cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
-            denylist: denylist.parse(),
             untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(),
             compliance: compliance.parse(emitter),
@@ -20943,71 +20923,6 @@ impl SorafsGatewayRateLimit {
                 .and_then(NonZeroU32::new),
             window: self.window,
             ban: self.ban.or(defaults::sorafs::gateway::rate_limit::BAN),
-        }
-    }
-}
-
-/// Denylist bootstrap configuration for the SoraFS gateway.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct SorafsGatewayDenylist {
-    /// Optional filesystem path to a JSON denylist definition.
-    pub path: Option<PathBuf>,
-    /// Optional filesystem path to a pack-catalog JSON definition.
-    pub catalog_path: Option<PathBuf>,
-    /// Pack identifiers explicitly disabled on this node.
-    #[config(default)]
-    pub opt_out_packs: Vec<String>,
-    /// Additional pack identifiers explicitly enabled on this node.
-    #[config(default)]
-    pub extra_packs: Vec<String>,
-    /// Optional jurisdiction code used to auto-enable matching regional packs.
-    pub jurisdiction: Option<String>,
-    /// Maximum TTL applied to standard entries when `expires_at` is omitted.
-    #[config(default = "defaults::sorafs::gateway::denylist::STANDARD_TTL")]
-    pub standard_ttl: Duration,
-    /// Maximum TTL applied to emergency entries.
-    #[config(default = "defaults::sorafs::gateway::denylist::EMERGENCY_TTL")]
-    pub emergency_ttl: Duration,
-    /// Review window enforced for emergency canons.
-    #[config(default = "defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW")]
-    pub emergency_review_window: Duration,
-    /// Require governance references for permanent entries.
-    #[config(default = "defaults::sorafs::gateway::denylist::REQUIRE_GOVERNANCE_REFERENCE")]
-    pub require_governance_reference: bool,
-}
-
-impl Default for SorafsGatewayDenylist {
-    fn default() -> Self {
-        Self {
-            path: defaults::sorafs::gateway::denylist::path(),
-            catalog_path: None,
-            opt_out_packs: Vec::new(),
-            extra_packs: Vec::new(),
-            jurisdiction: None,
-            standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
-            emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
-            emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,
-            require_governance_reference:
-                defaults::sorafs::gateway::denylist::REQUIRE_GOVERNANCE_REFERENCE,
-        }
-    }
-}
-
-impl SorafsGatewayDenylist {
-    fn parse(self) -> actual::SorafsGatewayDenylist {
-        actual::SorafsGatewayDenylist {
-            path: self.path,
-            catalog_path: self.catalog_path,
-            opt_out_packs: self.opt_out_packs,
-            extra_packs: self.extra_packs,
-            jurisdiction: self
-                .jurisdiction
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty()),
-            standard_ttl: self.standard_ttl,
-            emergency_ttl: self.emergency_ttl,
-            emergency_review_window: self.emergency_review_window,
-            require_governance_reference: self.require_governance_reference,
         }
     }
 }
@@ -23732,6 +23647,49 @@ pin_torii_urls = [
                 "https://taira-validator-2.sora.org".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn sorafs_gateway_rejects_all_removed_local_denylist_keys() {
+        let removed_keys = [
+            ("path", Value::String("./denylist.json".to_owned())),
+            (
+                "catalog_path",
+                Value::String("./denylist-catalog.json".to_owned()),
+            ),
+            (
+                "opt_out_packs",
+                Value::Array(vec![Value::String("regional-pack".to_owned())]),
+            ),
+            (
+                "extra_packs",
+                Value::Array(vec![Value::String("local-pack".to_owned())]),
+            ),
+            ("jurisdiction", Value::String("ae".to_owned())),
+            ("standard_ttl", Value::String("180d".to_owned())),
+            ("emergency_ttl", Value::String("30d".to_owned())),
+            ("emergency_review_window", Value::String("7d".to_owned())),
+            ("require_governance_reference", Value::Boolean(true)),
+        ];
+
+        for (removed_key, removed_value) in removed_keys {
+            let mut table = base_table();
+            let mut denylist = Table::new();
+            denylist.insert(removed_key.to_owned(), removed_value);
+            let mut gateway = Table::new();
+            gateway.insert("denylist".to_owned(), Value::Table(denylist));
+            let mut sorafs = Table::new();
+            sorafs.insert("gateway".to_owned(), Value::Table(gateway));
+            table.insert("sorafs".to_owned(), Value::Table(sorafs));
+
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("removed local gateway denylist key must not parse");
+            let report = format!("{error:?}");
+            assert!(
+                report.contains("denylist"),
+                "removed sorafs.gateway.denylist.{removed_key} produced an unrelated error: {report}"
+            );
+        }
     }
 
     #[test]

@@ -3,7 +3,6 @@
 mod acme;
 mod compliance;
 mod controller;
-mod denylist;
 mod feed_transport;
 mod policy;
 mod rate_limit;
@@ -32,7 +31,8 @@ pub use compliance::{
     GatewayComplianceLegalSafetyHoldV1, GatewayComplianceMutationBindingV1,
     GatewayComplianceMutationKindV1, GatewayComplianceMutationResultV1,
     GatewayComplianceRollbackPayloadV1, GatewayComplianceRollbackV1,
-    GatewayComplianceSourceAnchorV1, GatewayComplianceStore, GatewayComplianceSubjectKindV1,
+    GatewayComplianceSourceAnchorV1, GatewayComplianceStore, GatewayComplianceStoreGeneration,
+    GatewayComplianceStoreLease, GatewayComplianceStoreSnapshot, GatewayComplianceSubjectKindV1,
     GatewayComplianceToggleV1, GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
     MAX_GATEWAY_COMPLIANCE_ACKS_V1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
     MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1, MAX_GATEWAY_COMPLIANCE_ENTRIES_V1,
@@ -40,11 +40,6 @@ pub use compliance::{
     MAX_GATEWAY_COMPLIANCE_SIGNERS_V1,
 };
 pub use controller::TlsAutomationHandle;
-pub use denylist::{
-    DenylistEntry, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicy,
-    DenylistPolicyTier, GatewayDenylist, PerceptualFamilyEntry, PerceptualMatch,
-    PerceptualMatchBasis, PerceptualObservation,
-};
 pub use feed_transport::ProductionGatewayComplianceFeedTransport;
 pub use policy::{
     GatewayPolicy, GatewayPolicyConfig, PolicyDecision, PolicyViolation, RequestContext,
