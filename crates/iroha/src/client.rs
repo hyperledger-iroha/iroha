@@ -31988,7 +31988,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SubmitSorafsModerationCommit>()
                 .expect("exact commit instruction");
-            assert_eq!(embedded.commit_payload(), commit_payload);
+            assert_eq!(embedded.commit_payload(), &commit_payload);
 
             for (route, _) in expected_routes {
                 client
