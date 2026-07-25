@@ -354,7 +354,7 @@ use crate::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
-    kura::Kura,
+    kura::{Kura, PendingCertifiedMergeEvidenceScan},
     nexus::space_directory::{
         AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
         UaidDataspaceBindings,
@@ -4877,6 +4877,8 @@ impl<'world> WorldBlock<'world> {
             soradns_last_publish_ms,
             soradns_history_len,
             governance_last_unlock_sweep_height,
+            sccp_registry,
+            sccp_outbound_pending_usage,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -4958,6 +4960,11 @@ impl<'world> WorldBlock<'world> {
             axt_policies,
             axt_replay_ledger,
             sccp_outbound_pending_messages,
+            sccp_outbound_message_locator,
+            sccp_outbound_message_index,
+            sccp_outbound_proofs,
+            sccp_inbound_messages,
+            sccp_inbound_anchor_high_water,
             tx_sequences,
             verifying_keys,
             verifying_keys_by_circuit,
@@ -4975,6 +4982,8 @@ impl<'world> WorldBlock<'world> {
             contract_code_uploads,
             contract_code_upload_chunks,
             contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses,
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
@@ -14909,13 +14918,17 @@ mod storage_migration_tests {
         world
             .accounts
             .insert(second.clone(), AccountValue::new(second_details));
+        world.account_aliases.insert(label.clone(), first.clone());
+        world
+            .account_rekey_records
+            .insert(label.clone(), AccountRekeyRecord::new(label.clone(), first));
 
         let err = world
             .rebuild_account_alias_index()
             .expect_err("duplicate alias should be rejected");
         assert!(
-            err.contains("Account alias"),
-            "error should reference alias conflict: {err}"
+            err.contains("Account primary label") && err.contains("bound to account"),
+            "error should reference the conflicting primary binding: {err}"
         );
     }
 
@@ -14970,7 +14983,18 @@ mod storage_migration_tests {
             .insert(account_id.clone(), AccountValue::new(details));
         world
             .account_aliases
+            .insert(primary_label.clone(), account_id.clone());
+        world
+            .account_aliases
             .insert(bound_label.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            primary_label.clone(),
+            AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
+        );
+        world.account_rekey_records.insert(
+            bound_label.clone(),
+            AccountRekeyRecord::new(bound_label.clone(), account_id.clone()),
+        );
 
         world
             .rebuild_account_alias_index()
@@ -15400,8 +15424,6 @@ mod custom_parameter_tests {
             "vrf_commit_window_blocks",
             "vrf_reveal_window_blocks",
             "max_validators",
-            "min_self_bond",
-            "min_nomination_bond",
             "max_nominator_concentration_pct",
             "seat_band_pct",
             "max_entity_correlation_pct",
@@ -25454,6 +25476,10 @@ impl State {
             return;
         }
         let restored = snapshots.len();
+        for snapshot in snapshots {
+            crate::sumeragi::status::record_commit_qc(snapshot.commit_qc);
+            crate::sumeragi::status::record_validator_checkpoint(snapshot.validator_checkpoint);
+        }
         debug!(restored, "restored commit rosters from journal");
     }
 
@@ -26254,11 +26280,38 @@ impl State {
     }
 
     /// Push a committed block hash when constructing scenarios in tests.
+    ///
+    /// The synthetic autoscale sample keeps the test state eligible for a
+    /// canonical snapshot: production block commits always retain the same
+    /// height/hash suffix, so a hash-only fixture must do so as well.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn push_block_hash_for_testing(&mut self, block_hash: HashOf<BlockHeader>) {
+        let block_height = u64::try_from(self.block_hashes.committed_height())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         let mut block = self.block_hashes.block();
         block.push(block_hash);
         block.commit();
+
+        let history_cap = autoscale_sample_history_cap(&self.nexus.read().autoscale);
+        let mut history = self.autoscale_sample_history.write();
+        let baseline_timestamp_ms = block_height.saturating_mul(100).max(1);
+        let creation_time_ms = history.back().map_or(baseline_timestamp_ms, |previous| {
+            previous
+                .creation_time_ms
+                .saturating_add(1)
+                .max(baseline_timestamp_ms)
+        });
+        append_autoscale_sample_record(
+            &mut history,
+            AutoscaleSampleRecord {
+                block_height,
+                block_hash,
+                creation_time_ms,
+                work_count: 0,
+            },
+            history_cap,
+        );
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -26886,8 +26939,6 @@ impl State {
                     iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id(),
                 sorafs_pricing: PricingScheduleRecord::default(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
-                sorafs_repair_escalation:
-                    iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
                 sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
                 sorafs_provider_owners: std::collections::BTreeMap::new(),
                 conviction_step_blocks: 100,
@@ -27090,7 +27141,8 @@ impl State {
         *self.lane_incarnation_activation_heights.get_mut() = activation_heights;
     }
 
-    fn install_active_lane_markers_for_tests(&self) {
+    /// Synchronize Kura lane storage and manifests after an in-process test catalog mutation.
+    pub(crate) fn install_active_lane_markers_for_tests(&self) {
         let nexus = self.nexus.read();
         let incarnations = self.lane_incarnations.read();
         let activation_heights = self.lane_incarnation_activation_heights.read();
@@ -27105,6 +27157,16 @@ impl State {
                 )
                 .expect("install explicit active lane marker for State test fixture");
         }
+        let manifests = rebind_lane_manifests_for_lifecycle(
+            self.lane_manifests.read().as_ref(),
+            &nexus.lane_catalog,
+            &nexus.governance,
+        )
+        .expect("bind active lane manifests for State test fixture");
+        drop(activation_heights);
+        drop(incarnations);
+        drop(nexus);
+        self.install_lane_manifests(&manifests);
     }
 
     #[cfg(test)]
@@ -27384,6 +27446,98 @@ impl State {
         )
     }
 
+    /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
+    /// geometry.
+    ///
+    /// This is intentionally separate from [`Self::set_nexus`]: installing a
+    /// fixture's initial catalog is not a runtime lifecycle transition and must
+    /// not archive a synthetic default-primary segment.
+    #[cfg(test)]
+    pub(crate) fn new_with_nexus_for_testing(
+        world: World,
+        mut nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+    ) -> Self {
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        let kura = Kura::blank_kura_for_testing_with_lane_config(&nexus.lane_config);
+        let mut state = Self::try_new_with_chain(
+            world,
+            kura,
+            query_handle,
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("test fixture durable State startup journals must validate");
+        state.install_pre_genesis_nexus_for_testing(nexus);
+        state.configure_test_runtime_defaults();
+        state
+    }
+
+    /// Bind an already configured test Kura to its matching pre-genesis Nexus fixture.
+    ///
+    /// The caller must have opened Kura with the same lane geometry. This helper
+    /// is for tests that need a named store root or custom retention policy.
+    #[cfg(test)]
+    pub(crate) fn install_pre_genesis_nexus_for_testing(
+        &mut self,
+        mut nexus: iroha_config::parameters::actual::Nexus,
+    ) {
+        assert_eq!(
+            self.committed_height(),
+            0,
+            "a pre-genesis Nexus fixture cannot replace committed state"
+        );
+        assert_eq!(
+            self.kura
+                .exact_durable_blocks_count()
+                .expect("read test Kura durable height"),
+            0,
+            "a pre-genesis Nexus fixture cannot replace durable Kura state"
+        );
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
+        let autoscale_history_cap = autoscale_sample_history_cap(&nexus.autoscale);
+        *self.nexus.get_mut() = nexus;
+        self.reseed_static_lane_incarnations();
+        self.install_active_lane_markers_for_tests();
+        trim_autoscale_sample_history(
+            self.autoscale_sample_history.get_mut(),
+            autoscale_history_cap,
+        );
+        crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut self.world,
+            &configured_fee_asset_id,
+        );
+        self.nexus_storage_budget_last_check_height
+            .store(0, Ordering::Relaxed);
+        let _ = self.refresh_axt_policies_from_directory();
+        #[cfg(feature = "telemetry")]
+        {
+            let nexus = self.nexus.get_mut();
+            self.telemetry
+                .set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
+        }
+    }
+
+    fn configure_test_runtime_defaults(&mut self) {
+        // Make pipeline settings conservative and single-threaded for tests to reduce
+        // flakiness and avoid scheduler edge cases on highly parallel configs.
+        self.pipeline.dynamic_prepass = true;
+        self.pipeline.parallel_overlay = false;
+        self.pipeline.parallel_apply = false;
+        self.pipeline.ready_queue_heap = false;
+        self.pipeline.workers = 1;
+        self.pipeline_parallelism = PipelineParallelism::new(&self.pipeline);
+        // Disable citizenship gating by default in unit tests; individual tests can override.
+        self.gov.citizenship_bond_amount = 0_u64.into();
+        self.disable_nexus_fees_for_testing();
+    }
+
     /// Create a [`State`] suitable for tests in dependent crates with explicit chain id.
     ///
     /// This helper selects the correct constructor regardless of whether the
@@ -27406,17 +27560,7 @@ impl State {
         )
         .expect("test fixture durable State startup journals must validate");
         s.install_active_lane_markers_for_tests();
-        // Make pipeline settings conservative and single-threaded for tests to reduce
-        // flakiness and avoid scheduler edge cases on highly parallel configs.
-        s.pipeline.dynamic_prepass = true;
-        s.pipeline.parallel_overlay = false;
-        s.pipeline.parallel_apply = false;
-        s.pipeline.ready_queue_heap = false;
-        s.pipeline.workers = 1; // keep test execution single-threaded by default
-        s.pipeline_parallelism = PipelineParallelism::new(&s.pipeline);
-        // Disable citizenship gating by default in unit tests; individual tests can override.
-        s.gov.citizenship_bond_amount = 0_u64.into();
-        s.disable_nexus_fees_for_testing();
+        s.configure_test_runtime_defaults();
         s
     }
 
@@ -27851,12 +27995,15 @@ impl State {
                     ),
                 ));
             }
-            // Collect candidates to close at end height
+            // Close after the inclusive end height so ballots submitted in the
+            // `h_end` block remain eligible for the deterministic final tally.
             let to_close: Vec<(String, u64)> = wtx
                 .governance_referenda
                 .iter()
                 .filter_map(|(rid, rec)| match rec.status {
-                    super::state::GovernanceReferendumStatus::Open if rec.h_end == now_h => {
+                    super::state::GovernanceReferendumStatus::Open
+                        if rec.h_end.checked_add(1) == Some(now_h) =>
+                    {
                         Some((rid.clone(), rec.h_end))
                     }
                     _ => None,
@@ -27901,7 +28048,7 @@ impl State {
                             let step = sb.gov.conviction_step_blocks.max(1);
                             let max_c = sb.gov.max_conviction;
                             for rec in locks.locks.values() {
-                                if rec.expiry_height < now_h {
+                                if rec.expiry_height < at_h {
                                     continue;
                                 }
                                 let voting_units = crate::smartcontracts::isi::world::isi::quantity_to_voting_units(
@@ -32995,7 +33142,7 @@ impl State {
         lane_incarnation: Hash,
     ) -> bool {
         let pending = match self.kura.pending_queue_plan_admission_certificates_bounded(
-            crate::kura::MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES,
+            self.kura.pending_queue_plan_admission_capacity(),
         ) {
             Ok(pending) => pending,
             Err(_) => return true,
@@ -34419,9 +34566,11 @@ impl State {
 
         let chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
         let authority = self.view();
-        let mut remaining_certified_artifacts = SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX;
+        // Certified bundles and pending merge sidecars share one hard scan
+        // budget; neither durable source can hide an unbounded second pass.
+        let mut remaining_native_evidence_scan = SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX;
         for (lane_id, dataspace_id, incarnation) in active_routes.iter().copied() {
-            let requested = remaining_certified_artifacts.saturating_add(1);
+            let requested = remaining_native_evidence_scan.saturating_add(1);
             let certified = self.kura.latest_certified_lane_block_artifacts_matching(
                 lane_id,
                 requested,
@@ -34437,13 +34586,13 @@ impl State {
                         )
                 },
             );
-            if certified.len() > remaining_certified_artifacts {
+            if certified.len() > remaining_native_evidence_scan {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "certified autonomous Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
                 )));
             }
-            remaining_certified_artifacts =
-                remaining_certified_artifacts.saturating_sub(certified.len());
+            remaining_native_evidence_scan =
+                remaining_native_evidence_scan.saturating_sub(certified.len());
             for artifact in certified {
                 let descriptor = &artifact.proposal.descriptor;
                 let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
@@ -34483,11 +34632,37 @@ impl State {
         }
         drop(authority);
 
-        for (_, entry) in self
+        let pending_native_evidence = match self
             .kura
-            .pending_certified_merge_entries()
+            .pending_certified_merge_entry_hashes_matching_bounded(
+                remaining_native_evidence_scan,
+                |entry| {
+                    entry.execution_batch.as_ref().is_some_and(|batch| {
+                        batch.lanes.iter().any(|execution| {
+                            execution.native_amx_receipts.iter().any(Option::is_some)
+                        })
+                    })
+                },
+            )
             .map_err(MergeLedgerCommitError::Persistence)?
         {
+            PendingCertifiedMergeEvidenceScan::Complete(hashes) => hashes,
+            PendingCertifiedMergeEvidenceScan::LimitExceeded => {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "pending certified merge Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+        };
+        for entry_hash in pending_native_evidence {
+            let Some(entry) = self
+                .kura
+                .merge_entry_by_hash(entry_hash)
+                .map_err(MergeLedgerCommitError::Persistence)?
+            else {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "pending certified merge Native AMX diagnostic evidence {entry_hash} disappeared during its bounded scan",
+                )));
+            };
             if self
                 .validate_certified_merge_entry_for_global_order(&entry)
                 .is_err()
@@ -51503,6 +51678,40 @@ mod tiered_snapshot_diff_tests {
 
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
 
+    fn seed_sccp_snapshot_block_hashes(
+        state: &State,
+        hashes: impl IntoIterator<Item = HashOf<BlockHeader>>,
+    ) {
+        let mut committed_hashes = state.block_hashes.block();
+        for block_hash in hashes {
+            committed_hashes.push_for_tests(block_hash);
+        }
+        committed_hashes.commit_for_tests();
+        let history = state
+            .block_hashes
+            .view()
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, block_hash)| {
+                let block_height = u64::try_from(index)
+                    .expect("SCCP snapshot fixture height fits u64")
+                    .saturating_add(1);
+                AutoscaleSampleRecord {
+                    block_height,
+                    block_hash,
+                    creation_time_ms: block_height,
+                    work_count: 0,
+                }
+            })
+            .collect();
+        *state.autoscale_sample_history.write() = history;
+    }
+
+    fn seed_sccp_snapshot_height_one(state: &State, block_hash: HashOf<BlockHeader>) {
+        seed_sccp_snapshot_block_hashes(state, [block_hash]);
+    }
+
     fn sccp_state_snapshot_value(world: World, chain_id: &str) -> norito::json::Value {
         let state = State::new_with_chain(
             world,
@@ -51514,9 +51723,7 @@ mod tiered_snapshot_diff_tests {
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact SCCP finality fixture decodes");
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(finality.finality_artifact.block_hash);
-        block_hashes.commit_for_tests();
+        seed_sccp_snapshot_height_one(&state, finality.finality_artifact.block_hash);
         norito::json::to_value(&state).expect("serialize authoritative state snapshot")
     }
 
@@ -51550,9 +51757,7 @@ mod tiered_snapshot_diff_tests {
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact SCCP finality fixture decodes");
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(finality.finality_artifact.block_hash);
-        block_hashes.commit_for_tests();
+        seed_sccp_snapshot_height_one(&state, finality.finality_artifact.block_hash);
         state
     }
 
@@ -51827,11 +52032,7 @@ mod tiered_snapshot_diff_tests {
             LiveQueryStore::start_test(),
             ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
         );
-        let mut block_hashes = state.block_hashes.block();
-        for block in blocks {
-            block_hashes.push_for_tests(block.hash());
-        }
-        block_hashes.commit_for_tests();
+        seed_sccp_snapshot_block_hashes(&state, blocks.iter().map(|block| block.hash()));
         (
             norito::json::to_value(&state).expect("serialize whole-height deletion snapshot"),
             kura,
@@ -53447,9 +53648,7 @@ mod tiered_snapshot_diff_tests {
             LiveQueryStore::start_test(),
             ChainId::from("rootless-with-kura-suffix"),
         );
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(rootless.hash());
-        block_hashes.commit_for_tests();
+        seed_sccp_snapshot_height_one(&state, rootless.hash());
         let snapshot =
             norito::json::to_value(&state).expect("serialize rootless/suffix SCCP snapshot");
 
@@ -53471,9 +53670,7 @@ mod tiered_snapshot_diff_tests {
             LiveQueryStore::start_test(),
             ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
         );
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(rootless.hash());
-        block_hashes.commit_for_tests();
+        seed_sccp_snapshot_height_one(&state, rootless.hash());
         let snapshot = norito::json::to_value(&state)
             .expect("serialize fabricated rootless-height SCCP snapshot");
 
@@ -56761,52 +56958,17 @@ fn replay_blocks_from_kura_range_inner(
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_lines)]
-fn ensure_executor_bytecode(temp_dir: &tempfile::TempDir) -> String {
-    use std::path::PathBuf;
-
-    use norito::codec::Encode as _;
-
-    if std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR").is_some() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mut candidates = vec![
-            manifest_dir.join("../../defaults/executor.to"),
-            manifest_dir.join("defaults/executor.to"),
-        ];
-        if let Some(workspace_dir) = option_env!("CARGO_WORKSPACE_DIR") {
-            candidates.push(PathBuf::from(workspace_dir).join("defaults/executor.to"));
-        }
-        candidates.extend([
-            PathBuf::from("defaults/executor.to"),
-            PathBuf::from("../../defaults/executor.to"),
-        ]);
-        for candidate in candidates {
-            if candidate.exists() {
-                return candidate.to_string_lossy().into_owned();
-            }
-        }
-    }
-
-    let executor_path = temp_dir.path().join("executor.to");
-    let verdict: Result<(), iroha_data_model::ValidationFail> = Ok(());
-    let program = crate::executor::build_program_from_encoded_result(&verdict.encode());
-    std::fs::write(&executor_path, program).expect("write temporary executor bytecode");
-    executor_path.to_string_lossy().into_owned()
-}
-
-#[cfg(test)]
 mod strict_replay_tests;
 
 #[cfg(test)]
 mod replay_validation_tests {
-    use std::{collections::BTreeSet, sync::Arc};
+    use std::sync::Arc;
 
-    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         ChainId, ValidationFail,
         account::AccountId,
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{BlockSignature, SignedBlock, consensus_v2::ConsensusMode},
+        block::{SignedBlock, consensus_v2::ConsensusMode},
         isi::{InstructionBox, Log, Mint, Register, SetKeyValue},
         name::Name,
         nexus::{
@@ -56855,7 +57017,7 @@ mod replay_validation_tests {
     ///
     /// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
     /// parent-module function, which never enters this test-only adapter.
-    fn replay_blocks_from_kura_range(
+    pub(super) fn replay_blocks_from_kura_range(
         kura: &Arc<Kura>,
         state: &mut State,
         topology: &crate::sumeragi::network_topology::Topology,
@@ -56972,6 +57134,71 @@ mod replay_validation_tests {
         Account::new(account_id.clone())
     }
 
+    fn configure_replay_fixture_parameters(state: &State) {
+        let mut parameters = state.world.parameters.block();
+        parameters.sumeragi.key_require_hsm = false;
+        parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+
+    fn rebind_test_execution_context_validators_and_resign(
+        block: &mut SignedBlock,
+        topology: &crate::sumeragi::network_topology::Topology,
+        private_key: &iroha_crypto::PrivateKey,
+    ) {
+        let mut context = block
+            .execution_context()
+            .cloned()
+            .expect("state-free block fixture must carry execution context");
+        let mut validators = topology.as_ref().to_vec();
+        validators.sort();
+        validators.dedup();
+        let validator_count =
+            u32::try_from(validators.len()).expect("test validator count fits u32");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validators.len(),
+        ))
+        .expect("test quorum fits u32");
+        for ownership in &mut context.lane_payload_ownerships {
+            ownership.lane_block_descriptor_validator_set = validators.clone();
+            ownership.lane_block_descriptor_validator_count = validator_count;
+            ownership.lane_block_descriptor_min_quorum = min_quorum;
+            let hashes = ownership
+                .compute_replay_hashes()
+                .expect("rebind state-free execution-context replay hashes");
+            ownership.subject_hash = hashes.subject_hash;
+            ownership.payload_ownership_hash = hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(hashes.lane_block_descriptor_hash);
+        }
+        block.set_execution_context(Some(context));
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
+                .expect("re-sign rebound test execution context"),
+        );
+        block
+            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .expect("replace rebound block signature");
+    }
+
+    fn clear_test_execution_context_and_resign(
+        block: &mut SignedBlock,
+        private_key: &iroha_crypto::PrivateKey,
+    ) {
+        block.set_execution_context(None);
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
+                .expect("re-sign legacy replay fixture"),
+        );
+        block
+            .replace_signatures(std::collections::BTreeSet::from([signature]))
+            .expect("replace legacy replay fixture signature");
+    }
+
     fn previous_roster_evidence_for_parent(
         parent: &SignedBlock,
         roster: &[PeerId],
@@ -57011,20 +57238,34 @@ mod replay_validation_tests {
     ) -> SignedBlock {
         let time_source = TimeSource::new_system();
         let mut voting_block = None;
-        let (valid_block, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
-            block,
-            topology,
-            chain_id,
-            genesis_account,
-            &time_source,
-            state,
-            &mut voting_block,
-            false,
-            skip_block_signatures,
-            skip_block_signatures,
-        )
-        .unpack(|_| {})
-        .expect("block validates for replay fixture");
+        let validation = if skip_block_signatures {
+            ValidBlock::validate_keep_voting_block_for_replay(
+                block,
+                topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                &mut voting_block,
+                false,
+                true,
+                true,
+            )
+        } else {
+            ValidBlock::validate_keep_voting_block(
+                block,
+                topology,
+                chain_id,
+                genesis_account,
+                &time_source,
+                state,
+                &mut voting_block,
+                false,
+            )
+        };
+        let (valid_block, mut state_block) = validation
+            .unpack(|_| {})
+            .expect("block validates for replay fixture");
         let committed = valid_block.commit_unchecked().unpack(|_| {});
         let committed_signed = committed.as_ref().clone();
         state
@@ -57089,22 +57330,6 @@ mod replay_validation_tests {
         )
     }
 
-    fn strip_execution_context_and_resign_for_test(
-        block: &mut SignedBlock,
-        private_key: &iroha_crypto::PrivateKey,
-        signatory_idx: u64,
-    ) {
-        block.set_execution_context(None);
-        let signature = BlockSignature::new(
-            signatory_idx,
-            SignatureOf::try_from_hash(private_key, block.header().hash())
-                .expect("test block signing should succeed"),
-        );
-        block
-            .replace_signatures(BTreeSet::from([signature]))
-            .expect("replace block signatures");
-    }
-
     fn configure_private_replay_route(
         state: &mut State,
         lane_id: LaneId,
@@ -57163,6 +57388,14 @@ mod replay_validation_tests {
             chain_id,
         );
         configure_private_replay_route(&mut state, lane_id, dataspace_id);
+        let configured_nexus = state.nexus.get_mut().clone();
+        state.install_pre_genesis_nexus_for_testing(configured_nexus);
+        let manifests = {
+            let nexus = state.nexus.get_mut();
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance))
+        };
+        state.install_lane_manifests(&manifests);
+        configure_replay_fixture_parameters(&state);
         state
     }
 
@@ -57519,11 +57752,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        {
-            let mut params_block = materialize_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&materialize_state);
         let genesis_block = commit_replay_validated_block(
             &materialize_state,
             &topology,
@@ -57560,11 +57789,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&state);
 
         replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Permissioned)
             .expect("replay first two blocks");
@@ -57621,7 +57846,7 @@ mod replay_validation_tests {
 
         use iroha_crypto::Algorithm;
         use iroha_data_model::{
-            parameter::system::{Parameter, SumeragiNposParameters},
+            parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
             peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
@@ -57630,8 +57855,6 @@ mod replay_validation_tests {
         };
 
         let chain_id = ChainId::from("iroha:test:npos-replay");
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-
         let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let peers = vec![
@@ -57651,7 +57874,6 @@ mod replay_validation_tests {
 
         let npos_params = SumeragiNposParameters {
             epoch_seed: seed,
-            epoch_length_blocks: NonZeroU64::new(10).expect("test epoch must be non-zero"),
             ..Default::default()
         };
 
@@ -57666,10 +57888,9 @@ mod replay_validation_tests {
             ),
         ];
 
-        let executor_path = super::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
-            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
                 .set_topology(topology_entries)
                 .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
         genesis_builder = genesis_builder
@@ -57677,6 +57898,9 @@ mod replay_validation_tests {
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_consensus_meta()
             .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
             .expect("genesis");
         let genesis_signed = genesis_block.0.clone();
@@ -57717,23 +57941,23 @@ mod replay_validation_tests {
             .chain(0, Some(&genesis_signed))
             .sign(signer)
             .unpack(|_| {});
-        let signed_block: SignedBlock = new_block.into();
-
-        let block_arc = Arc::new(signed_block);
+        let mut signed_block: SignedBlock = new_block.into();
         let mut validation_topology =
             crate::sumeragi::network_topology::Topology::new(peers.clone());
         validation_topology.rotate_preserve_view_to_front(leader_index);
+        rebind_test_execution_context_validators_and_resign(
+            &mut signed_block,
+            &validation_topology,
+            signer,
+        );
+        let block_arc = Arc::new(signed_block);
         let materialize_state = State::new_with_chain(
             make_world(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        {
-            let mut params_block = materialize_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&materialize_state);
         let genesis_signed = commit_replay_validated_block(
             &materialize_state,
             &topology,
@@ -57780,17 +58004,15 @@ mod replay_validation_tests {
 
     #[allow(clippy::too_many_lines)]
     fn replay_uses_commit_roster_journal_for_signature_order_impl() {
-        use std::{borrow::Cow, collections::BTreeSet};
+        use std::borrow::Cow;
 
         use iroha_config::{
             base::WithOrigin,
             kura::InitMode,
             parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         };
-        use iroha_crypto::{Algorithm, SignatureOf};
-        use iroha_data_model::{
-            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
-        };
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId};
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
             SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
@@ -57834,10 +58056,9 @@ mod replay_validation_tests {
             ),
         ];
 
-        let executor_path = super::ensure_executor_bytecode(&temp_dir);
         let (user_id, user_keypair) = gen_account_in("wonderland");
         let mut genesis_builder =
-            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
                 .set_topology(topology_entries);
         genesis_builder = genesis_builder
             .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
@@ -57876,6 +58097,7 @@ mod replay_validation_tests {
         );
         kura.store_block(Arc::new(genesis_signed.clone()))
             .expect("store genesis");
+        configure_replay_fixture_parameters(&state);
 
         let tx = TransactionBuilder::new(
             chain_id.clone(),
@@ -57910,16 +58132,11 @@ mod replay_validation_tests {
         } else {
             peer_b.private_key()
         };
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(signer_key, signed_block.header().hash())
-                .expect("test block signing should succeed"),
+        rebind_test_execution_context_validators_and_resign(
+            &mut signed_block,
+            &signature_topology,
+            signer_key,
         );
-        let mut signature_set = BTreeSet::new();
-        signature_set.insert(signature);
-        signed_block
-            .replace_signatures(signature_set)
-            .expect("replace signatures");
 
         let signed_block = commit_replay_validated_block_with_options(
             &state,
@@ -58001,10 +58218,21 @@ mod replay_validation_tests {
             PeerId::new(peer_b.public_key().clone()),
         ]);
 
-        replay_blocks_from_kura(
+        replay_blocks_from_kura_range(
             &kura,
             &mut replay_state,
             &fallback_topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay permissioned genesis before installing test-only penalty parameters");
+        configure_replay_fixture_parameters(&replay_state);
+        replay_blocks_from_kura_range(
+            &kura,
+            &mut replay_state,
+            &fallback_topology,
+            2,
             2,
             ConsensusMode::Permissioned,
         )
@@ -58022,10 +58250,10 @@ mod replay_validation_tests {
 
     #[allow(clippy::too_many_lines)]
     fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
-        use std::{borrow::Cow, collections::BTreeSet};
+        use std::borrow::Cow;
 
-        use iroha_crypto::{Algorithm, SignatureOf};
-        use iroha_data_model::{DomainId, account::AccountId, block::BlockSignature, peer::PeerId};
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{DomainId, account::AccountId, peer::PeerId};
         use iroha_genesis::GENESIS_DOMAIN_ID;
 
         let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
@@ -58074,11 +58302,7 @@ mod replay_validation_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&state);
         let genesis_block = commit_replay_validated_block(
             &state,
             &fallback_topology,
@@ -58125,14 +58349,11 @@ mod replay_validation_tests {
             .sign(mismatched_signer)
             .unpack(|_| {});
         let mut signed_block2: SignedBlock = block2.into();
-        let forged_signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(mismatched_signer, signed_block2.header().hash())
-                .expect("test block signing should succeed"),
+        rebind_test_execution_context_validators_and_resign(
+            &mut signed_block2,
+            &expected_topology,
+            mismatched_signer,
         );
-        signed_block2
-            .replace_signatures(BTreeSet::from([forged_signature]))
-            .expect("replace signatures");
 
         let signed_block2 = commit_replay_validated_block_with_signature_mode(
             &state,
@@ -58162,11 +58383,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id,
         );
-        {
-            let mut params_block = replay_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&replay_state);
 
         let err = replay_blocks_from_kura(
             &kura,
@@ -58236,11 +58453,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        {
-            let mut params_block = materialize_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&materialize_state);
 
         let tx_genesis = TransactionBuilder::new(
             chain_id.clone(),
@@ -58304,11 +58517,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id,
         );
-        {
-            let mut params_block = replay_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&replay_state);
 
         let err = replay_blocks_from_kura(
             &kura,
@@ -58377,11 +58586,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        {
-            let mut params_block = materialize_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&materialize_state);
 
         let tx_genesis = TransactionBuilder::new(
             chain_id.clone(),
@@ -58432,10 +58637,10 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(signed_block2.clone()))
             .expect("store block2");
         let correct_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&materialize_state);
-        kura.store_wsv_checkpoint(
+        kura.overwrite_wsv_checkpoint_without_validation_for_tests(
             2,
-            signed_block2.hash(),
             Hash::new(b"not the replayed canonical WSV"),
+            None,
         )
         .expect("overwrite block2 WSV checkpoint");
 
@@ -58445,11 +58650,7 @@ mod replay_validation_tests {
             crate::query::store::LiveQueryStore::start_test(),
             chain_id,
         );
-        {
-            let mut params_block = replay_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        configure_replay_fixture_parameters(&replay_state);
 
         replay_blocks_from_kura_range(
             &kura,
@@ -58496,7 +58697,7 @@ mod replay_validation_tests {
             "checkpoint rejection must not publish merge-cache entries"
         );
 
-        kura.store_wsv_checkpoint(2, signed_block2.hash(), correct_checkpoint)
+        kura.overwrite_wsv_checkpoint_without_validation_for_tests(2, correct_checkpoint, None)
             .expect("replace unbound forged checkpoint with the exact canonical state hash");
         replay_blocks_from_kura_range(
             &kura,
@@ -58541,11 +58742,12 @@ mod replay_validation_tests {
         let original_state =
             replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
         seed_space_directory_manifest_for_legacy_checkpoint_test(&original_state, dataspace_id);
-        {
-            let mut params_block = original_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
+        let proof_policies = |height| {
+            crate::da::active_proof_policy_bundle_at_height(
+                &original_state.nexus_snapshot(),
+                height,
+            )
+        };
 
         let tx_genesis = TransactionBuilder::new(
             chain_id.clone(),
@@ -58554,11 +58756,12 @@ mod replay_validation_tests {
         )
         .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let genesis_block = SignedBlock::genesis(
+        let genesis_block = SignedBlock::genesis_with_da_proof_policies(
             vec![tx_genesis],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
             None,
             None,
+            Some(proof_policies(1)),
         );
         let genesis_block = commit_replay_validated_block(
             &original_state,
@@ -58612,24 +58815,28 @@ mod replay_validation_tests {
         let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let block = crate::block::BlockBuilder::new(vec![accepted])
             .chain(0, Some(&genesis_block))
+            .with_da_proof_policies(Some(proof_policies(2)))
             .sign(leader.private_key())
             .unpack(|_| {});
         let mut legacy_block: SignedBlock = block.into();
-        strip_execution_context_and_resign_for_test(&mut legacy_block, leader.private_key(), 0);
+        clear_test_execution_context_and_resign(&mut legacy_block, leader.private_key());
         assert!(
             legacy_block.execution_context().is_none(),
-            "fixture must exercise the legacy missing-context replay path"
+            "legacy fixture must exercise replay compatibility without an execution context"
         );
-        let legacy_block = commit_replay_validated_block(
+        let legacy_block = commit_replay_validated_block_with_signature_mode(
             &original_state,
             &topology,
             legacy_block,
             &chain_id,
             &genesis_id,
+            true,
         );
         assert!(legacy_block.has_results());
         kura.store_block(Arc::new(legacy_block.clone()))
             .expect("store legacy block");
+        let canonical_prefix =
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state);
 
         let block3_instructions = vec![
             InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
@@ -58659,20 +58866,22 @@ mod replay_validation_tests {
                 &legacy_block,
                 topology.as_ref(),
             )))
+            .with_da_proof_policies(Some(proof_policies(3)))
             .sign(leader.private_key())
             .unpack(|_| {});
         let mut legacy_block3: SignedBlock = block3.into();
-        strip_execution_context_and_resign_for_test(&mut legacy_block3, leader.private_key(), 0);
+        clear_test_execution_context_and_resign(&mut legacy_block3, leader.private_key());
         assert!(
             legacy_block3.execution_context().is_none(),
-            "fixture must exercise multi-block legacy missing-context replay"
+            "multi-block legacy fixture must retain missing-context replay compatibility"
         );
-        let legacy_block3 = commit_replay_validated_block(
+        let legacy_block3 = commit_replay_validated_block_with_signature_mode(
             &original_state,
             &topology,
             legacy_block3,
             &chain_id,
             &genesis_id,
+            true,
         );
         assert!(legacy_block3.has_results());
         kura.store_block(Arc::new(legacy_block3.clone()))
@@ -58686,20 +58895,36 @@ mod replay_validation_tests {
             canonical_checkpoint, legacy_checkpoint,
             "test fixture must distinguish the exact first-release WSV from the retired surface"
         );
-        kura.store_wsv_checkpoint(3, legacy_block3.hash(), legacy_checkpoint)
+        kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, legacy_checkpoint, None)
             .expect("overwrite final WSV checkpoint with retired surface hash");
 
+        let replay_kura = Kura::blank_kura_for_testing();
         let mut replay_state =
-            replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
+            replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
         seed_space_directory_manifest_for_legacy_checkpoint_test(&replay_state, dataspace_id);
-        {
-            let mut params_block = replay_state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
+        for height in 1..=3 {
+            let height_index = NonZeroUsize::new(height).expect("replay height is non-zero");
+            let block = kura
+                .get_block(height_index)
+                .expect("source replay block exists");
+            let checkpoint = kura
+                .wsv_checkpoint(u64::try_from(height).expect("test height fits u64"))
+                .expect("read source replay checkpoint")
+                .expect("source replay checkpoint exists");
+            replay_kura
+                .store_block(Arc::clone(&block))
+                .expect("copy replay block after pre-genesis Nexus installation");
+            replay_kura
+                .store_wsv_checkpoint(
+                    u64::try_from(height).expect("test height fits u64"),
+                    block.hash(),
+                    checkpoint.state_hash(),
+                )
+                .expect("copy replay checkpoint");
         }
 
         let err = replay_blocks_from_kura(
-            &kura,
+            &replay_kura,
             &mut replay_state,
             &topology,
             3,
@@ -58713,8 +58938,8 @@ mod replay_validation_tests {
         );
         assert_eq!(
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
-            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state),
-            "the exact state may reconstruct correctly, but only its exact checkpoint is accepted"
+            canonical_prefix,
+            "checkpoint rejection must leave the last exactly authenticated prefix committed"
         );
     }
 }
@@ -58735,6 +58960,7 @@ mod permission_cache_tests {
     };
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias},
+        role::CanManageRoles,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
     use iroha_primitives::json::Json;
@@ -58974,6 +59200,43 @@ mod permission_cache_tests {
         builder.sign(signer).unpack(|_| {})
     }
 
+    fn install_permission_cache_replay_parameters(state: &State) {
+        let mut parameters = state.world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::system::Parameter::Custom(
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+
+    fn replay_permission_cache_blocks(
+        kura: &Arc<Kura>,
+        state: &mut State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block_count: usize,
+    ) -> Result<()> {
+        super::replay_validation_tests::replay_blocks_from_kura_range(
+            kura,
+            state,
+            topology,
+            1,
+            1,
+            ConsensusMode::Permissioned,
+        )?;
+        install_permission_cache_replay_parameters(state);
+        if block_count > 1 {
+            super::replay_validation_tests::replay_blocks_from_kura_range(
+                kura,
+                state,
+                topology,
+                2,
+                block_count,
+                ConsensusMode::Permissioned,
+            )?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn permission_cache_rebuilds_after_restart() {
         // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
@@ -59086,10 +59349,8 @@ mod permission_cache_tests {
         let (registrar, registrar_keypair) = gen_account_in("wonderland");
         let (owner, owner_keypair) = gen_account_in("wonderland");
         let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-        let executor_path = ensure_executor_bytecode(&temp_dir);
-
         let mut genesis_builder =
-            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
+            GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
                 .set_topology(vec![GenesisTopologyEntry::new(
                     PeerId::new(leader_public_key.clone()),
                     leader_pop,
@@ -59098,7 +59359,22 @@ mod permission_cache_tests {
             .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(registrar_keypair.public_key().clone())
             .account(owner_keypair.public_key().clone())
-            .finish_domain();
+            .finish_domain()
+            .append_instruction(Register::trigger(iroha_data_model::trigger::Trigger::new(
+                trigger_id.clone(),
+                iroha_data_model::trigger::action::Action::new(
+                    vec![InstructionBox::from(Log::new(
+                        iroha_logger::Level::INFO,
+                        "permission cache trigger".to_owned(),
+                    ))],
+                    iroha_data_model::trigger::action::Repeats::Indefinitely,
+                    owner.clone(),
+                    iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(owner.clone()),
+                ),
+            )))
+            .append_instruction(Grant::account_permission(CanManageRoles, owner.clone()));
         let genesis_block = genesis_builder
             .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
             .expect("genesis");
@@ -59124,7 +59400,6 @@ mod permission_cache_tests {
             let block_arc = Arc::new(committed_genesis.into());
             kura.store_block(Arc::clone(&block_arc))
                 .expect("store genesis block");
-            kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
             kura.store_wsv_checkpoint(
                 height,
@@ -59141,6 +59416,7 @@ mod permission_cache_tests {
             );
             recorded_blocks.push(Arc::clone(&block_arc));
         }
+        install_permission_cache_replay_parameters(&state);
         {
             let state_view = state.view();
             let world_view = state_view.world();
@@ -59221,7 +59497,6 @@ mod permission_cache_tests {
             let block_arc = Arc::new(signed_block);
             kura.store_block(Arc::clone(&block_arc))
                 .expect("store grant block");
-            kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
             kura.store_wsv_checkpoint(
                 height,
@@ -59280,14 +59555,8 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(
-            &kura,
-            &mut state,
-            &topology,
-            recorded_blocks.len(),
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay stored blocks");
+        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
+            .expect("replay stored blocks");
         {
             let latest_hash = state
                 .view()
@@ -59376,7 +59645,6 @@ mod permission_cache_tests {
             let block_arc = Arc::new(committed_revoke.into());
             kura.store_block(Arc::clone(&block_arc))
                 .expect("store revoke block");
-            kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
             kura.store_wsv_checkpoint(
                 height,
@@ -59430,14 +59698,8 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(
-            &kura,
-            &mut state,
-            &topology,
-            recorded_blocks.len(),
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay stored blocks after revoke");
+        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
+            .expect("replay stored blocks after revoke");
         {
             let state_view = state.view();
             let world_view = state_view.world();
@@ -59514,7 +59776,6 @@ mod permission_cache_tests {
             let block_arc = Arc::new(signed_block);
             kura.store_block(Arc::clone(&block_arc))
                 .expect("store role block");
-            kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
             kura.store_wsv_checkpoint(
                 height,
@@ -59564,14 +59825,8 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(
-            &kura,
-            &mut state,
-            &topology,
-            recorded_blocks.len(),
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay stored blocks after role grant");
+        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
+            .expect("replay stored blocks after role grant");
 
         let latest_hash = state
             .view()
@@ -59631,7 +59886,6 @@ mod permission_cache_tests {
             let block_arc = Arc::new(signed_block);
             kura.store_block(Arc::clone(&block_arc))
                 .expect("store revoke role block");
-            kura.persist_block_immediate_for_tests(&block_arc);
             let height = block_arc.header().height().get();
             kura.store_wsv_checkpoint(
                 height,
@@ -59685,14 +59939,8 @@ mod permission_cache_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        replay_blocks_from_kura(
-            &kura,
-            &mut state,
-            &topology,
-            recorded_blocks.len(),
-            ConsensusMode::Permissioned,
-        )
-        .expect("replay stored blocks after role revoke");
+        replay_permission_cache_blocks(&kura, &mut state, &topology, recorded_blocks.len())
+            .expect("replay stored blocks after role revoke");
 
         let latest_hash = state
             .view()
@@ -61682,9 +61930,10 @@ impl StateTransaction<'_, '_> {
                 self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                 let artifacts = artifacts?;
                 let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                    crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                    crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                         context,
                         summary.prepared_contract().artifact(),
+                        &event,
                     )
                 });
                 let validation_outcome =
@@ -61937,9 +62186,10 @@ impl StateTransaction<'_, '_> {
                                 self.last_tx_gas_used.saturating_add(trigger_gas_used);
                             let artifacts = artifacts?;
                             let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                                     context,
                                     prepared_contract.artifact(),
+                                    &event,
                                 )
                             });
                             let validation_outcome =
@@ -64616,8 +64866,6 @@ pub(crate) mod deserialize {
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
-            sorafs_repair_escalation:
-                iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
             sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: std::collections::BTreeMap::new(),
             conviction_step_blocks: 100,
@@ -64686,20 +64934,35 @@ pub(crate) mod deserialize {
         use super::*;
 
         #[test]
+        fn take_parameters_cell_accepts_canonical_mv_envelope() {
+            let expected = Parameters::default();
+            let blocks = norito::json::to_value(&expected).expect("serialize parameters");
+            let mut canonical_map = json::native::Map::new();
+            canonical_map.insert("revert".to_owned(), json::Value::Null);
+            canonical_map.insert("blocks".to_owned(), blocks);
+            let canonical = json::Value::Object(canonical_map);
+
+            let mut map = json::native::Map::new();
+            map.insert("parameters".to_owned(), canonical);
+
+            let parsed = take_parameters_cell(&mut map, "parameters")
+                .expect("canonical parameters MV envelope must be accepted");
+            assert_eq!(parsed.view().get(), &expected);
+        }
+
+        #[test]
         fn take_parameters_cell_rejects_legacy_blocks_envelope() {
             let expected = Parameters::default();
             let blocks = norito::json::to_value(&expected).expect("serialize parameters");
             let mut legacy_map = json::native::Map::new();
-            legacy_map.insert("revert".to_owned(), json::Value::Null);
             legacy_map.insert("blocks".to_owned(), blocks);
-            let historical = json::Value::Object(legacy_map);
 
             let mut map = json::native::Map::new();
-            map.insert("parameters".to_owned(), historical);
+            map.insert("parameters".to_owned(), json::Value::Object(legacy_map));
 
             let error = take_parameters_cell(&mut map, "parameters")
                 .err()
-                .expect("historical parameters envelope must be rejected");
+                .expect("legacy blocks-only parameters envelope must be rejected");
             assert!(
                 error.to_string().contains("parameters"),
                 "unexpected diagnostic: {error}"
@@ -64917,6 +65180,56 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    #[test]
+    fn test_state_constructor_installs_default_lane_manifest() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        state
+            .lane_manifests
+            .read()
+            .ensure_lane_ready(LaneId::SINGLE)
+            .expect("default test lane must be present in the manifest registry");
+    }
+
+    #[test]
+    fn test_nexus_fixture_constructor_opens_custom_primary_without_default_segment() {
+        let custom_primary = LaneConfig {
+            alias: "custom-primary".to_owned(),
+            ..LaneConfig::default()
+        };
+        let custom_catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![custom_primary]).expect("custom lane catalog");
+        let state = State::new_with_nexus_for_testing(
+            World::default(),
+            iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: custom_catalog,
+                ..Default::default()
+            },
+            LiveQueryStore::start_test(),
+        );
+
+        state
+            .lane_manifests
+            .read()
+            .ensure_lane_ready(LaneId::SINGLE)
+            .expect("custom primary test lane must have an authenticated manifest");
+        let store_root = state.kura.store_root();
+        let nexus = state.nexus_snapshot();
+        let primary = nexus.lane_config.primary();
+        assert!(primary.blocks_dir(&store_root).is_dir());
+        assert!(primary.merge_log_path(&store_root).is_file());
+
+        let default_primary = RuntimeLaneConfig::default().primary().clone();
+        assert_ne!(primary.kura_segment, default_primary.kura_segment);
+        assert!(!default_primary.blocks_dir(&store_root).exists());
+        assert!(!default_primary.merge_log_path(&store_root).exists());
+    }
 
     #[test]
     fn insert_domain_for_testing_replaces_owner_index_without_empty_bucket() {
@@ -66450,54 +66763,73 @@ seiyaku SequentialNfts {
 
     #[test]
     fn set_nexus_config_cycle_never_reuses_a_retired_incarnation() {
-        let mut state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
+        let changed_lane = LaneId::new(1);
         let original = iroha_config::parameters::actual::Nexus {
             enabled: true,
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: changed_lane,
+                        alias: "policy-cycle".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("two-lane policy fixture"),
             ..Default::default()
         };
-        state
-            .set_nexus(original.clone())
-            .expect("install original Nexus policy");
+        let mut state = State::new_with_nexus_for_testing(
+            World::default(),
+            original.clone(),
+            LiveQueryStore::start_test(),
+        );
         let first_incarnation = state
-            .lane_incarnation(LaneId::SINGLE)
-            .expect("default lane incarnation");
+            .lane_incarnation(changed_lane)
+            .expect("changed lane incarnation");
 
         let mut relabelled = original.clone();
         relabelled.lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                alias: "renamed-default-lane".to_owned(),
-                ..LaneConfig::default()
-            }],
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: changed_lane,
+                    alias: "renamed-policy-cycle".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
         )
         .expect("relabelled catalog");
         state
             .set_nexus(relabelled)
             .expect("pure storage relabel remains admissible");
         assert_eq!(
-            state.lane_incarnation(LaneId::SINGLE),
+            state.lane_incarnation(changed_lane),
             Some(first_incarnation),
             "non-consensus relabels must preserve the lane incarnation"
         );
 
         let mut restricted = original.clone();
         restricted.lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                visibility: LaneVisibility::Restricted,
-                ..LaneConfig::default()
-            }],
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: changed_lane,
+                    alias: "policy-cycle".to_owned(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
         )
         .expect("restricted catalog");
         state
             .set_nexus(restricted)
             .expect("install changed lane policy");
         let restricted_incarnation = state
-            .lane_incarnation(LaneId::SINGLE)
+            .lane_incarnation(changed_lane)
             .expect("restricted lane incarnation");
         assert_ne!(restricted_incarnation, first_incarnation);
 
@@ -66505,7 +66837,7 @@ seiyaku SequentialNfts {
             .set_nexus(original)
             .expect("restore original lane policy");
         let restored_incarnation = state
-            .lane_incarnation(LaneId::SINGLE)
+            .lane_incarnation(changed_lane)
             .expect("restored lane incarnation");
         assert_ne!(restored_incarnation, first_incarnation);
         assert_ne!(restored_incarnation, restricted_incarnation);
@@ -67491,7 +67823,17 @@ seiyaku SequentialNfts {
             .insert(account_id.clone(), AccountValue::new(details));
         world
             .account_aliases
+            .insert(primary_label.clone(), account_id.clone());
+        world
+            .account_aliases
             .insert(bound_label.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            primary_label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                primary_label.clone(),
+                account_id.clone(),
+            ),
+        );
         world.account_rekey_records.insert(
             bound_label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(
@@ -68094,6 +68436,20 @@ seiyaku SequentialNfts {
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) {
         nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+        let previous_lane_config = state.nexus.read().lane_config.clone();
+        let diff = lane_topology_diff(&previous_lane_config, &nexus.lane_config, &BTreeSet::new());
+        assert!(
+            diff.relabelled.iter().all(|(previous, _)| {
+                previous.lane_id != previous_lane_config.primary().lane_id
+            }),
+            "a pre-genesis primary relabel fixture must construct Kura with the target catalog"
+        );
+        let mut fixture_replacements = diff.replacements;
+        fixture_replacements.extend(diff.relabelled);
+        state
+            .kura
+            .reconcile_lane_segments_for_testing(&diff.added, &diff.retired, &fixture_replacements)
+            .expect("test Nexus lane storage must match the installed catalog");
         let incarnations =
             derive_static_lane_incarnations(state.chain_id_ref(), &nexus.lane_catalog);
         let activation_heights = nexus
@@ -69060,26 +69416,30 @@ seiyaku SequentialNfts {
             alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
         let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
+        // A primary account label is authoritative only with its active forward,
+        // reverse, continuity, and SNS records. Keep the account otherwise
+        // unlinked so the test still exercises label-based domain projection.
+        let mut world = World::with(
+            [Domain::new(recipient_domain.clone()).build(&ALICE_ID)],
+            [Account::new(subject.clone()).build(&ALICE_ID)],
+            [],
+        );
+        world.accounts.insert(
+            subject.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                Some(account_label.clone()),
+                None,
+                Vec::new(),
+            )),
+        );
+        seed_active_account_alias_binding(&mut world, &subject, &account_label);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
         let block = new_dummy_block_with_payload(|_| {});
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-
-        Register::domain(Domain::new(recipient_domain.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-        let account = Account {
-            id: subject.clone(),
-            metadata: Metadata::default(),
-            label: Some(account_label),
-            uaid: None,
-            opaque_ids: Vec::new(),
-        };
-        let (account_id, account_value) = account.into_key_value();
-        stx.world.accounts.insert(account_id, account_value);
+        let stx = state_block.transaction();
 
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -72904,11 +73264,6 @@ seiyaku SequentialNfts {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let parent_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
-        {
-            let mut hashes = state.block_hashes.block();
-            hashes.push_for_tests(parent_header.hash());
-            hashes.commit_for_tests();
-        }
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![LaneConfig::default()],
@@ -72931,6 +73286,7 @@ seiyaku SequentialNfts {
                 true,
             )
             .expect("install drain candidate lane");
+        state.push_block_hash_for_testing(parent_header.hash());
         let lane_id = LaneId::new(1);
         let incarnation = state
             .lane_incarnation(lane_id)
@@ -72981,7 +73337,6 @@ seiyaku SequentialNfts {
             topology.extend(unrelated_roster);
             topology.commit();
         }
-        state.nexus.write().staking.max_validators = nonzero!(1_u32);
         let (body, recovered_committee) = state
             .pending_autoscale_lane_drain_body()
             .expect("embedded close committee survives current-roster drift");
@@ -73040,11 +73395,6 @@ seiyaku SequentialNfts {
             Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
                 if message.contains("unsupported merge ledger entry version")
         ));
-        assert!(matches!(
-            state.commit_merge_entry(entry.clone()),
-            Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock)
-        ));
-
         let carrier_header = BlockHeader::new(
             nonzero!(2_u64),
             Some(parent_header.hash()),
@@ -73053,9 +73403,8 @@ seiyaku SequentialNfts {
             101,
             7,
         );
-        let mut carrier = state.block(carrier_header);
-        carrier
-            .stage_certified_merge_entry(&entry)
+        let carrier = state
+            .block_with_certified_merge_entry(carrier_header, &entry)
             .expect("exact global carrier stages a certificate-only drain");
         let staged_lane = carrier
             .nexus
@@ -73076,6 +73425,12 @@ seiyaku SequentialNfts {
         );
         assert_eq!(staged_commitment.merge_entry_hash, entry.canonical_hash());
         assert_eq!(staged_commitment.carrier_height, 2);
+        drop(carrier);
+
+        assert!(matches!(
+            state.commit_merge_entry(entry.clone()),
+            Err(MergeLedgerCommitError::ExecutionRequiresGlobalBlock)
+        ));
 
         let mut wrong_order = certificate.clone();
         wrong_order.validator_set.swap(0, 1);
@@ -73841,7 +74196,10 @@ seiyaku SequentialNfts {
         ))
         .execute(&ALICE_ID, &mut transaction)
         .expect_err("stale catalog commitment must fail closed");
-        assert!(err.to_string().contains("expected catalog hash"));
+        assert!(
+            format!("{err:?}").contains("expected catalog hash"),
+            "unexpected stale-catalog error: {err:?}"
+        );
         drop(transaction);
 
         assert_eq!(block.nexus.lane_catalog, LaneCatalog::default());
@@ -73867,7 +74225,10 @@ seiyaku SequentialNfts {
         let err = instruction()
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("a second transition in the same transaction must be rejected");
-        assert!(err.to_string().contains("already staged"));
+        assert!(
+            format!("{err:?}").contains("already staged"),
+            "unexpected duplicate-transition error: {err:?}"
+        );
         drop(transaction);
 
         assert_eq!(block.nexus.lane_catalog, LaneCatalog::default());
@@ -73881,7 +74242,6 @@ seiyaku SequentialNfts {
         let (authority, signer) = gen_account_in("universal");
         let domain = Domain::new(sample_domain_id()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let previous = autoscale_signed_block_with_committed_fragments(None, 100, 1);
 
         for authorized in [false, true] {
             let mut world = World::with([domain.clone()], [account.clone()], []);
@@ -73902,8 +74262,13 @@ seiyaku SequentialNfts {
             ))])
             .sign(signer.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                .chain(0, None)
+                .sign(signer.private_key())
+                .unpack(|_| {})
+                .into();
             let unverified = BlockBuilder::new(vec![accepted])
-                .chain(0, Some(&previous))
+                .chain(0, Some(&parent))
                 .sign(signer.private_key())
                 .unpack(|_| {});
             let mut state_block = state.block(unverified.header());
@@ -73922,13 +74287,14 @@ seiyaku SequentialNfts {
                 );
                 assert!(state_block.pending_autoscale_lifecycle.is_some());
             } else {
-                let rejection = signed
-                    .error(0)
-                    .expect("authority without CanSetParameters must be rejected")
-                    .to_string();
+                let rejection = format!(
+                    "{:?}",
+                    signed
+                        .error(0)
+                        .expect("authority without CanSetParameters must be rejected")
+                );
                 assert!(
-                    rejection
-                        .contains("Can't set executor configuration parameters without permission"),
+                    rejection.contains("Can't set network parameters without CanSetParameters"),
                     "unexpected permission rejection: {rejection}"
                 );
                 assert!(state_block.pending_autoscale_lifecycle.is_none());
@@ -73949,7 +74315,6 @@ seiyaku SequentialNfts {
             BTreeSet::from([Permission::from(CanSetParameters)]),
         );
         let state = manual_lane_lifecycle_test_state(world);
-        let previous = autoscale_signed_block_with_committed_fragments(None, 100, 1);
         let instruction = || {
             iroha_data_model::isi::SetParameter::new(Parameter::Custom(
                 manual_lane_lifecycle_payload().into_custom_parameter(),
@@ -73964,7 +74329,7 @@ seiyaku SequentialNfts {
         .sign(signer.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let unverified = BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&previous))
+            .chain(0, None)
             .sign(signer.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(unverified.header());
@@ -73974,10 +74339,12 @@ seiyaku SequentialNfts {
             .commit_unchecked()
             .unpack(|_| {});
         let signed: SignedBlock = committed.into();
-        let rejection = signed
-            .error(0)
-            .expect("duplicate signed lifecycle transition must be rejected")
-            .to_string();
+        let rejection = format!(
+            "{:?}",
+            signed
+                .error(0)
+                .expect("duplicate signed lifecycle transition must be rejected")
+        );
 
         assert!(rejection.contains("already staged"), "{rejection}");
         assert_eq!(state_block.nexus.lane_catalog, LaneCatalog::default());
@@ -74048,10 +74415,12 @@ seiyaku SequentialNfts {
             .commit_unchecked()
             .unpack(|_| {});
         let signed: SignedBlock = committed.into();
-        let rejection = signed
-            .error(0)
-            .expect("stale signed lifecycle transition must be rejected")
-            .to_string();
+        let rejection = format!(
+            "{:?}",
+            signed
+                .error(0)
+                .expect("stale signed lifecycle transition must be rejected")
+        );
 
         assert!(rejection.contains("expected catalog hash"), "{rejection}");
         assert_eq!(state_block.nexus.lane_catalog, before);
@@ -78063,9 +78432,7 @@ seiyaku SequentialNfts {
 
     #[test]
     fn autoscale_transition_adds_managed_elastic_lane_for_public_base_profile() {
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let mut base_lane = LaneConfig {
             id: LaneId::new(0),
             alias: "core".to_owned(),
@@ -78081,8 +78448,9 @@ seiyaku SequentialNfts {
             .metadata
             .insert("scheduler.teu_capacity".to_owned(), "2400".to_owned());
         let expected_base_profile = base_lane.clone();
-        state
-            .set_nexus(autoscale_transition_test_nexus(
+        let state = State::new_with_nexus_for_testing(
+            World::default(),
+            autoscale_transition_test_nexus(
                 vec![
                     base_lane,
                     LaneConfig {
@@ -78099,8 +78467,10 @@ seiyaku SequentialNfts {
                 3,
                 5,
                 100,
-            ))
-            .expect("apply autoscale public-profile test nexus config");
+            ),
+            query_handle,
+        );
+        let kura = Arc::clone(&state.kura);
         seed_autoscale_committee_for_test(&state, 4);
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
@@ -85364,6 +85734,9 @@ seiyaku SequentialNfts {
         world
             .accounts
             .insert(owner_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(label.clone(), owner_id.clone());
 
         world
             .rebuild_domain_selector_index()
@@ -85673,12 +86046,11 @@ seiyaku SequentialNfts {
         let mut storage = iroha_config::parameters::actual::NexusStorage::default();
         storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(max_disk_usage);
         storage.budget_enforce_interval_blocks = 0;
-        let nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            storage,
-            ..Default::default()
-        };
-        state.set_nexus(nexus).expect("apply nexus config");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.storage = storage;
+        }
 
         state.enforce_nexus_storage_budget(1);
 
@@ -85736,12 +86108,11 @@ seiyaku SequentialNfts {
         let mut storage = iroha_config::parameters::actual::NexusStorage::default();
         storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(total_used);
         storage.budget_enforce_interval_blocks = interval_blocks;
-        let nexus_ok = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            storage,
-            ..Default::default()
-        };
-        state.set_nexus(nexus_ok).expect("apply nexus config");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.storage = storage;
+        }
         state.enforce_nexus_storage_budget(1);
         assert!(
             spool_file.exists(),
@@ -87059,13 +87430,12 @@ seiyaku SequentialNfts {
 
     #[test]
     fn set_nexus_exits_public_validators_with_embedded_reset_lane() {
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let rebound = DataSpaceId::new(28);
         let retained = DataSpaceId::new(29);
-        let retained_lane = LaneId::new(1);
+        let reset_lane = LaneId::new(1);
+        let retained_lane = LaneId::new(2);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -87083,9 +87453,14 @@ seiyaku SequentialNfts {
         ])
         .expect("dataspace catalog");
         let initial_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
+                LaneConfig {
+                    id: reset_lane,
+                    alias: "validator-reset".to_string(),
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: retained_lane,
                     dataspace_id: retained,
@@ -87104,15 +87479,14 @@ seiyaku SequentialNfts {
             dataspace_catalog: dataspace_catalog.clone(),
             ..Default::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let mut state =
+            State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle);
 
         let (embedded_reset_validator, embedded_reset_peer) =
             seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
                 &state,
                 retained_lane,
-                LaneId::SINGLE,
+                reset_lane,
                 PublicLaneValidatorStatus::Active,
             );
         let (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test(
@@ -87130,10 +87504,13 @@ seiyaku SequentialNfts {
         }
 
         let updated_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
+                LaneConfig::default(),
                 LaneConfig {
+                    id: reset_lane,
                     dataspace_id: rebound,
+                    alias: "validator-reset".to_string(),
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -87152,11 +87529,6 @@ seiyaku SequentialNfts {
             ),
             lane_catalog: updated_lane_catalog,
             dataspace_catalog,
-            routing_policy: LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: rebound,
-                ..Default::default()
-            },
             ..Default::default()
         };
         state
@@ -87265,14 +87637,31 @@ seiyaku SequentialNfts {
 
     #[test]
     fn apply_lane_lifecycle_rejects_duplicate_retire_lane() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query_handle);
-        state.nexus.write().enabled = true;
+        let duplicate_lane = LaneId::new(1);
+        let state = State::new_with_nexus_for_testing(
+            World::default(),
+            iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    nonzero!(2_u32),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: duplicate_lane,
+                            alias: "duplicate-retire".to_owned(),
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("two-lane duplicate-retire fixture"),
+                ..Default::default()
+            },
+            LiveQueryStore::start_test(),
+        );
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
-            retire: vec![LaneId::SINGLE, LaneId::SINGLE],
+            retire: vec![duplicate_lane, duplicate_lane],
         };
         let err = state
             .apply_lane_lifecycle(&plan)
@@ -87281,12 +87670,12 @@ seiyaku SequentialNfts {
             err,
             LaneLifecycleError::Catalog(
                 iroha_data_model::nexus::LaneCatalogError::DuplicateRetireLane(lane)
-            ) if lane == LaneId::SINGLE
+            ) if lane == duplicate_lane
         ));
         let nexus = state.nexus_snapshot();
         assert_eq!(
-            nexus.lane_catalog.lanes(),
-            &[LaneConfig::default()],
+            nexus.lane_catalog.lane_count().get(),
+            2,
             "rejected duplicate retire must not mutate the lane catalog"
         );
     }
@@ -87848,23 +88237,28 @@ seiyaku SequentialNfts {
                 autoscale_enabled: true,
             },
         ] {
-            let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
-            {
-                let mut nexus = state.nexus.write();
-                nexus.enabled = true;
-                nexus.autoscale.enabled = case.autoscale_enabled;
-                if let Some(dataspace) = case.extra_dataspace {
-                    nexus.dataspace_catalog = dataspace_catalog_with_extra(dataspace);
-                }
-                nexus.lane_catalog = LaneCatalog::new(
-                    nonzero!(10_u32),
-                    vec![LaneConfig::default(), case.lane.clone()],
-                )
-                .unwrap_or_else(|err| panic!("corrupted {} catalog: {err}", case.name));
-                nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+            let mut nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                ..Default::default()
+            };
+            nexus.autoscale.enabled = case.autoscale_enabled;
+            if let Some(dataspace) = case.extra_dataspace {
+                nexus.dataspace_catalog = dataspace_catalog_with_extra(dataspace);
             }
+            nexus.lane_catalog = LaneCatalog::new(
+                nonzero!(10_u32),
+                vec![LaneConfig::default(), case.lane.clone()],
+            )
+            .unwrap_or_else(|err| panic!("corrupted {} catalog: {err}", case.name));
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+            // This fixture intentionally installs a manifest-incompatible catalog so the repair
+            // path can retire it. Open Kura at that exact physical geometry, but bypass ordinary
+            // pre-genesis manifest admission for the deliberately corrupt catalog.
+            let kura = Kura::blank_kura_for_testing_with_lane_config(&nexus.lane_config);
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            *state.nexus.write() = nexus;
             state.reseed_static_lane_incarnations_for_tests();
 
             state
@@ -87932,29 +88326,25 @@ seiyaku SequentialNfts {
 
     #[test]
     fn apply_lane_lifecycle_allows_retiring_manual_lane_inside_active_autoscale_range() {
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query_handle);
-        {
-            let mut nexus = state.nexus.write();
-            nexus.enabled = true;
-            nexus.autoscale.enabled = true;
-            nexus.lane_catalog = LaneCatalog::new(
-                nonzero!(2_u32),
-                vec![
-                    LaneConfig::default(),
-                    LaneConfig {
-                        id: LaneId::new(1),
-                        alias: "preexisting-manual-elastic-range".to_owned(),
-                        ..LaneConfig::default()
-                    },
-                ],
-            )
-            .expect("corrupted manual elastic-range catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        state.reseed_static_lane_incarnations_for_tests();
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "preexisting-manual-elastic-range".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("corrupted manual elastic-range catalog");
+        let state = State::new_with_nexus_for_testing(World::default(), nexus, query_handle);
 
         state
             .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
@@ -88124,17 +88514,12 @@ seiyaku SequentialNfts {
         ];
 
         for (field, lane) in profile_drifts {
-            let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
-            state
-                .set_nexus(autoscale_transition_test_nexus(
-                    vec![base_lane.clone()],
-                    1,
-                    3,
-                    100,
-                ))
-                .expect("apply autoscale profile-drift test nexus config");
+            let state = State::new_with_nexus_for_testing(
+                World::default(),
+                autoscale_transition_test_nexus(vec![base_lane.clone()], 1, 3, 100),
+                query_handle,
+            );
 
             let err = state
                 .apply_lane_lifecycle_with_options(
@@ -88410,23 +88795,20 @@ seiyaku SequentialNfts {
 
     #[test]
     fn apply_lane_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() {
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let future_created =
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 42);
         let lane_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_created])
                 .expect("future-created managed catalog");
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.autoscale.enabled = true;
-            nexus.lane_catalog = lane_catalog;
-            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        state.reseed_static_lane_incarnations();
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        let state = State::new_with_nexus_for_testing(World::default(), nexus, query_handle);
         let mut future_pin_intent = DaPinIntent::new(
             LaneId::new(1),
             7,
@@ -88861,14 +89243,22 @@ seiyaku SequentialNfts {
 
     #[test]
     fn apply_lane_lifecycle_rejects_rebinding_default_lane_without_policy_update() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let migrated = DataSpaceId::new(11);
+        let routed_lane = LaneId::new(1);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
-                .expect("lane catalog"),
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: routed_lane,
+                        alias: "routing-default".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog"),
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata::default(),
                 DataSpaceMetadata {
@@ -88879,20 +89269,27 @@ seiyaku SequentialNfts {
                 },
             ])
             .expect("dataspace catalog"),
+            routing_policy: LaneRoutingPolicy {
+                default_lane: routed_lane,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                ..Default::default()
+            },
             ..iroha_config::parameters::actual::Nexus::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let state = State::new_with_nexus_for_testing(
+            World::default(),
+            initial_nexus,
+            LiveQueryStore::start_test(),
+        );
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
-                id: LaneId::SINGLE,
+                id: routed_lane,
                 dataspace_id: migrated,
-                alias: "lane0-migrated".to_string(),
+                alias: "routing-default-migrated".to_string(),
                 ..LaneConfig::default()
             }],
-            retire: vec![LaneId::SINGLE],
+            retire: vec![routed_lane],
         };
         let err = state
             .apply_lane_lifecycle(&plan)
@@ -88900,7 +89297,7 @@ seiyaku SequentialNfts {
         assert!(matches!(
             err,
             LaneLifecycleError::RoutingPolicy(reason)
-                if reason.contains("default lane 0 is bound to dataspace 11")
+                if reason.contains("default lane 1 is bound to dataspace 11")
         ));
 
         let nexus = state.nexus_snapshot();
@@ -88908,13 +89305,14 @@ seiyaku SequentialNfts {
             .lane_catalog
             .lanes()
             .iter()
-            .find(|lane| lane.id == LaneId::SINGLE)
+            .find(|lane| lane.id == routed_lane)
             .expect("default lane remains present");
         assert_eq!(lane.dataspace_id, DataSpaceId::UNIVERSAL);
         assert_eq!(
             nexus.routing_policy.default_dataspace,
             DataSpaceId::UNIVERSAL
         );
+        assert_eq!(nexus.routing_policy.default_lane, routed_lane);
     }
 
     #[test]
@@ -89342,11 +89740,15 @@ seiyaku SequentialNfts {
                     "authenticated Kura must defer fresh secondary storage"
                 );
             }
-            let mut state = State::new_for_testing(
+            let mut state = State::try_new_with_chain(
                 World::default(),
                 Arc::clone(&kura),
                 LiveQueryStore::start_test(),
-            );
+                (*DEFAULT_TEST_CHAIN_ID).clone(),
+                #[cfg(feature = "telemetry")]
+                <_>::default(),
+            )
+            .expect("construct production-like authenticated startup State");
             state
                 .prepare_configured_primary_geometry_anchor(&configured)
                 .expect("anchor exact authenticated primary");
@@ -91805,13 +92207,12 @@ seiyaku SequentialNfts {
 
     #[test]
     fn set_nexus_prunes_axt_replay_entries_for_reset_target_lanes() {
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let rebound = DataSpaceId::new(8);
         let retained = DataSpaceId::new(9);
-        let retained_lane = LaneId::new(1);
+        let reset_lane = LaneId::new(1);
+        let retained_lane = LaneId::new(2);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -91829,9 +92230,14 @@ seiyaku SequentialNfts {
         ])
         .expect("dataspace catalog");
         let initial_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
+                LaneConfig {
+                    id: reset_lane,
+                    alias: "reset".to_string(),
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: retained_lane,
                     dataspace_id: retained,
@@ -91850,11 +92256,10 @@ seiyaku SequentialNfts {
             dataspace_catalog: dataspace_catalog.clone(),
             ..Default::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let mut state =
+            State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle);
 
-        let reset_lane_key = AxtHandleReplayKey::from_parts([0x33; 32], 2, 1, LaneId::SINGLE);
+        let reset_lane_key = AxtHandleReplayKey::from_parts([0x33; 32], 2, 1, reset_lane);
         let retained_lane_key = AxtHandleReplayKey::from_parts([0x44; 32], 2, 2, retained_lane);
         {
             let mut block = state.world.axt_replay_ledger.block();
@@ -91878,10 +92283,13 @@ seiyaku SequentialNfts {
         }
 
         let updated_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
+                LaneConfig::default(),
                 LaneConfig {
+                    id: reset_lane,
                     dataspace_id: rebound,
+                    alias: "reset".to_string(),
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -91900,11 +92308,6 @@ seiyaku SequentialNfts {
             ),
             lane_catalog: updated_lane_catalog,
             dataspace_catalog,
-            routing_policy: LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: rebound,
-                ..Default::default()
-            },
             ..Default::default()
         };
         state
@@ -91928,13 +92331,12 @@ seiyaku SequentialNfts {
             .lock()
             .expect("nexus status test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let rebound = DataSpaceId::new(8);
         let retained = DataSpaceId::new(9);
-        let retained_lane = LaneId::new(1);
+        let reset_lane = LaneId::new(1);
+        let retained_lane = LaneId::new(2);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -91952,9 +92354,14 @@ seiyaku SequentialNfts {
         ])
         .expect("dataspace catalog");
         let initial_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
+                LaneConfig {
+                    id: reset_lane,
+                    alias: "reset".to_string(),
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: retained_lane,
                     dataspace_id: retained,
@@ -91973,24 +92380,26 @@ seiyaku SequentialNfts {
             dataspace_catalog: dataspace_catalog.clone(),
             ..Default::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let mut state =
+            State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle);
 
         let reset_lane_keys =
-            seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 99);
+            seed_public_lane_economic_state_for_lifecycle_test(&state, reset_lane, 99);
         let retained_lane_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 3);
         let reset_status_bonded = Quantity::from(899_u32);
         let retained_status_bonded = Quantity::from(903_u32);
-        record_public_lane_staking_status_for_test(LaneId::SINGLE, &reset_status_bonded);
+        record_public_lane_staking_status_for_test(reset_lane, &reset_status_bonded);
         record_public_lane_staking_status_for_test(retained_lane, &retained_status_bonded);
 
         let updated_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
+                LaneConfig::default(),
                 LaneConfig {
+                    id: reset_lane,
                     dataspace_id: rebound,
+                    alias: "reset".to_string(),
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -92009,11 +92418,6 @@ seiyaku SequentialNfts {
             ),
             lane_catalog: updated_lane_catalog,
             dataspace_catalog,
-            routing_policy: LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: rebound,
-                ..Default::default()
-            },
             ..Default::default()
         };
         state
@@ -92023,7 +92427,7 @@ seiyaku SequentialNfts {
         assert_public_lane_economic_state_presence(&state, &reset_lane_keys, false);
         assert_public_lane_economic_state_presence(&state, &retained_lane_keys, true);
         assert_public_lane_staking_status_absent(
-            LaneId::SINGLE,
+            reset_lane,
             "set_nexus lane rebind must clear reset-lane operator staking status",
         );
         assert_public_lane_staking_status_bonded(
@@ -92040,13 +92444,12 @@ seiyaku SequentialNfts {
             .lock()
             .expect("nexus status test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let rebound = DataSpaceId::new(18);
         let retained = DataSpaceId::new(19);
-        let retained_lane = LaneId::new(1);
+        let reset_lane = LaneId::new(1);
+        let retained_lane = LaneId::new(2);
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -92064,9 +92467,14 @@ seiyaku SequentialNfts {
         ])
         .expect("dataspace catalog");
         let initial_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
                 LaneConfig::default(),
+                LaneConfig {
+                    id: reset_lane,
+                    alias: "embedded-reset".to_string(),
+                    ..LaneConfig::default()
+                },
                 LaneConfig {
                     id: retained_lane,
                     dataspace_id: retained,
@@ -92085,25 +92493,27 @@ seiyaku SequentialNfts {
             dataspace_catalog: dataspace_catalog.clone(),
             ..Default::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let mut state =
+            State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle);
 
         let embedded_reset_keys =
             seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
                 &state,
                 retained_lane,
-                LaneId::SINGLE,
+                reset_lane,
                 177,
             );
         let retained_keys =
             seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 178);
 
         let updated_lane_catalog = LaneCatalog::new(
-            nonzero!(2_u32),
+            nonzero!(3_u32),
             vec![
+                LaneConfig::default(),
                 LaneConfig {
+                    id: reset_lane,
                     dataspace_id: rebound,
+                    alias: "embedded-reset".to_string(),
                     ..LaneConfig::default()
                 },
                 LaneConfig {
@@ -92122,11 +92532,6 @@ seiyaku SequentialNfts {
             ),
             lane_catalog: updated_lane_catalog,
             dataspace_catalog,
-            routing_policy: LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: rebound,
-                ..Default::default()
-            },
             ..Default::default()
         };
         state
@@ -92338,16 +92743,25 @@ seiyaku SequentialNfts {
             .lock()
             .expect("nexus status test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(9);
+        let reset_lane = LaneId::new(1);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
-                .expect("lane catalog"),
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: reset_lane,
+                        alias: "lane1-retained".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog"),
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
@@ -92365,9 +92779,8 @@ seiyaku SequentialNfts {
             .expect("dataspace catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
-        state
-            .set_nexus(initial_nexus)
-            .expect("set initial nexus config");
+        let mut state =
+            State::new_with_nexus_for_testing(World::default(), initial_nexus, query_handle);
 
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];
@@ -92376,7 +92789,7 @@ seiyaku SequentialNfts {
             let _ = relays
                 .insert(sample_lane_relay_envelope(
                     1,
-                    LaneId::new(0),
+                    reset_lane,
                     &signers,
                     vec![0b0000_0001],
                 ))
@@ -92385,7 +92798,7 @@ seiyaku SequentialNfts {
         {
             let mut commitments = state.da_commitments.write();
             let record = DaCommitmentRecord::new(
-                LaneId::new(0),
+                reset_lane,
                 1,
                 0,
                 BlobDigest::new([0xAA; 32]),
@@ -92421,13 +92834,13 @@ seiyaku SequentialNfts {
         {
             let mut intents = state.da_pin_intents.write();
             let mut intent = DaPinIntent::new(
-                LaneId::new(0),
+                reset_lane,
                 1,
                 1,
                 StorageTicketId::new([0x44; 32]),
                 ManifestDigest::new([0x55; 32]),
             );
-            intent.alias = Some("lane0-reassign".to_string());
+            intent.alias = Some("lane1-reassign".to_string());
             intents.insert(
                 intent,
                 DaCommitmentLocation {
@@ -92439,7 +92852,7 @@ seiyaku SequentialNfts {
         {
             let mut wb = state.world.block();
             wb.lane_relay_emergency_validators.insert(
-                LaneId::new(0),
+                reset_lane,
                 LaneRelayEmergencyValidatorSet {
                     peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
                     expires_at_height: 10,
@@ -92449,18 +92862,21 @@ seiyaku SequentialNfts {
             wb.commit();
         }
         let reset_status_bonded = Quantity::from(909_u32);
-        record_public_lane_staking_status_for_test(LaneId::new(0), &reset_status_bonded);
+        record_public_lane_staking_status_for_test(reset_lane, &reset_status_bonded);
 
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             lane_catalog: LaneCatalog::new(
-                nonzero!(1_u32),
-                vec![LaneConfig {
-                    id: LaneId::new(0),
-                    dataspace_id: migrated,
-                    alias: "lane0-migrated".to_string(),
-                    ..LaneConfig::default()
-                }],
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: reset_lane,
+                        dataspace_id: migrated,
+                        alias: "lane1-migrated".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
             )
             .expect("lane catalog"),
             dataspace_catalog: DataSpaceCatalog::new(vec![
@@ -92478,10 +92894,6 @@ seiyaku SequentialNfts {
                 },
             ])
             .expect("dataspace catalog"),
-            routing_policy: iroha_config::parameters::actual::LaneRoutingPolicy {
-                default_dataspace: migrated,
-                ..Default::default()
-            },
             ..iroha_config::parameters::actual::Nexus::default()
         };
         state
@@ -92496,7 +92908,7 @@ seiyaku SequentialNfts {
             state
                 .da_commitments
                 .read()
-                .get_by_lane_epoch_sequence(0, 1, 0)
+                .get_by_lane_epoch_sequence(reset_lane.as_u32(), 1, 0)
                 .is_none(),
             "lane commitments should be pruned when lane dataspace changes"
         );
@@ -92504,7 +92916,7 @@ seiyaku SequentialNfts {
             state
                 .da_confidential_compute
                 .read()
-                .get_by_lane_epoch_sequence(0, 1, 0)
+                .get_by_lane_epoch_sequence(reset_lane.as_u32(), 1, 0)
                 .is_none(),
             "lane confidential receipts should be pruned when lane dataspace changes"
         );
@@ -92512,7 +92924,7 @@ seiyaku SequentialNfts {
             state
                 .da_pin_intents
                 .read()
-                .get_by_alias("lane0-reassign")
+                .get_by_alias("lane1-reassign")
                 .is_none(),
             "lane pin intents should be pruned when lane dataspace changes"
         );
@@ -92521,12 +92933,12 @@ seiyaku SequentialNfts {
                 .world
                 .lane_relay_emergency_validators
                 .view()
-                .get(&LaneId::new(0))
+                .get(&reset_lane)
                 .is_none(),
             "lane emergency validator overrides should be pruned when lane dataspace changes"
         );
         assert_public_lane_staking_status_absent(
-            LaneId::new(0),
+            reset_lane,
             "set_nexus lane dataspace change must clear reset-lane operator staking status",
         );
         crate::sumeragi::status::reset_nexus_economics_for_tests();
@@ -93506,17 +93918,23 @@ seiyaku SequentialNfts {
             .expect("retired Kura geometry root exists")
             .map(|entry| entry.expect("retired Kura transition entry").path())
             .collect::<Vec<_>>();
+        let archived_kura_markers = transition_archives
+            .iter()
+            .map(|archive| {
+                archive
+                    .join("lane_0000000001")
+                    .join("previous_blocks")
+                    .join("old-incarnation-marker")
+            })
+            .filter(|marker| marker.exists())
+            .collect::<Vec<_>>();
         assert_eq!(
-            transition_archives.len(),
+            archived_kura_markers.len(),
             1,
-            "same-plan replacement should create one authenticated transition archive"
+            "same-plan replacement should archive the source incarnation exactly once"
         );
-        let archived_kura_marker = transition_archives[0]
-            .join("lane_0000000001")
-            .join("previous_blocks")
-            .join("old-incarnation-marker");
         assert_eq!(
-            std::fs::read(&archived_kura_marker).expect("archived Kura marker exists"),
+            std::fs::read(&archived_kura_markers[0]).expect("archived Kura marker exists"),
             b"old kura data",
             "old Kura data should be retained under the transition-scoped archive"
         );
@@ -94924,17 +95342,23 @@ seiyaku SequentialNfts {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        {
-            let mut nexus = state.nexus.write();
-            nexus.enabled = false;
-            // Poison the disabled catalog deliberately. Snapshot helpers must
-            // still trust only the implicit compatibility route.
-            nexus.lane_catalog = two_lane_catalog;
-        }
+        // Poison the disabled catalog deliberately. Snapshot helpers must still
+        // trust only the implicit compatibility route, while Kura retains the
+        // matching physical lane geometry needed by strict startup.
+        install_existing_nexus_geometry_for_test(
+            &state,
+            iroha_config::parameters::actual::Nexus {
+                enabled: false,
+                lane_catalog: two_lane_catalog,
+                ..Default::default()
+            },
+        );
         let default_incarnation = state
             .lane_incarnation(LaneId::SINGLE)
             .expect("implicit default lane must have an active incarnation");
-        let foreign_incarnation = Hash::new(b"foreign-disabled-nexus-incarnation");
+        let foreign_incarnation = state
+            .lane_incarnation(foreign_lane)
+            .expect("foreign physical lane must retain its installed incarnation marker");
 
         let (default_block, default_session, default_signer_pops) =
             lane_artifact_block_and_session_for_state_test(
@@ -95431,7 +95855,7 @@ seiyaku SequentialNfts {
         };
         assert!(message.contains("kura journal"), "{message}");
         assert!(
-            message.contains("pending certified work belongs to a retiring lane incarnation"),
+            message.contains("pending certified work targets a retiring lane incarnation"),
             "{message}"
         );
         let nexus_after = state.nexus_snapshot();
@@ -96304,6 +96728,13 @@ seiyaku SequentialNfts {
             nexus.lane_catalog = two_lane_catalog;
             nexus.lane_config = reset_config.clone();
         }
+        // The focused fixture records a height-11 cursor without constructing eleven otherwise
+        // irrelevant block bodies. Journal recovery still requires the authoritative State height
+        // to cover the cursor checkpoint.
+        seed_committed_height_for_state_test(&restarted, 11);
+        // Construction hydrates against the default pre-snapshot catalog. Re-run the one-shot
+        // loader after restoring the exact recreated-lane geometry used by the persisted journal.
+        *restarted.da_indexes_hydrated.write() = None;
         restarted
             .ensure_da_indexes_hydrated()
             .expect("restart should hydrate fresh recreated-lane cursor from journal");
@@ -98977,6 +99408,7 @@ seiyaku SequentialNfts {
             .into();
         let block =
             ValidBlock::new_dummy_and_modify_header(leader_keypair.private_key(), |header| {
+                header.set_height(nonzero!(2_u64));
                 header.set_prev_block_hash(Some(predecessor.hash()));
             });
         state
@@ -99595,7 +100027,7 @@ seiyaku SequentialNfts {
     fn committed_verified_lane_relay_record_hydrates_runtime_cache() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&envelope);
 
@@ -99730,7 +100162,7 @@ seiyaku SequentialNfts {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
 
         let newer =
-            sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         state
             .lane_relays
@@ -99738,7 +100170,7 @@ seiyaku SequentialNfts {
             .insert(newer.clone())
             .expect("seed newer cached relay");
         let older =
-            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&older);
 
@@ -99941,20 +100373,27 @@ seiyaku SequentialNfts {
 
     #[test]
     fn merge_candidates_restart_hydrates_only_active_verified_lane_relay_records() {
-        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let (mut state, validator_keypairs) = setup_lane_relay_burn_state();
         let validator_ids: Vec<_> = validator_keypairs
             .iter()
             .map(|keypair| AccountId::new(keypair.public_key().clone()))
             .collect();
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let future_created_lane = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(future_created_lane, 7),
+        );
+        state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
+            b"verified-lane-relay-restart-parent",
+        )));
         let active_envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let stale_unknown_envelope =
             sample_lane_relay_envelope(2, LaneId::new(7), &signers, signers_bitmap)
                 .with_manifest_root(Some([0x77; 32]));
-        let future_created_lane = LaneId::new(1);
         let future_created_envelope = sample_lane_relay_envelope(
             2,
             future_created_lane,
@@ -99965,6 +100404,11 @@ seiyaku SequentialNfts {
         let active_record = sample_verified_lane_relay_record(&active_envelope);
         let stale_unknown_record = sample_verified_lane_relay_record(&stale_unknown_envelope);
         let future_created_record = sample_verified_lane_relay_record(&future_created_envelope);
+        let mut snapshot_nexus = state.nexus_snapshot();
+        snapshot_nexus.autoscale.enabled = false;
+        snapshot_nexus.lane_catalog = LaneCatalog::default();
+        snapshot_nexus.lane_config = RuntimeLaneConfig::default();
+        install_existing_nexus_geometry_for_test(&state, snapshot_nexus);
         let active_key =
             State::verified_lane_relay_state_key(&active_envelope).expect("active state key");
         let stale_unknown_key = State::verified_lane_relay_state_key(&stale_unknown_envelope)
@@ -104550,6 +104994,7 @@ seiyaku SequentialNfts {
             ],
         );
         configure_commit_topology_preserving_world_peers(&state, 1);
+        ensure_merge_carrier_parent_for_test(&state);
 
         let lane0 = sample_lane_relay_envelope_for_state_with_view(
             &state,
@@ -104620,6 +105065,7 @@ seiyaku SequentialNfts {
             ],
         );
         let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
+        ensure_merge_carrier_parent_for_test(&state);
 
         let lane0_h1 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -105942,15 +106388,21 @@ seiyaku SequentialNfts {
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
-                enabled: true,
-                lane_catalog: catalog,
-                lane_config,
-                ..Default::default()
-            })
-            .expect("apply Nexus catalog for multi-bundle replay test");
+        let mut state = State::try_new(
+            World::default(),
+            Arc::clone(&kura),
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("open multi-bundle DA test State against configured Kura");
+        state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: catalog,
+            lane_config,
+            ..Default::default()
+        });
+        state.configure_test_runtime_defaults();
 
         let keypair = crate::state::checked_keypair();
         let first_bundle = DaCommitmentBundle::new(vec![
@@ -106039,26 +106491,37 @@ seiyaku SequentialNfts {
 
     #[test]
     fn resharding_clears_stale_shard_cursors() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-
-        let initial_catalog =
-            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
+        let target_lane = LaneId::new(1);
+        let initial_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: target_lane,
+                    alias: "reshard-target".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("catalog");
         let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-        state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
+        let initial_shard = initial_config.shard_id(target_lane);
+        let mut state = State::new_with_nexus_for_testing(
+            World::default(),
+            iroha_config::parameters::actual::Nexus {
+                enabled: true,
                 lane_catalog: initial_catalog,
                 lane_config: initial_config.clone(),
                 ..Default::default()
-            })
-            .expect("apply Nexus catalog before resharding");
+            },
+            LiveQueryStore::start_test(),
+        );
         state
             .ensure_da_indexes_hydrated()
             .expect("hydrate DA indexes before advancing");
 
         let advance = DaCommitmentRecord::new(
-            LaneId::new(0),
+            target_lane,
             1,
             1,
             BlobDigest::new([0xAA; 32]),
@@ -106076,20 +106539,27 @@ seiyaku SequentialNfts {
             .expect("advance cursor");
         {
             let cursors = state.da_shard_cursor_index();
-            let cursor = cursors.get(0).expect("cursor stored under original shard");
+            let cursor = cursors
+                .get(initial_shard)
+                .expect("cursor stored under original shard");
             assert_eq!(cursor.last_block_height, 3);
         }
 
         let reshard_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                metadata: {
-                    let mut map = BTreeMap::new();
-                    map.insert("da_shard_id".to_string(), "5".to_string());
-                    map
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: target_lane,
+                    alias: "reshard-target".to_owned(),
+                    metadata: {
+                        let mut map = BTreeMap::new();
+                        map.insert("da_shard_id".to_string(), "5".to_string());
+                        map
+                    },
+                    ..LaneConfig::default()
                 },
-                ..LaneConfig::default()
-            }],
+            ],
         )
         .expect("reshard catalog");
         let reshard_config = RuntimeLaneConfig::from_catalog(&reshard_catalog);
@@ -106103,7 +106573,7 @@ seiyaku SequentialNfts {
             .expect("apply resharding Nexus catalog");
 
         let resharded_record = DaCommitmentRecord::new(
-            LaneId::new(0),
+            target_lane,
             2,
             0,
             BlobDigest::new([0xAB; 32]),
@@ -106122,7 +106592,7 @@ seiyaku SequentialNfts {
 
         let cursors = state.da_shard_cursor_index();
         assert!(
-            cursors.get(0).is_none(),
+            cursors.get(initial_shard).is_none(),
             "old shard entry should be cleared after reshard"
         );
         let cursor = cursors.get(5).expect("cursor re-seeded under new shard id");
@@ -106265,15 +106735,21 @@ seiyaku SequentialNfts {
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
-                enabled: true,
-                lane_catalog: catalog,
-                lane_config: lane_config.clone(),
-                ..Default::default()
-            })
-            .expect("apply dual-lane Nexus catalog");
+        let mut state = State::try_new(
+            World::default(),
+            Arc::clone(&kura),
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("open dual-lane DA test State against configured Kura");
+        state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: catalog,
+            lane_config: lane_config.clone(),
+            ..Default::default()
+        });
+        state.configure_test_runtime_defaults();
 
         let lane_zero_record = DaCommitmentRecord::new(
             LaneId::new(0),
@@ -107026,61 +107502,9 @@ seiyaku SequentialNfts {
         )
     }
 
-    fn state_journal_test_roster(height: u64, view: u64, seed: u8) -> (Qc, ValidatorSetCheckpoint) {
-        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let block_hash = BlockHeader::new(
-            NonZeroU64::new(height).expect("nonzero journal height"),
-            None,
-            None,
-            None,
-            0,
-            view,
-        )
-        .hash();
-        let parent_state_root = Hash::prehashed([seed; Hash::LENGTH]);
-        let post_state_root = Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]);
-        let signers_bitmap = vec![1];
-        let aggregate_signature = vec![seed; 96];
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: aggregate_signature.clone(),
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new(
-            height,
-            view,
-            block_hash,
-            parent_state_root,
-            post_state_root,
-            roster,
-            signers_bitmap,
-            aggregate_signature,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        (commit_qc, checkpoint)
-    }
-
     struct ExpectedStateJournalRecovery {
         query_index: QueryIndexStatus,
         projection: QueryProjectionCheckpoint,
-        roster_qc: Qc,
     }
 
     fn seed_distinct_state_journal_main_and_temp_files(
@@ -107127,28 +107551,9 @@ seiyaku SequentialNfts {
         )
         .expect("install projection checkpoint temp");
 
-        let roster_path = CommitRosterJournal::journal_path(&root);
-        let retention = kura.block_sync_roster_retention();
-        let (main_qc, main_checkpoint) = state_journal_test_roster(2, 1, 0x11);
-        let mut roster_main = CommitRosterJournal::new(roster_path.clone(), retention);
-        roster_main.upsert(main_qc, main_checkpoint, None);
-        roster_main.persist().expect("persist commit-roster main");
-        let roster_temp_source = root.join("commit-roster-recovery-source.norito");
-        let mut roster_temp = CommitRosterJournal::new(roster_temp_source.clone(), retention);
-        let (first_temp_qc, first_temp_checkpoint) = state_journal_test_roster(7, 2, 0x21);
-        roster_temp.upsert(first_temp_qc, first_temp_checkpoint, None);
-        let (roster_qc, roster_checkpoint) = state_journal_test_roster(8, 3, 0x31);
-        roster_temp.upsert(roster_qc.clone(), roster_checkpoint, None);
-        roster_temp
-            .persist()
-            .expect("persist commit-roster temp source");
-        std::fs::rename(roster_temp_source, roster_path.with_extension("norito.tmp"))
-            .expect("install commit-roster temp");
-
         ExpectedStateJournalRecovery {
             query_index,
             projection,
-            roster_qc,
         }
     }
 
@@ -107189,21 +107594,12 @@ seiyaku SequentialNfts {
                 state.query_projection_checkpoint_snapshot(),
                 Some(expected.projection)
             );
-            assert!(
-                state
-                    .commit_roster_journal
-                    .read()
-                    .get(
-                        expected.roster_qc.height,
-                        expected.roster_qc.subject_block_hash
-                    )
-                    .is_some(),
-                "temp commit-roster journal must replace the distinct main journal"
-            );
+            // Commit-roster storage is content-addressed and deliberately has no
+            // legacy mutable `.tmp` promotion path. This fixture covers the two
+            // journals that still use recoverable main/temp publication.
             for path in [
                 state.query_index_journal_path(),
                 state.query_projection_checkpoint_journal_path(),
-                state.commit_roster_journal_path(),
             ] {
                 assert!(path.exists(), "promoted journal main must exist: {path:?}");
                 assert!(
@@ -107898,9 +108294,10 @@ seiyaku SequentialNfts {
             .ensure_da_indexes_hydrated()
             .expect("hydrate from journal");
         let cursors = restored_state.da_shard_cursor_index();
-        let cursor = cursors.get(0).expect("cursor restored from journal");
-        assert_eq!((cursor.epoch, cursor.sequence), (1, 2));
-        assert_eq!(cursor.last_block_height, 5);
+        assert!(
+            cursors.get(0).is_none(),
+            "journal cursors ahead of the canonical replay height must remain inert"
+        );
     }
 
     #[test]
@@ -108149,8 +108546,12 @@ seiyaku SequentialNfts {
                 bls_aggregate_signature: aggregate_signature,
             },
         };
-        status::record_commit_qc(commit_cert);
-        let _ = state_block.apply_without_execution(&committed, roster);
+        status::record_commit_qc(commit_cert.clone());
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed,
+            roster,
+            Some(&commit_cert),
+        );
         state_block.commit().expect("commit");
 
         let certs = status::commit_qc_history();
@@ -109266,12 +109667,24 @@ seiyaku SequentialNfts {
             LiveQueryStore::start_test(),
         );
 
-        let canonical_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
-        let stale_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let canonical_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let canonical_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(keypair.private_key(), canonical_header.hash())
+                .expect("sign canonical roster fixture block"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(
+            canonical_signature,
+            canonical_header,
+            Vec::new(),
+        ));
+        let canonical_hash = canonical_block.hash();
+        kura.store_block(canonical_block)
+            .expect("store canonical roster fixture block");
+        let stale_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5C; Hash::LENGTH]));
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBB; 96];
@@ -109321,32 +109734,35 @@ seiyaku SequentialNfts {
                 .expect("initial journal persistence should retain known durability"),
             "initial canonical commit roster should be accepted"
         );
-        kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            1,
-            stale_hash,
-            Some(Qc {
-                subject_block_hash: stale_hash,
-                view: 1,
-                ..commit_cert.clone()
-            }),
-            Some(ValidatorSetCheckpoint::new(
-                1,
+        assert!(
+            kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
                 1,
                 stale_hash,
-                zero_root,
-                zero_root,
-                roster,
-                signers_bitmap,
-                bls_aggregate_signature,
-                VALIDATOR_SET_HASH_VERSION_V1,
+                Some(Qc {
+                    subject_block_hash: stale_hash,
+                    view: 1,
+                    ..commit_cert.clone()
+                }),
+                Some(ValidatorSetCheckpoint::new(
+                    1,
+                    1,
+                    stale_hash,
+                    zero_root,
+                    zero_root,
+                    roster,
+                    signers_bitmap,
+                    bls_aggregate_signature,
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                )),
                 None,
             )),
-            None,
-        ));
-        let stale_sidecar = kura
-            .read_roster_metadata(1)
-            .expect("test setup should write stale sidecar");
-        assert_eq!(stale_sidecar.block_hash, stale_hash);
+            "test setup should persist the deliberately stale sidecar bytes"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "canonical readers must hide the stale sidecar before repair"
+        );
 
         assert!(
             state
@@ -109463,12 +109879,24 @@ seiyaku SequentialNfts {
             LiveQueryStore::start_test(),
         );
 
-        let canonical_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
-        let stale_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let canonical_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let canonical_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(keypair.private_key(), canonical_header.hash())
+                .expect("sign canonical committed-height fixture block"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(
+            canonical_signature,
+            canonical_header,
+            Vec::new(),
+        ));
+        let canonical_hash = canonical_block.hash();
+        kura.store_block(canonical_block)
+            .expect("store canonical committed-height fixture block");
+        let stale_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xAA; 96];
@@ -109571,14 +109999,20 @@ seiyaku SequentialNfts {
     fn da_shard_cursor_journal_drops_on_reshard() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
+        let target_lane = LaneId::new(1);
         let mut metadata = BTreeMap::new();
         metadata.insert("da_shard_id".to_string(), "1".to_string());
         let initial_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                metadata: metadata.clone(),
-                ..LaneConfig::default()
-            }],
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: target_lane,
+                    alias: "cursor-reshard-target".to_owned(),
+                    metadata: metadata.clone(),
+                    ..LaneConfig::default()
+                },
+            ],
         )
         .expect("lane catalog");
         let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
@@ -109603,18 +110037,24 @@ seiyaku SequentialNfts {
         };
         let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(iroha_config::parameters::actual::Nexus {
-                enabled: true,
-                lane_catalog: initial_catalog,
-                lane_config: initial_config.clone(),
-                ..Default::default()
-            })
-            .expect("apply Nexus catalog before relabel test");
+        let mut state = State::try_new(
+            World::default(),
+            Arc::clone(&kura),
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("open DA cursor test State against configured Kura");
+        state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: initial_catalog,
+            lane_config: initial_config.clone(),
+            ..Default::default()
+        });
+        state.configure_test_runtime_defaults();
 
         let record = DaCommitmentRecord::new(
-            LaneId::new(0),
+            target_lane,
             5,
             7,
             BlobDigest::new([0x10; 32]),
@@ -109636,11 +110076,16 @@ seiyaku SequentialNfts {
         let mut updated_metadata = metadata;
         updated_metadata.insert("da_shard_id".to_string(), "3".to_string());
         let updated_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
-            vec![LaneConfig {
-                metadata: updated_metadata,
-                ..LaneConfig::default()
-            }],
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: target_lane,
+                    alias: "cursor-reshard-target".to_owned(),
+                    metadata: updated_metadata,
+                    ..LaneConfig::default()
+                },
+            ],
         )
         .expect("updated catalog");
         let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
@@ -110651,7 +111096,7 @@ seiyaku SequentialNfts {
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
 
-        let mut world = World::with([domain], [account], []);
+        let world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::default(),
             uaid,
@@ -110672,13 +111117,14 @@ seiyaku SequentialNfts {
         );
         let mut set = SpaceDirectoryManifestSet::default();
         set.upsert(record);
-        world
-            .space_directory_manifests_mut_for_testing()
-            .insert(uaid, set);
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(world, kura, query_handle);
+        state
+            .world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
         {
             let nexus = state.nexus.get_mut();
             install_test_nexus_lane_catalog(nexus, lane_catalog);
@@ -111233,12 +111679,8 @@ seiyaku SequentialNfts {
         nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
         nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
 
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::new(), kura, query_handle);
-        state
-            .set_nexus(nexus)
-            .expect("apply Nexus catalog for replay ledger pruning test");
+        let state = State::new_with_nexus_for_testing(World::new(), nexus, query_handle);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let mut block = state.block(header);
@@ -111360,10 +111802,9 @@ seiyaku SequentialNfts {
         nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
         nexus.axt.replay_retention_slots = NonZeroU64::new(4).expect("retention");
 
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::new(), kura, query_handle);
-        state.set_nexus(nexus.clone()).expect("configure nexus");
+        let mut state =
+            State::new_with_nexus_for_testing(World::new(), nexus.clone(), query_handle);
         state.set_axt_policy(
             dsid,
             AxtPolicyEntry {
@@ -111515,13 +111956,9 @@ seiyaku SequentialNfts {
                 current_slot: 0,
             },
         );
-        let kura = Arc::clone(&state.kura);
-        let query_handle = state.query_handle.clone();
         let world = mem::replace(&mut state.world, World::new());
-        let mut restarted = State::new(world, kura, query_handle);
-        restarted
-            .set_nexus(nexus)
-            .expect("apply Nexus catalog after state restore");
+        let restarted =
+            State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
 
         let mut host = CoreHost::from_state(authority.clone(), &restarted);
         let mut vm = IVM::new(100_000);
@@ -111601,12 +112038,8 @@ seiyaku SequentialNfts {
         nexus.axt.slot_length_ms = NonZeroU64::new(1).expect("slot length");
         nexus.axt.replay_retention_slots = NonZeroU64::new(2).expect("retention");
 
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::new(), kura, query_handle);
-        state
-            .set_nexus(nexus)
-            .expect("apply Nexus catalog before replay eviction test");
+        let mut state = State::new_with_nexus_for_testing(World::new(), nexus, query_handle);
         state.set_axt_policy(
             dsid,
             AxtPolicyEntry {
@@ -111917,9 +112350,6 @@ seiyaku SequentialNfts {
             block.commit();
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
         let lane_catalog = LaneCatalog::new(
             nonzero!(5_u32),
             vec![LaneConfig {
@@ -111941,9 +112371,17 @@ seiyaku SequentialNfts {
         install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
         nexus.routing_policy.default_lane = policy.target_lane;
         nexus.routing_policy.default_dataspace = dsid;
-        state
-            .set_nexus(nexus)
-            .expect("AXT cache-hit test Nexus catalog");
+        let kura = Kura::blank_kura_for_testing_with_lane_config(&nexus.lane_config);
+        let mut state = State::try_new_with_chain(
+            world,
+            kura,
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            telemetry,
+        )
+        .expect("telemetry fixture durable State startup journals must validate");
+        state.install_pre_genesis_nexus_for_testing(nexus);
+        state.configure_test_runtime_defaults();
         let snapshot = state.view().axt_policy_snapshot();
 
         let expected = if snapshot.version != 0 {
@@ -113090,7 +113528,7 @@ seiyaku SequentialNfts {
             .build(&account_id);
         let domain = Domain::new(domain_id).build(&account_id);
 
-        let mut world = World::with([domain], [account], []);
+        let world = World::with([domain], [account], []);
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::default(),
             uaid,
@@ -113112,13 +113550,14 @@ seiyaku SequentialNfts {
         );
         let mut set = SpaceDirectoryManifestSet::default();
         set.upsert(record);
-        world
-            .space_directory_manifests_mut_for_testing()
-            .insert(uaid, set);
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(world, kura, query_handle);
+        state
+            .world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
         {
             let nexus = state.nexus.get_mut();
             install_test_nexus_lane_catalog(nexus, lane_catalog);
@@ -116325,7 +116764,18 @@ seiyaku SequentialNfts {
                 provenance: None,
             },
         );
-        let events_before = transaction.world.external_event_buf.len();
+        let execute_events_before = transaction
+            .world
+            .external_event_buf
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    EventBox::ExecuteTrigger(execute)
+                        if execute.trigger_id() == &trigger_id
+                )
+            })
+            .count();
         let error = transaction
             .execute_called_trigger(&trigger_id, &event)
             .expect_err("a manifest-bound hash must not execute as a generic trigger");
@@ -116337,10 +116787,47 @@ seiyaku SequentialNfts {
             ),
             "unexpected generic-trigger binding error: {error:?}"
         );
+        let completion = transaction
+            .world
+            .external_event_buf
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                EventBox::TriggerCompleted(completion)
+                    if completion.trigger_id() == &trigger_id =>
+                {
+                    Some(completion)
+                }
+                _ => None,
+            });
+        assert!(
+            matches!(
+                completion,
+                Some(completion)
+                    if completion.trigger_id() == &trigger_id
+                        && matches!(
+                            completion.outcome(),
+                            TriggerCompletedOutcome::Failure(message)
+                                if message.contains("contract manifest")
+                        )
+            ),
+            "generic-trigger binding rejection must emit an auditable failure completion"
+        );
         assert_eq!(
-            transaction.world.external_event_buf.len(),
-            events_before,
-            "generic-trigger binding rejection must emit no completion event"
+            transaction
+                .world
+                .external_event_buf
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        EventBox::ExecuteTrigger(execute)
+                            if execute.trigger_id() == &trigger_id
+                    )
+                })
+                .count(),
+            execute_events_before,
+            "generic-trigger binding rejection must not publish an execute-trigger event"
         );
     }
 
@@ -119832,8 +120319,8 @@ seiyaku IdentitylessRawCallback {
             (
                 "empty",
                 empty,
-                "merge ledger entry must include a lane snapshot or execution batch",
-                "merge ledger entry must include a lane snapshot or execution batch",
+                "merge ledger entry must include a lane snapshot, execution batch, or drain certificate",
+                "EmptyEntry",
             ),
             (
                 "zero activation",
@@ -121223,7 +121710,6 @@ seiyaku IdentitylessRawCallback {
             .get_block(NonZeroUsize::new(1).expect("non-zero parent height"))
             .expect("fee merge carrier parent");
         let carrier = certified_merge_carrier_after(&parent, &entry);
-        let carrier_hash = carrier.hash();
         let entry_hash = entry.canonical_hash();
         let state_block = state
             .block_with_certified_merge_entry(carrier.header().clone(), &entry)
@@ -121243,13 +121729,19 @@ seiyaku IdentitylessRawCallback {
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
             Numeric::from(10_u32)
         );
-        assert_eq!(state.kura.exact_durable_blocks_count().unwrap(), 2);
+        assert!(
+            matches!(
+                state.kura.exact_durable_blocks_count(),
+                Err(crate::kura::Error::CanonicalStoragePoisoned)
+            ),
+            "a post-commit association failure must poison-gate exact live Kura reads"
+        );
         assert_eq!(
             state
                 .kura
                 .get_durable_block_hash(NonZeroUsize::new(2).expect("carrier height")),
-            Some(carrier_hash),
-            "the Kura block commit remains canonical after the later merge append failure"
+            None,
+            "poisoned Kura must not expose the committed carrier before restart recovery"
         );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
         assert_eq!(
@@ -121260,13 +121752,12 @@ seiyaku IdentitylessRawCallback {
             None,
             "the failed append must not expose a partial merge association"
         );
-        assert_eq!(
-            state
-                .kura
-                .merge_entry_by_hash(entry_hash)
-                .expect("read retained exact merge retry"),
-            Some(entry),
-            "the exact pending entry remains available to repair the canonical carrier"
+        assert!(
+            matches!(
+                state.kura.merge_entry_by_hash(entry_hash),
+                Err(crate::kura::Error::CanonicalStoragePoisoned)
+            ),
+            "the exact pending retry must remain inaccessible until restart recovery"
         );
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
         assert!(
@@ -121701,6 +122192,12 @@ seiyaku IdentitylessRawCallback {
         let candidate = merge_candidate_with_lanes(1, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
+        let block_hashes = state.block_hashes.block_and_revert();
+        block_hashes.commit_for_tests();
+        assert!(
+            state.latest_block_hash_fast().is_none(),
+            "the live carrier parent must be absent for this fixture"
+        );
 
         let err = state
             .validate_merge_quorum_certificate(&entry, true, true)
@@ -121827,7 +122324,7 @@ seiyaku IdentitylessRawCallback {
         let signers = [&validator_keypair];
         let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
             &state,
-            2,
+            1,
             LaneId::new(0),
             &signers,
             full_signer_bitmap(signers.len()),
@@ -122060,7 +122557,7 @@ seiyaku IdentitylessRawCallback {
         let signers = [&validator_keypair];
         let envelope = sample_lane_relay_envelope_with_state_incarnation_unchecked(
             &state,
-            2,
+            1,
             LaneId::new(0),
             &signers,
             full_signer_bitmap(signers.len()),
@@ -122139,7 +122636,7 @@ seiyaku IdentitylessRawCallback {
         let state = State::new(World::default(), kura, query);
         let keypairs = configure_commit_topology(&state, 1);
 
-        let candidate = merge_candidate_with_lanes(2, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
         let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         qc.message_digest = Hash::new(b"wrong-digest");
         let entry = merge_entry_from_candidate(candidate, qc);
@@ -122160,7 +122657,7 @@ seiyaku IdentitylessRawCallback {
         let state = State::new(World::default(), kura, query);
         let keypairs = configure_commit_topology(&state, 3);
 
-        let candidate = merge_candidate_with_lanes(3, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
         let qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         let entry = merge_entry_from_candidate(candidate, qc);
 
@@ -122180,7 +122677,7 @@ seiyaku IdentitylessRawCallback {
         let state = State::new(World::default(), kura, query);
         let keypairs = configure_commit_topology(&state, 1);
 
-        let candidate = merge_candidate_with_lanes(4, 1);
+        let candidate = merge_candidate_with_lanes(1, 1);
         let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
         if let Some(first) = qc.aggregate_signature.first_mut() {
             *first ^= 0xFF;
@@ -122403,7 +122900,7 @@ seiyaku IdentitylessRawCallback {
     fn globally_carried_merge_publication_is_durable_idempotent_and_replay_silent() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let mut state = State::new(World::default(), Arc::clone(&kura), query);
 
         let genesis = new_dummy_block_with_payload(|header| {
             header.set_height(nonzero!(1_u64));
@@ -122412,6 +122909,7 @@ seiyaku IdentitylessRawCallback {
         let genesis = Arc::new(genesis.as_ref().clone());
         kura.store_block(Arc::clone(&genesis))
             .expect("store fixture genesis");
+        state.push_block_hash_for_testing(genesis.hash());
 
         let carrier_fixture = |parent: &SignedBlock, epoch: u64| {
             let parent_hash = parent.hash();
@@ -122456,6 +122954,7 @@ seiyaku IdentitylessRawCallback {
 
         kura.store_block_with_merge_entry(Arc::clone(&carrier_one), &entry_one)
             .expect("store first durable carrier and sidecar");
+        state.push_block_hash_for_testing(carrier_one.hash());
         let (stored_one, first_event) = state
             .record_globally_committed_merge_entry(
                 &entry_one,
@@ -122488,8 +122987,10 @@ seiyaku IdentitylessRawCallback {
         ));
         assert_eq!(state.merge_ledger().snapshot().len(), 1);
 
+        let carrier_two_hash = carrier_two.hash();
         kura.store_block_with_merge_entry(carrier_two, &entry_two)
             .expect("store second durable carrier and sidecar");
+        state.push_block_hash_for_testing(carrier_two_hash);
         let (stored_two, replay_event) = state
             .record_globally_committed_merge_entry(&entry_two, MergeLedgerPublicationMode::Replay)
             .expect("replay durable second merge");
@@ -122703,7 +123204,9 @@ seiyaku IdentitylessRawCallback {
             Err(payload) => panic_payload_text(payload),
         };
         assert!(
-            panic.contains("aggregate signature") || panic.contains("BLS"),
+            panic.contains("aggregate signature")
+                || panic.contains("BLS")
+                || panic.contains("MergeQCAggregateSignatureInvalid"),
             "unexpected strict recovery rejection: {panic}"
         );
         assert_eq!(
@@ -124240,9 +124743,8 @@ seiyaku IdentitylessRawCallback {
 
     fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
         let block_arc = Arc::new(block.clone().into());
-        kura.store_block(Arc::clone(&block_arc))
+        kura.store_block(block_arc)
             .expect("store committed block in kura");
-        kura.persist_block_immediate_for_tests(&block_arc);
     }
 
     #[test]

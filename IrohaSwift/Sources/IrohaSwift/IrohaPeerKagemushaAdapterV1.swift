@@ -24,7 +24,8 @@ public enum IrohaPeerKagemushaAdapterV1 {
     }
 
     public static func decode(
-        _ message: IrohaPeerWireMessageV1
+        _ message: IrohaPeerWireMessageV1,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaPeerPayload {
         guard message.profile == .kagemusha else {
             throw IrohaPeerWireMessageErrorV1.unexpectedProfile(
@@ -37,7 +38,8 @@ public enum IrohaPeerKagemushaAdapterV1 {
         }
         return try KagemushaPeerPayload.decode(
             archive: message.canonicalPayload,
-            kind: message.kind.kagemushaKind
+            kind: message.kind.kagemushaKind,
+            chainDiscriminant: chainDiscriminant
         )
     }
 }

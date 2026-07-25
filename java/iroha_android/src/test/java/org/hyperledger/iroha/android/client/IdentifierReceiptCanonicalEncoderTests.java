@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.client;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 
 /** Tests canonical Norito identifier receipt payload decoding. */
@@ -27,7 +28,8 @@ public final class IdentifierReceiptCanonicalEncoderTests {
     final IdentifierResolutionPayload payload = samplePayload("A1B2C3D4", 142L, 242L);
     final IdentifierResolutionPayload decoded =
         IdentifierReceiptCanonicalEncoder.decodePayload(
-            IdentifierReceiptCanonicalEncoder.encodePayload(payload));
+            IdentifierReceiptCanonicalEncoder.encodePayload(payload),
+            AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
     assert payload.policyId().equals(decoded.policyId()) : "policy id mismatch";
     assert payload.opaqueId().equals(decoded.opaqueId()) : "opaque id mismatch";
@@ -246,7 +248,9 @@ public final class IdentifierReceiptCanonicalEncoderTests {
     final byte[] mutated = Arrays.copyOf(encoded, encoded.length + 1);
 
     assertThrows(
-        () -> IdentifierReceiptCanonicalEncoder.decodePayload(mutated),
+        () ->
+            IdentifierReceiptCanonicalEncoder.decodePayload(
+                mutated, AccountAddress.DEFAULT_I105_DISCRIMINANT),
         "identifier receipt payload trailing bytes must fail");
   }
 

@@ -287,6 +287,38 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     _validate_application_evidence(fixture)
 
 
+@pytest.mark.parametrize(
+    "validator",
+    [
+        " not-a-canonical-bls-peer-id",
+        "ed0120" + "AA" * 32,
+        "ea0130" + "80" + "00" * 47,
+        "EA0130" + "AA" * 48,
+    ],
+    ids=[
+        "surrounding-whitespace",
+        "non-bls-peer-id",
+        "non-subgroup-bls-point",
+        "non-canonical-multihash-case",
+    ],
+)
+def test_grouped_native_amx_v2_rejects_noncanonical_validator_peer_ids(
+    validator: str,
+) -> None:
+    fixture = _fixture()
+    group = fixture["golden"]["receipt_group"]
+    group["native_amx_receipts"][0]["legs"][0]["prepare_qc"][
+        "validator_set"
+    ][0] = validator
+
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiLaneSettlementCommitment.from_payload(group)
+    diagnostics = deepcopy(fixture["golden"]["expected_diagnostics"])
+    diagnostics["lane_settlement_commitments"] = [group]
+    with pytest.raises(RuntimeError):
+        CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
+
+
 def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() -> None:
     hints = get_type_hints(SumeragiNativeAmxAttestationBody)
     assert SumeragiNativeAmxSourceId is not SumeragiNativeAmxTransactionEntrypointHash

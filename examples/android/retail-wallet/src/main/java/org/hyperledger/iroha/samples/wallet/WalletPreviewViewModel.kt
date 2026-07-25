@@ -29,7 +29,11 @@ import org.hyperledger.iroha.android.tx.TransactionBuilder
 class WalletPreviewViewModel(application: Application) : AndroidViewModel(application) {
 
     private val keyManager = IrohaKeyManager.withDefaultProviders()
-    private val builder = TransactionBuilder(NoritoJavaCodecAdapter(), keyManager)
+    private val builder =
+        TransactionBuilder(
+            NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            keyManager,
+        )
     private val appContext = application.applicationContext
     private val policyOverrideStore = PolicyOverrideStore(appContext)
     @Volatile private var securityPolicy: SecurityPolicy =

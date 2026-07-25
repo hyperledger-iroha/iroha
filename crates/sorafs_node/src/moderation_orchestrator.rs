@@ -46,6 +46,7 @@ use iroha_data_model::{
             is_canonical_moderation_identifier_v1, sorafs_moderation_select_panel_v1,
         },
     },
+    transaction::{Executable, SignedTransaction},
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
@@ -59,11 +60,18 @@ pub use iroha_data_model::sorafs::moderation_ledger::{
 };
 
 /// Checkpoint schema version.
-pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 1;
+///
+/// Version two adds generation-bound signed-envelope retirement history. V1 is
+/// pre-release state and is intentionally rejected instead of migrated.
+pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 2;
 /// Hard ceiling for one canonical native moderation instruction.
 pub const MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one persisted orchestrator checkpoint.
 pub const MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1: u64 = 32 * 1024 * 1024;
+/// Hard ceiling for one canonical signed moderation transaction.
+pub const MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1: usize = 10 * 1024 * 1024;
+/// Exact first-release lifetime for every signed moderation transaction.
+pub const MODERATION_TRANSACTION_TTL_MS_V1: u64 = 5 * 60 * 1_000;
 
 const ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.native-action.v1";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.operation-id.v1";
@@ -71,6 +79,9 @@ const REQUEST_BINDING_DOMAIN_V1: &[u8] = b"sorafs.moderation.http-request-bindin
 const SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.finalized-snapshot.v1";
 const HANDOFF_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.terminal-handoff.v1";
 const POP_PROOF_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-proof-payload.v1";
+const SIGNED_TRANSACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.signed-transaction.v1";
+const RETIRED_ENVELOPE_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.retired-envelope-record.v1";
 static CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
@@ -87,11 +98,18 @@ const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
 ))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
 const ACTION_LIMITS: DecodeLimits = DecodeLimits::new(
-    256,
     MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
-    4_096,
+    MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
     2 * MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
-    64,
+    2 * MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
+    128,
+);
+const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
+    MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
+    MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
+    2 * MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
+    2 * MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
+    128,
 );
 
 /// One exact native moderation mutation.
@@ -156,6 +174,24 @@ impl ModerationNativeActionV1 {
             Self::SubmitReveal(_) => "submit_reveal",
             Self::FinalizeCase(_) => "finalize_case",
         }
+    }
+
+    /// Validate the canonical V1 action and its caller authority binding.
+    ///
+    /// Caller-signed Torii command adapters use this same validator as the
+    /// governed orchestration path so no route can admit a looser envelope.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the action exceeds its bound, contains noncanonical embedded
+    /// payloads, violates native field rules, or is signed by the wrong caller.
+    pub fn validate_for_authority(
+        &self,
+        authority: &AccountId,
+    ) -> Result<(), ModerationOrchestratorError> {
+        self.validate_authority(authority)?;
+        self.canonical_bytes()?;
+        Ok(())
     }
 
     fn canonical_bytes(&self) -> Result<Vec<u8>, ModerationOrchestratorError> {
@@ -363,9 +399,16 @@ impl ModerationNativeActionV1 {
         Ok(domain_hash(ACTION_DIGEST_DOMAIN_V1, &[bytes.as_slice()]))
     }
 
-    fn operation_id(&self, authority: &AccountId) -> Result<[u8; 32], ModerationOrchestratorError> {
+    fn operation_id(
+        &self,
+        chain_id: &iroha_data_model::ChainId,
+        authority: &AccountId,
+    ) -> Result<[u8; 32], ModerationOrchestratorError> {
         let material = self.semantic_material(authority)?;
-        Ok(domain_hash(OPERATION_ID_DOMAIN_V1, &[material.as_slice()]))
+        Ok(domain_hash(
+            OPERATION_ID_DOMAIN_V1,
+            &[chain_id.as_str().as_bytes(), material.as_slice()],
+        ))
     }
 }
 
@@ -384,7 +427,7 @@ pub struct ModerationOrchestratorConfigV1 {
     pub max_idempotency_records: usize,
     /// Maximum terminal handoff records.
     pub max_handoffs: usize,
-    /// Maximum safe submission attempts under the same operation identity.
+    /// Maximum safe submission attempts and envelope generations under one operation identity.
     pub max_submit_attempts: u32,
     /// Maximum checkpoint bytes.
     pub checkpoint_max_bytes: u64,
@@ -434,6 +477,10 @@ impl ModerationOrchestratorConfigV1 {
 /// Canonical request forwarded to the runtime-only HSM transaction service.
 #[derive(Debug, Clone)]
 pub struct ModerationTransactionRequestV1 {
+    /// Exact ledger chain bound into the signed transaction and operation id.
+    pub chain_id: iroha_data_model::ChainId,
+    /// Durable signed-envelope generation; semantic operation identity remains stable.
+    pub envelope_generation: u32,
     /// Stable, replica-independent semantic operation identity.
     pub operation_id: [u8; 32],
     /// Exact authenticated native transaction authority.
@@ -448,6 +495,185 @@ pub struct ModerationTransactionRequestV1 {
     pub request_binding_digest: [u8; 32],
     /// Finalized height reconciled before this submission was created.
     pub baseline_finalized_height: u64,
+    /// Finalized block hash paired with `baseline_finalized_height`.
+    pub baseline_finalized_block_hash: [u8; 32],
+}
+
+impl ModerationTransactionRequestV1 {
+    /// Construct the canonical submission request for one authenticated action.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the authority does not match the action, the action
+    /// cannot be canonically encoded, the request binding is inert, or the
+    /// finalized baseline is invalid.
+    pub fn new(
+        chain_id: iroha_data_model::ChainId,
+        envelope_generation: u32,
+        authority: AccountId,
+        action: ModerationNativeActionV1,
+        request_binding_digest: [u8; 32],
+        baseline_finalized_height: u64,
+        baseline_finalized_block_hash: [u8; 32],
+    ) -> Result<Self, ModerationOrchestratorError> {
+        action.validate_authority(&authority)?;
+        let canonical_action = action.canonical_bytes()?;
+        let action_digest = action.action_digest()?;
+        if chain_id.as_str().is_empty() || chain_id.as_str() != chain_id.as_str().trim() {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission chain id must be non-empty and canonical".to_owned(),
+            ));
+        }
+        if envelope_generation == 0 {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission envelope generation must be non-zero".to_owned(),
+            ));
+        }
+        let operation_id = action.operation_id(&chain_id, &authority)?;
+        let request = Self {
+            chain_id,
+            envelope_generation,
+            operation_id,
+            authority,
+            action,
+            canonical_action,
+            action_digest,
+            request_binding_digest,
+            baseline_finalized_height,
+            baseline_finalized_block_hash,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    /// Recompute and validate every canonical identity and authority binding.
+    ///
+    /// This is the sole request validator used at transaction-adapter
+    /// boundaries; callers must not reproduce its digest domains locally.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for inert fields, authority substitution, noncanonical
+    /// action bytes, or mismatched action/operation digests.
+    pub fn validate(&self) -> Result<(), ModerationOrchestratorError> {
+        if self.request_binding_digest == [0; 32] {
+            return Err(ModerationOrchestratorError::InvalidRequestBinding);
+        }
+        if self.baseline_finalized_height == 0 || self.baseline_finalized_block_hash == [0; 32] {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission baseline finalized cursor must be non-zero".to_owned(),
+            ));
+        }
+        self.action.validate_authority(&self.authority)?;
+        let canonical_action = self.action.canonical_bytes()?;
+        if canonical_action != self.canonical_action {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission canonical action bytes do not match the native action".to_owned(),
+            ));
+        }
+        let action_digest = self.action.action_digest()?;
+        if action_digest == [0; 32] || action_digest != self.action_digest {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission action digest does not match the native action".to_owned(),
+            ));
+        }
+        if self.chain_id.as_str().is_empty()
+            || self.chain_id.as_str() != self.chain_id.as_str().trim()
+        {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission chain id must be non-empty and canonical".to_owned(),
+            ));
+        }
+        if self.envelope_generation == 0 {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission envelope generation must be non-zero".to_owned(),
+            ));
+        }
+        let operation_id = self
+            .action
+            .operation_id(&self.chain_id, &self.authority)?;
+        if operation_id == [0; 32] || operation_id != self.operation_id {
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "submission operation identity does not match the authority and native action"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Exact signed transaction retained before any ingress call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationSignedTransactionV1 {
+    /// Native signed transaction hash.
+    pub transaction_id: [u8; 32],
+    /// Digest binding the exact canonical signed envelope bytes.
+    pub canonical_bytes_digest: [u8; 32],
+    /// Canonical Norito signed transaction bytes.
+    pub canonical_bytes: Vec<u8>,
+}
+
+impl ModerationSignedTransactionV1 {
+    /// Validate and retain one exact signed transaction for `request`.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for invalid signatures, substituted authority or
+    /// instructions, noncanonical or oversized bytes, and inert identities.
+    pub fn from_signed_transaction(
+        request: &ModerationTransactionRequestV1,
+        transaction: &SignedTransaction,
+    ) -> Result<Self, ModerationSubmissionFailureV1> {
+        request
+            .validate()
+            .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+        validate_signed_transaction_for_request(request, transaction)?;
+        let canonical_bytes = norito::to_bytes(transaction)
+            .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+        let signed = Self {
+            transaction_id: *transaction.hash().as_ref(),
+            canonical_bytes_digest: signed_transaction_digest(&canonical_bytes),
+            canonical_bytes,
+        };
+        signed.decode_for_request(request)?;
+        Ok(signed)
+    }
+
+    /// Decode and revalidate the exact retained transaction.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if any retained field or canonical byte differs from the
+    /// signed transaction bound to `request`.
+    pub fn decode_for_request(
+        &self,
+        request: &ModerationTransactionRequestV1,
+    ) -> Result<SignedTransaction, ModerationSubmissionFailureV1> {
+        request
+            .validate()
+            .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+        if self.transaction_id == [0; 32]
+            || self.canonical_bytes_digest == [0; 32]
+            || self.canonical_bytes.is_empty()
+            || self.canonical_bytes.len() > MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1
+            || signed_transaction_digest(&self.canonical_bytes) != self.canonical_bytes_digest
+        {
+            return Err(ModerationSubmissionFailureV1::PermanentRejection);
+        }
+        let transaction = decode_from_bytes_with_limits::<SignedTransaction>(
+            &self.canonical_bytes,
+            SIGNED_TRANSACTION_LIMITS,
+        )
+        .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+        let canonical = norito::to_bytes(&transaction)
+            .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+        if canonical != self.canonical_bytes || *transaction.hash().as_ref() != self.transaction_id
+        {
+            return Err(ModerationSubmissionFailureV1::PermanentRejection);
+        }
+        validate_signed_transaction_for_request(request, &transaction)?;
+        Ok(transaction)
+    }
 }
 
 /// A transaction identity returned by the injected submitter.
@@ -478,6 +704,10 @@ pub enum ModerationSubmissionFailureV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSubmissionLookupV1 {
     /// No matching submission exists as of the supplied finalized height.
+    ///
+    /// Envelope renewal treats this as strong absence only when the height is
+    /// exactly the independently queried finalized snapshot anchor. A lesser
+    /// height may permit replay of the same unexpired bytes but never renewal.
     NotFound {
         /// Finalized height at which absence was established.
         observed_finalized_height: u64,
@@ -503,14 +733,32 @@ pub enum ModerationSubmissionLookupV1 {
     Unknown,
 }
 
-/// Runtime-only HSM and transaction submission interface.
+/// Runtime-only HSM and strict transaction-ingress interface.
 pub trait ModerationTransactionSubmitterV1: Send + Sync {
-    /// Sign and submit exactly one native action under its authenticated authority.
+    /// Exact ledger chain implemented by this runtime boundary.
     ///
-    /// Implementations must deduplicate `operation_id` across replicas.
-    fn submit(
+    /// The orchestrator freezes this value at open and rejects every retained
+    /// or newly signed envelope whose chain differs.
+    fn chain_id(&self) -> iroha_data_model::ChainId;
+
+    /// Sign exactly one native action without exposing it to transaction ingress.
+    ///
+    /// The orchestrator durably retains the returned canonical bytes and hash
+    /// before calling [`Self::submit_signed`].
+    fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
+    ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1>;
+
+    /// Submit the exact signed envelope already retained by the orchestrator.
+    ///
+    /// Implementations must never sign or replace a transaction here. They
+    /// must atomically deduplicate `operation_id` and `signed.transaction_id`
+    /// at their strict durable ingress boundary.
+    fn submit_signed(
+        &self,
+        request: &ModerationTransactionRequestV1,
+        signed: &ModerationSignedTransactionV1,
     ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1>;
 
     /// Resolve an earlier submission by its stable operation identity.
@@ -670,8 +918,32 @@ struct StoredOperationV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredOutboxStateV1 {
     Ready,
+    Signing,
+    Signed,
     Ambiguous,
     Submitted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum StoredRetiredEnvelopeDispositionV1 {
+    NotFound,
+    Pending,
+    Applied,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredRetiredEnvelopeV1 {
+    generation: u32,
+    transaction_id: [u8; 32],
+    signed_transaction_digest: [u8; 32],
+    created_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    retired_at_finalized_height: u64,
+    retired_at_finalized_block_hash: [u8; 32],
+    retired_at_finalized_unix_ms: u64,
+    disposition: StoredRetiredEnvelopeDispositionV1,
+    record_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -681,8 +953,13 @@ struct StoredOutboxEntryV1 {
     action: ModerationNativeActionV1,
     action_digest: [u8; 32],
     request_binding_digest: [u8; 32],
+    envelope_generation: u32,
+    retired_envelopes: Vec<StoredRetiredEnvelopeV1>,
     baseline_finalized_height: u64,
+    baseline_finalized_block_hash: [u8; 32],
     transaction_id: Option<[u8; 32]>,
+    signed_transaction_digest: Option<[u8; 32]>,
+    signed_transaction_bytes: Option<Vec<u8>>,
     attempts: u32,
     state: StoredOutboxStateV1,
 }
@@ -742,6 +1019,7 @@ impl Default for ModerationOrchestratorCheckpointV1 {
 /// Finalized-chain moderation orchestrator.
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
+    chain_id: iroha_data_model::ChainId,
     deps: ModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
     durability_faulted: AtomicBool,
@@ -773,36 +1051,55 @@ impl ModerationOrchestratorV1 {
         deps: ModerationOrchestratorDepsV1,
     ) -> Result<Self, ModerationOrchestratorError> {
         config.validate()?;
+        let chain_id = deps.submitter.chain_id();
+        if chain_id.as_str().is_empty() || chain_id.as_str() != chain_id.as_str().trim() {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "moderation submitter chain id must be non-empty and canonical".to_owned(),
+            ));
+        }
         ensure_secure_parent(&config.checkpoint_path)?;
-        let state = match read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)? {
-            None => ModerationOrchestratorCheckpointV1::default(),
-            Some(bytes) => {
-                let limits = checkpoint_decode_limits(config.checkpoint_max_bytes)?;
-                let checkpoint =
-                    decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
-                        &bytes, limits,
-                    )
+        let mut state =
+            match read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)? {
+                None => ModerationOrchestratorCheckpointV1::default(),
+                Some(bytes) => {
+                    let limits = checkpoint_decode_limits(config.checkpoint_max_bytes)?;
+                    let checkpoint = decode_from_bytes_with_limits::<
+                        ModerationOrchestratorCheckpointV1,
+                    >(&bytes, limits)
                     .map_err(|error| {
                         ModerationOrchestratorError::CheckpointCorrupt(format!(
                             "decode checkpoint: {error}"
                         ))
                     })?;
-                let canonical = norito::to_bytes(&checkpoint).map_err(|error| {
-                    ModerationOrchestratorError::CheckpointCorrupt(format!(
-                        "re-encode checkpoint: {error}"
-                    ))
-                })?;
-                if canonical != bytes {
-                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                        "checkpoint is not canonical Norito".to_owned(),
-                    ));
+                    let canonical = norito::to_bytes(&checkpoint).map_err(|error| {
+                        ModerationOrchestratorError::CheckpointCorrupt(format!(
+                            "re-encode checkpoint: {error}"
+                        ))
+                    })?;
+                    if canonical != bytes {
+                        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                            "checkpoint is not canonical Norito".to_owned(),
+                        ));
+                    }
+                    checkpoint
                 }
-                checkpoint
+            };
+        validate_checkpoint(&state, &config, &chain_id)?;
+        let mut recovered_signing_claim = false;
+        for entry in &mut state.outbox {
+            if entry.state == StoredOutboxStateV1::Signing {
+                entry.state = StoredOutboxStateV1::Ready;
+                entry.baseline_finalized_height = 0;
+                entry.baseline_finalized_block_hash = [0; 32];
+                recovered_signing_claim = true;
             }
-        };
-        validate_checkpoint(&state, &config)?;
+        }
+        if recovered_signing_claim {
+            persist_checkpoint(&config, &chain_id, &mut state)?;
+        }
         Ok(Self {
             config,
+            chain_id,
             deps,
             state: Mutex::new(state),
             durability_faulted: AtomicBool::new(false),
@@ -850,7 +1147,7 @@ impl ModerationOrchestratorV1 {
         action.validate_authority(&authority)?;
         action.canonical_bytes()?;
         let action_digest = action.action_digest()?;
-        let operation_id = action.operation_id(&authority)?;
+        let operation_id = action.operation_id(&self.chain_id, &authority)?;
 
         let mut state = self.lock_state()?;
         self.reconcile_locked(&mut state)?;
@@ -925,15 +1222,20 @@ impl ModerationOrchestratorV1 {
             action: action.clone(),
             action_digest,
             request_binding_digest,
-            baseline_finalized_height: cursor.height,
+            envelope_generation: 1,
+            retired_envelopes: Vec::new(),
+            baseline_finalized_height: 0,
+            baseline_finalized_block_hash: [0; 32],
             transaction_id: None,
+            signed_transaction_digest: None,
+            signed_transaction_bytes: None,
             attempts: 0,
             state: StoredOutboxStateV1::Ready,
         });
         self.persist_checkpoint_locked(&mut state)?;
 
-        // Consult the stable cross-replica operation registry before the first
-        // submission. A racing peer may already own the same transaction.
+        // Advance the durable staged delivery. Cross-replica races are resolved
+        // by exact transaction observation and the authoritative action effect.
         self.reconcile_outbox_locked(&mut state)?;
         let operation = find_operation(&state, operation_id).ok_or_else(|| {
             ModerationOrchestratorError::CheckpointCorrupt(
@@ -954,7 +1256,9 @@ impl ModerationOrchestratorV1 {
     /// Only native sortition, activation/failover, and finalization ISIs are
     /// emitted. The injected operational identity must equal the authority in
     /// the finalized policy or panel selection; configuration cannot override
-    /// ledger authority. At most `limit` actions are attempted.
+    /// ledger authority. Deadline evaluation uses only the signed creation time
+    /// of the exact finalized block retained in the snapshot. At most `limit`
+    /// actions are attempted.
     ///
     /// # Errors
     ///
@@ -962,7 +1266,6 @@ impl ModerationOrchestratorV1 {
     pub fn run_maintenance(
         &self,
         governance_authority: AccountId,
-        now_unix_ms: u64,
         limit: usize,
     ) -> Result<Vec<ModerationSubmitOutcomeV1>, ModerationOrchestratorError> {
         if limit == 0 {
@@ -972,6 +1275,7 @@ impl ModerationOrchestratorV1 {
         let snapshot = self
             .snapshot()
             .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
+        let now_unix_ms = snapshot.finalized_at_unix_ms;
         let mut actions = Vec::new();
         for appeal_view in &snapshot.appeals {
             if actions.len() >= limit {
@@ -1133,7 +1437,7 @@ impl ModerationOrchestratorV1 {
         if self.durability_faulted.load(Ordering::Acquire) {
             return Err(ModerationOrchestratorError::DurabilityFaulted);
         }
-        if let Err(error) = persist_checkpoint(&self.config, state) {
+        if let Err(error) = persist_checkpoint(&self.config, &self.chain_id, state) {
             self.durability_faulted.store(true, Ordering::Release);
             return Err(error);
         }
@@ -1243,30 +1547,63 @@ impl ModerationOrchestratorV1 {
                 ActionEffect::Absent => {}
             }
 
-            let lookup = self
+            self.reconcile_retired_envelopes_locked(&mut entry, cursor);
+            if let Some(fenced_transaction_id) =
+                retired_history_fence_transaction_id(&entry)
+            {
+                state.operations[operation_position].transaction_id =
+                    Some(fenced_transaction_id);
+                retained.push(entry);
+                continue;
+            }
+            state.operations[operation_position].transaction_id = entry.transaction_id;
+
+            if matches!(
+                entry.state,
+                StoredOutboxStateV1::Ready | StoredOutboxStateV1::Signing
+            ) {
+                retained.push(entry);
+                continue;
+            }
+            let request = moderation_transaction_request(&self.chain_id, &entry)?;
+            let signed = moderation_signed_transaction(&entry)?;
+            let transaction = signed.decode_for_request(&request).map_err(|_| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "active outbox envelope failed exact validation".to_owned(),
+                )
+            })?;
+            let timing = signed_envelope_timing(&transaction)?;
+            let expired = snapshot.finalized_at_unix_ms >= timing.expires_at_unix_ms;
+            if entry.state == StoredOutboxStateV1::Signed && !expired {
+                retained.push(entry);
+                continue;
+            }
+            let expected_transaction_id = signed.transaction_id;
+            match self
                 .deps
                 .submitter
-                .lookup(entry.operation_id, entry.transaction_id);
-            match lookup {
+                .lookup(entry.operation_id, Some(expected_transaction_id))
+            {
                 ModerationSubmissionLookupV1::Pending { transaction_id }
-                | ModerationSubmissionLookupV1::Applied { transaction_id } => {
-                    entry.transaction_id = Some(transaction_id);
+                | ModerationSubmissionLookupV1::Applied { transaction_id }
+                    if transaction_id == expected_transaction_id =>
+                {
                     entry.state = StoredOutboxStateV1::Submitted;
-                    state.operations[operation_position].transaction_id = Some(transaction_id);
-                    retained.push(entry);
-                }
-                ModerationSubmissionLookupV1::Unknown => {
-                    entry.state = StoredOutboxStateV1::Ambiguous;
+                    state.operations[operation_position].transaction_id =
+                        Some(expected_transaction_id);
                     retained.push(entry);
                 }
                 ModerationSubmissionLookupV1::Rejected {
                     transaction_id,
                     observed_finalized_height,
-                } if observed_finalized_height >= entry.baseline_finalized_height => {
+                } if transaction_id
+                    .is_none_or(|candidate| candidate == expected_transaction_id)
+                    && observed_finalized_height > entry.baseline_finalized_height
+                    && observed_finalized_height <= cursor.height =>
+                {
                     state.operations[operation_position].status = StoredOperationStatusV1::Rejected;
-                    if transaction_id.is_some() {
-                        state.operations[operation_position].transaction_id = transaction_id;
-                    }
+                    state.operations[operation_position].transaction_id =
+                        Some(expected_transaction_id);
                     dead.push(StoredDeadLetterV1 {
                         identity: entry.operation_id,
                         action_label: entry.action.label().to_owned(),
@@ -1276,22 +1613,60 @@ impl ModerationOrchestratorV1 {
                 }
                 ModerationSubmissionLookupV1::NotFound {
                     observed_finalized_height,
-                } if observed_finalized_height >= entry.baseline_finalized_height => {
+                } if observed_finalized_height > entry.baseline_finalized_height
+                    && observed_finalized_height <= cursor.height =>
+                {
                     if entry.attempts >= self.config.max_submit_attempts {
                         state.operations[operation_position].status =
                             StoredOperationStatusV1::Rejected;
+                        state.operations[operation_position].transaction_id =
+                            Some(expected_transaction_id);
                         dead.push(StoredDeadLetterV1 {
                             identity: entry.operation_id,
                             action_label: entry.action.label().to_owned(),
                             reason: StoredDeadLetterReasonV1::RetryExhaustedNotFound,
                             finalized_cursor: cursor,
                         });
+                    } else if expired {
+                        let next_generation =
+                            next_envelope_generation(entry.envelope_generation)?;
+                        if next_generation > self.config.max_submit_attempts {
+                            state.operations[operation_position].status =
+                                StoredOperationStatusV1::Rejected;
+                            state.operations[operation_position].transaction_id =
+                                Some(expected_transaction_id);
+                            dead.push(StoredDeadLetterV1 {
+                                identity: entry.operation_id,
+                                action_label: entry.action.label().to_owned(),
+                                reason: StoredDeadLetterReasonV1::RetryExhaustedNotFound,
+                                finalized_cursor: cursor,
+                            });
+                        } else if observed_finalized_height == cursor.height {
+                            self.retire_expired_envelope(
+                                &mut entry,
+                                &signed,
+                                timing,
+                                cursor,
+                                snapshot.finalized_at_unix_ms,
+                                next_generation,
+                            )?;
+                            state.operations[operation_position].transaction_id = None;
+                            retained.push(entry);
+                        } else {
+                            entry.state = StoredOutboxStateV1::Ambiguous;
+                            retained.push(entry);
+                        }
                     } else {
-                        entry.state = StoredOutboxStateV1::Ready;
+                        entry.baseline_finalized_height = cursor.height;
+                        entry.baseline_finalized_block_hash = cursor.block_hash;
+                        entry.state = StoredOutboxStateV1::Signed;
                         retained.push(entry);
                     }
                 }
-                ModerationSubmissionLookupV1::Rejected { .. }
+                ModerationSubmissionLookupV1::Unknown
+                | ModerationSubmissionLookupV1::Pending { .. }
+                | ModerationSubmissionLookupV1::Applied { .. }
+                | ModerationSubmissionLookupV1::Rejected { .. }
                 | ModerationSubmissionLookupV1::NotFound { .. } => {
                     entry.state = StoredOutboxStateV1::Ambiguous;
                     retained.push(entry);
@@ -1308,26 +1683,119 @@ impl ModerationOrchestratorV1 {
         state.outbox = retained;
         state.dead_letters.extend(dead);
 
-        let ready = state
+        let deliverable = state
             .outbox
             .iter()
-            .filter(|entry| entry.state == StoredOutboxStateV1::Ready)
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    StoredOutboxStateV1::Ready | StoredOutboxStateV1::Signed
+                ) && retired_history_fence_transaction_id(entry).is_none()
+            })
             .map(|entry| entry.operation_id)
             .collect::<Vec<_>>();
-        for operation_id in ready {
-            let canonical = state
-                .outbox
-                .iter()
-                .find(|entry| entry.operation_id == operation_id)
-                .ok_or_else(|| {
-                    ModerationOrchestratorError::CheckpointCorrupt(
-                        "ready outbox entry disappeared".to_owned(),
-                    )
-                })?
-                .action
-                .canonical_bytes()?;
-            self.try_submit_locked(state, operation_id, canonical)?;
+        for operation_id in deliverable {
+            self.try_submit_locked(state, operation_id)?;
         }
+        Ok(())
+    }
+
+    fn reconcile_retired_envelopes_locked(
+        &self,
+        entry: &mut StoredOutboxEntryV1,
+        cursor: ModerationFinalizedCursorV1,
+    ) {
+        let operation_id = entry.operation_id;
+        for record in &mut entry.retired_envelopes {
+            let lookup = self
+                .deps
+                .submitter
+                .lookup(operation_id, Some(record.transaction_id));
+            let next_disposition = match lookup {
+                ModerationSubmissionLookupV1::Applied { transaction_id }
+                    if transaction_id == record.transaction_id =>
+                {
+                    StoredRetiredEnvelopeDispositionV1::Applied
+                }
+                ModerationSubmissionLookupV1::Pending { transaction_id }
+                    if transaction_id == record.transaction_id =>
+                {
+                    match record.disposition {
+                        StoredRetiredEnvelopeDispositionV1::Applied
+                        | StoredRetiredEnvelopeDispositionV1::Rejected => record.disposition,
+                        StoredRetiredEnvelopeDispositionV1::NotFound
+                        | StoredRetiredEnvelopeDispositionV1::Pending => {
+                            StoredRetiredEnvelopeDispositionV1::Pending
+                        }
+                    }
+                }
+                ModerationSubmissionLookupV1::Rejected {
+                    transaction_id: Some(transaction_id),
+                    observed_finalized_height,
+                } if transaction_id == record.transaction_id
+                    && observed_finalized_height >= record.retired_at_finalized_height
+                    && observed_finalized_height <= cursor.height =>
+                {
+                    if record.disposition == StoredRetiredEnvelopeDispositionV1::Applied {
+                        StoredRetiredEnvelopeDispositionV1::Applied
+                    } else {
+                        StoredRetiredEnvelopeDispositionV1::Rejected
+                    }
+                }
+                ModerationSubmissionLookupV1::NotFound { .. }
+                | ModerationSubmissionLookupV1::Pending { .. }
+                | ModerationSubmissionLookupV1::Applied { .. }
+                | ModerationSubmissionLookupV1::Rejected { .. }
+                | ModerationSubmissionLookupV1::Unknown => record.disposition,
+            };
+            if next_disposition != record.disposition {
+                record.disposition = next_disposition;
+                refresh_retired_envelope_record_digest(operation_id, record);
+            }
+        }
+    }
+
+    fn retire_expired_envelope(
+        &self,
+        entry: &mut StoredOutboxEntryV1,
+        signed: &ModerationSignedTransactionV1,
+        timing: SignedEnvelopeTimingV1,
+        cursor: ModerationFinalizedCursorV1,
+        finalized_at_unix_ms: u64,
+        next_generation: u32,
+    ) -> Result<(), ModerationOrchestratorError> {
+        if next_generation != next_envelope_generation(entry.envelope_generation)?
+            || next_generation > self.config.max_submit_attempts
+        {
+            return Err(ModerationOrchestratorError::GenerationOverflow);
+        }
+        if finalized_at_unix_ms < timing.expires_at_unix_ms {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "cannot retire an unexpired moderation envelope".to_owned(),
+            ));
+        }
+        let mut retired = StoredRetiredEnvelopeV1 {
+            generation: entry.envelope_generation,
+            transaction_id: signed.transaction_id,
+            signed_transaction_digest: signed.canonical_bytes_digest,
+            created_at_unix_ms: timing.created_at_unix_ms,
+            expires_at_unix_ms: timing.expires_at_unix_ms,
+            retired_at_finalized_height: cursor.height,
+            retired_at_finalized_block_hash: cursor.block_hash,
+            retired_at_finalized_unix_ms: finalized_at_unix_ms,
+            disposition: StoredRetiredEnvelopeDispositionV1::NotFound,
+            record_digest: [0; 32],
+        };
+        refresh_retired_envelope_record_digest(entry.operation_id, &mut retired);
+
+        entry.retired_envelopes.push(retired);
+        entry.envelope_generation = next_generation;
+        entry.baseline_finalized_height = 0;
+        entry.baseline_finalized_block_hash = [0; 32];
+        entry.transaction_id = None;
+        entry.signed_transaction_digest = None;
+        entry.signed_transaction_bytes = None;
+        entry.state = StoredOutboxStateV1::Ready;
         Ok(())
     }
 
@@ -1335,7 +1803,6 @@ impl ModerationOrchestratorV1 {
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
         operation_id: [u8; 32],
-        canonical_action: Vec<u8>,
     ) -> Result<(), ModerationOrchestratorError> {
         let position = state
             .outbox
@@ -1346,50 +1813,151 @@ impl ModerationOrchestratorV1 {
                     "submission outbox entry is missing".to_owned(),
                 )
             })?;
-        if state.outbox[position].attempts >= self.config.max_submit_attempts {
+        if state.outbox[position].state == StoredOutboxStateV1::Ready {
+            self.stage_signed_transaction_locked(state, operation_id)?;
+        }
+        self.submit_staged_transaction_locked(state, operation_id)
+    }
+
+    fn stage_signed_transaction_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+        operation_id: [u8; 32],
+    ) -> Result<(), ModerationOrchestratorError> {
+        let position = state
+            .outbox
+            .iter()
+            .position(|entry| entry.operation_id == operation_id)
+            .ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "signing outbox entry is missing".to_owned(),
+                )
+            })?;
+        if state.outbox[position].state != StoredOutboxStateV1::Ready {
             return Ok(());
         }
-        state.outbox[position].attempts = state.outbox[position].attempts.saturating_add(1);
+        let cursor = snapshot_cursor(state)?;
+        state.outbox[position].baseline_finalized_height = cursor.height;
+        state.outbox[position].baseline_finalized_block_hash = cursor.block_hash;
+        state.outbox[position].state = StoredOutboxStateV1::Signing;
+        self.persist_checkpoint_locked(state)?;
+
+        let request =
+            moderation_transaction_request(&self.chain_id, &state.outbox[position])?;
+        match self.deps.submitter.sign(&request) {
+            Ok(signed) => {
+                let transaction = signed.decode_for_request(&request).map_err(|_| {
+                    ModerationOrchestratorError::CheckpointCorrupt(
+                        "runtime signer returned an invalid exact transaction".to_owned(),
+                    )
+                })?;
+                let timing = signed_envelope_timing(&transaction)?;
+                let duplicate_or_stale = state.outbox[position]
+                    .retired_envelopes
+                    .iter()
+                    .any(|record| {
+                        record.transaction_id == signed.transaction_id
+                            || record.signed_transaction_digest == signed.canonical_bytes_digest
+                    })
+                    || state.outbox[position].retired_envelopes.last().is_some_and(
+                        |previous| {
+                            timing.created_at_unix_ms <= previous.created_at_unix_ms
+                                || timing.expires_at_unix_ms
+                                    <= previous.retired_at_finalized_unix_ms
+                        },
+                    );
+                if duplicate_or_stale {
+                    state.outbox[position].baseline_finalized_height = 0;
+                    state.outbox[position].baseline_finalized_block_hash = [0; 32];
+                    state.outbox[position].state = StoredOutboxStateV1::Ready;
+                    self.persist_checkpoint_locked(state)?;
+                    return Err(ModerationOrchestratorError::InvalidAction(
+                        "runtime signer did not advance the retired envelope generation"
+                            .to_owned(),
+                    ));
+                }
+                state.outbox[position].transaction_id = Some(signed.transaction_id);
+                state.outbox[position].signed_transaction_digest =
+                    Some(signed.canonical_bytes_digest);
+                state.outbox[position].signed_transaction_bytes = Some(signed.canonical_bytes);
+                state.outbox[position].state = StoredOutboxStateV1::Signed;
+                let transaction_id = state.outbox[position].transaction_id;
+                if let Some(operation) = state
+                    .operations
+                    .iter_mut()
+                    .find(|operation| operation.operation_id == operation_id)
+                {
+                    operation.transaction_id = transaction_id;
+                }
+                self.persist_checkpoint_locked(state)
+            }
+            Err(
+                ModerationSubmissionFailureV1::NotSubmittedUnavailable
+                | ModerationSubmissionFailureV1::NotSubmittedBackpressure
+                | ModerationSubmissionFailureV1::Ambiguous
+                | ModerationSubmissionFailureV1::RuntimeUnavailable,
+            ) => {
+                state.outbox[position].baseline_finalized_height = 0;
+                state.outbox[position].baseline_finalized_block_hash = [0; 32];
+                state.outbox[position].state = StoredOutboxStateV1::Ready;
+                self.persist_checkpoint_locked(state)
+            }
+            Err(ModerationSubmissionFailureV1::PermanentRejection) => self
+                .dead_letter_submission_locked(
+                    state,
+                    position,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                ),
+        }
+    }
+
+    fn submit_staged_transaction_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+        operation_id: [u8; 32],
+    ) -> Result<(), ModerationOrchestratorError> {
+        let position = state
+            .outbox
+            .iter()
+            .position(|entry| entry.operation_id == operation_id)
+            .ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "submission outbox entry is missing".to_owned(),
+                )
+            })?;
+        if state.outbox[position].state != StoredOutboxStateV1::Signed {
+            return Ok(());
+        }
+        if state.outbox[position].attempts >= self.config.max_submit_attempts {
+            return self.dead_letter_submission_locked(
+                state,
+                position,
+                StoredDeadLetterReasonV1::RetryExhaustedNotFound,
+            );
+        }
+        let request =
+            moderation_transaction_request(&self.chain_id, &state.outbox[position])?;
+        let signed = moderation_signed_transaction(&state.outbox[position])?;
+        signed.decode_for_request(&request).map_err(|_| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "retained signed transaction failed exact validation".to_owned(),
+            )
+        })?;
+        state.outbox[position].attempts = state.outbox[position]
+            .attempts
+            .checked_add(1)
+            .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
         state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
         self.persist_checkpoint_locked(state)?;
 
-        let entry = state.outbox[position].clone();
-        let request = ModerationTransactionRequestV1 {
-            operation_id,
-            authority: entry.authority,
-            action: entry.action,
-            canonical_action,
-            action_digest: entry.action_digest,
-            request_binding_digest: entry.request_binding_digest,
-            baseline_finalized_height: entry.baseline_finalized_height,
-        };
-        let result = self.deps.submitter.submit(&request);
-        match result {
+        match self.deps.submitter.submit_signed(&request, &signed) {
             Ok(receipt) => {
-                if receipt.transaction_id == [0; 32]
-                    || receipt.observed_finalized_height < entry.baseline_finalized_height
+                if receipt.transaction_id != signed.transaction_id
+                    || receipt.observed_finalized_height < request.baseline_finalized_height
                 {
-                    if receipt.transaction_id != [0; 32] {
-                        state.outbox[position].transaction_id = Some(receipt.transaction_id);
-                        if let Some(operation) = state
-                            .operations
-                            .iter_mut()
-                            .find(|operation| operation.operation_id == operation_id)
-                        {
-                            operation.transaction_id = Some(receipt.transaction_id);
-                        }
-                    }
                     state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
                 } else {
-                    state.outbox[position].transaction_id = Some(receipt.transaction_id);
                     state.outbox[position].state = StoredOutboxStateV1::Submitted;
-                    if let Some(operation) = state
-                        .operations
-                        .iter_mut()
-                        .find(|operation| operation.operation_id == operation_id)
-                    {
-                        operation.transaction_id = Some(receipt.transaction_id);
-                    }
                 }
             }
             Err(
@@ -1402,27 +1970,44 @@ impl ModerationOrchestratorV1 {
                 ModerationSubmissionFailureV1::NotSubmittedUnavailable
                 | ModerationSubmissionFailureV1::NotSubmittedBackpressure,
             ) => {
-                state.outbox[position].state = StoredOutboxStateV1::Ready;
+                state.outbox[position].state = StoredOutboxStateV1::Signed;
             }
             Err(ModerationSubmissionFailureV1::PermanentRejection) => {
-                ensure_dead_letter_capacity(state, &self.config, 1)?;
-                let cursor = snapshot_cursor(state)?;
-                state.outbox.remove(position);
-                if let Some(operation) = state
-                    .operations
-                    .iter_mut()
-                    .find(|operation| operation.operation_id == operation_id)
-                {
-                    operation.status = StoredOperationStatusV1::Rejected;
-                }
-                state.dead_letters.push(StoredDeadLetterV1 {
-                    identity: operation_id,
-                    action_label: request.action.label().to_owned(),
-                    reason: StoredDeadLetterReasonV1::PermanentRejection,
-                    finalized_cursor: cursor,
-                });
+                return self.dead_letter_submission_locked(
+                    state,
+                    position,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                );
             }
         }
+        self.persist_checkpoint_locked(state)
+    }
+
+    fn dead_letter_submission_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+        position: usize,
+        reason: StoredDeadLetterReasonV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        ensure_dead_letter_capacity(state, &self.config, 1)?;
+        let cursor = snapshot_cursor(state)?;
+        let entry = state.outbox.remove(position);
+        if let Some(operation) = state
+            .operations
+            .iter_mut()
+            .find(|operation| operation.operation_id == entry.operation_id)
+        {
+            operation.status = StoredOperationStatusV1::Rejected;
+            if operation.transaction_id.is_none() {
+                operation.transaction_id = entry.transaction_id;
+            }
+        }
+        state.dead_letters.push(StoredDeadLetterV1 {
+            identity: entry.operation_id,
+            action_label: entry.action.label().to_owned(),
+            reason,
+            finalized_cursor: cursor,
+        });
         self.persist_checkpoint_locked(state)
     }
 
@@ -1664,6 +2249,7 @@ fn validate_finalized_snapshot(
     if snapshot.version != MODERATION_FINALIZED_SNAPSHOT_VERSION_V1
         || snapshot.finalized_height == 0
         || snapshot.finalized_block_hash == [0; 32]
+        || snapshot.finalized_at_unix_ms == 0
     {
         return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
             "snapshot version or finalized anchor is invalid".to_owned(),
@@ -2622,6 +3208,7 @@ fn action_effect(
 fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
 ) -> Result<(), ModerationOrchestratorError> {
     if state.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1 {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
@@ -2660,11 +3247,13 @@ fn validate_checkpoint(
             ));
         }
     }
-    let mut operations = BTreeSet::new();
+    let mut operations = BTreeMap::new();
     for operation in &state.operations {
         if operation.operation_id == [0; 32]
             || operation.action_digest == [0; 32]
-            || !operations.insert(operation.operation_id)
+            || operations
+                .insert(operation.operation_id, operation)
+                .is_some()
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "invalid or duplicate operation tombstone".to_owned(),
@@ -2673,21 +3262,94 @@ fn validate_checkpoint(
     }
     let mut outbox = BTreeSet::new();
     for entry in &state.outbox {
+        let Some(operation) = operations.get(&entry.operation_id).copied() else {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "outbox entry has no operation tombstone".to_owned(),
+            ));
+        };
         if !outbox.insert(entry.operation_id)
-            || !operations.contains(&entry.operation_id)
             || entry.action_digest != entry.action.action_digest()?
             || entry.request_binding_digest == [0; 32]
             || entry.attempts > config.max_submit_attempts
+            || operation.authority != entry.authority
+            || operation.action_digest != entry.action_digest
+            || operation.status != StoredOperationStatusV1::Pending
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "invalid, duplicate, or orphaned outbox entry".to_owned(),
             ));
         }
+        validate_retired_envelope_history(entry, config)?;
+        let expected_operation_transaction_id =
+            retired_history_fence_transaction_id(entry).or(entry.transaction_id);
+        if operation.transaction_id != expected_operation_transaction_id {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "operation transaction identity does not match active or fenced history".to_owned(),
+            ));
+        }
         entry.action.validate_authority(&entry.authority)?;
-        if entry.action.operation_id(&entry.authority)? != entry.operation_id {
+        if entry
+            .action
+            .operation_id(chain_id, &entry.authority)?
+            != entry.operation_id
+        {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "outbox semantic identity mismatch".to_owned(),
             ));
+        }
+        let empty_cursor =
+            entry.baseline_finalized_height == 0 && entry.baseline_finalized_block_hash == [0; 32];
+        let nonzero_cursor =
+            entry.baseline_finalized_height != 0 && entry.baseline_finalized_block_hash != [0; 32];
+        let empty_transaction = entry.transaction_id.is_none()
+            && entry.signed_transaction_digest.is_none()
+            && entry.signed_transaction_bytes.is_none();
+        let complete_transaction = entry.transaction_id.is_some()
+            && entry.signed_transaction_digest.is_some()
+            && entry.signed_transaction_bytes.is_some();
+        let valid_delivery = match entry.state {
+            StoredOutboxStateV1::Ready => empty_cursor && empty_transaction,
+            StoredOutboxStateV1::Signing => nonzero_cursor && empty_transaction,
+            StoredOutboxStateV1::Signed => nonzero_cursor && complete_transaction,
+            StoredOutboxStateV1::Ambiguous | StoredOutboxStateV1::Submitted => {
+                nonzero_cursor && complete_transaction && entry.attempts != 0
+            }
+        };
+        if !valid_delivery {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "outbox crash state is inconsistent".to_owned(),
+            ));
+        }
+        if !empty_cursor {
+            let request = moderation_transaction_request(chain_id, entry)?;
+            if complete_transaction {
+                let signed = moderation_signed_transaction(entry)?;
+                let transaction = signed
+                    .decode_for_request(&request)
+                    .map_err(|_| {
+                        ModerationOrchestratorError::CheckpointCorrupt(
+                            "outbox signed transaction is invalid".to_owned(),
+                        )
+                    })?;
+                let timing = signed_envelope_timing(&transaction)?;
+                if entry.retired_envelopes.iter().any(|record| {
+                    record.transaction_id == signed.transaction_id
+                        || record.signed_transaction_digest == signed.canonical_bytes_digest
+                }) {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "active signed envelope duplicates retired history".to_owned(),
+                    ));
+                }
+                if let Some(previous) = entry.retired_envelopes.last()
+                    && (timing.created_at_unix_ms <= previous.created_at_unix_ms
+                        || timing.expires_at_unix_ms
+                            <= previous.retired_at_finalized_unix_ms)
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "active signed envelope does not advance retired history".to_owned(),
+                    ));
+                }
+            }
         }
     }
     let mut handoffs = state
@@ -2715,13 +3377,14 @@ fn validate_checkpoint(
 
 fn persist_checkpoint(
     config: &ModerationOrchestratorConfigV1,
+    chain_id: &iroha_data_model::ChainId,
     state: &mut ModerationOrchestratorCheckpointV1,
 ) -> Result<(), ModerationOrchestratorError> {
     state.generation = state
         .generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
-    validate_checkpoint(state, config)?;
+    validate_checkpoint(state, config, chain_id)?;
     let bytes = norito::to_bytes(state).map_err(|error| {
         ModerationOrchestratorError::CheckpointIo(format!("encode checkpoint: {error}"))
     })?;
@@ -2813,6 +3476,242 @@ fn finalized_snapshot_digest(
         ModerationOrchestratorError::InvalidFinalizedSnapshot(format!("encode snapshot: {error}"))
     })?;
     Ok(domain_hash(SNAPSHOT_DIGEST_DOMAIN_V1, &[&bytes]))
+}
+
+fn moderation_transaction_request(
+    chain_id: &iroha_data_model::ChainId,
+    entry: &StoredOutboxEntryV1,
+) -> Result<ModerationTransactionRequestV1, ModerationOrchestratorError> {
+    ModerationTransactionRequestV1::new(
+        chain_id.clone(),
+        entry.envelope_generation,
+        entry.authority.clone(),
+        entry.action.clone(),
+        entry.request_binding_digest,
+        entry.baseline_finalized_height,
+        entry.baseline_finalized_block_hash,
+    )
+}
+
+fn moderation_signed_transaction(
+    entry: &StoredOutboxEntryV1,
+) -> Result<ModerationSignedTransactionV1, ModerationOrchestratorError> {
+    match (
+        entry.transaction_id,
+        entry.signed_transaction_digest,
+        entry.signed_transaction_bytes.as_ref(),
+    ) {
+        (Some(transaction_id), Some(canonical_bytes_digest), Some(canonical_bytes)) => {
+            Ok(ModerationSignedTransactionV1 {
+                transaction_id,
+                canonical_bytes_digest,
+                canonical_bytes: canonical_bytes.clone(),
+            })
+        }
+        _ => Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "signed outbox state has no exact retained transaction".to_owned(),
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SignedEnvelopeTimingV1 {
+    created_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+}
+
+fn signed_envelope_timing(
+    transaction: &SignedTransaction,
+) -> Result<SignedEnvelopeTimingV1, ModerationOrchestratorError> {
+    let created_at_unix_ms = u64::try_from(transaction.creation_time().as_millis()).map_err(|_| {
+        ModerationOrchestratorError::CheckpointCorrupt(
+            "signed transaction creation time exceeds u64".to_owned(),
+        )
+    })?;
+    let expires_at_unix_ms = created_at_unix_ms
+        .checked_add(MODERATION_TRANSACTION_TTL_MS_V1)
+        .ok_or_else(|| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "signed transaction expiration overflows u64".to_owned(),
+            )
+        })?;
+    Ok(SignedEnvelopeTimingV1 {
+        created_at_unix_ms,
+        expires_at_unix_ms,
+    })
+}
+
+fn next_envelope_generation(
+    generation: u32,
+) -> Result<u32, ModerationOrchestratorError> {
+    generation
+        .checked_add(1)
+        .ok_or(ModerationOrchestratorError::GenerationOverflow)
+}
+
+fn retired_envelope_disposition_tag(
+    disposition: StoredRetiredEnvelopeDispositionV1,
+) -> [u8; 1] {
+    [match disposition {
+        StoredRetiredEnvelopeDispositionV1::NotFound => 0,
+        StoredRetiredEnvelopeDispositionV1::Pending => 1,
+        StoredRetiredEnvelopeDispositionV1::Applied => 2,
+        StoredRetiredEnvelopeDispositionV1::Rejected => 3,
+    }]
+}
+
+fn retired_envelope_record_digest(
+    operation_id: [u8; 32],
+    record: &StoredRetiredEnvelopeV1,
+) -> [u8; 32] {
+    let generation = record.generation.to_le_bytes();
+    let created_at_unix_ms = record.created_at_unix_ms.to_le_bytes();
+    let expires_at_unix_ms = record.expires_at_unix_ms.to_le_bytes();
+    let retired_at_finalized_height = record.retired_at_finalized_height.to_le_bytes();
+    let retired_at_finalized_unix_ms = record.retired_at_finalized_unix_ms.to_le_bytes();
+    let disposition = retired_envelope_disposition_tag(record.disposition);
+    domain_hash(
+        RETIRED_ENVELOPE_RECORD_DIGEST_DOMAIN_V1,
+        &[
+            &operation_id,
+            &generation,
+            &record.transaction_id,
+            &record.signed_transaction_digest,
+            &created_at_unix_ms,
+            &expires_at_unix_ms,
+            &retired_at_finalized_height,
+            &record.retired_at_finalized_block_hash,
+            &retired_at_finalized_unix_ms,
+            &disposition,
+        ],
+    )
+}
+
+fn refresh_retired_envelope_record_digest(
+    operation_id: [u8; 32],
+    record: &mut StoredRetiredEnvelopeV1,
+) {
+    record.record_digest = retired_envelope_record_digest(operation_id, record);
+}
+
+fn retired_history_fence_transaction_id(entry: &StoredOutboxEntryV1) -> Option<[u8; 32]> {
+    entry
+        .retired_envelopes
+        .iter()
+        .rev()
+        .find(|record| {
+            record.disposition == StoredRetiredEnvelopeDispositionV1::Applied
+        })
+        .or_else(|| {
+            entry.retired_envelopes.iter().rev().find(|record| {
+                record.disposition == StoredRetiredEnvelopeDispositionV1::Pending
+            })
+        })
+        .map(|record| record.transaction_id)
+}
+
+fn validate_retired_envelope_history(
+    entry: &StoredOutboxEntryV1,
+    config: &ModerationOrchestratorConfigV1,
+) -> Result<(), ModerationOrchestratorError> {
+    if entry.envelope_generation == 0
+        || entry.envelope_generation > config.max_submit_attempts
+        || usize::try_from(entry.envelope_generation.saturating_sub(1)).ok()
+            != Some(entry.retired_envelopes.len())
+    {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "outbox envelope generation/history is inconsistent".to_owned(),
+        ));
+    }
+    let mut transaction_ids = BTreeSet::new();
+    let mut signed_digests = BTreeSet::new();
+    let mut previous_retirement: Option<(u64, u64, u64)> = None;
+    for (index, record) in entry.retired_envelopes.iter().enumerate() {
+        let expected_generation = u32::try_from(index)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+        let expected_expiry = record
+            .created_at_unix_ms
+            .checked_add(MODERATION_TRANSACTION_TTL_MS_V1);
+        if record.generation != expected_generation
+            || record.transaction_id == [0; 32]
+            || record.signed_transaction_digest == [0; 32]
+            || !transaction_ids.insert(record.transaction_id)
+            || !signed_digests.insert(record.signed_transaction_digest)
+            || record.created_at_unix_ms == 0
+            || expected_expiry != Some(record.expires_at_unix_ms)
+            || record.retired_at_finalized_height == 0
+            || record.retired_at_finalized_block_hash == [0; 32]
+            || record.retired_at_finalized_unix_ms < record.expires_at_unix_ms
+            || record.record_digest == [0; 32]
+            || record.record_digest
+                != retired_envelope_record_digest(entry.operation_id, record)
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "retired signed-envelope history is invalid".to_owned(),
+            ));
+        }
+        if let Some((height, finalized_at_unix_ms, created_at_unix_ms)) = previous_retirement {
+            if record.retired_at_finalized_height <= height
+                || record.retired_at_finalized_unix_ms < finalized_at_unix_ms
+                || record.created_at_unix_ms <= created_at_unix_ms
+            {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "retired signed-envelope history is not monotonic".to_owned(),
+                ));
+            }
+        }
+        previous_retirement = Some((
+            record.retired_at_finalized_height,
+            record.retired_at_finalized_unix_ms,
+            record.created_at_unix_ms,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_signed_transaction_for_request(
+    request: &ModerationTransactionRequestV1,
+    transaction: &SignedTransaction,
+) -> Result<(), ModerationSubmissionFailureV1> {
+    let canonical_payload = norito::to_bytes(transaction.payload())
+        .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+    let canonical_envelope = norito::to_bytes(transaction)
+        .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
+    if transaction.verify_signature().is_err()
+        || transaction.chain() != &request.chain_id
+        || transaction.authority() != &request.authority
+        || *transaction.hash().as_ref() == [0; 32]
+        || transaction.creation_time().is_zero()
+        || transaction.time_to_live()
+            != Some(core::time::Duration::from_millis(
+                MODERATION_TRANSACTION_TTL_MS_V1,
+            ))
+        || transaction.nonce().is_some()
+        || !transaction.metadata().is_empty()
+        || transaction.fee_payment_intent().validate().is_err()
+        || transaction.attachments().is_some()
+        || canonical_payload.is_empty()
+        || canonical_payload.len() > MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1
+        || canonical_envelope.is_empty()
+        || canonical_envelope.len() > MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1
+    {
+        return Err(ModerationSubmissionFailureV1::PermanentRejection);
+    }
+    let expected = request.action.instruction();
+    match transaction.instructions() {
+        Executable::Instructions(instructions)
+            if instructions.len() == 1 && instructions.first() == Some(&expected) =>
+        {
+            Ok(())
+        }
+        _ => Err(ModerationSubmissionFailureV1::PermanentRejection),
+    }
+}
+
+fn signed_transaction_digest(bytes: &[u8]) -> [u8; 32] {
+    domain_hash(SIGNED_TRANSACTION_DIGEST_DOMAIN_V1, &[bytes])
 }
 
 fn decode_canonical_commit(
@@ -3000,9 +3899,9 @@ fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOr
         )
     })?;
     Ok(DecodeLimits::new(
-        512,
         max_bytes,
-        262_144,
+        max_bytes,
+        max_bytes.saturating_mul(2),
         max_bytes.saturating_mul(2),
         128,
     ))
@@ -3403,12 +4302,15 @@ pub enum ModerationOrchestratorError {
 mod tests {
     use std::{
         collections::BTreeMap,
+        num::NonZeroU32,
         sync::{Arc, Mutex},
     };
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
+        ChainId,
         events::data::sorafs::SorafsModerationLedgerEvent,
+        metadata::Metadata,
         sorafs::{
             moderation::{
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
@@ -3425,10 +4327,14 @@ mod tests {
                 sorafs_moderation_panel_roster_hash_v1,
             },
         },
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_primitives::json::Json;
     use tempfile::TempDir;
 
     use super::*;
+
+    const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
 
     #[derive(Debug)]
     struct MockSnapshotReader {
@@ -3460,9 +4366,12 @@ mod tests {
     #[derive(Debug)]
     struct MockSubmitterState {
         calls: usize,
+        sign_calls: usize,
         actions: Vec<ModerationNativeActionV1>,
-        operations: BTreeMap<[u8; 32], ModerationSubmissionLookupV1>,
+        signed: BTreeMap<([u8; 32], u32), ModerationSignedTransactionV1>,
+        operations: BTreeMap<([u8; 32], [u8; 32]), ModerationSubmissionLookupV1>,
         fallback: ModerationSubmissionLookupV1,
+        sign_failure: Option<ModerationSubmissionFailureV1>,
         failure: Option<ModerationSubmissionFailureV1>,
         ambiguous_is_applied: bool,
     }
@@ -3477,9 +4386,12 @@ mod tests {
             Self {
                 state: Mutex::new(MockSubmitterState {
                     calls: 0,
+                    sign_calls: 0,
                     actions: Vec::new(),
+                    signed: BTreeMap::new(),
                     operations: BTreeMap::new(),
                     fallback,
+                    sign_failure: None,
                     failure: None,
                     ambiguous_is_applied: false,
                 }),
@@ -3490,9 +4402,12 @@ mod tests {
             Self {
                 state: Mutex::new(MockSubmitterState {
                     calls: 0,
+                    sign_calls: 0,
                     actions: Vec::new(),
+                    signed: BTreeMap::new(),
                     operations: BTreeMap::new(),
                     fallback,
+                    sign_failure: None,
                     failure: Some(ModerationSubmissionFailureV1::Ambiguous),
                     ambiguous_is_applied: true,
                 }),
@@ -3506,32 +4421,132 @@ mod tests {
         fn actions(&self) -> Vec<ModerationNativeActionV1> {
             self.state.lock().expect("submitter lock").actions.clone()
         }
+
+        fn sign_calls(&self) -> usize {
+            self.state.lock().expect("submitter lock").sign_calls
+        }
+
+        fn set_failure(&self, failure: Option<ModerationSubmissionFailureV1>) {
+            self.state.lock().expect("submitter lock").failure = failure;
+        }
+
+        fn set_sign_failure(&self, failure: Option<ModerationSubmissionFailureV1>) {
+            self.state.lock().expect("submitter lock").sign_failure = failure;
+        }
+
+        fn set_lookup(
+            &self,
+            operation_id: [u8; 32],
+            transaction_id: [u8; 32],
+            lookup: ModerationSubmissionLookupV1,
+        ) {
+            self.state
+                .lock()
+                .expect("submitter lock")
+                .operations
+                .insert((operation_id, transaction_id), lookup);
+        }
+
     }
 
     impl ModerationTransactionSubmitterV1 for MockSubmitter {
-        fn submit(
+        fn chain_id(&self) -> ChainId {
+            ChainId::from("moderation-orchestrator-test")
+        }
+
+        fn sign(
             &self,
             request: &ModerationTransactionRequestV1,
-        ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+        ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
             let mut state = self.state.lock().expect("submitter lock");
+            state.sign_calls = state.sign_calls.saturating_add(1);
+            if let Some(failure) = state.sign_failure {
+                return Err(failure);
+            }
+            let signed_key = (request.operation_id, request.envelope_generation);
+            if let Some(signed) = state.signed.get(&signed_key) {
+                return Ok(signed.clone());
+            }
+            let signer = key_for_authority(&request.authority);
+            let mut builder = TransactionBuilder::new(
+                request.chain_id.clone(),
+                request.authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            );
+            builder.set_ttl(core::time::Duration::from_millis(
+                MODERATION_TRANSACTION_TTL_MS_V1,
+            ));
+            let generation_offset = u64::from(request.envelope_generation.saturating_sub(1))
+                .checked_mul(MODERATION_TRANSACTION_TTL_MS_V1.saturating_add(1))
+                .ok_or(ModerationSubmissionFailureV1::PermanentRejection)?;
+            let creation_time = TEST_ENVELOPE_CREATION_UNIX_MS
+                .checked_add(generation_offset)
+                .ok_or(ModerationSubmissionFailureV1::PermanentRejection)?;
+            builder.set_creation_time(core::time::Duration::from_millis(creation_time));
+            let transaction = builder
+                .with_instructions([request.action.instruction()])
+                .sign(signer.private_key());
+            let signed =
+                ModerationSignedTransactionV1::from_signed_transaction(request, &transaction)?;
+            state.signed.insert(signed_key, signed.clone());
+            Ok(signed)
+        }
+
+        fn submit_signed(
+            &self,
+            request: &ModerationTransactionRequestV1,
+            signed: &ModerationSignedTransactionV1,
+        ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+            signed.decode_for_request(request)?;
+            let mut state = self.state.lock().expect("submitter lock");
+            let lookup_key = (request.operation_id, signed.transaction_id);
+            if let Some(existing) = state.operations.get(&lookup_key).copied() {
+                let existing_transaction_id = match existing {
+                    ModerationSubmissionLookupV1::Pending { transaction_id }
+                    | ModerationSubmissionLookupV1::Applied { transaction_id } => transaction_id,
+                    ModerationSubmissionLookupV1::Rejected {
+                        transaction_id: Some(transaction_id),
+                        ..
+                    } => transaction_id,
+                    ModerationSubmissionLookupV1::NotFound { .. }
+                    | ModerationSubmissionLookupV1::Rejected {
+                        transaction_id: None,
+                        ..
+                    }
+                    | ModerationSubmissionLookupV1::Unknown => {
+                        return Err(ModerationSubmissionFailureV1::Ambiguous);
+                    }
+                };
+                return if existing_transaction_id == signed.transaction_id {
+                    Ok(ModerationTransactionReceiptV1 {
+                        transaction_id: signed.transaction_id,
+                        observed_finalized_height: request.baseline_finalized_height,
+                    })
+                } else {
+                    Err(ModerationSubmissionFailureV1::Ambiguous)
+                };
+            }
             state.calls = state.calls.saturating_add(1);
             state.actions.push(request.action.clone());
-            let transaction_id = [u8::try_from(state.calls).unwrap_or(u8::MAX); 32];
             if state.ambiguous_is_applied {
                 state.operations.insert(
-                    request.operation_id,
-                    ModerationSubmissionLookupV1::Applied { transaction_id },
+                    lookup_key,
+                    ModerationSubmissionLookupV1::Applied {
+                        transaction_id: signed.transaction_id,
+                    },
                 );
             }
             if let Some(failure) = state.failure {
                 return Err(failure);
             }
             state.operations.insert(
-                request.operation_id,
-                ModerationSubmissionLookupV1::Pending { transaction_id },
+                lookup_key,
+                ModerationSubmissionLookupV1::Pending {
+                    transaction_id: signed.transaction_id,
+                },
             );
             Ok(ModerationTransactionReceiptV1 {
-                transaction_id,
+                transaction_id: signed.transaction_id,
                 observed_finalized_height: request.baseline_finalized_height,
             })
         }
@@ -3539,13 +4554,16 @@ mod tests {
         fn lookup(
             &self,
             operation_id: [u8; 32],
-            _transaction_id: Option<[u8; 32]>,
+            transaction_id: Option<[u8; 32]>,
         ) -> ModerationSubmissionLookupV1 {
             let state = self.state.lock().expect("submitter lock");
-            state
-                .operations
-                .get(&operation_id)
-                .copied()
+            transaction_id
+                .and_then(|transaction_id| {
+                    state
+                        .operations
+                        .get(&(operation_id, transaction_id))
+                        .copied()
+                })
                 .unwrap_or(state.fallback)
         }
     }
@@ -3580,6 +4598,16 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
+    fn key_for_authority(authority: &AccountId) -> KeyPair {
+        (1_u8..=u8::MAX)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("deterministic authority key")
+            })
+            .find(|key| key.public_key() == authority.signatory())
+            .expect("test authority must use the deterministic account fixture")
+    }
+
     fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -3605,12 +4633,23 @@ mod tests {
             version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
             finalized_height: height,
             finalized_block_hash: block_hash,
+            finalized_at_unix_ms: height.max(1),
             policy: None,
             status: None,
             appeals: Vec::new(),
             cases: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    fn empty_snapshot_at(
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+    ) -> ModerationFinalizedLedgerSnapshotV1 {
+        let mut snapshot = empty_snapshot(height, block_hash);
+        snapshot.finalized_at_unix_ms = finalized_at_unix_ms;
+        snapshot
     }
 
     fn snapshot_with_policy(
@@ -3624,6 +4663,7 @@ mod tests {
             version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
             finalized_height: height,
             finalized_block_hash: block_hash,
+            finalized_at_unix_ms: 1,
             policy: Some(ModerationLedgerPolicyRecord {
                 policy,
                 policy_digest,
@@ -3754,6 +4794,7 @@ mod tests {
                 version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
                 finalized_height: height,
                 finalized_block_hash: block_hash,
+                finalized_at_unix_ms: 31,
                 policy: Some(ModerationLedgerPolicyRecord {
                     policy: active_policy,
                     policy_digest,
@@ -3886,6 +4927,7 @@ mod tests {
 
         snapshot.finalized_height = height;
         snapshot.finalized_block_hash = block_hash;
+        snapshot.finalized_at_unix_ms = FINALIZED_AT_UNIX_MS;
         let appeal = &mut snapshot
             .appeals
             .first_mut()
@@ -4044,6 +5086,76 @@ mod tests {
             settlement_sink: Arc::new(MockHandoffSink::default()),
             publication_sink: Arc::new(MockHandoffSink::default()),
         }
+    }
+
+    fn seed_ready_operation_without_delivery(
+        orchestrator: &ModerationOrchestratorV1,
+        authority: AccountId,
+        action: ModerationNativeActionV1,
+        request_binding_digest: [u8; 32],
+    ) -> [u8; 32] {
+        orchestrator.reconcile().expect("initial reconciliation");
+        let action_digest = action.action_digest().expect("action digest");
+        let operation_id = action
+            .operation_id(&orchestrator.chain_id, &authority)
+            .expect("operation id");
+        let mut state = orchestrator.state.lock().expect("orchestrator state");
+        state.operations.push(StoredOperationV1 {
+            operation_id,
+            authority: authority.clone(),
+            action_digest,
+            status: StoredOperationStatusV1::Pending,
+            transaction_id: None,
+        });
+        state.outbox.push(StoredOutboxEntryV1 {
+            operation_id,
+            authority,
+            action,
+            action_digest,
+            request_binding_digest,
+            envelope_generation: 1,
+            retired_envelopes: Vec::new(),
+            baseline_finalized_height: 0,
+            baseline_finalized_block_hash: [0; 32],
+            transaction_id: None,
+            signed_transaction_digest: None,
+            signed_transaction_bytes: None,
+            attempts: 0,
+            state: StoredOutboxStateV1::Ready,
+        });
+        orchestrator
+            .persist_checkpoint_locked(&mut state)
+            .expect("persist ready operation");
+        operation_id
+    }
+
+    fn retained_envelope(
+        orchestrator: &ModerationOrchestratorV1,
+    ) -> (
+        [u8; 32],
+        u32,
+        ModerationSignedTransactionV1,
+        SignedEnvelopeTimingV1,
+        StoredOutboxStateV1,
+    ) {
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let [entry] = state.outbox.as_slice() else {
+            panic!("one retained moderation envelope");
+        };
+        let request = moderation_transaction_request(&orchestrator.chain_id, entry)
+            .expect("retained transaction request");
+        let signed = moderation_signed_transaction(entry).expect("retained signed transaction");
+        let transaction = signed
+            .decode_for_request(&request)
+            .expect("valid retained signed transaction");
+        let timing = signed_envelope_timing(&transaction).expect("retained envelope timing");
+        (
+            entry.operation_id,
+            entry.envelope_generation,
+            signed,
+            timing,
+            entry.state,
+        )
     }
 
     fn assert_finalized_authority_rejection_has_no_native_mutation(
@@ -4278,6 +5390,901 @@ mod tests {
     }
 
     #[test]
+    fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_substitution() {
+        let chain_id = ChainId::from("moderation-orchestrator-test");
+        let authority = account(1);
+        let action = policy_action(policy(1));
+        let request = ModerationTransactionRequestV1::new(
+            chain_id.clone(),
+            1,
+            authority.clone(),
+            action.clone(),
+            [0x71; 32],
+            7,
+            [0x72; 32],
+        )
+        .expect("canonical generic request");
+        let other_chain_request = ModerationTransactionRequestV1::new(
+            ChainId::from("other-moderation-chain"),
+            1,
+            authority.clone(),
+            action.clone(),
+            [0x71; 32],
+            7,
+            [0x72; 32],
+        )
+        .expect("canonical cross-chain request");
+        assert_ne!(request.operation_id, other_chain_request.operation_id);
+        let next_generation_request = ModerationTransactionRequestV1::new(
+            chain_id.clone(),
+            2,
+            authority.clone(),
+            action.clone(),
+            [0x71; 32],
+            8,
+            [0x73; 32],
+        )
+        .expect("canonical next-generation request");
+        assert_eq!(request.operation_id, next_generation_request.operation_id);
+        let mut zero_generation_request = request.clone();
+        zero_generation_request.envelope_generation = 0;
+        assert!(matches!(
+            zero_generation_request.validate(),
+            Err(ModerationOrchestratorError::InvalidAction(message))
+                if message.contains("generation")
+        ));
+        let signer = key_for_authority(&authority);
+
+        let exact_builder = || {
+            TransactionBuilder::new(
+                chain_id.clone(),
+                authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+        };
+        let sign_exact = |mut builder: TransactionBuilder, instruction: InstructionBox| {
+            builder.set_ttl(core::time::Duration::from_millis(
+                MODERATION_TRANSACTION_TTL_MS_V1,
+            ));
+            builder
+                .with_instructions([instruction])
+                .sign(signer.private_key())
+        };
+
+        let exact = sign_exact(exact_builder(), action.instruction());
+        ModerationSignedTransactionV1::from_signed_transaction(&request, &exact)
+            .expect("exact generic signed envelope");
+
+        let wrong_chain = sign_exact(
+            TransactionBuilder::new(
+                ChainId::from("other-moderation-chain"),
+                authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            ),
+            action.instruction(),
+        );
+        assert_eq!(
+            ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_chain),
+            Err(ModerationSubmissionFailureV1::PermanentRejection),
+        );
+
+        let mut wrong_ttl_builder = exact_builder();
+        wrong_ttl_builder.set_ttl(core::time::Duration::from_millis(
+            MODERATION_TRANSACTION_TTL_MS_V1 + 1,
+        ));
+        let wrong_ttl = wrong_ttl_builder
+            .with_instructions([action.instruction()])
+            .sign(signer.private_key());
+        assert_eq!(
+            ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_ttl),
+            Err(ModerationSubmissionFailureV1::PermanentRejection),
+        );
+
+        let mut nonce_builder = exact_builder();
+        nonce_builder.set_ttl(core::time::Duration::from_millis(
+            MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        nonce_builder.set_nonce(NonZeroU32::new(9).expect("non-zero nonce"));
+        let with_nonce = nonce_builder
+            .with_instructions([action.instruction()])
+            .sign(signer.private_key());
+        assert_eq!(
+            ModerationSignedTransactionV1::from_signed_transaction(&request, &with_nonce),
+            Err(ModerationSubmissionFailureV1::PermanentRejection),
+        );
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "moderation_action_hint"
+                .parse()
+                .expect("valid metadata key"),
+            Json::new("set_policy".to_owned()),
+        );
+        let with_metadata = sign_exact(
+            exact_builder().with_metadata(metadata),
+            action.instruction(),
+        );
+        assert_eq!(
+            ModerationSignedTransactionV1::from_signed_transaction(&request, &with_metadata),
+            Err(ModerationSubmissionFailureV1::PermanentRejection),
+        );
+
+        let substituted_action = ModerationNativeActionV1::FinalizeCase(
+            FinalizeSorafsModerationCase::new("case-substitute".to_owned(), "round-1".to_owned()),
+        );
+        let substituted = sign_exact(exact_builder(), substituted_action.instruction());
+        assert_eq!(
+            ModerationSignedTransactionV1::from_signed_transaction(&request, &substituted),
+            Err(ModerationSubmissionFailureV1::PermanentRejection),
+        );
+    }
+
+    #[test]
+    fn expired_finalized_not_found_renews_one_generation_and_preserves_history() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "renew-expired.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x81; 32])
+            .expect("initial submission");
+        let (operation_id, generation, first_signed, first_timing, state) =
+            retained_envelope(&orchestrator);
+        assert_eq!(generation, 1);
+        assert_eq!(state, StoredOutboxStateV1::Submitted);
+
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            first_timing.expires_at_unix_ms,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("renew after exact finalized absence");
+
+        let (_, generation, second_signed, _, state) = retained_envelope(&orchestrator);
+        assert_eq!(generation, 2);
+        assert_eq!(state, StoredOutboxStateV1::Submitted);
+        assert_ne!(second_signed.transaction_id, first_signed.transaction_id);
+        assert_ne!(
+            second_signed.canonical_bytes_digest,
+            first_signed.canonical_bytes_digest
+        );
+        assert_eq!(submitter.sign_calls(), 2);
+        assert_eq!(submitter.calls(), 2);
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let [entry] = state.outbox.as_slice() else {
+            panic!("one renewed outbox entry");
+        };
+        let [retired] = entry.retired_envelopes.as_slice() else {
+            panic!("one retired envelope");
+        };
+        assert_eq!(retired.generation, 1);
+        assert_eq!(retired.transaction_id, first_signed.transaction_id);
+        assert_eq!(
+            retired.signed_transaction_digest,
+            first_signed.canonical_bytes_digest
+        );
+        assert_eq!(
+            retired.disposition,
+            StoredRetiredEnvelopeDispositionV1::NotFound
+        );
+        assert_eq!(
+            retired.record_digest,
+            retired_envelope_record_digest(operation_id, retired)
+        );
+    }
+
+    #[test]
+    fn expired_envelope_does_not_renew_for_positive_unknown_rejected_or_stale_absence() {
+        let scenarios = [
+            (
+                "pending",
+                ModerationSubmissionLookupV1::Pending {
+                    transaction_id: [0; 32],
+                },
+            ),
+            (
+                "applied",
+                ModerationSubmissionLookupV1::Applied {
+                    transaction_id: [0; 32],
+                },
+            ),
+            ("unknown", ModerationSubmissionLookupV1::Unknown),
+            (
+                "rejected",
+                ModerationSubmissionLookupV1::Rejected {
+                    transaction_id: Some([0; 32]),
+                    observed_finalized_height: 2,
+                },
+            ),
+            (
+                "stale-not-found",
+                ModerationSubmissionLookupV1::NotFound {
+                    observed_finalized_height: 2,
+                },
+            ),
+        ];
+        for (index, (label, lookup)) in scenarios.into_iter().enumerate() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+            let submitter =
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+            let orchestrator = ModerationOrchestratorV1::open(
+                config(&temp, &format!("no-renew-{label}.norito")),
+                deps(Arc::clone(&reader), Arc::clone(&submitter)),
+            )
+            .expect("orchestrator");
+            orchestrator
+                .submit(
+                    account(1),
+                    policy_action(policy(1)),
+                    [u8::try_from(index).unwrap_or(0).saturating_add(1); 32],
+                )
+                .expect("initial submission");
+            let (operation_id, _, signed, timing, _) = retained_envelope(&orchestrator);
+            let exact_lookup = match lookup {
+                ModerationSubmissionLookupV1::Pending { .. } => {
+                    ModerationSubmissionLookupV1::Pending {
+                        transaction_id: signed.transaction_id,
+                    }
+                }
+                ModerationSubmissionLookupV1::Applied { .. } => {
+                    ModerationSubmissionLookupV1::Applied {
+                        transaction_id: signed.transaction_id,
+                    }
+                }
+                ModerationSubmissionLookupV1::Rejected {
+                    observed_finalized_height,
+                    ..
+                } => ModerationSubmissionLookupV1::Rejected {
+                    transaction_id: Some(signed.transaction_id),
+                    observed_finalized_height,
+                },
+                other => other,
+            };
+            submitter.set_lookup(operation_id, signed.transaction_id, exact_lookup);
+            let finalized_height = if label == "stale-not-found" { 3 } else { 2 };
+            reader.replace(empty_snapshot_at(
+                finalized_height,
+                [u8::try_from(finalized_height).unwrap_or(9); 32],
+                timing.expires_at_unix_ms.saturating_add(1),
+            ));
+            orchestrator
+                .reconcile()
+                .expect("expired non-renewal reconciliation");
+            assert_eq!(submitter.sign_calls(), 1, "{label}");
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            if label == "rejected" {
+                assert!(state.outbox.is_empty(), "{label}");
+                assert_eq!(
+                    state.operations[0].status,
+                    StoredOperationStatusV1::Rejected
+                );
+            } else {
+                let [entry] = state.outbox.as_slice() else {
+                    panic!("{label}: one retained envelope");
+                };
+                assert_eq!(entry.envelope_generation, 1, "{label}");
+                assert!(entry.retired_envelopes.is_empty(), "{label}");
+                if matches!(label, "unknown" | "stale-not-found") {
+                    assert_eq!(entry.state, StoredOutboxStateV1::Ambiguous, "{label}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ambiguous_submission_never_renews_without_exact_finalized_absence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        submitter.set_failure(Some(ModerationSubmissionFailureV1::Ambiguous));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "ambiguous-no-renew.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x82; 32])
+            .expect("ambiguous submission retained");
+        let (_, _, _, timing, state) = retained_envelope(&orchestrator);
+        assert_eq!(state, StoredOutboxStateV1::Ambiguous);
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            timing.expires_at_unix_ms.saturating_add(1),
+        ));
+        orchestrator
+            .reconcile()
+            .expect("unknown lookup remains ambiguous");
+        let (_, generation, _, _, state) = retained_envelope(&orchestrator);
+        assert_eq!(generation, 1);
+        assert_eq!(state, StoredOutboxStateV1::Ambiguous);
+        assert_eq!(submitter.sign_calls(), 1);
+    }
+
+    #[test]
+    fn late_applied_retired_envelope_fences_new_generation_until_semantic_finality() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let authority = account(1);
+        let active_policy = policy(1);
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "late-old-envelope.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(
+                authority.clone(),
+                policy_action(active_policy.clone()),
+                [0x83; 32],
+            )
+            .expect("initial submission");
+        let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            first_timing.expires_at_unix_ms,
+        ));
+        orchestrator.reconcile().expect("renew envelope");
+        let (_, generation, second_signed, second_timing, _) = retained_envelope(&orchestrator);
+        assert_eq!(generation, 2);
+
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::Pending {
+                transaction_id: first_signed.transaction_id,
+            },
+        );
+        submitter.set_lookup(
+            operation_id,
+            second_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 3,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            3,
+            [3; 32],
+            second_timing.expires_at_unix_ms.saturating_add(1),
+        ));
+        orchestrator
+            .reconcile()
+            .expect("late old pending result fences replacement");
+        {
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            let [entry] = state.outbox.as_slice() else {
+                panic!("fenced renewed entry");
+            };
+            assert_eq!(entry.envelope_generation, 2);
+            assert_eq!(
+                entry.retired_envelopes[0].disposition,
+                StoredRetiredEnvelopeDispositionV1::Pending
+            );
+            assert_eq!(
+                state.operations[0].transaction_id,
+                Some(first_signed.transaction_id)
+            );
+        }
+        assert_eq!(submitter.sign_calls(), 2);
+        assert_eq!(submitter.calls(), 2);
+
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::Applied {
+                transaction_id: first_signed.transaction_id,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            4,
+            [4; 32],
+            second_timing
+                .expires_at_unix_ms
+                .saturating_add(MODERATION_TRANSACTION_TTL_MS_V1),
+        ));
+        orchestrator
+            .reconcile()
+            .expect("late old application makes the history fence terminal");
+        {
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            assert_eq!(
+                state.outbox[0].retired_envelopes[0].disposition,
+                StoredRetiredEnvelopeDispositionV1::Applied
+            );
+        }
+
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 5,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            5,
+            [5; 32],
+            second_timing
+                .expires_at_unix_ms
+                .saturating_add(MODERATION_TRANSACTION_TTL_MS_V1.saturating_mul(2)),
+        ));
+        orchestrator
+            .reconcile()
+            .expect("applied history fence is sticky");
+        assert_eq!(retained_envelope(&orchestrator).1, 2);
+        assert_eq!(submitter.sign_calls(), 2);
+
+        let mut finalized = snapshot_with_policy(6, [6; 32], active_policy, authority);
+        finalized.finalized_at_unix_ms = second_timing
+            .expires_at_unix_ms
+            .saturating_add(MODERATION_TRANSACTION_TTL_MS_V1.saturating_mul(3));
+        reader.replace(finalized);
+        orchestrator
+            .reconcile()
+            .expect("authoritative semantic effect finalizes operation");
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        assert!(state.outbox.is_empty());
+        assert_eq!(
+            state.operations[0].status,
+            StoredOperationStatusV1::Finalized
+        );
+        assert_eq!(
+            state.operations[0].transaction_id,
+            Some(first_signed.transaction_id)
+        );
+    }
+
+    #[test]
+    fn restart_recovers_retired_generation_after_signer_outage() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let checkpoint = config(&temp, "retired-before-resign.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x84; 32])
+            .expect("initial submission");
+        let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        );
+        submitter.set_sign_failure(Some(
+            ModerationSubmissionFailureV1::RuntimeUnavailable,
+        ));
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            first_timing.expires_at_unix_ms,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("persist retired generation despite signer outage");
+        {
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            let [entry] = state.outbox.as_slice() else {
+                panic!("one retired ready entry");
+            };
+            assert_eq!(entry.envelope_generation, 2);
+            assert_eq!(entry.state, StoredOutboxStateV1::Ready);
+            assert_eq!(entry.retired_envelopes.len(), 1);
+            assert!(entry.transaction_id.is_none());
+        }
+        drop(orchestrator);
+
+        submitter.set_sign_failure(None);
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
+                .expect("restart from retired ready generation");
+        restarted
+            .reconcile()
+            .expect("sign and submit the next generation after restart");
+        let (_, generation, second_signed, _, state) = retained_envelope(&restarted);
+        assert_eq!(generation, 2);
+        assert_eq!(state, StoredOutboxStateV1::Submitted);
+        assert_ne!(second_signed.transaction_id, first_signed.transaction_id);
+        assert_eq!(submitter.sign_calls(), 3);
+    }
+
+    #[test]
+    fn renewed_envelope_restart_replays_byte_identical_bytes_without_resigning() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let checkpoint = config(&temp, "renewed-byte-identical.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x85; 32])
+            .expect("initial submission");
+        let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        );
+        submitter.set_failure(Some(
+            ModerationSubmissionFailureV1::NotSubmittedUnavailable,
+        ));
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            first_timing.expires_at_unix_ms,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("retain renewed envelope after definite non-submission");
+        let (_, generation, retained, _, state) = retained_envelope(&orchestrator);
+        assert_eq!(generation, 2);
+        assert_eq!(state, StoredOutboxStateV1::Signed);
+        assert_eq!(submitter.sign_calls(), 2);
+        drop(orchestrator);
+
+        submitter.set_failure(None);
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
+                .expect("restart with renewed retained bytes");
+        restarted
+            .reconcile()
+            .expect("replay exact renewed envelope");
+        let (_, generation, replayed, _, state) = retained_envelope(&restarted);
+        assert_eq!(generation, 2);
+        assert_eq!(state, StoredOutboxStateV1::Submitted);
+        assert_eq!(replayed, retained);
+        assert_eq!(submitter.sign_calls(), 2);
+    }
+
+    #[test]
+    fn tampered_retired_envelope_history_fails_closed_on_restart() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let checkpoint = config(&temp, "tampered-retired-history.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x86; 32])
+            .expect("initial submission");
+        let (operation_id, _, first_signed, first_timing, _) = retained_envelope(&orchestrator);
+        submitter.set_lookup(
+            operation_id,
+            first_signed.transaction_id,
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        );
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            first_timing.expires_at_unix_ms,
+        ));
+        orchestrator.reconcile().expect("renew envelope");
+        drop(orchestrator);
+
+        let original = fs::read(&checkpoint.checkpoint_path).expect("read checkpoint");
+        for tamper in 0_u8..3 {
+            let mut state: ModerationOrchestratorCheckpointV1 =
+                norito::decode_from_bytes(&original).expect("decode checkpoint");
+            let retired = state.outbox[0]
+                .retired_envelopes
+                .first_mut()
+                .expect("retired history");
+            match tamper {
+                0 => retired.transaction_id[0] ^= 0x80,
+                1 => retired.signed_transaction_digest[0] ^= 0x80,
+                2 => retired.record_digest[0] ^= 0x80,
+                _ => unreachable!(),
+            }
+            write_atomic(
+                &checkpoint.checkpoint_path,
+                &norito::to_bytes(&state).expect("encode tampered history"),
+            )
+            .expect("write tampered history");
+            assert!(matches!(
+                ModerationOrchestratorV1::open(
+                    checkpoint.clone(),
+                    deps(Arc::clone(&reader), Arc::clone(&submitter)),
+                ),
+                Err(ModerationOrchestratorError::CheckpointCorrupt(_))
+            ));
+            write_atomic(&checkpoint.checkpoint_path, &original).expect("restore checkpoint");
+        }
+    }
+
+    #[test]
+    fn envelope_generation_increment_fails_closed_on_overflow() {
+        assert_eq!(
+            next_envelope_generation(u32::MAX),
+            Err(ModerationOrchestratorError::GenerationOverflow)
+        );
+    }
+
+    #[test]
+    fn restart_submits_the_exact_envelope_persisted_before_ingress() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let checkpoint = config(&temp, "signed-before-ingress.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x51; 32],
+        );
+        let (retained_id, retained_digest, retained_bytes) = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .stage_signed_transaction_locked(&mut state, operation_id)
+                .expect("persist exact signed envelope");
+            let entry = state
+                .outbox
+                .iter()
+                .find(|entry| entry.operation_id == operation_id)
+                .expect("signed entry");
+            assert_eq!(entry.state, StoredOutboxStateV1::Signed);
+            (
+                entry.transaction_id.expect("transaction id"),
+                entry
+                    .signed_transaction_digest
+                    .expect("transaction digest"),
+                entry
+                    .signed_transaction_bytes
+                    .clone()
+                    .expect("signed transaction bytes"),
+            )
+        };
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 0);
+        drop(orchestrator);
+
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
+                .expect("restart from signed checkpoint");
+        restarted
+            .reconcile()
+            .expect("submit retained envelope after restart");
+        let state = restarted.state.lock().expect("restarted state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("submitted entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert_eq!(entry.transaction_id, Some(retained_id));
+        assert_eq!(entry.signed_transaction_digest, Some(retained_digest));
+        assert_eq!(
+            entry.signed_transaction_bytes.as_deref(),
+            Some(retained_bytes.as_slice())
+        );
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 1);
+    }
+
+    #[test]
+    fn restart_recovers_signing_claim_to_unsigned_ready_only() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        let checkpoint = config(&temp, "interrupted-signing.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x52; 32],
+        );
+        {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            let cursor = snapshot_cursor(&state).expect("finalized cursor");
+            let entry = state
+                .outbox
+                .iter_mut()
+                .find(|entry| entry.operation_id == operation_id)
+                .expect("ready entry");
+            entry.baseline_finalized_height = cursor.height;
+            entry.baseline_finalized_block_hash = cursor.block_hash;
+            entry.state = StoredOutboxStateV1::Signing;
+            orchestrator
+                .persist_checkpoint_locked(&mut state)
+                .expect("persist interrupted signing claim");
+        }
+        drop(orchestrator);
+
+        let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
+            .expect("recover signer-only crash state");
+        let state = restarted.state.lock().expect("restarted state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("recovered entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Ready);
+        assert_eq!(entry.baseline_finalized_height, 0);
+        assert_eq!(entry.baseline_finalized_block_hash, [0; 32]);
+        assert!(entry.transaction_id.is_none());
+        assert!(entry.signed_transaction_digest.is_none());
+        assert!(entry.signed_transaction_bytes.is_none());
+        assert_eq!(entry.attempts, 0);
+    }
+
+    #[test]
+    fn tampered_retained_transaction_bytes_digest_and_hash_fail_closed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        let checkpoint = config(&temp, "tampered-signed.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x53; 32],
+        );
+        {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .stage_signed_transaction_locked(&mut state, operation_id)
+                .expect("persist signed transaction");
+        }
+        drop(orchestrator);
+
+        let original =
+            fs::read(&checkpoint.checkpoint_path).expect("read canonical signed checkpoint");
+        for tamper in 0_u8..3 {
+            let mut state: ModerationOrchestratorCheckpointV1 =
+                norito::decode_from_bytes(&original).expect("decode checkpoint");
+            let entry = state.outbox.first_mut().expect("signed outbox entry");
+            match tamper {
+                0 => {
+                    let bytes = entry
+                        .signed_transaction_bytes
+                        .as_mut()
+                        .expect("signed bytes");
+                    let last = bytes.last_mut().expect("non-empty signed bytes");
+                    *last ^= 0x80;
+                    let digest = signed_transaction_digest(bytes);
+                    entry.signed_transaction_digest = Some(digest);
+                }
+                1 => {
+                    entry
+                        .signed_transaction_digest
+                        .as_mut()
+                        .expect("signed digest")[0] ^= 0x80;
+                }
+                2 => {
+                    entry.transaction_id.as_mut().expect("transaction id")[0] ^= 0x80;
+                    state.operations[0]
+                        .transaction_id
+                        .as_mut()
+                        .expect("operation transaction id")[0] ^= 0x80;
+                }
+                _ => unreachable!(),
+            }
+            write_atomic(
+                &checkpoint.checkpoint_path,
+                &norito::to_bytes(&state).expect("encode tampered checkpoint"),
+            )
+            .expect("write tampered checkpoint");
+            assert!(matches!(
+                ModerationOrchestratorV1::open(
+                    checkpoint.clone(),
+                    deps(Arc::clone(&reader), Arc::clone(&submitter)),
+                ),
+                Err(ModerationOrchestratorError::CheckpointCorrupt(_))
+            ));
+            write_atomic(&checkpoint.checkpoint_path, &original).expect("restore checkpoint");
+        }
+    }
+
+    #[test]
+    fn definitely_not_submitted_reuses_retained_envelope_without_resigning() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        submitter.set_failure(Some(
+            ModerationSubmissionFailureV1::NotSubmittedUnavailable,
+        ));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "not-submitted.norito"),
+            deps(reader, Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x54; 32])
+            .expect("retain exact envelope after pre-ingress failure");
+        let retained = {
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            let [entry] = state.outbox.as_slice() else {
+                panic!("one retained outbox entry");
+            };
+            assert_eq!(entry.state, StoredOutboxStateV1::Signed);
+            moderation_signed_transaction(entry).expect("retained envelope")
+        };
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 1);
+
+        submitter.set_failure(None);
+        orchestrator
+            .reconcile()
+            .expect("retry the exact retained envelope");
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let [entry] = state.outbox.as_slice() else {
+            panic!("one submitted outbox entry");
+        };
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert_eq!(
+            moderation_signed_transaction(entry).expect("submitted retained envelope"),
+            retained
+        );
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 2);
+    }
+
+    #[test]
     fn ambiguous_submission_is_reconciled_after_restart_without_resubmit() {
         let temp = tempfile::tempdir().expect("tempdir");
         let authority = account(1);
@@ -4289,6 +6296,8 @@ mod tests {
             },
         ));
         let checkpoint = config(&temp, "checkpoint.norito");
+        let retained_transaction_id;
+        let retained_transaction_digest;
         {
             let orchestrator = ModerationOrchestratorV1::open(
                 checkpoint.clone(),
@@ -4302,23 +6311,62 @@ mod tests {
                     [0x11; 32],
                 )
                 .expect("ambiguous submit remains pending");
+            let state = orchestrator.state.lock().expect("orchestrator state");
+            let [entry] = state.outbox.as_slice() else {
+                panic!("one ambiguous outbox entry must remain");
+            };
+            assert_eq!(entry.state, StoredOutboxStateV1::Ambiguous);
+            retained_transaction_id = entry.transaction_id.expect("retained transaction id");
+            retained_transaction_digest = entry
+                .signed_transaction_digest
+                .expect("retained transaction digest");
+            let retained_bytes = entry
+                .signed_transaction_bytes
+                .as_deref()
+                .expect("retained signed bytes");
+            assert_eq!(
+                signed_transaction_digest(retained_bytes),
+                retained_transaction_digest
+            );
         }
 
+        reader.replace(empty_snapshot(2, [2; 32]));
+        let restarted = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("restart with retained exact transaction");
+        restarted
+            .reconcile()
+            .expect("exact transaction lookup after restart");
+        {
+            let state = restarted.state.lock().expect("restarted state");
+            let [entry] = state.outbox.as_slice() else {
+                panic!("one submitted outbox entry must remain");
+            };
+            assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+            assert_eq!(entry.transaction_id, Some(retained_transaction_id));
+            assert_eq!(
+                entry.signed_transaction_digest,
+                Some(retained_transaction_digest)
+            );
+        }
+        assert_eq!(submitter.calls(), 1);
+        assert_eq!(submitter.sign_calls(), 1);
+
         reader.replace(snapshot_with_policy(
-            2,
-            [2; 32],
+            3,
+            [3; 32],
             active_policy.clone(),
             authority.clone(),
         ));
-        let restarted =
-            ModerationOrchestratorV1::open(checkpoint, deps(reader, Arc::clone(&submitter)))
-                .expect("restarted orchestrator");
         restarted.reconcile().expect("finalized reconciliation");
         let replay = restarted
             .submit(authority, policy_action(active_policy), [0x11; 32])
             .expect("finalized replay");
 
         assert_eq!(submitter.calls(), 1);
+        assert_eq!(submitter.sign_calls(), 1);
         assert_eq!(replay.status, ModerationOperationStatusV1::Finalized);
         assert!(replay.replay);
     }
@@ -4462,10 +6510,10 @@ mod tests {
         .expect("orchestrator");
 
         let first = orchestrator
-            .run_maintenance(governance.clone(), 31, 1)
+            .run_maintenance(governance.clone(), 1)
             .expect("first failover scan");
         let replay = orchestrator
-            .run_maintenance(governance, 31, 1)
+            .run_maintenance(governance, 1)
             .expect("replayed failover scan");
 
         assert_eq!(first.len(), 1);
@@ -4480,6 +6528,86 @@ mod tests {
         assert_eq!(activation.case_id(), "case-failover");
         assert_eq!(activation.round_id(), "round-1");
         assert_eq!(*activation.sortition_digest(), expected_sortition_digest);
+    }
+
+    #[test]
+    fn same_finalized_tip_produces_byte_identical_maintenance_actions_across_replicas() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(100);
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [2; 32], governance.clone());
+        let first_submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let second_submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let first = ModerationOrchestratorV1::open(
+            config(&temp, "replica-a.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot.clone())),
+                Arc::clone(&first_submitter),
+            ),
+        )
+        .expect("first replica");
+        let second = ModerationOrchestratorV1::open(
+            config(&temp, "replica-b.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::clone(&second_submitter),
+            ),
+        )
+        .expect("second replica");
+
+        let first_outcomes = first
+            .run_maintenance(governance.clone(), 1)
+            .expect("first replica maintenance");
+        let second_outcomes = second
+            .run_maintenance(governance, 1)
+            .expect("second replica maintenance");
+        let first_actions = first_submitter.actions();
+        let second_actions = second_submitter.actions();
+
+        assert_eq!(first_outcomes.len(), 1);
+        assert_eq!(second_outcomes.len(), 1);
+        assert_eq!(
+            first_outcomes[0].operation_id,
+            second_outcomes[0].operation_id
+        );
+        assert_eq!(first_actions, second_actions);
+        assert_eq!(
+            norito::to_bytes(&first_actions).expect("encode first actions"),
+            norito::to_bytes(&second_actions).expect("encode second actions")
+        );
+    }
+
+    #[test]
+    fn same_tip_with_a_changed_finalized_timestamp_is_rejected_as_equivocation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(2, [2; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "timestamp-equivocation.norito"),
+            deps(Arc::clone(&reader), submitter),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("initial finalized tip");
+
+        let mut forged = empty_snapshot(2, [2; 32]);
+        forged.finalized_at_unix_ms = forged.finalized_at_unix_ms.saturating_add(1);
+        reader.replace(forged);
+
+        assert_eq!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::FinalizedEquivocation { height: 2 })
+        );
     }
 
     #[test]

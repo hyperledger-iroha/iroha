@@ -3,11 +3,17 @@
 
 package org.hyperledger.iroha.sdk.consensus
 
+import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.util.Collections
+import java.util.LinkedHashMap
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
+import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.norito.CRC64
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
  * Strict JSON models for Native AMX V2 control receipts.
@@ -34,6 +40,47 @@ object NativeAmxV2 {
 
     private val U32_MAX: BigInteger = BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE)
     private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
+    private val BIG_TWO: BigInteger = BigInteger.valueOf(2)
+    private val BLS12_381_BASE_FIELD = BigInteger(
+        "1A0111EA397FE69A4B1BA7B6434BACD7" +
+            "64774B84F38512BF6730D2A0F6B0F624" +
+            "1EABFFFEB153FFFFB9FEFFFFFFFFAAAB",
+        16,
+    )
+    private val BLS12_381_SCALAR_FIELD = BigInteger(
+        "73EDA753299D7D483339D80809A1D805" +
+            "53BDA402FFFE5BFEFFFFFFFF00000001",
+        16,
+    )
+    private const val DESCRIPTOR_PREIMAGE_TYPE =
+        "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
+    private const val PROPOSAL_PREIMAGE_TYPE =
+        "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
+    private const val SETTLEMENT_TYPE =
+        "iroha_data_model::block::consensus::LaneBlockCommitment"
+
+    private class BlsNormalPeerId(
+        val literal: String,
+        val compressedKey: ByteArray,
+    ) {
+        val orderingKey: ByteArray =
+            byteArrayOf(2) + compressedKey
+    }
+
+    private data class JacobianPoint(
+        val x: BigInteger,
+        val y: BigInteger,
+        val z: BigInteger,
+    )
+
+    private val BLS_NORMAL_PEER_CACHE: MutableMap<String, BlsNormalPeerId> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, BlsNormalPeerId>(512, 0.75f, true) {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, BlsNormalPeerId>?,
+                ): Boolean = size > 512
+            },
+        )
 
     /** Typed prepare/commit phase from the mandatory tagged phase object. */
     enum class Phase(private val wireName: String) {
@@ -530,6 +577,35 @@ object NativeAmxV2 {
         ).hashCode()
     }
 
+    /** Return true only for a canonical, non-infinity BLS-Normal subgroup point. */
+    @JvmStatic
+    fun isCanonicalBlsNormalPeerId(value: String): Boolean =
+        try {
+            decodeBlsNormalPeerId(value, "Native AMX validator")
+            true
+        } catch (_: IllegalArgumentException) {
+            false
+        }
+
+    /**
+     * Determine whether a participant proposal needs block-wide mixed-role
+     * anchor validation. The current entrypoint may occur either once or not
+     * at all; duplicates are malformed.
+     */
+    @JvmStatic
+    fun requiresMixedRoleAnchorValidation(
+        descriptor: ParticipantDescriptor,
+        transactionEntrypointHash: TransactionEntrypointHash,
+    ): Boolean {
+        val matches = descriptor.acceptedTransactionHashes.count {
+            it == transactionEntrypointHash
+        }
+        require(matches <= 1) {
+            "Native AMX participant descriptor repeats the current transaction entrypoint"
+        }
+        return matches == 0
+    }
+
     /** Parse and strictly validate one Native AMX receipt-group JSON object. */
     @JvmStatic
     fun parseReceiptGroup(json: String): ReceiptGroup {
@@ -756,10 +832,11 @@ object NativeAmxV2 {
         val matchingEntrypoints = descriptor.acceptedTransactionHashes.indices.filter {
             descriptor.acceptedTransactionHashes[it] == body.transactionEntrypointHash
         }
-        require(matchingEntrypoints.size <= 1) {
-            "$path participant descriptor repeats the current transaction entrypoint"
-        }
-        val requiresMixedRoleAnchorValidation = matchingEntrypoints.isEmpty()
+        val requiresMixedRoleAnchorValidation =
+            requiresMixedRoleAnchorValidation(
+                descriptor,
+                body.transactionEntrypointHash,
+            )
         if (!requiresMixedRoleAnchorValidation) {
             val position = matchingEntrypoints.single()
             require(
@@ -772,6 +849,7 @@ object NativeAmxV2 {
         val settlementSources = settlement.receipts.map(SettlementReceipt::sourceId)
         require(
             settlementHash == body.participantSettlementCommitment &&
+                settlementHash == computeParticipantSettlementHash(settlement) &&
                 settlement.blockHeight == body.participantLaneBlockHeight &&
                 settlement.laneId == laneId &&
                 settlement.dataspaceId == dataspaceId &&
@@ -815,18 +893,15 @@ object NativeAmxV2 {
             record["validator_set_hash"],
             "$path.validator_set_hash",
         )
-        val validators = array(record["validator_set"], "$path.validator_set")
-            .mapIndexed { index, item ->
-                string(item, "$path.validator_set[$index]").also {
-                    require(it.isNotBlank() && it == it.trim()) {
-                        "$path.validator_set[$index] must be an exact non-empty validator ID"
-                    }
-                }
-            }
+        val validators = canonicalBlsNormalValidatorSet(
+            array(record["validator_set"], "$path.validator_set").mapIndexed { index, item ->
+                string(item, "$path.validator_set[$index]")
+            },
+            "$path.validator_set",
+        )
         require(validators.size in 1..MAX_VALIDATORS) {
             "$path.validator_set must contain 1..$MAX_VALIDATORS validators"
         }
-        requireStrictlyOrdered(validators, "$path.validator_set")
         val pops = array(record["validator_set_pops"], "$path.validator_set_pops")
             .mapIndexed { index, item ->
                 Bytes.fromJson(item, "$path.validator_set_pops[$index]").also {
@@ -857,6 +932,7 @@ object NativeAmxV2 {
             body.participantValidatorCount == validators.size &&
                 body.participantMinQuorum == expectedQuorum &&
                 body.participantValidatorSetHash == validatorSetHash &&
+                validatorSetHash == computeValidatorSetHash(validators) &&
                 bitmap.countOneBits() >= expectedQuorum,
         ) { "$path contains inconsistent validator count, quorum, hash, or bitmap" }
         val signature = Bytes.fromJson(
@@ -1004,10 +1080,12 @@ object NativeAmxV2 {
 
     private fun parseProposal(value: Any?, path: String): ParticipantProposal {
         val record = exactObject(value, PROPOSAL_FIELDS, path)
-        return ParticipantProposal(
-            parseDescriptor(record["descriptor"], "$path.descriptor"),
-            hash(record["proposal_hash"], "$path.proposal_hash"),
-        )
+        val descriptor = parseDescriptor(record["descriptor"], "$path.descriptor")
+        val proposalHash = hash(record["proposal_hash"], "$path.proposal_hash")
+        require(proposalHash == computeProposalHash(descriptor)) {
+            "$path.proposal_hash does not match the canonical proposal preimage"
+        }
+        return ParticipantProposal(descriptor, proposalHash)
     }
 
     private fun parseDescriptor(value: Any?, path: String): ParticipantDescriptor {
@@ -1051,18 +1129,15 @@ object NativeAmxV2 {
                 candidateIndices.toSet().size == candidateIndices.size &&
                 transactionHashes.toSet().size == transactionHashes.size,
         ) { "$path accepted work must be matching bounded unique lists" }
-        val validators = array(record["validator_set"], "$path.validator_set")
-            .mapIndexed { index, item ->
-                string(item, "$path.validator_set[$index]").also {
-                    require(it.isNotBlank() && it == it.trim()) {
-                        "$path.validator_set[$index] must be an exact non-empty validator ID"
-                    }
-                }
-            }
+        val validators = canonicalBlsNormalValidatorSet(
+            array(record["validator_set"], "$path.validator_set").mapIndexed { index, item ->
+                string(item, "$path.validator_set[$index]")
+            },
+            "$path.validator_set",
+        )
         require(validators.size in 1..MAX_VALIDATORS) {
             "$path.validator_set must contain 1..$MAX_VALIDATORS validators"
         }
-        requireStrictlyOrdered(validators, "$path.validator_set")
         val validatorCount = boundedInt(
             record["validator_count"],
             "$path.validator_count",
@@ -1089,7 +1164,12 @@ object NativeAmxV2 {
         require(qcModeTag.isNotBlank() && qcModeTag == qcModeTag.trim()) {
             "$path.qc_mode_tag must be an exact non-empty string"
         }
-        return ParticipantDescriptor(
+        val validatorSetHash = hash(
+            record["validator_set_hash"],
+            "$path.validator_set_hash",
+        )
+        val descriptorHash = hash(record["descriptor_hash"], "$path.descriptor_hash")
+        val descriptor = ParticipantDescriptor(
             laneId = laneId(record["lane_id"], "$path.lane_id"),
             dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id"),
             laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation"),
@@ -1107,16 +1187,18 @@ object NativeAmxV2 {
             acceptedCandidateIndices = candidateIndices,
             acceptedTransactionHashes = transactionHashes,
             validatorSetHashVersion = version,
-            validatorSetHash = hash(
-                record["validator_set_hash"],
-                "$path.validator_set_hash",
-            ),
+            validatorSetHash = validatorSetHash,
             validatorSet = validators,
             validatorCount = validatorCount,
             minQuorum = minQuorum,
             qcModeTag = qcModeTag,
-            descriptorHash = hash(record["descriptor_hash"], "$path.descriptor_hash"),
+            descriptorHash = descriptorHash,
         )
+        require(
+            validatorSetHash == computeValidatorSetHash(validators) &&
+                descriptorHash == computeDescriptorHash(descriptor),
+        ) { "$path validator-set or descriptor hash does not match its canonical preimage" }
+        return descriptor
     }
 
     private fun parseParticipantSettlement(value: Any?, path: String): ParticipantSettlement {
@@ -1287,6 +1369,381 @@ object NativeAmxV2 {
         return text
     }
 
+    private fun canonicalBlsNormalValidatorSet(
+        values: List<String>,
+        path: String,
+    ): List<String> {
+        val decoded = values.mapIndexed { index, value ->
+            decodeBlsNormalPeerId(value, "$path[$index]")
+        }
+        require(
+            decoded.zipWithNext().all { (left, right) ->
+                compareUnsigned(left.orderingKey, right.orderingKey) < 0
+            },
+        ) { "$path must be strictly ordered by canonical BLS-Normal PeerId" }
+        return decoded.map(BlsNormalPeerId::literal)
+    }
+
+    private fun decodeBlsNormalPeerId(
+        value: String,
+        path: String,
+    ): BlsNormalPeerId {
+        require(value == value.trim()) { "$path must not contain surrounding whitespace" }
+        val bare =
+            if (value.startsWith("bls_normal:")) {
+                value.removePrefix("bls_normal:")
+            } else {
+                value
+            }
+        require(BLS_NORMAL_PEER_ID.matches(bare)) {
+            "$path must be a canonical BLS-Normal PeerId"
+        }
+        synchronized(BLS_NORMAL_PEER_CACHE) {
+            BLS_NORMAL_PEER_CACHE[bare]?.let { return it }
+        }
+
+        val compressed = hexBytes(bare.substring(6))
+        val first = compressed[0].toInt() and 0xff
+        val compressedFlag = first and 0x80 != 0
+        val infinityFlag = first and 0x40 != 0
+        val signFlag = first and 0x20 != 0
+        val xBytes = compressed.copyOf()
+        xBytes[0] = (first and 0x1f).toByte()
+        val x = BigInteger(1, xBytes)
+        require(compressedFlag && !infinityFlag && x < BLS12_381_BASE_FIELD) {
+            "$path contains an invalid BLS-Normal compressed point"
+        }
+        val rhs =
+            x.modPow(BigInteger.valueOf(3), BLS12_381_BASE_FIELD)
+                .add(BigInteger.valueOf(4))
+                .mod(BLS12_381_BASE_FIELD)
+        var y = rhs.modPow(
+            BLS12_381_BASE_FIELD.add(BigInteger.ONE).shiftRight(2),
+            BLS12_381_BASE_FIELD,
+        )
+        require(y.multiply(y).mod(BLS12_381_BASE_FIELD) == rhs) {
+            "$path contains an invalid BLS-Normal compressed point"
+        }
+        if ((y.shiftLeft(1) > BLS12_381_BASE_FIELD) != signFlag) {
+            y = BLS12_381_BASE_FIELD.subtract(y)
+        }
+        require(isInBlsNormalSubgroup(x, y)) {
+            "$path contains a non-subgroup BLS-Normal public key"
+        }
+        val decoded = BlsNormalPeerId(bare, compressed)
+        synchronized(BLS_NORMAL_PEER_CACHE) {
+            return BLS_NORMAL_PEER_CACHE[bare] ?: decoded.also {
+                BLS_NORMAL_PEER_CACHE[bare] = it
+            }
+        }
+    }
+
+    private fun isInBlsNormalSubgroup(x: BigInteger, y: BigInteger): Boolean {
+        var result = JacobianPoint(BigInteger.ZERO, BigInteger.ONE, BigInteger.ZERO)
+        for (bit in BLS12_381_SCALAR_FIELD.bitLength() - 1 downTo 0) {
+            result = jacobianDouble(result)
+            if (BLS12_381_SCALAR_FIELD.testBit(bit)) {
+                result = jacobianAddAffine(result, x, y)
+            }
+        }
+        return result.z == BigInteger.ZERO
+    }
+
+    private fun jacobianDouble(point: JacobianPoint): JacobianPoint {
+        if (point.z == BigInteger.ZERO || point.y == BigInteger.ZERO) {
+            return JacobianPoint(BigInteger.ZERO, BigInteger.ONE, BigInteger.ZERO)
+        }
+        val modulus = BLS12_381_BASE_FIELD
+        val a = point.x.multiply(point.x).mod(modulus)
+        val b = point.y.multiply(point.y).mod(modulus)
+        val c = b.multiply(b).mod(modulus)
+        val d = BIG_TWO.multiply(
+            point.x.add(b).pow(2).subtract(a).subtract(c),
+        ).mod(modulus)
+        val e = BigInteger.valueOf(3).multiply(a).mod(modulus)
+        val f = e.multiply(e).mod(modulus)
+        val x3 = f.subtract(BIG_TWO.multiply(d)).mod(modulus)
+        val y3 = e.multiply(d.subtract(x3))
+            .subtract(BigInteger.valueOf(8).multiply(c))
+            .mod(modulus)
+        val z3 = BIG_TWO.multiply(point.y).multiply(point.z).mod(modulus)
+        return JacobianPoint(x3, y3, z3)
+    }
+
+    private fun jacobianAddAffine(
+        point: JacobianPoint,
+        affineX: BigInteger,
+        affineY: BigInteger,
+    ): JacobianPoint {
+        if (point.z == BigInteger.ZERO) {
+            return JacobianPoint(affineX, affineY, BigInteger.ONE)
+        }
+        val modulus = BLS12_381_BASE_FIELD
+        val z1Squared = point.z.multiply(point.z).mod(modulus)
+        val u2 = affineX.multiply(z1Squared).mod(modulus)
+        val s2 = affineY.multiply(z1Squared).multiply(point.z).mod(modulus)
+        val h = u2.subtract(point.x).mod(modulus)
+        if (h == BigInteger.ZERO) {
+            return if (s2 == point.y) {
+                jacobianDouble(point)
+            } else {
+                JacobianPoint(BigInteger.ZERO, BigInteger.ONE, BigInteger.ZERO)
+            }
+        }
+        val hh = h.multiply(h).mod(modulus)
+        val i = BigInteger.valueOf(4).multiply(hh).mod(modulus)
+        val j = h.multiply(i).mod(modulus)
+        val r = BIG_TWO.multiply(s2.subtract(point.y)).mod(modulus)
+        val v = point.x.multiply(i).mod(modulus)
+        val x3 = r.multiply(r)
+            .subtract(j)
+            .subtract(BIG_TWO.multiply(v))
+            .mod(modulus)
+        val y3 = r.multiply(v.subtract(x3))
+            .subtract(BIG_TWO.multiply(point.y).multiply(j))
+            .mod(modulus)
+        val z3 = point.z.add(h).pow(2)
+            .subtract(z1Squared)
+            .subtract(hh)
+            .mod(modulus)
+        return JacobianPoint(x3, y3, z3)
+    }
+
+    private fun computeValidatorSetHash(validators: List<String>): ConsensusHash =
+        ConsensusHash(hashLiteral(validatorVector(validators)))
+
+    private fun computeDescriptorHash(descriptor: ParticipantDescriptor): ConsensusHash {
+        val predecessor =
+            descriptor.previousLaneBlockDescriptorHash?.let {
+                byteArrayOf(1) + field(hashBytes(it))
+            } ?: byteArrayOf(0)
+        val payload = structure(
+            listOf(
+                stringBytes("nexus:lane-block-descriptor:v1"),
+                byteArrayOf(1),
+                field(u32(descriptor.laneId)),
+                field(u64(descriptor.dataspaceId)),
+                hashBytes(descriptor.laneIncarnation),
+                u64(descriptor.proposalHeight),
+                u64(descriptor.previousLaneBlockHeight),
+                predecessor,
+                u64(descriptor.laneBlockHeight),
+                u64(descriptor.laneBlockView),
+                hashBytes(descriptor.subjectHash),
+                hashBytes(descriptor.payloadOwnershipHash),
+                hashBytes(descriptor.rbcInstanceHash),
+                vector(descriptor.acceptedCandidateIndices, ::u64),
+                vector(descriptor.acceptedTransactionHashes) { hashBytes(it.value) },
+                u16(descriptor.validatorSetHashVersion),
+                hashBytes(descriptor.validatorSetHash),
+                validatorVector(descriptor.validatorSet),
+                u32(descriptor.validatorCount.toLong()),
+                u32(descriptor.minQuorum.toLong()),
+                stringBytes(descriptor.qcModeTag),
+            ),
+        )
+        return ConsensusHash(
+            hashLiteral(noritoFrame(DESCRIPTOR_PREIMAGE_TYPE, payload)),
+        )
+    }
+
+    private fun computeProposalHash(descriptor: ParticipantDescriptor): ConsensusHash {
+        val payload = structure(
+            listOf(
+                stringBytes("nexus:lane-block-proposal:v1"),
+                byteArrayOf(1),
+                u64(descriptor.proposalHeight),
+                hashBytes(descriptor.descriptorHash),
+                field(u32(descriptor.laneId)),
+                field(u64(descriptor.dataspaceId)),
+                hashBytes(descriptor.laneIncarnation),
+                u64(descriptor.laneBlockHeight),
+                u64(descriptor.laneBlockView),
+                hashBytes(descriptor.subjectHash),
+                hashBytes(descriptor.payloadOwnershipHash),
+                hashBytes(descriptor.rbcInstanceHash),
+                vector(descriptor.acceptedCandidateIndices, ::u64),
+                vector(descriptor.acceptedTransactionHashes) { hashBytes(it.value) },
+                u16(descriptor.validatorSetHashVersion),
+                hashBytes(descriptor.validatorSetHash),
+                validatorVector(descriptor.validatorSet),
+                u32(descriptor.validatorCount.toLong()),
+                u32(descriptor.minQuorum.toLong()),
+                stringBytes(descriptor.qcModeTag),
+            ),
+        )
+        return ConsensusHash(
+            hashLiteral(noritoFrame(PROPOSAL_PREIMAGE_TYPE, payload)),
+        )
+    }
+
+    private fun computeParticipantSettlementHash(
+        settlement: ParticipantSettlement,
+    ): ConsensusHash {
+        val payload = structure(
+            listOf(
+                u64(settlement.blockHeight),
+                field(u32(settlement.laneId)),
+                hashBytes(settlement.laneIncarnation),
+                field(u64(settlement.dataspaceId)),
+                u64(BigInteger.valueOf(settlement.transactionCount)),
+                quantity(settlement.totalLocalAmount),
+                quantity(settlement.totalXorDue),
+                quantity(settlement.totalXorAfterHaircut),
+                quantity(settlement.totalXorVariance),
+                byteArrayOf(0),
+                vector(settlement.receipts, ::settlementReceipt),
+                vector(emptyList<ByteArray>()) { it },
+                vector(emptyList<ByteArray>()) { it },
+            ),
+        )
+        return ConsensusHash(hashLiteral(noritoFrame(SETTLEMENT_TYPE, payload)))
+    }
+
+    private fun settlementReceipt(receipt: SettlementReceipt): ByteArray =
+        structure(
+            listOf(
+                hexBytes(receipt.sourceId.value),
+                quantity(receipt.localAmount),
+                quantity(receipt.xorDue),
+                quantity(receipt.xorAfterHaircut),
+                quantity(receipt.xorVariance),
+                u64(receipt.timestampMs),
+            ),
+        )
+
+    private fun quantity(value: String): ByteArray {
+        val separator = value.indexOf('.')
+        val whole = if (separator < 0) value else value.substring(0, separator)
+        val fraction = if (separator < 0) "" else value.substring(separator + 1)
+        val mantissa = BigInteger(whole + fraction)
+        val signedLittleEndian =
+            if (mantissa == BigInteger.ZERO) {
+                ByteArray(0)
+            } else {
+                mantissa.toByteArray().reversedArray()
+            }
+        return structure(
+            listOf(
+                u32(signedLittleEndian.size.toLong()) + signedLittleEndian,
+                u32(fraction.length.toLong()),
+            ),
+        )
+    }
+
+    private fun validatorVector(validators: List<String>): ByteArray =
+        vector(validators) { validator ->
+            val peer = decodeBlsNormalPeerId(validator, "Native AMX validator")
+            val compactKey = byteArrayOf(2) + peer.compressedKey
+            val encodedKey = ByteArrayOutputStream()
+            write(encodedKey, u64(BigInteger.valueOf(compactKey.size.toLong())))
+            compactKey.forEach { byte ->
+                write(encodedKey, field(byteArrayOf(byte)))
+            }
+            field(encodedKey.toByteArray())
+        }
+
+    private fun <T> vector(values: List<T>, encoder: (T) -> ByteArray): ByteArray {
+        val output = ByteArrayOutputStream()
+        write(output, u64(BigInteger.valueOf(values.size.toLong())))
+        values.forEach { value ->
+            write(output, field(encoder(value)))
+        }
+        return output.toByteArray()
+    }
+
+    private fun structure(fields: List<ByteArray>): ByteArray {
+        val output = ByteArrayOutputStream()
+        fields.forEach { value -> write(output, field(value)) }
+        return output.toByteArray()
+    }
+
+    private fun field(payload: ByteArray): ByteArray =
+        compactLength(payload.size) + payload
+
+    private fun stringBytes(value: String): ByteArray {
+        val encoded = value.toByteArray(StandardCharsets.UTF_8)
+        return compactLength(encoded.size) + encoded
+    }
+
+    private fun compactLength(value: Int): ByteArray {
+        require(value >= 0) { "compact length must not be negative" }
+        var remaining = value.toLong()
+        val output = ByteArrayOutputStream()
+        do {
+            var byte = (remaining and 0x7f).toInt()
+            remaining = remaining ushr 7
+            if (remaining != 0L) {
+                byte = byte or 0x80
+            }
+            output.write(byte)
+        } while (remaining != 0L)
+        return output.toByteArray()
+    }
+
+    private fun u16(value: Int): ByteArray =
+        byteArrayOf(
+            (value and 0xff).toByte(),
+            (value ushr 8 and 0xff).toByte(),
+        )
+
+    private fun u32(value: Long): ByteArray =
+        ByteArray(4) { index ->
+            (value ushr (index * 8) and 0xff).toByte()
+        }
+
+    private fun u64(value: BigInteger): ByteArray {
+        require(value.signum() >= 0 && value <= U64_MAX) {
+            "value must fit in an unsigned 64-bit integer"
+        }
+        return ByteArray(8) { index ->
+            value.shiftRight(index * 8).and(BigInteger.valueOf(0xff)).toByte()
+        }
+    }
+
+    private fun hashBytes(value: ConsensusHash): ByteArray =
+        HashLiteral.decode(value.value)
+
+    private fun hashBytes(value: String): ByteArray =
+        HashLiteral.decode(value)
+
+    private fun hashLiteral(payload: ByteArray): String =
+        HashLiteral.canonicalize(Blake2b.digest256(payload))
+
+    private fun noritoFrame(typeName: String, payload: ByteArray): ByteArray {
+        val header = NoritoHeader(
+            SchemaHash.hash16(typeName),
+            payload.size,
+            CRC64.compute(payload),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE,
+        ).encode()
+        return header + payload
+    }
+
+    private fun write(output: ByteArrayOutputStream, value: ByteArray) {
+        output.write(value, 0, value.size)
+    }
+
+    private fun compareUnsigned(left: ByteArray, right: ByteArray): Int {
+        val shared = minOf(left.size, right.size)
+        for (index in 0 until shared) {
+            val comparison =
+                (left[index].toInt() and 0xff).compareTo(right[index].toInt() and 0xff)
+            if (comparison != 0) {
+                return comparison
+            }
+        }
+        return left.size.compareTo(right.size)
+    }
+
+    private fun hexBytes(value: String): ByteArray {
+        require(value.length % 2 == 0) { "hex value must have an even length" }
+        return ByteArray(value.length / 2) { index ->
+            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
+
     private fun requireStrictlyOrdered(values: List<String>, path: String) {
         require(values.zipWithNext().all { (left, right) -> left < right }) {
             "$path must be strictly ordered and unique"
@@ -1306,6 +1763,7 @@ object NativeAmxV2 {
 
     private val SOURCE_ID = Regex("^[0-9A-F]{64}$")
     private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
+    private val BLS_NORMAL_PEER_ID = Regex("^ea0130[0-9A-F]{96}$")
     private val QUANTITY = Regex("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{0,27}[1-9])?$")
 
     private val GROUP_FIELDS = setOf(

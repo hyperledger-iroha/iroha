@@ -15,6 +15,7 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonEncoder
@@ -438,8 +439,10 @@ class SumeragiAutonomousLaneExecutions(rows: List<SumeragiAutonomousLaneExecutio
  * Complete operational response returned by `/v1/sumeragi/diagnostics`.
  *
  * Lane evidence types that are not yet interpreted by core-jvm are retained as exact JSON
- * objects. Native participant applications and autonomous execution rows are parsed into their
- * closed, bounded models and checked in the canonical Rust ordering.
+ * objects. Native-bearing settlement commitments, including relay-contained commitments, are
+ * additionally routed through the strict Native AMX V2 parser. Native participant applications
+ * and autonomous execution rows are parsed into their closed, bounded models and checked in the
+ * canonical Rust ordering.
  */
 @Serializable
 data class SumeragiDiagnosticsStatus(
@@ -511,6 +514,10 @@ data class SumeragiDiagnosticsStatus(
         require(laneVectors.all { it.size <= SUMERAGI_DIAGNOSTIC_LANES_MAX }) {
             "Sumeragi diagnostics lane vector exceeds the 128-row limit"
         }
+        validateNativeAmxDiagnosticsEvidence(
+            laneSettlementCommitments,
+            laneRelayEnvelopes,
+        )
         require(laneGovernanceSealedTotal in 0..0xffff_ffffL) {
             "laneGovernanceSealedTotal must be an unsigned 32-bit value"
         }
@@ -584,6 +591,48 @@ internal object SumeragiU64Serializer : KSerializer<BigInteger> {
 private val CANONICAL_U64_TOKEN = Regex("0|[1-9][0-9]*")
 private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
+
+private fun validateNativeAmxDiagnosticsEvidence(
+    settlements: List<JsonObject>,
+    relays: List<JsonObject>,
+) {
+    settlements.forEachIndexed { index, settlement ->
+        validateNativeAmxSettlementEvidence(
+            settlement,
+            "lane_settlement_commitments[$index]",
+        )
+    }
+    relays.forEachIndexed { index, relay ->
+        val settlement = relay["settlement_commitment"]
+        require(settlement is JsonObject) {
+            "lane_relay_envelopes[$index].settlement_commitment must be a JSON object"
+        }
+        validateNativeAmxSettlementEvidence(
+            settlement,
+            "lane_relay_envelopes[$index].settlement_commitment",
+        )
+    }
+}
+
+private fun validateNativeAmxSettlementEvidence(
+    settlement: JsonObject,
+    field: String,
+) {
+    val nativeReceipts = settlement["native_amx_receipts"]
+    require(nativeReceipts is JsonArray) {
+        "$field.native_amx_receipts must be a JSON array"
+    }
+    if (nativeReceipts.isEmpty()) return
+
+    try {
+        NativeAmxV2.parseReceiptGroup(settlement.toString())
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException(
+            "$field contains invalid Native AMX V2 evidence",
+            error,
+        )
+    }
+}
 
 private fun requireU64(value: BigInteger, field: String): BigInteger {
     require(value.signum() >= 0 && value <= U64_MAX) {

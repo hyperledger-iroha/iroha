@@ -139,6 +139,7 @@ from iroha_torii_client.client import (
     SubscriptionPlanListItem,
     SubscriptionPlanListPage,
     ToriiCanonicalRequestAuth,
+    ToriiClient as _BaseToriiClient,
     VpnProfile,
     VpnQuote,
     VpnQuoteCreateRequest,
@@ -152,8 +153,12 @@ from iroha_torii_client.client import (
     canonical_request_message,
     canonical_request_signature_message,
 )
-from iroha_torii_client.client import (
-    ToriiClient as _BaseToriiClient,
+from iroha_torii_client.native_amx import (
+    compute_native_amx_descriptor_hash,
+    compute_native_amx_participant_settlement_hash,
+    compute_native_amx_proposal_hash,
+    compute_native_amx_validator_set_hash,
+    validate_bls_normal_validator_set,
 )
 
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
@@ -7100,28 +7105,21 @@ class SumeragiNativeAmxAttestationQc:
             or len(validator_set_raw) > 128
         ):
             raise TypeError(f"{context} `validator_set` must be a bounded non-empty list")
-        validator_set: List[str] = []
-        for index, validator in enumerate(validator_set_raw):
-            if not isinstance(validator, str) or validator.strip() == "":
-                raise TypeError(
-                    f"{context} validator at index {index} must be a non-empty string"
-                )
-            validator_set.append(validator)
-        if any(
-            left >= right
-            for left, right in zip(validator_set, validator_set[1:])
-        ):
-            raise ValueError(
-                f"{context} `validator_set` must be strictly ordered by validator id"
-            )
+        validator_set = validate_bls_normal_validator_set(
+            validator_set_raw, f"{context} `validator_set`"
+        )
         expected_quorum = len(validator_set) - (len(validator_set) - 1) // 3
         validator_set_hash = _strict_hash_literal(
             payload, "validator_set_hash", context
+        )
+        computed_validator_set_hash = compute_native_amx_validator_set_hash(
+            validator_set
         )
         if (
             body.participant_validator_count != len(validator_set)
             or body.participant_min_quorum != expected_quorum
             or body.participant_validator_set_hash != validator_set_hash
+            or validator_set_hash != computed_validator_set_hash
         ):
             raise ValueError(f"{context} committee fields differ from the signed body")
 
@@ -7161,7 +7159,7 @@ class SumeragiNativeAmxAttestationQc:
             body=body,
             validator_set_hash_version=version,
             validator_set_hash=validator_set_hash,
-            validator_set=tuple(validator_set),
+            validator_set=validator_set,
             validator_set_pops=pops,
             signers_bitmap=bitmap,
             bls_aggregate_signature=signature,
@@ -7284,17 +7282,9 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
             or len(validators_value) > 128
         ):
             raise TypeError(f"{context} validator set must be a bounded non-empty list")
-        validators: List[str] = []
-        for index, validator in enumerate(validators_value):
-            if not isinstance(validator, str) or validator.strip() == "":
-                raise TypeError(
-                    f"{context} validator at index {index} must be a non-empty string"
-                )
-            validators.append(validator)
-        if any(left >= right for left, right in zip(validators, validators[1:])):
-            raise ValueError(
-                f"{context} validator set must be strictly ordered by validator id"
-            )
+        validators = validate_bls_normal_validator_set(
+            validators_value, f"{context} validator set"
+        )
         validator_count = _strict_uint(payload, "validator_count", 32, context)
         min_quorum = _strict_uint(payload, "min_quorum", 32, context)
         expected_quorum = len(validators) - (len(validators) - 1) // 3
@@ -7306,7 +7296,14 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
         ):
             raise ValueError(f"{context} contains inconsistent committee fields")
 
-        return cls(
+        validator_set_hash = _strict_hash_literal(
+            payload, "validator_set_hash", context
+        )
+        if validator_set_hash != compute_native_amx_validator_set_hash(validators):
+            raise ValueError(
+                f"{context} validator-set hash does not match the canonical committee"
+            )
+        parsed = cls(
             lane_id=_strict_uint(payload, "lane_id", 32, context),
             dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
             lane_incarnation=_strict_hash_literal(
@@ -7327,15 +7324,23 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
             accepted_candidate_indices=indices,
             accepted_transaction_hashes=hashes,
             validator_set_hash_version=version,
-            validator_set_hash=_strict_hash_literal(
-                payload, "validator_set_hash", context
-            ),
-            validator_set=tuple(validators),
+            validator_set_hash=validator_set_hash,
+            validator_set=validators,
             validator_count=validator_count,
             min_quorum=min_quorum,
-            qc_mode_tag=_strict_nonempty_string(payload, "qc_mode_tag", context),
+            qc_mode_tag=_require_exact_non_empty_string(
+                _required_field(payload, "qc_mode_tag", context),
+                f"{context} `qc_mode_tag`",
+            ),
             descriptor_hash=_strict_hash_literal(payload, "descriptor_hash", context),
         )
+        if parsed.descriptor_hash != compute_native_amx_descriptor_hash(
+            asdict(parsed)
+        ):
+            raise ValueError(
+                f"{context} descriptor hash does not match its canonical preimage"
+            )
+        return parsed
 
 
 @dataclass(frozen=True)
@@ -7356,12 +7361,17 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
         descriptor = _required_field(payload, "descriptor", context)
         if not isinstance(descriptor, Mapping):
             raise TypeError(f"{context} `descriptor` must be an object")
-        return cls(
-            descriptor=SumeragiNativeAmxParticipantLaneBlockDescriptor.from_payload(
-                descriptor
-            ),
-            proposal_hash=_strict_hash_literal(payload, "proposal_hash", context),
+        parsed_descriptor = (
+            SumeragiNativeAmxParticipantLaneBlockDescriptor.from_payload(descriptor)
         )
+        proposal_hash = _strict_hash_literal(payload, "proposal_hash", context)
+        if proposal_hash != compute_native_amx_proposal_hash(
+            asdict(parsed_descriptor)
+        ):
+            raise ValueError(
+                f"{context} proposal hash does not match its canonical preimage"
+            )
+        return cls(descriptor=parsed_descriptor, proposal_hash=proposal_hash)
 
 
 @dataclass(frozen=True)
@@ -7447,6 +7457,12 @@ class SumeragiNativeAmxLeg:
         settlement_hash = _strict_hash_literal(
             payload, "participant_settlement_hash", context
         )
+        if settlement_hash != compute_native_amx_participant_settlement_hash(
+            asdict(settlement)
+        ):
+            raise ValueError(
+                f"{context} participant settlement hash does not match its canonical commitment"
+            )
         body = prepare.body
         descriptor = proposal.descriptor
         if (

@@ -111,6 +111,160 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void TypedOrderbookBuildersUseCanonicalSelectorsAndFreeOutputs()
+    {
+        var native = new FakeNativeBoundary();
+        var owner = Encoding.UTF8.GetBytes("merchant@paynet");
+        var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
+        var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7, native);
+        Assert.Equal(Enumerable.Repeat((byte)7, 32), orderId);
+
+        var order = SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+            SoraFsOrderbookSide.Bid,
+            SoraFsOrderbookTier.Hot,
+            "12.000000001",
+            12,
+            owner,
+            1_700_010_000,
+            7,
+            25,
+            30,
+            privateKey,
+            null,
+            orderId,
+            null,
+            native);
+        Assert.Equal(orderId, order);
+
+        var ask = SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+            SoraFsOrderbookSide.Ask,
+            SoraFsOrderbookTier.Hot,
+            "1.25",
+            4,
+            owner,
+            1_700_010_000,
+            8,
+            25,
+            30,
+            privateKey,
+            null,
+            null,
+            Enumerable.Repeat((byte)0x72, 32).ToArray(),
+            native);
+        Assert.Equal(Enumerable.Repeat((byte)8, 32), ask);
+
+        var cancel = SoraFsReferenceValidators.BuildSignedOrderbookOrderCancel(
+            orderId,
+            owner,
+            SoraFsOrderbookCancelReason.OwnerRequested,
+            8,
+            privateKey,
+            native);
+        Assert.Equal(orderId, cancel);
+
+        var receiptId = Enumerable.Repeat((byte)0x21, 32).ToArray();
+        var receipt = SoraFsReferenceValidators.BuildSignedOrderbookSettlementReceipt(
+            receiptId,
+            Enumerable.Repeat((byte)0x22, 32).ToArray(),
+            Enumerable.Repeat((byte)0x23, 32).ToArray(),
+            0,
+            4_096,
+            Enumerable.Repeat((byte)0x24, 32).ToArray(),
+            4_096,
+            "1.000000001",
+            "1",
+            "0.000000001",
+            1_700_000_999,
+            privateKey,
+            native);
+        Assert.Equal(receiptId, receipt);
+        Assert.Equal(4, native.FreeCalls);
+        Assert.Equal(Enumerable.Repeat((byte)0xb7, 32), privateKey);
+    }
+
+    [Fact]
+    public void TypedOrderbookBuildersRejectNonCanonicalInputsBeforeDispatch()
+    {
+        var native = new FakeNativeBoundary();
+        var owner = Encoding.UTF8.GetBytes("merchant@paynet");
+        var privateKey = new byte[32];
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SoraFsReferenceValidators.SignOrderbookPayload(
+                SoraFsOrderbookPayloadKind.RuntimeSnapshot,
+                new byte[] { 1 },
+                privateKey,
+                native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.DeriveOrderbookOrderId(Array.Empty<byte>(), 7, native));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 0, native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+                SoraFsOrderbookSide.Bid,
+                SoraFsOrderbookTier.Hot,
+                "1.0",
+                1,
+                owner,
+                2,
+                7,
+                0,
+                0,
+                privateKey,
+                null,
+                null,
+                null,
+                native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+                SoraFsOrderbookSide.Bid,
+                SoraFsOrderbookTier.Hot,
+                "1",
+                1,
+                owner,
+                2,
+                7,
+                0,
+                0,
+                Enumerable.Repeat((byte)0xb7, 32).ToArray(),
+                null,
+                null,
+                Enumerable.Repeat((byte)0x72, 32).ToArray(),
+                native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+                SoraFsOrderbookSide.Ask,
+                SoraFsOrderbookTier.Hot,
+                "1",
+                1,
+                owner,
+                2,
+                7,
+                0,
+                0,
+                Enumerable.Repeat((byte)0xb7, 32).ToArray(),
+                null,
+                null,
+                null,
+                native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.BuildSignedOrderbookOrderCancel(
+                new byte[31],
+                owner,
+                SoraFsOrderbookCancelReason.OwnerRequested,
+                1,
+                privateKey,
+                native));
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.SignOrderbookPayload(
+                SoraFsOrderbookPayloadKind.OrderRequest,
+                new byte[] { 1 },
+                new byte[31],
+                native));
+        Assert.Equal(0, native.FreeCalls);
+    }
+
+    [Fact]
     public void GovernanceBlockValidationCopiesInputsAndFreesOutput()
     {
         var native = new FakeNativeBoundary();
@@ -491,6 +645,87 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void OrderbookBuildersProduceAcceptedPayloadsWhenNativeAvailable()
+    {
+        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
+        {
+            return;
+        }
+        var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
+        var owner = Encoding.UTF8.GetBytes("buyer@sora");
+        var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
+        Assert.Equal(
+            "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69",
+            Convert.ToHexString(orderId).ToLowerInvariant());
+
+        var order = SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+            SoraFsOrderbookSide.Bid,
+            SoraFsOrderbookTier.Hot,
+            "1.25",
+            64,
+            owner,
+            1_800_000_000,
+            7,
+            10,
+            15,
+            privateKey);
+        AssertOutcomeOk(SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.OrderRequest,
+            order,
+            null,
+            123));
+
+        var ask = SoraFsReferenceValidators.BuildSignedOrderbookOrderRequest(
+            SoraFsOrderbookSide.Ask,
+            SoraFsOrderbookTier.Hot,
+            "1.25",
+            4,
+            owner,
+            1_800_000_000,
+            8,
+            10,
+            15,
+            privateKey,
+            providerId: Enumerable.Repeat((byte)0x72, 32).ToArray());
+        AssertOutcomeOk(SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.OrderRequest,
+            ask,
+            null,
+            123));
+
+        var cancel = SoraFsReferenceValidators.BuildSignedOrderbookOrderCancel(
+            orderId,
+            owner,
+            SoraFsOrderbookCancelReason.OwnerRequested,
+            8,
+            privateKey);
+        AssertOutcomeOk(SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.OrderCancel,
+            cancel,
+            null,
+            123));
+
+        var receipt = SoraFsReferenceValidators.BuildSignedOrderbookSettlementReceipt(
+            Enumerable.Repeat((byte)0x21, 32).ToArray(),
+            Enumerable.Repeat((byte)0x22, 32).ToArray(),
+            Enumerable.Repeat((byte)0x23, 32).ToArray(),
+            0,
+            4_096,
+            Enumerable.Repeat((byte)0x24, 32).ToArray(),
+            4_096,
+            "1.000000001",
+            "1",
+            "0.000000001",
+            1_700_000_999,
+            privateKey);
+        AssertOutcomeOk(SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.SettlementReceipt,
+            receipt,
+            null,
+            123));
+    }
+
+    [Fact]
     public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
     {
         if (!SoraFsReferenceValidators.IsAvailable())
@@ -751,6 +986,12 @@ public sealed class SoraFsReferenceValidatorsTests
             actual);
     }
 
+    private static void AssertOutcomeOk(string json)
+    {
+        using var outcome = JsonDocument.Parse(json);
+        Assert.Equal("Ok", outcome.RootElement.GetProperty("status").GetString());
+    }
+
     private static string ValidOutcomeJson(ulong generatedAt)
     {
         var outcome = new Dictionary<string, object?>
@@ -869,6 +1110,68 @@ public sealed class SoraFsReferenceValidatorsTests
             return AllocateResult(generatedAt);
         }
 
+        public NativeValidationResult SignOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] privateKey)
+        {
+            return AllocateBytes(bytes.Concat(new byte[] { (byte)kind }).ToArray());
+        }
+
+        public int DeriveOrderbookOrderId(
+            byte[] ownerAccount,
+            ulong nonce,
+            byte[] output)
+        {
+            Array.Fill(output, checked((byte)nonce));
+            return ReturnCode;
+        }
+
+        public NativeValidationResult BuildSignedOrderbookOrderRequest(
+            byte[] orderId,
+            uint side,
+            uint tier,
+            byte[] pricePerGib,
+            ulong quantityGib,
+            ulong remainingGib,
+            byte[] ownerAccount,
+            byte[] providerId,
+            ulong expiryUnix,
+            ulong nonce,
+            uint makerFeeBps,
+            uint takerFeeBps,
+            byte[] privateKey)
+        {
+            return AllocateBytes(orderId);
+        }
+
+        public NativeValidationResult BuildSignedOrderbookOrderCancel(
+            byte[] orderId,
+            byte[] ownerAccount,
+            uint reason,
+            ulong nonce,
+            byte[] privateKey)
+        {
+            return AllocateBytes(orderId);
+        }
+
+        public NativeValidationResult BuildSignedOrderbookSettlementReceipt(
+            byte[] receiptId,
+            byte[] channelId,
+            byte[] tradeId,
+            ulong rangeStart,
+            ulong rangeEnd,
+            byte[] chunkHash,
+            ulong bytesDelivered,
+            byte[] xorDebited,
+            byte[] providerCredit,
+            byte[] feeAmount,
+            ulong issuedAtUnix,
+            byte[] privateKey)
+        {
+            return AllocateBytes(receiptId);
+        }
+
         public NativeValidationResult ValidatePdpPayload(
             uint kind,
             byte[] bytes,
@@ -958,7 +1261,11 @@ public sealed class SoraFsReferenceValidatorsTests
 
         private NativeValidationResult AllocateResult(ulong generatedAt)
         {
-            var output = OutputFactory(generatedAt);
+            return AllocateBytes(OutputFactory(generatedAt));
+        }
+
+        private NativeValidationResult AllocateBytes(byte[] output)
+        {
             var pointer = Marshal.AllocHGlobal(output.Length);
             Marshal.Copy(output, 0, pointer, output.Length);
             allocations.Add(pointer);

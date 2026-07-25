@@ -7,7 +7,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::Path,
 };
 
@@ -18,16 +17,14 @@ use iroha_data_model::{
         ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
         SorafsRepairTaskActionV1,
     },
-    sorafs::moderation_ledger::{
-        REPAIR_LEDGER_TASK_VERSION_V1, RepairFinalizedCursorV1, RepairFinalizedTaskV1,
-        sorafs_repair_task_id_v1,
-    },
+    sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedTaskV1},
 };
 use thiserror::Error;
 
 use crate::{
-    NodeHandle, RepairChunkPayload, RepairOrchestrator,
+    NodeHandle, RepairChunkPayload, RepairOrchestrator, RepairOrchestratorError,
     native_repair_singleflight::NativeRepairSingleflightErrorV1,
+    repair_ledger_projection::validate_task,
     repair_transaction_forwarder::{
         RepairOperationV1, RepairTransactionContextV1, RepairTransactionEnqueueResultV1,
         RepairTransactionForwarderError,
@@ -151,6 +148,12 @@ pub enum NativeRepairExecutionErrorV1 {
     /// Durable native transaction forwarding failed.
     #[error("native repair terminal transaction forwarding failed")]
     Forwarder(#[from] RepairTransactionForwarderError),
+    /// A lifecycle-leased storage read or replacement failed.
+    #[error("native repair storage operation failed")]
+    Storage(#[from] crate::store::StorageError),
+    /// The configured rehydration orchestrator could not fetch remote chunks.
+    #[error("native repair orchestrator rehydration failed")]
+    Orchestrator(#[from] RepairOrchestratorError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,24 +197,7 @@ impl NodeHandle {
             return Err(NativeRepairExecutionErrorV1::StaleFinalizedCursor);
         }
         let task = &finalized_task.task;
-        if task.version != REPAIR_LEDGER_TASK_VERSION_V1
-            || task.task_id == [0; 32]
-            || task.task_id != sorafs_repair_task_id_v1(task.source_identity)
-            || task.revision == 0
-            || task.ticket_id.is_empty()
-        {
-            return Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask);
-        }
-        let report =
-            crate::repair_transaction_forwarder::decode_repair_report(&task.canonical_report)
-                .map_err(|_| NativeRepairExecutionErrorV1::InvalidFinalizedTask)?;
-        if report.ticket_id.0 != task.ticket_id
-            || report.evidence.manifest_digest != task.manifest_digest
-            || report.evidence.provider_id != task.provider_id
-            || report.auditor_account != task.submitted_by.to_string()
-        {
-            return Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask);
-        }
+        validate_task(task).map_err(|_| NativeRepairExecutionErrorV1::InvalidFinalizedTask)?;
         let local_provider = self
             .capacity_usage()
             .provider_id
@@ -349,7 +335,11 @@ fn execute_storage_repair(
     orchestrator: Option<&dyn RepairOrchestrator>,
     context: &NativeRepairExecutionContextV1,
 ) -> Result<NativeRepairStorageOutcomeV1, NativeRepairExecutionErrorV1> {
-    let Some(manifest) = storage.manifest_by_digest(&context.manifest_digest) else {
+    let Some(outcome) = storage
+        .with_manifest_io_by_digest(&context.manifest_digest, |manifest| {
+            execute_storage_repair_for_manifest(storage, orchestrator, context, manifest)
+        })?
+    else {
         return Ok(NativeRepairStorageOutcomeV1 {
             failure: Some(NativeRepairFailureCodeV1::ManifestMissing),
             manifest: None,
@@ -358,35 +348,45 @@ fn execute_storage_repair(
             invalid_after: Vec::new(),
         });
     };
-    let chunks = manifest_chunks_bounded(&manifest)?;
+    outcome
+}
+
+fn execute_storage_repair_for_manifest(
+    storage: &StorageBackend,
+    orchestrator: Option<&dyn RepairOrchestrator>,
+    context: &NativeRepairExecutionContextV1,
+    manifest: &StoredManifest,
+) -> Result<NativeRepairStorageOutcomeV1, NativeRepairExecutionErrorV1> {
+    let chunks = manifest_chunks_bounded(manifest)?;
     let mut invalid = invalid_chunks(&chunks);
     let invalid_before = invalid.len();
     if invalid.is_empty() {
         return Ok(NativeRepairStorageOutcomeV1 {
             failure: None,
-            manifest: Some(manifest),
+            manifest: Some(manifest.clone()),
             invalid_before,
             rehydrated: 0,
             invalid_after: Vec::new(),
         });
     }
 
-    let mut rehydrated = restore_from_local_replicas(storage, &invalid)?;
+    let mut rehydrated = restore_from_local_replicas(storage, manifest, &invalid)?;
     invalid = invalid_chunks(&chunks);
     if !invalid.is_empty() {
         rehydrated = rehydrated.saturating_add(restore_from_orchestrator(
+            storage,
             orchestrator,
             context,
-            &manifest,
+            manifest,
             &invalid,
-        ));
+        )?);
     }
     let invalid_after = invalid_chunks(&chunks);
     let failure =
         (!invalid_after.is_empty()).then_some(NativeRepairFailureCodeV1::InvalidChunksRemain);
     Ok(NativeRepairStorageOutcomeV1 {
         failure,
-        manifest: Some(manifest),
+        manifest: Some(manifest.clone()),
         invalid_before,
         rehydrated,
         invalid_after,
@@ -428,19 +428,12 @@ fn invalid_chunks(chunks: &[ChunkFileRecord]) -> Vec<ChunkFileRecord> {
 }
 
 fn read_valid_chunk(chunk: &ChunkFileRecord) -> Option<Vec<u8>> {
-    let metadata = fs::symlink_metadata(&chunk.path).ok()?;
-    if !metadata.file_type().is_file() || metadata.len() != u64::from(chunk.length) {
-        return None;
-    }
-    let bytes = fs::read(&chunk.path).ok()?;
-    if bytes.len() != chunk.length as usize || blake3::hash(&bytes).as_bytes() != &chunk.digest {
-        return None;
-    }
-    Some(bytes)
+    crate::store::read_verified_chunk_file(chunk).ok()
 }
 
 fn restore_from_local_replicas(
     storage: &StorageBackend,
+    target_manifest: &StoredManifest,
     invalid: &[ChunkFileRecord],
 ) -> Result<usize, NativeRepairExecutionErrorV1> {
     let required = invalid
@@ -451,25 +444,25 @@ fn restore_from_local_replicas(
     manifests.sort_by(|left, right| left.manifest_id().cmp(right.manifest_id()));
     let mut inspected = 0_usize;
     let mut sources = BTreeMap::<[u8; 32], (String, Vec<u8>)>::new();
+    collect_local_repair_sources(
+        storage,
+        target_manifest,
+        &required,
+        &mut inspected,
+        &mut sources,
+    )?;
     for manifest in manifests {
-        for index in 0..manifest.chunk_count() {
-            inspected = inspected
-                .checked_add(1)
-                .ok_or(NativeRepairExecutionErrorV1::ResourceLimitExceeded)?;
-            if inspected > NATIVE_REPAIR_MAX_SOURCE_CHUNKS_V1 {
-                return Err(NativeRepairExecutionErrorV1::ResourceLimitExceeded);
-            }
-            let Some(candidate) = manifest.chunk(index) else {
-                return Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask);
-            };
-            if !required.contains(&candidate.digest) || sources.contains_key(&candidate.digest) {
-                continue;
-            }
-            let Some(bytes) = read_valid_chunk(candidate) else {
-                continue;
-            };
-            let key = stable_local_path_key(storage.root_dir(), &candidate.path);
-            sources.insert(candidate.digest, (key, bytes));
+        if manifest.manifest_id() == target_manifest.manifest_id() {
+            continue;
+        }
+        let manifest_id = manifest.manifest_id().to_owned();
+        let result = storage.with_manifest_io(&manifest_id, |manifest| {
+            collect_local_repair_sources(storage, manifest, &required, &mut inspected, &mut sources)
+        });
+        match result {
+            Ok(result) => result?,
+            Err(crate::store::StorageError::ManifestNotFound { .. }) => continue,
+            Err(error) => return Err(error.into()),
         }
     }
 
@@ -484,55 +477,106 @@ fn restore_from_local_replicas(
         if bytes.len() != target.length as usize {
             continue;
         }
-        if crate::store::write_atomic(&target.path, bytes).is_ok()
-            && read_valid_chunk(target).is_some()
-        {
+        storage.replace_chunk_for_repair(target_manifest, target, bytes)?;
+        if read_valid_chunk(target).is_some() {
             restored = restored.saturating_add(1);
         }
     }
     Ok(restored)
 }
 
+fn collect_local_repair_sources(
+    storage: &StorageBackend,
+    manifest: &StoredManifest,
+    required: &BTreeSet<[u8; 32]>,
+    inspected: &mut usize,
+    sources: &mut BTreeMap<[u8; 32], (String, Vec<u8>)>,
+) -> Result<(), NativeRepairExecutionErrorV1> {
+    for index in 0..manifest.chunk_count() {
+        *inspected = (*inspected)
+            .checked_add(1)
+            .ok_or(NativeRepairExecutionErrorV1::ResourceLimitExceeded)?;
+        if *inspected > NATIVE_REPAIR_MAX_SOURCE_CHUNKS_V1 {
+            return Err(NativeRepairExecutionErrorV1::ResourceLimitExceeded);
+        }
+        let Some(candidate) = manifest.chunk(index) else {
+            return Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask);
+        };
+        if !required.contains(&candidate.digest) || sources.contains_key(&candidate.digest) {
+            continue;
+        }
+        let Some(bytes) = read_valid_chunk(candidate) else {
+            continue;
+        };
+        let key = stable_local_path_key(storage.root_dir(), &candidate.path);
+        sources.insert(candidate.digest, (key, bytes));
+    }
+    Ok(())
+}
+
 fn restore_from_orchestrator(
+    storage: &StorageBackend,
     orchestrator: Option<&dyn RepairOrchestrator>,
     context: &NativeRepairExecutionContextV1,
     manifest: &StoredManifest,
     invalid: &[ChunkFileRecord],
-) -> usize {
+) -> Result<usize, NativeRepairExecutionErrorV1> {
     let Some(orchestrator) = orchestrator else {
-        return 0;
+        return Ok(0);
     };
-    let Ok(payloads) = orchestrator.rehydrate_missing_chunks(context, manifest, invalid) else {
-        return 0;
-    };
+    let payloads = orchestrator.rehydrate_missing_chunks(context, manifest, invalid)?;
     if payloads.len() > invalid.len() {
-        return 0;
+        return Ok(0);
     }
     let mut expected = BTreeMap::<[u8; 32], Vec<&ChunkFileRecord>>::new();
     for target in invalid {
         expected.entry(target.digest).or_default().push(target);
     }
+    validate_orchestrator_payload_budget(&payloads, NATIVE_REPAIR_MAX_TARGET_BYTES_V1)?;
     let mut seen = BTreeSet::new();
     let mut restored = 0_usize;
     for RepairChunkPayload { digest, bytes, .. } in payloads {
-        if !seen.insert(digest)
-            || blake3::hash(&bytes).as_bytes() != &digest
-            || !expected.contains_key(&digest)
+        let Some(targets) = expected.get(&digest) else {
+            continue;
+        };
+        if !targets
+            .iter()
+            .any(|target| bytes.len() == target.length as usize)
+            || !seen.insert(digest)
         {
             continue;
         }
-        for target in &expected[&digest] {
+        if blake3::hash(&bytes).as_bytes() != &digest {
+            continue;
+        }
+        for target in targets {
             if read_valid_chunk(target).is_some() || bytes.len() != target.length as usize {
                 continue;
             }
-            if crate::store::write_atomic(&target.path, &bytes).is_ok()
-                && read_valid_chunk(target).is_some()
-            {
+            storage.replace_chunk_for_repair(manifest, target, &bytes)?;
+            if read_valid_chunk(target).is_some() {
                 restored = restored.saturating_add(1);
             }
         }
     }
-    restored
+    Ok(restored)
+}
+
+fn validate_orchestrator_payload_budget(
+    payloads: &[RepairChunkPayload],
+    maximum_bytes: u64,
+) -> Result<(), NativeRepairExecutionErrorV1> {
+    let aggregate_bytes = payloads.iter().try_fold(0_u64, |total, payload| {
+        let length = u64::try_from(payload.bytes.len())
+            .map_err(|_| NativeRepairExecutionErrorV1::ResourceLimitExceeded)?;
+        total
+            .checked_add(length)
+            .ok_or(NativeRepairExecutionErrorV1::ResourceLimitExceeded)
+    })?;
+    if aggregate_bytes > maximum_bytes {
+        return Err(NativeRepairExecutionErrorV1::ResourceLimitExceeded);
+    }
+    Ok(())
 }
 
 fn stable_local_path_key(root: &Path, path: &Path) -> String {
@@ -591,6 +635,8 @@ fn terminal_evidence_hasher(
     let mut hasher = blake3::Hasher::new();
     hasher.update(TERMINAL_EVIDENCE_DIGEST_DOMAIN_V1);
     hash_bytes(&mut hasher, context.chain_id.as_str().as_bytes())?;
+    hash_u64(&mut hasher, context.finalized_cursor.height);
+    hasher.update(&context.finalized_cursor.block_hash);
     hasher.update(&context.task_id);
     hash_bytes(&mut hasher, context.ticket_id.as_bytes())?;
     hasher.update(&context.manifest_digest);
@@ -616,4 +662,135 @@ fn hash_bytes(
 
 fn hash_u64(hasher: &mut blake3::Hasher, value: u64) {
     hasher.update(&value.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use std::{fs, os::unix::fs::symlink};
+
+    use super::*;
+
+    fn evidence_context(chain_id: &str) -> NativeRepairExecutionContextV1 {
+        NativeRepairExecutionContextV1 {
+            chain_id: ChainId::from(chain_id),
+            finalized_cursor: RepairFinalizedCursorV1 {
+                height: 17,
+                block_hash: [0x44; 32],
+            },
+            task_id: [0x11; 32],
+            ticket_id: "REP-VECTOR-1".to_owned(),
+            manifest_digest: [0x22; 32],
+            provider_id: [0x33; 32],
+            lease_owner_account: "authority-vector".to_owned(),
+            task_revision: 7,
+            lease_generation: 9,
+        }
+    }
+
+    #[test]
+    fn terminal_evidence_domain_binding_matches_fixed_vector() {
+        let context = evidence_context("repair-vector-chain");
+        let digest = terminal_evidence_hasher(&context)
+            .expect("hash fixed terminal evidence context")
+            .finalize();
+
+        assert_eq!(
+            hex::encode(digest.as_bytes()),
+            "b29face3fad6431d740fd32f14613384b6ef0c7ccefa5d0f141aa9566a9144b2"
+        );
+
+        let foreign_chain = terminal_evidence_hasher(&evidence_context("foreign-repair-chain"))
+            .expect("hash foreign chain context")
+            .finalize();
+        assert_ne!(foreign_chain, digest);
+
+        let mut different_task = context.clone();
+        different_task.task_id[0] ^= 1;
+        assert_ne!(
+            terminal_evidence_hasher(&different_task)
+                .expect("hash different task context")
+                .finalize(),
+            digest
+        );
+
+        let mut different_block_hash = context.clone();
+        different_block_hash.finalized_cursor.block_hash[0] ^= 1;
+        assert_ne!(
+            terminal_evidence_hasher(&different_block_hash)
+                .expect("hash different finalized block context")
+                .finalize(),
+            digest
+        );
+
+        let mut different_height = context;
+        different_height.finalized_cursor.height += 1;
+        assert_ne!(
+            terminal_evidence_hasher(&different_height)
+                .expect("hash different finalized height context")
+                .finalize(),
+            digest
+        );
+    }
+
+    #[test]
+    fn orchestrator_payload_budget_counts_every_returned_byte() {
+        let payloads = vec![
+            RepairChunkPayload {
+                digest: [0x11; 32],
+                bytes: vec![0; 2],
+                source: None,
+            },
+            RepairChunkPayload {
+                digest: [0x22; 32],
+                bytes: vec![0; 2],
+                source: None,
+            },
+        ];
+
+        assert!(matches!(
+            validate_orchestrator_payload_budget(&payloads, 3),
+            Err(NativeRepairExecutionErrorV1::ResourceLimitExceeded)
+        ));
+        validate_orchestrator_payload_budget(&payloads, 4)
+            .expect("exact aggregate payload limit is accepted");
+    }
+
+    #[cfg(unix)]
+    fn chunk_record(path: &Path, bytes: &[u8]) -> ChunkFileRecord {
+        ChunkFileRecord {
+            path: path.to_path_buf(),
+            offset: 0,
+            length: u32::try_from(bytes.len()).expect("test chunk length fits u32"),
+            digest: *blake3::hash(bytes).as_bytes(),
+            role: None,
+            group_id: None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_repair_chunk_validation_rejects_symlink() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let bytes = b"native repair symlink rejection";
+        let target = temp.path().join("target.chunk");
+        let linked = temp.path().join("linked.chunk");
+        fs::write(&target, bytes).expect("write target");
+        symlink(&target, &linked).expect("create symlink");
+
+        assert!(read_valid_chunk(&chunk_record(&linked, bytes)).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_repair_chunk_validation_rejects_hardlink() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let bytes = b"native repair hardlink rejection";
+        let chunk = temp.path().join("chunk.bin");
+        let alias = temp.path().join("alias.bin");
+        fs::write(&chunk, bytes).expect("write chunk");
+        fs::hard_link(&chunk, &alias).expect("create hard link");
+
+        assert!(read_valid_chunk(&chunk_record(&chunk, bytes)).is_none());
+    }
 }

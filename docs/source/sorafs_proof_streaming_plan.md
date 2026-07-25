@@ -24,9 +24,9 @@ summary: Implemented PoR/PDP/PoTR streaming APIs, challenge-bound CLI requests, 
 > must supply its non-zero `challenge_id` and cannot choose a sample count or
 > seed. Proof failures use the exact-chain durable native repair-transaction
 > handoff and finalized-lease-gated storage execution. Promotion remains
-> blocked on removing the residual local repair manager/checkpoint consumers,
-> proving one cross-peer terminal outcome, and genuine multi-provider
-> deployment evidence.
+> blocked on proving one cross-peer terminal outcome and collecting genuine
+> multi-provider deployment evidence. The former local repair
+> manager/checkpoint authority and its GC/reconciliation consumers are deleted.
 
 ## API Concepts
 

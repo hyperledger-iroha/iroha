@@ -78,7 +78,7 @@ pub mod isi {
                 GovernanceParliamentBallotRecorded, GovernanceReferendumClosed,
                 GovernanceSlashReason,
             },
-            prelude::TriggerEvent,
+            prelude::{AccountEvent, AccountPermissionChanged, TriggerEvent},
             smart_contract::{
                 ContractCodeRegistered, ContractCodeRemoved, ContractInstanceActivated,
                 ContractInstanceDeactivated, SmartContractEvent,
@@ -151,7 +151,15 @@ pub mod isi {
     use super::*;
     use crate::{
         governance::draw::{self, derive_parliament_bodies},
-        smartcontracts::triggers::isi::register_trigger_internal,
+        smartcontracts::{
+            code::fetch_bound_contract_record,
+            isi::triggers::{
+                isi::register_trigger_internal,
+                set::{ExecutableRef, SetReadOnly as _},
+                specialized::LoadedActionTrait as _,
+                trigger_is_enabled,
+            },
+        },
         state::derive_validator_key_id,
         sumeragi::status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
@@ -478,18 +486,30 @@ pub mod isi {
                     .clone()
                     .unwrap_or_else(|| contract_subject.clone());
                 let action = iroha_data_model::trigger::action::Action::new(
-                    Executable::Ivm(IvmBytecode::from_compiled(callback_contract.code_bytes)),
+                    Executable::ContractCall(
+                        iroha_data_model::transaction::executable::ContractInvocation {
+                            contract_address: callback_contract.contract_address,
+                            expected_code_hash: callback_contract.code_hash,
+                            entrypoint: descriptor.callback.entrypoint.clone(),
+                            arguments: None,
+                        },
+                    ),
                     descriptor.repeats,
                     trigger_authority,
                     descriptor.filter.clone(),
                 )
                 .with_metadata(metadata);
                 let trigger = Trigger::new(descriptor.id.clone(), action);
-                // Contract lifecycle authority does not grant the right to
-                // schedule execution as an unrelated account. Reuse normal
-                // trigger-owner authorization so an explicit descriptor
-                // authority requires CanRegisterTrigger for that account.
-                register_trigger_internal(authority, state_transaction, trigger, false)?;
+                // The lifecycle path may register only a manifest trigger owned
+                // by this contract's exact derived subject. The subject account
+                // must already exist. Explicit unrelated authorities continue
+                // through normal CanRegisterTrigger authorization.
+                register_trigger_internal(
+                    authority,
+                    state_transaction,
+                    trigger,
+                    Some(contract_subject),
+                )?;
             }
         }
         Ok(())
@@ -2523,30 +2543,10 @@ pub mod isi {
                 "no eligible citizens available for proposal-time parliament sortition".into(),
             ));
         }
-        // Bodies are independently sampled, so readiness is determined by the
-        // largest required member roster—not the sum of all seven bodies. Cross-
-        // body service is allowed and JIT snapshots do not consume persisted
-        // `max_seats_per_epoch` counters.
-        let largest_body = [
-            state_transaction.gov.rules_committee_size,
-            state_transaction.gov.agenda_council_size,
-            state_transaction.gov.interest_panel_size,
-            state_transaction.gov.review_panel_size,
-            state_transaction.gov.policy_jury_size,
-            state_transaction.gov.oversight_committee_size,
-            state_transaction.gov.fma_committee_size,
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
-        if candidates.len() < largest_body {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "proposal-time parliament sortition requires at least {largest_body} eligible citizens"
-                )
-                .into(),
-            ));
-        }
+        // Bodies are independently sampled and each actual roster is capped by
+        // the number of eligible bonded citizens available at proposal time.
+        // Cross-body service is allowed and the immutable proposal snapshot
+        // records the exact smaller roster (and therefore its exact quorum).
         let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
             &state_transaction.gov,
             &state_transaction.chain_id,
@@ -5457,15 +5457,6 @@ pub mod isi {
                 "lock duration shorter than minimum".into(),
             ));
         }
-        if !has_permission(
-            &state_transaction.world,
-            authority,
-            "CanSubmitGovernanceBallot",
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanSubmitGovernanceBallot".into(),
-            ));
-        }
         Ok(())
     }
 
@@ -5487,7 +5478,7 @@ pub mod isi {
     fn ensure_plain_referendum_open(
         ballot: &gov::CastPlainBallot,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<crate::state::GovernanceReferendumRecord, Error> {
         let rid = ballot.referendum_id.clone();
         let now_h = state_transaction._curr_block.height().get();
         let Some(mut rr) = state_transaction
@@ -5551,7 +5542,56 @@ pub mod isi {
             ));
         }
 
-        if !matches!(rr.status, crate::state::GovernanceReferendumStatus::Open) {
+        let proposal = hex::decode(rid.trim_start_matches("0x"))
+            .ok()
+            .and_then(|bytes| {
+                if bytes.len() != 32 {
+                    return None;
+                }
+                let mut proposal_id = [0_u8; 32];
+                proposal_id.copy_from_slice(&bytes);
+                state_transaction
+                    .world
+                    .governance_proposals
+                    .get(&proposal_id)
+                    .cloned()
+            });
+        if let Some(proposal) = proposal {
+            if !matches!(rr.status, crate::state::GovernanceReferendumStatus::Open) {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: rid,
+                            reason: "Parliament has not opened the proposal-backed referendum"
+                                .into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proposal-backed referendum must be opened by Parliament before citizen voting"
+                        .into(),
+                ));
+            }
+            let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
+            let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
+            let approval_epoch = proposal.approval_epoch(fallback_epoch);
+            let approvals = state_transaction
+                .world
+                .governance_stage_approvals
+                .get(&ballot.referendum_id)
+                .cloned()
+                .unwrap_or_default();
+            if !parliament_approval_gate_met(&proposal.kind, &approvals, approval_epoch)
+                || required_parliament_bodies(&proposal.kind)
+                    .iter()
+                    .copied()
+                    .any(|body| approvals.rejection_quorum_met(body, approval_epoch))
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proposal-backed referendum has no exact Parliament approval gate".into(),
+                ));
+            }
+        } else if !matches!(rr.status, crate::state::GovernanceReferendumStatus::Open) {
             rr.status = crate::state::GovernanceReferendumStatus::Open;
             state_transaction
                 .world
@@ -5565,6 +5605,33 @@ pub mod isi {
                         h_end: rr.h_end,
                     },
                 ),
+            ));
+        }
+        Ok(rr)
+    }
+
+    fn ensure_plain_ballot_lock_covers_window(
+        ballot: &gov::CastPlainBallot,
+        referendum: crate::state::GovernanceReferendumRecord,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let expiry_height = state_transaction
+            ._curr_block
+            .height()
+            .get()
+            .checked_add(ballot.duration_blocks)
+            .ok_or_else(|| Error::from(MathError::Overflow))?;
+        if expiry_height < referendum.h_end {
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                        referendum_id: ballot.referendum_id.clone(),
+                        reason: "ballot lock expires before the referendum end height".into(),
+                    },
+                ),
+            ));
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ballot lock must remain active through the referendum end height".into(),
             ));
         }
         Ok(())
@@ -5706,7 +5773,8 @@ pub mod isi {
                 state_transaction.gov.max_conviction,
             )?;
             sweep_expired_plain_locks(&self, state_transaction);
-            ensure_plain_referendum_open(&self, state_transaction)?;
+            let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
+            ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
             apply_plain_ballot_lock(&self, authority, weight, state_transaction)?;
             Ok(())
         }
@@ -5856,10 +5924,24 @@ pub mod isi {
             ));
         }
 
-        let current_height = state_transaction._curr_block.height().get();
-        if current_height < expected_window.lower || current_height > expected_window.upper {
+        if referendum.status != crate::state::GovernanceReferendumStatus::Closed {
             return Err(InstructionExecutionError::InvariantViolation(
-                "governance enactment is outside the approved referendum window".into(),
+                "governance enactment requires a closed referendum".into(),
+            ));
+        }
+        let finalized_at_height = proposal
+            .finalization_evidence
+            .as_ref()
+            .map(|evidence| evidence.finalized_at_height)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "governance enactment requires finalized referendum evidence".into(),
+                )
+            })?;
+        let current_height = state_transaction._curr_block.height().get();
+        if current_height <= finalized_at_height {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance enactment must occur after referendum finalization".into(),
             ));
         }
 
@@ -6148,6 +6230,7 @@ pub mod isi {
                     .into(),
             ));
         }
+        validate_validation_fee_payout_lifecycle_runtime(payout_binding, state_transaction)?;
         let derived_lifecycle_seal =
             lifecycle_payload
                 .payout_binding
@@ -6261,11 +6344,11 @@ pub mod isi {
                     "validation-fee activation delay overflows the block-height domain".into(),
                 )
             })?;
-        if effective_from_height < minimum_effective_height {
+        if effective_from_height != minimum_effective_height {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     format!(
-                        "validation-fee policy effective height must be at least {minimum_effective_height}"
+                        "validation-fee policy effective height must equal {minimum_effective_height}"
                     )
                     .into(),
                 ),
@@ -6613,6 +6696,444 @@ pub mod isi {
         Ok(())
     }
 
+    fn permission_targets_trigger(permission: &Permission, trigger_id: &TriggerId) -> bool {
+        iroha_executor_data_model::permission::trigger::CanUnregisterTrigger::try_from(permission)
+            .is_ok_and(|token| &token.trigger == trigger_id)
+            || iroha_executor_data_model::permission::trigger::CanModifyTrigger::try_from(
+                permission,
+            )
+            .is_ok_and(|token| &token.trigger == trigger_id)
+            || iroha_executor_data_model::permission::trigger::CanExecuteTrigger::try_from(
+                permission,
+            )
+            .is_ok_and(|token| &token.trigger == trigger_id)
+            || iroha_executor_data_model::permission::trigger::CanModifyTriggerMetadata::try_from(
+                permission,
+            )
+            .is_ok_and(|token| &token.trigger == trigger_id)
+    }
+
+    fn require_sole_direct_validation_fee_runtime_permission_holder(
+        state_transaction: &StateTransaction<'_, '_>,
+        permission: &Permission,
+        required_holder: &AccountId,
+        selector_label: &str,
+    ) -> Result<(), Error> {
+        let direct_holders = state_transaction
+            .world
+            .account_permissions
+            .iter()
+            .filter_map(|(account_id, permissions)| {
+                permissions
+                    .iter()
+                    .any(|candidate| candidate == permission)
+                    .then_some(account_id)
+            })
+            .collect::<Vec<_>>();
+        if direct_holders.len() != 1 || direct_holders[0] != required_holder {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee payout lifecycle requires the bound subject to be the sole direct holder of {selector_label}"
+                )
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .roles
+            .iter()
+            .any(|(_, role)| role.permissions().any(|candidate| candidate == permission))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee payout lifecycle forbids role ownership of {selector_label}"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validation_fee_payout_effect_permission(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+    ) -> Permission {
+        iroha_executor_data_model::permission::asset::CanTransferAsset {
+            asset: AssetId::new(
+                binding.sbd_asset_id.clone(),
+                binding.treasury_account_id.clone(),
+            ),
+        }
+        .into()
+    }
+
+    fn require_absent_validation_fee_runtime_permission(
+        state_transaction: &StateTransaction<'_, '_>,
+        permission: &Permission,
+        permission_label: &str,
+    ) -> Result<(), Error> {
+        if state_transaction
+            .world
+            .account_permissions
+            .iter()
+            .any(|(_, permissions)| permissions.iter().any(|candidate| candidate == permission))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee payout lifecycle requires {permission_label} to be absent before enactment"
+                )
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .roles
+            .iter()
+            .any(|(_, role)| role.permissions().any(|candidate| candidate == permission))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee payout lifecycle forbids role ownership of {permission_label}"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn install_derived_validation_fee_runtime_permissions_with_validation<F>(
+        permissions: Vec<(Permission, AccountId, &'static str)>,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        validate_installed: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&StateTransaction<'_, '_>) -> Result<(), Error>,
+    {
+        for (permission, _, permission_label) in &permissions {
+            require_absent_validation_fee_runtime_permission(
+                state_transaction,
+                permission,
+                permission_label,
+            )?;
+        }
+        for (permission, required_holder, _) in &permissions {
+            state_transaction
+                .world
+                .add_account_permission(required_holder, permission.clone());
+        }
+        if let Err(error) = validate_installed(state_transaction) {
+            for (permission, required_holder, _) in &permissions {
+                state_transaction
+                    .world
+                    .remove_account_permission(required_holder, permission);
+                state_transaction.invalidate_permission_cache_for_account(required_holder);
+            }
+            return Err(error);
+        }
+
+        for (permission, required_holder, _) in permissions {
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::PermissionAdded(
+                    AccountPermissionChanged {
+                        account: required_holder.clone(),
+                        permission,
+                    },
+                )));
+            state_transaction.invalidate_permission_cache_for_account(&required_holder);
+        }
+        Ok(())
+    }
+
+    fn install_derived_validation_fee_runtime_permissions(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        state_transaction
+            .world
+            .account(&binding.treasury_account_id)
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle wrapper subject account does not exist".into(),
+                )
+            })?;
+        state_transaction
+            .world
+            .account(&binding.pool_vault_account_id)
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle pool subject account does not exist".into(),
+                )
+            })?;
+        let pool_contract_address = state_transaction
+            .world
+            .contract_subject_addresses
+            .get(&binding.pool_vault_account_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle pool vault must be an active contract subject"
+                        .into(),
+                )
+            })?;
+        let permissions = validation_fee_runtime_permissions(binding, &pool_contract_address);
+        install_derived_validation_fee_runtime_permissions_with_validation(
+            permissions,
+            state_transaction,
+            |state_transaction| {
+                validate_validation_fee_payout_lifecycle_runtime(binding, state_transaction)
+            },
+        )?;
+        Ok(())
+    }
+
+    fn validation_fee_runtime_permissions(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        pool_contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Vec<(Permission, AccountId, &'static str)> {
+        vec![
+            (
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: binding.contract_address.clone(),
+                    entrypoint: binding.entrypoint.to_string(),
+                }
+                .into(),
+                binding.treasury_account_id.clone(),
+                "the wrapper payout selector",
+            ),
+            (
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: pool_contract_address.clone(),
+                    entrypoint: crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
+                }
+                .into(),
+                binding.treasury_account_id.clone(),
+                "the pool swap selector",
+            ),
+            (
+                validation_fee_payout_effect_permission(binding),
+                binding.pool_vault_account_id.clone(),
+                "the wrapper SBD asset transfer effect",
+            ),
+        ]
+    }
+
+    fn validate_validation_fee_payout_lifecycle_runtime(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_validation_fee_payout_lifecycle_runtime_with_effect(
+            binding,
+            state_transaction,
+            true,
+        )
+    }
+
+    fn validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_validation_fee_payout_lifecycle_runtime_with_effect(
+            binding,
+            state_transaction,
+            false,
+        )
+    }
+
+    fn validate_validation_fee_payout_lifecycle_runtime_with_effect(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        state_transaction: &StateTransaction<'_, '_>,
+        require_derived_permissions: bool,
+    ) -> Result<(), Error> {
+        let record = fetch_bound_contract_record(state_transaction, &binding.contract_address)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle requires an active immutable contract".into(),
+                )
+            })?;
+        if record.contract_address != binding.contract_address
+            || record.contract_subject != binding.treasury_account_id
+            || binding.contract_address.subject_id() != binding.treasury_account_id
+            || <[u8; 32]>::from(sha2::Sha256::digest(&record.code_bytes)) != binding.code_hash
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle contract code or subject differs from its typed binding"
+                    .into(),
+            ));
+        }
+        let entrypoints = record.manifest.entrypoints.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle contract has no manifest entrypoints".into(),
+            )
+        })?;
+        let matching_entrypoints = entrypoints
+            .iter()
+            .filter(|entrypoint| entrypoint.name == binding.entrypoint.as_ref())
+            .collect::<Vec<_>>();
+        if matching_entrypoints.len() != 1
+            || matching_entrypoints[0].kind
+                != iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
+            || !matching_entrypoints[0].params.is_empty()
+            || matching_entrypoints[0].argument_schema.is_some()
+            || matching_entrypoints[0].permission.as_deref()
+                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle requires one argument-free autonomous entrypoint protected by exact contract-selector authorization"
+                    .into(),
+            ));
+        }
+        if entrypoints.iter().any(|entrypoint| {
+            entrypoint.kind == iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen
+        }) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle contract must not expose kaizen/改善".into(),
+            ));
+        }
+        let active_code_hash = state_transaction
+            .world
+            .contract_instances
+            .get(&binding.contract_address)
+            .copied()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle contract is not active".into(),
+                )
+            })?;
+        let invocation_matches =
+            |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
+                invocation.contract_address == binding.contract_address
+                    && invocation.expected_code_hash == active_code_hash
+                    && invocation.entrypoint == binding.entrypoint.as_ref()
+                    && invocation.arguments.is_none()
+            };
+        let matching_triggers = state_transaction
+            .world
+            .triggers
+            .time_triggers()
+            .iter()
+            .filter(|(_, action)| {
+                match action.executable() {
+                    ExecutableRef::ContractCall(invocation) => invocation_matches(invocation),
+                    ExecutableRef::Batch(items) => items.iter().any(|item| {
+                        matches!(
+                            item,
+                            iroha_data_model::transaction::executable::ExecutableBatchItem::ContractCall(
+                                invocation
+                            ) if invocation_matches(invocation)
+                        )
+                    }),
+                    ExecutableRef::Ivm(_) | ExecutableRef::Instructions(_) => false,
+                }
+            })
+            .collect::<Vec<_>>();
+        if matching_triggers.len() != 1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle requires exactly one scheduled Time trigger"
+                    .into(),
+            ));
+        }
+        let (trigger_id, action) = matching_triggers[0];
+        if action.authority() != &binding.treasury_account_id
+            || !matches!(action.executable(), ExecutableRef::ContractCall(invocation) if invocation_matches(invocation))
+            || action.repeats != iroha_data_model::trigger::action::Repeats::Indefinitely
+            || action.retry_policy.is_some()
+            || !trigger_is_enabled(&action.metadata)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle trigger must be enabled, indefinite, and retry-free"
+                    .into(),
+            ));
+        }
+        let account_permission_exists =
+            state_transaction
+                .world
+                .account_permissions
+                .iter()
+                .any(|(_, permissions)| {
+                    permissions
+                        .iter()
+                        .any(|permission| permission_targets_trigger(permission, trigger_id))
+                });
+        let role_permission_exists = state_transaction.world.roles.iter().any(|(_, role)| {
+            role.permissions
+                .iter()
+                .any(|permission| permission_targets_trigger(permission, trigger_id))
+        });
+        if account_permission_exists || role_permission_exists {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle trigger permissions must not be delegated".into(),
+            ));
+        }
+
+        let pool_contract_address = state_transaction
+            .world
+            .contract_subject_addresses
+            .get(&binding.pool_vault_account_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle pool vault must be an active contract subject"
+                        .into(),
+                )
+            })?;
+        let pool_record = fetch_bound_contract_record(state_transaction, &pool_contract_address)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle requires an active pool contract".into(),
+                )
+            })?;
+        if pool_record.contract_subject != binding.pool_vault_account_id
+            || pool_contract_address.subject_id() != binding.pool_vault_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle pool contract subject differs from the bound vault"
+                    .into(),
+            ));
+        }
+        let pool_entrypoints = pool_record.manifest.entrypoints.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle pool contract has no manifest entrypoints".into(),
+            )
+        })?;
+        let matching_pool_entrypoints = pool_entrypoints
+            .iter()
+            .filter(|entrypoint| {
+                entrypoint.name == crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT
+            })
+            .collect::<Vec<_>>();
+        if matching_pool_entrypoints.len() != 1
+            || matching_pool_entrypoints[0].kind
+                != iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
+            || matching_pool_entrypoints[0].permission.as_deref()
+                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle requires one exact protected public pool swap selector"
+                    .into(),
+            ));
+        }
+
+        for (permission, required_holder, permission_label) in
+            validation_fee_runtime_permissions(binding, &pool_contract_address)
+        {
+            if require_derived_permissions {
+                require_sole_direct_validation_fee_runtime_permission_holder(
+                    state_transaction,
+                    &permission,
+                    &required_holder,
+                    permission_label,
+                )?;
+            } else {
+                require_absent_validation_fee_runtime_permission(
+                    state_transaction,
+                    &permission,
+                    permission_label,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     impl Execute for gov::EnactReferendum {
         fn execute(
             self,
@@ -6698,11 +7219,19 @@ pub mod isi {
                                 .into(),
                         ));
                     }
+                    validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+                        &payload.payout_binding,
+                        state_transaction,
+                    )?;
                     let enactment_height = state_transaction._curr_block.height().get();
                     let _ = validation_fee_parliament_authorization(
                         pid,
                         &proposal,
                         enactment_height,
+                        state_transaction,
+                    )?;
+                    install_derived_validation_fee_runtime_permissions(
+                        &payload.payout_binding,
                         state_transaction,
                     )?;
                 }
@@ -6761,6 +7290,16 @@ pub mod isi {
             if existing == Some(key) {
                 // idempotent when same
                 return Ok(());
+            }
+            if existing.is_some()
+                && crate::validation_fee::is_enacted_validation_fee_payout_contract(
+                    state_transaction,
+                    &contract_address,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this contract code".into(),
+                ));
             }
 
             if existing.is_some()
@@ -7166,6 +7705,14 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if crate::validation_fee::is_enacted_validation_fee_payout_contract(
+                state_transaction,
+                self.contract_address(),
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this contract instance".into(),
+                ));
+            }
             ensure_contract_binding_governance(
                 authority,
                 self.contract_address(),
@@ -7908,15 +8455,29 @@ pub mod isi {
                 }
             }
 
-            let mut approve: u128 = 0;
-            let mut reject: u128 = 0;
-            let mut abstain: u128 = 0;
             let now_h = state_transaction._curr_block.height().get();
-            if now_h < referendum.h_start || now_h > referendum.h_end {
+            if referendum.mode == crate::state::GovernanceReferendumMode::Plain
+                && now_h <= referendum.h_end
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "proposal-backed plain referendum cannot be finalized before its inclusive voting window ends"
+                        .into(),
+                ));
+            }
+            if referendum.mode == crate::state::GovernanceReferendumMode::Zk
+                && (now_h < referendum.h_start || now_h > referendum.h_end)
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "referendum finalization is outside the exact stored window".into(),
                 ));
             }
+            let tally_height = match referendum.mode {
+                crate::state::GovernanceReferendumMode::Plain => referendum.h_end,
+                crate::state::GovernanceReferendumMode::Zk => now_h,
+            };
+            let mut approve: u128 = 0;
+            let mut reject: u128 = 0;
+            let mut abstain: u128 = 0;
             match referendum.mode {
                 crate::state::GovernanceReferendumMode::Plain => {
                     if let Some(locks) = state_transaction
@@ -7927,7 +8488,7 @@ pub mod isi {
                         let step = state_transaction.gov.conviction_step_blocks.max(1);
                         let max_c = state_transaction.gov.max_conviction;
                         for rec in locks.locks.values() {
-                            if rec.expiry_height < now_h {
+                            if rec.expiry_height < tally_height {
                                 continue;
                             }
                             let weight =
@@ -7990,7 +8551,7 @@ pub mod isi {
             let evidence = GovernanceFinalizationEvidence {
                 proposal_id: self.proposal_id,
                 referendum_id: self.proposal_id,
-                finalized_at_height: now_h,
+                finalized_at_height: tally_height,
                 mode: match referendum.mode {
                     crate::state::GovernanceReferendumMode::Zk => gov::VotingMode::Zk,
                     crate::state::GovernanceReferendumMode::Plain => gov::VotingMode::Plain,
@@ -19855,6 +20416,22 @@ pub mod isi {
             let mut role = new_role.build(authority);
             role.ensure_permission_epochs(state_transaction.block_height());
 
+            if role.permissions().any(|permission| {
+                crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
+                    state_transaction,
+                    permission,
+                ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                    state_transaction,
+                    permission,
+                )
+                .is_some()
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
+                        .into(),
+                ));
+            }
+
             if state_transaction.world.roles.get(role.id()).is_some() {
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
@@ -19928,6 +20505,21 @@ pub mod isi {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
             let current_epoch = state_transaction.block_height();
+
+            if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &permission,
+            ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                state_transaction,
+                &permission,
+            )
+            .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
+                        .into(),
+                ));
+            }
 
             let Some(existing_role) = state_transaction.world.roles.get(&role_id) else {
                 return Err(FindError::Role(role_id).into());
@@ -20160,14 +20752,47 @@ pub mod isi {
                             if next.id()
                                 == &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id()
                             {
-                                let npos = iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(&next)
-                                    .ok_or_else(|| {
+                                let payload =
+                                    norito::json::from_str::<norito::json::Value>(
+                                        next.payload().get(),
+                                    )
+                                    .map_err(|error| {
                                         InstructionExecutionError::InvalidParameter(
-                                            InvalidParameterError::SmartContract(
-                                                "invalid signed NPoS parameter payload".to_owned(),
-                                            ),
+                                            InvalidParameterError::SmartContract(format!(
+                                                "invalid signed NPoS parameter payload: {error}"
+                                            )),
                                         )
                                     })?;
+                                // The typed decoder validates all reconfiguration bounds as one
+                                // group. Preflight explicit numeric zeroes so callers retain the
+                                // exact governed field diagnostic; typed decoding below still
+                                // rejects missing, unknown, or mistyped fields.
+                                for field in [
+                                    "finality_margin_blocks",
+                                    "evidence_horizon_blocks",
+                                    "activation_lag_blocks",
+                                    "slashing_delay_blocks",
+                                ] {
+                                    if payload.get(field).and_then(norito::json::Value::as_u64)
+                                        == Some(0)
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(format!(
+                                                "sumeragi.npos.reconfig.{field} must be greater than zero"
+                                            )),
+                                        ));
+                                    }
+                                }
+                                let npos = norito::json::value::from_value::<
+                                    iroha_data_model::parameter::system::SumeragiNposParameters,
+                                >(payload)
+                                .map_err(|error| {
+                                    InstructionExecutionError::InvalidParameter(
+                                        InvalidParameterError::SmartContract(format!(
+                                            "invalid signed NPoS parameter payload: {error}"
+                                        )),
+                                    )
+                                })?;
                                 npos.validate().map_err(|error| {
                                     InstructionExecutionError::InvalidParameter(
                                         InvalidParameterError::SmartContract(format!(
@@ -20370,6 +20995,14 @@ pub mod isi {
             );
             assert!(
                 super::ensure_validation_fee_policy_activation_delay(
+                    minimum.saturating_add(1),
+                    enacted_at_height,
+                )
+                .is_err(),
+                "late activation must not weaken the exact 120,960-block relation"
+            );
+            assert!(
+                super::ensure_validation_fee_policy_activation_delay(
                     u64::MAX,
                     u64::MAX
                         - iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS
@@ -20377,6 +21010,164 @@ pub mod isi {
                 )
                 .is_err()
             );
+        }
+
+        #[test]
+        fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role_holders() {
+            use iroha_data_model::permission::Permissions;
+            use iroha_executor_data_model::permission::asset::CanTransferAsset;
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let permission: Permission = CanTransferAsset {
+                asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
+            }
+            .into();
+
+            super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect("an absent effect permission is eligible for protected derivation");
+
+            stx.world
+                .account_permissions
+                .insert(BOB_ID.clone(), Permissions::from([permission.clone()]));
+            let direct_error = super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect_err("a caller-made direct effect grant must fail closed");
+            assert!(
+                format!("{direct_error:?}").contains("absent before enactment"),
+                "unexpected direct-holder error: {direct_error:?}"
+            );
+            stx.world.account_permissions.remove(BOB_ID.clone());
+
+            let role_id: RoleId = "validation_fee_effect_holder".parse().expect("role id");
+            let role = Role::new(role_id.clone(), ALICE_ID.clone())
+                .add_permission(permission.clone())
+                .build(&ALICE_ID);
+            stx.world.roles.insert(role_id, role);
+            let role_error = super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect_err("a role-owned effect grant must fail closed");
+            assert!(
+                format!("{role_error:?}").contains("forbids role ownership"),
+                "unexpected role-holder error: {role_error:?}"
+            );
+            assert!(
+                stx.world
+                    .account_permissions
+                    .iter()
+                    .all(|(_, permissions)| !permissions.contains(&permission)),
+                "a failed derivation preflight must leave no direct effect token"
+            );
+        }
+
+        #[test]
+        fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
+            use iroha_executor_data_model::permission::asset::CanTransferAsset;
+            use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
+            let effect_permission: Permission = CanTransferAsset {
+                asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
+            }
+            .into();
+            let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("canonical contract address");
+            let wrapper_permission: Permission = CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            }
+            .into();
+            let pool_permission: Permission = CanInvokeContractEntrypoint {
+                contract: contract_address,
+                entrypoint: "swap_exact_in_quote_public".to_owned(),
+            }
+            .into();
+            let permissions = vec![
+                (
+                    wrapper_permission.clone(),
+                    ALICE_ID.clone(),
+                    "the wrapper payout selector",
+                ),
+                (
+                    pool_permission.clone(),
+                    ALICE_ID.clone(),
+                    "the pool swap selector",
+                ),
+                (
+                    effect_permission.clone(),
+                    BOB_ID.clone(),
+                    "the wrapper SBD asset transfer effect",
+                ),
+            ];
+
+            let error = super::install_derived_validation_fee_runtime_permissions_with_validation(
+                permissions,
+                &mut stx,
+                |_| {
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "forced post-install topology failure".into(),
+                    ))
+                },
+            )
+            .expect_err("post-install validation failure must reject lifecycle derivation");
+            assert!(
+                format!("{error:?}").contains("forced post-install topology failure"),
+                "unexpected rollback error: {error:?}"
+            );
+            for permission in [wrapper_permission, pool_permission, effect_permission] {
+                assert!(
+                    stx.world
+                        .account_permissions
+                        .iter()
+                        .all(|(_, permissions)| !permissions.contains(&permission)),
+                    "failed post-install validation must roll back every derived permission"
+                );
+            }
         }
 
         fn fee_sponsor_revision_fixture(
@@ -20659,7 +21450,14 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset revision must fail");
-            assert!(stage_error.to_string().contains("requires global-balance"));
+            let is_restricted_asset_error = |error: &Error| {
+                matches!(
+                    error,
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                        if message.contains("requires global-balance")
+                )
+            };
+            assert!(is_restricted_asset_error(&stage_error));
             assert!(
                 stx.world
                     .fee_sponsor_program_revisions
@@ -20674,7 +21472,7 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset funding must fail");
-            assert!(fund_error.to_string().contains("requires global-balance"));
+            assert!(is_restricted_asset_error(&fund_error));
 
             let allocation_error = RegisterVerifiedFeeSponsorVaultAllocation {
                 program_id,
@@ -20694,11 +21492,7 @@ pub mod isi {
             }
             .execute(&authority, &mut stx)
             .expect_err("restricted fee asset allocation must fail");
-            assert!(
-                allocation_error
-                    .to_string()
-                    .contains("requires global-balance")
-            );
+            assert!(is_restricted_asset_error(&allocation_error));
         }
 
         #[test]
@@ -20779,7 +21573,11 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err(label);
                 assert!(
-                    error.to_string().contains(expected),
+                    matches!(
+                        &error,
+                        Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                            if message.contains(expected)
+                    ),
                     "unexpected {label} error: {error}"
                 );
                 assert!(
@@ -23983,15 +24781,20 @@ seiyaku GovernanceLifecycle {
                 }) if pending_code_hash == code_hash
             ));
             let trigger_id: TriggerId = "governance_wake".parse().expect("trigger id");
-            assert!(
-                transaction
-                    .world
-                    .triggers
-                    .time_triggers()
-                    .get(&trigger_id)
-                    .is_some(),
-                "governance binding must register exact manifest triggers"
-            );
+            let action = transaction
+                .world
+                .triggers
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("governance binding must register exact manifest triggers");
+            let invocation = match action.executable() {
+                ExecutableRef::ContractCall(invocation) => invocation,
+                _ => panic!("manifest trigger must retain a typed contract call"),
+            };
+            assert_eq!(invocation.contract_address, payload.contract_address);
+            assert_eq!(invocation.expected_code_hash, code_hash);
+            assert_eq!(invocation.entrypoint, "run");
+            assert!(invocation.arguments.is_none());
         }
 
         #[test]
@@ -28447,10 +29250,10 @@ seiyaku GovernanceLifecycle {
 
             seed_manifest_record(&mut stx, uaid, dataspace);
             seed_account_alias_manage_permissions(&mut stx, &ALICE_ID, &account_label);
-            seed_account_alias_lease_tx(&mut stx, &ALICE_ID, &account_label);
 
             let keypair = checked_keypair();
             let account_id = AccountId::new(keypair.public_key().clone());
+            seed_account_alias_lease_tx(&mut stx, &account_id, &account_label);
             Register::account(
                 new_account_in_domain(&account_id)
                     .with_label(Some(account_label.clone()))
@@ -30640,7 +31443,14 @@ seiyaku GovernanceLifecycle {
             let err = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("generic bridge proof must require an authoritative verifier");
-            assert!(format!("{err:?}").contains("authoritative on-chain verifier"));
+            assert!(
+                matches!(
+                    &err,
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                        if message.contains("already been recorded")
+                ),
+                "the seeded proof must fail at exact replay detection: {err:?}"
+            );
             assert!(
                 stx.bridge_receipt_proofs_available_in_tx
                     .contains(&proof_hash)

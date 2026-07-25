@@ -90,6 +90,31 @@ def test_native_governance_sdk_contract_requires_fail_closed_environment(
 
 
 @pytest.mark.parametrize(
+    "marker",
+    automation.JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
+)
+def test_java_governance_validator_uses_external_writable_gradle_state(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / automation.MOBILE_SDK_ARTIFACTS_WORKFLOW
+    source = workflow.read_text(encoding="utf-8")
+    start = source.index(automation.JAVA_GOVERNANCE_WORKFLOW_STEP_NAME)
+    end = source.index("name: Validate Android mobile SDK artifact", start)
+    section = source[start:end]
+    assert marker in section
+    drifted_section = section.replace(marker, "REMOVED_EXTERNAL_STATE", 1)
+    workflow.write_text(
+        source[:start] + drifted_section + source[end:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Governance DAG"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
     ("relative", "required_call", "unconditional_skip"),
     [
         (

@@ -54,6 +54,12 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
 )
 from iroha_torii_client.client import _decode_i105_string  # noqa: E402
 from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
+from iroha_torii_client.native_amx import (  # noqa: E402
+    compute_native_amx_descriptor_hash,
+    compute_native_amx_participant_settlement_hash,
+    compute_native_amx_proposal_hash,
+    compute_native_amx_validator_set_hash,
+)
 
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -61,6 +67,12 @@ CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
 CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID = "7EAD8EFYV3tk2BtyQaGhqhATjFy7"
 CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID = "7EAD8EFYUx1bhNP18PQmxXsySxi6"
+_NATIVE_AMX_VALIDATOR_SET = [
+    "ea013094D37A1FCA72E8734CAAD4163678D82C36FE2CA70B80F5626E6591709E0D44831BE86CBA9BD0471C6D0D73FF9C4B54E0",
+    "ea01309988FA1336476987EF7F91C3EA728B7EA0556698AA0F1A294147C8D5CD43BB24C4BCD14FAE23A384D721CBF1F6A16DF7",
+    "ea013099BA3FACE165941434D3238C4D5767059EBFFFB4120A9885A4EB2BAC9CD868F690660D2936B03C0214FBDAD36034D578",
+    "ea0130B921EAC90D1A99EC9DA3FF8C8A29EBEE19DD1B659A4C6FC21BC8046EA30DE566668EDCCEAE4CB5932F4F860606A1E0E3",
+]
 
 
 def _authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
@@ -397,6 +409,39 @@ def _nexus_fee_receipt_payload() -> Dict[str, Any]:
     }
 
 
+def _seal_native_amx_receipt_payload(receipt: Dict[str, Any]) -> Dict[str, Any]:
+    for leg in receipt["legs"]:
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["validator_set_hash"] = (
+            compute_native_amx_validator_set_hash(
+                descriptor["validator_set"]
+            )
+        )
+        descriptor["descriptor_hash"] = compute_native_amx_descriptor_hash(
+            descriptor
+        )
+        leg["participant_proposal"]["proposal_hash"] = (
+            compute_native_amx_proposal_hash(descriptor)
+        )
+        leg["participant_settlement_hash"] = (
+            compute_native_amx_participant_settlement_hash(
+                leg["participant_settlement"]
+            )
+        )
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["validator_set_hash"] = descriptor["validator_set_hash"]
+            qc["body"]["participant_validator_set_hash"] = descriptor[
+                "validator_set_hash"
+            ]
+            qc["body"]["participant_proposal_hash"] = leg[
+                "participant_proposal"
+            ]["proposal_hash"]
+            qc["body"]["participant_settlement_commitment"] = leg[
+                "participant_settlement_hash"
+            ]
+    return receipt
+
+
 def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
     transaction_hashes = [_canonical_hash(0x61), _canonical_hash(0x74)]
     source_ids = ["AB" * 32, "CD" * 32]
@@ -445,13 +490,13 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
             "body": body,
             "validator_set_hash_version": 1,
             "validator_set_hash": _canonical_hash(0x66),
-            "validator_set": ["validator-a", "validator-b", "validator-c", "validator-d"],
+            "validator_set": list(_NATIVE_AMX_VALIDATOR_SET),
             "validator_set_pops": [[1] * 96 for _ in range(4)],
             "signers_bitmap": [0x07],
             "bls_aggregate_signature": [2] * 96,
         }
 
-    return {
+    return _seal_native_amx_receipt_payload({
         "version": 2,
         "source_id": source_id,
         "chain_id_hash": _canonical_hash(0x63),
@@ -484,12 +529,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                         "accepted_transaction_hashes": transaction_hashes,
                         "validator_set_hash_version": 1,
                         "validator_set_hash": _canonical_hash(0x66),
-                        "validator_set": [
-                            "validator-a",
-                            "validator-b",
-                            "validator-c",
-                            "validator-d",
-                        ],
+                        "validator_set": list(_NATIVE_AMX_VALIDATOR_SET),
                         "validator_count": 4,
                         "min_quorum": 3,
                         "qc_mode_tag": "permissioned:native-amx-v2",
@@ -534,7 +574,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                 "commit_qc": qc("commit"),
             }
         ],
-    }
+    })
 
 
 def _native_amx_receipt_group() -> List[Dict[str, Any]]:
@@ -3937,6 +3977,7 @@ def test_get_sumeragi_diagnostics_accepts_first_native_amx_participant_block() -
         del descriptor["previous_lane_block_descriptor_hash"]
         descriptor["lane_block_height"] = 1
         leg["participant_settlement"]["block_height"] = 1
+        _seal_native_amx_receipt_payload(native)
     settlement["native_amx_receipts"] = native_group
     payload["lane_settlement_commitments"] = [settlement]
 
@@ -3960,6 +4001,7 @@ def test_get_sumeragi_diagnostics_accepts_mixed_role_proposal_without_current_en
     descriptor = leg["participant_proposal"]["descriptor"]
     descriptor["accepted_candidate_indices"] = [1]
     descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x74)]
+    _seal_native_amx_receipt_payload(native)
     settlement["native_amx_receipts"] = native_group
     payload["lane_settlement_commitments"] = [settlement]
 
@@ -3995,7 +4037,7 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift() -> None
     native_group[0]["legs"][0]["participant_settlement"]["receipts"].reverse()
     settlement["native_amx_receipts"] = native_group
     unordered_participant_sources["lane_settlement_commitments"] = [settlement]
-    with pytest.raises(RuntimeError, match="strictly ordered"):
+    with pytest.raises(RuntimeError, match="canonical commitment"):
         _get_sumeragi_diagnostics(unordered_participant_sources)
 
     oversized_outer_group = _sumeragi_diagnostics_payload()
@@ -4024,6 +4066,7 @@ def test_get_sumeragi_diagnostics_rejects_same_route_native_identity_drift() -> 
     leg["participant_settlement"]["lane_id"] = 2
     leg["participant_settlement"]["dataspace_id"] = 7
     leg["participant_settlement"]["lane_incarnation"] = _canonical_hash(0x51)
+    _seal_native_amx_receipt_payload(native_group[0])
     settlement["native_amx_receipts"] = native_group
     payload["lane_settlement_commitments"] = [settlement]
 
@@ -4056,14 +4099,14 @@ def test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set() ->
     payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
-    native["legs"][0]["prepare_qc"]["validator_set"][0:2] = [
-        "validator-b",
-        "validator-a",
-    ]
+    validators = native["legs"][0]["prepare_qc"]["validator_set"]
+    validators[0], validators[1] = validators[1], validators[0]
     settlement["native_amx_receipts"] = [native]
     payload["lane_settlement_commitments"] = [settlement]
 
-    with pytest.raises(RuntimeError, match="strictly ordered by validator id"):
+    with pytest.raises(
+        RuntimeError, match="strictly ordered by canonical validator id"
+    ):
         _get_sumeragi_diagnostics(payload)
 
 

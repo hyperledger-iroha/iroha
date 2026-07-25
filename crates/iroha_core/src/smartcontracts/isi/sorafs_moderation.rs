@@ -104,8 +104,15 @@ const APPEAL_PROOF_TOKEN_KEY_DOMAIN_V1: &[u8] =
 const PROOF_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-proof-payload.v1";
 const STATE_MAX_BYTES: usize = 512 * 1024;
 const PAYLOAD_MAX_BYTES: usize = 64 * 1024;
-const STATE_LIMITS: DecodeLimits =
-    DecodeLimits::new(256, STATE_MAX_BYTES, 4_096, 2 * STATE_MAX_BYTES, 64);
+// Persisted records embed canonical instruction payloads as byte sequences, so
+// their sequence limit must admit every payload accepted by `decode_payload`.
+const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
+    PAYLOAD_MAX_BYTES,
+    STATE_MAX_BYTES,
+    4_096,
+    2 * STATE_MAX_BYTES,
+    64,
+);
 const PAYLOAD_LIMITS: DecodeLimits =
     DecodeLimits::new(256, PAYLOAD_MAX_BYTES, 2_048, 2 * PAYLOAD_MAX_BYTES, 64);
 const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
@@ -3565,6 +3572,20 @@ fn query_moderation_snapshot(
 ) -> Result<ModerationFinalizedLedgerSnapshotV1, QueryExecutionFail> {
     let (max_cases, max_events) = checked_snapshot_limits(query)?;
     let finalized_cursor = resolve_finalized_cursor(state_ro)?;
+    let finalized_block = state_ro.latest_block().ok_or_else(|| {
+        QueryExecutionFail::Conversion(
+            "finalized moderation snapshot requires its exact Kura block".to_owned(),
+        )
+    })?;
+    let finalized_at_unix_ms = finalized_block.header().creation_time_ms;
+    if finalized_block.header().height().get() != finalized_cursor.height
+        || finalized_block.hash().as_ref() != &finalized_cursor.block_hash
+        || finalized_at_unix_ms == 0
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized moderation snapshot Kura block does not match its state anchor".to_owned(),
+        ));
+    }
     let world = state_ro.world();
     let mut budget = ModerationSnapshotReadBudget::default();
     charge_existing_snapshot_state(world, policy_key(), &mut budget).map_err(query_failure)?;
@@ -4142,6 +4163,7 @@ fn query_moderation_snapshot(
         version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
         finalized_height: finalized_cursor.height,
         finalized_block_hash: finalized_cursor.block_hash,
+        finalized_at_unix_ms,
         policy,
         status,
         appeals: appeal_views,
@@ -6683,6 +6705,13 @@ mod tests {
             .execute(&view)
             .expect("rebuild complete finalized moderation snapshot");
         assert_eq!(snapshot.finalized_height, 3);
+        assert_eq!(
+            snapshot.finalized_at_unix_ms,
+            view.latest_block()
+                .expect("exact finalized block")
+                .header()
+                .creation_time_ms
+        );
         assert_eq!(
             snapshot
                 .appeals

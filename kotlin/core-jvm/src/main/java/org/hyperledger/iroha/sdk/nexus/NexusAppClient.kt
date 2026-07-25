@@ -32,13 +32,20 @@ class NexusAppError(
 /** Static configuration for a SORA Nexus app facade instance. */
 data class NexusAppConfig @JvmOverloads constructor(
     @JvmField val chainId: String,
+    @JvmField val chainDiscriminant: Int,
     @JvmField val appId: String? = null,
     @JvmField val relayUrl: String? = null,
     @JvmField val node: String? = null,
     @JvmField val authority: String? = null,
     @JvmField val signingPublicKey: ByteArray? = null,
     @JvmField val appMetadata: Map<String, String> = emptyMap(),
-)
+) {
+    init {
+        require(chainDiscriminant in 0..0xffff) {
+            "chainDiscriminant must fit in u16"
+        }
+    }
+}
 
 /** App-role Connect registration options. */
 data class NexusConnectOptions @JvmOverloads constructor(
@@ -146,7 +153,8 @@ interface NexusConnectTransport {
 class NexusAppClient @JvmOverloads constructor(
     private val config: NexusAppConfig,
     private val connectTransport: NexusConnectTransport? = null,
-    private val codecAdapter: NoritoCodecAdapter = NoritoJavaCodecAdapter(),
+    private val codecAdapter: NoritoCodecAdapter =
+        NoritoJavaCodecAdapter(config.chainDiscriminant),
     private val toriiClient: IrohaClient? = null,
 ) {
 

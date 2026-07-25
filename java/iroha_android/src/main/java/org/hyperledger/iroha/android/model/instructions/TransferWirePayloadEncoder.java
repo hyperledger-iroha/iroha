@@ -105,33 +105,45 @@ public final class TransferWirePayloadEncoder {
     return encoder.toByteArray();
   }
 
-  /** Decodes a bare {@code AccountId} payload produced by {@link #encodeAccountIdPayload}. */
-  public static String decodeAccountIdPayload(byte[] payload) {
-    return decodeAccountIdPayload(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+  /**
+   * Decodes a bare {@code AccountId} payload produced by {@link #encodeAccountIdPayload}.
+   *
+   * <p>Norito carries only the account controller, so callers must supply the target chain's I105
+   * discriminant instead of relying on the process-global address default.
+   */
+  public static String decodeAccountIdPayload(byte[] payload, int chainDiscriminant) {
+    return decodeAccountIdPayload(
+        payload, chainDiscriminant, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
   }
 
-  /** Decodes a bare {@code AccountId} payload with explicit Norito flags. */
-  public static String decodeAccountIdPayload(byte[] payload, int flags, int flagsHint) {
+  /** Decodes a bare {@code AccountId} payload with explicit chain and Norito flags. */
+  public static String decodeAccountIdPayload(
+      byte[] payload, int chainDiscriminant, int flags, int flagsHint) {
     Objects.requireNonNull(payload, "payload");
+    requireChainDiscriminant(chainDiscriminant);
     final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
     final AccountId accountId = new AccountIdAdapter().decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after AccountId payload");
     }
-    return accountId.renderI105();
+    return accountId.renderI105(chainDiscriminant);
   }
 
   /** Decodes a Norito-framed {@code TransferBox::Asset} payload. */
-  static DecodedAssetTransfer decodeAssetTransferPayload(byte[] wirePayload) {
+  public static DecodedAssetTransfer decodeAssetTransferPayload(
+      byte[] wirePayload, int chainDiscriminant) {
     Objects.requireNonNull(wirePayload, "wirePayload");
+    requireChainDiscriminant(chainDiscriminant);
     final TransferAssetPayload payload =
         NoritoCodec.decode(wirePayload, new TransferAssetPayloadAdapter(), SCHEMA_PATH);
     return new DecodedAssetTransfer(
-        payload.source().render(), payload.amount().render(), payload.destination().renderI105());
+        payload.source().render(chainDiscriminant),
+        payload.amount().render(),
+        payload.destination().renderI105(chainDiscriminant));
   }
 
   /** Decoded asset-transfer payload rendered as canonical SDK strings. */
-  static final class DecodedAssetTransfer {
+  public static final class DecodedAssetTransfer {
     private final String assetId;
     private final String amount;
     private final String destinationAccountId;
@@ -143,15 +155,15 @@ public final class TransferWirePayloadEncoder {
       this.destinationAccountId = destinationAccountId;
     }
 
-    String assetId() {
+    public String assetId() {
       return assetId;
     }
 
-    String amount() {
+    public String amount() {
       return amount;
     }
 
-    String destinationAccountId() {
+    public String destinationAccountId() {
       return destinationAccountId;
     }
   }
@@ -304,7 +316,7 @@ public final class TransferWirePayloadEncoder {
       return multisigPolicy;
     }
 
-    String renderI105() {
+    String renderI105(final int chainDiscriminant) {
       if (isSingle()) {
         final PublicKeyCodec.PublicKeyPayload decoded =
             PublicKeyCodec.decodeCompactPublicKeyPayload(publicKeyPayload());
@@ -318,14 +330,14 @@ public final class TransferWirePayloadEncoder {
         }
         try {
           return AccountAddress.fromAccount(decoded.keyBytes(), algorithm)
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+              .toI105(chainDiscriminant);
         } catch (AccountAddress.AccountAddressException ex) {
           throw new IllegalArgumentException("Invalid single-key AccountController payload", ex);
         }
       }
       try {
         return AccountAddress.fromMultisigPolicy(multisigPolicy())
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+            .toI105(chainDiscriminant);
       } catch (AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("Invalid multisig AccountController payload", ex);
       }
@@ -346,8 +358,8 @@ public final class TransferWirePayloadEncoder {
       return controller;
     }
 
-    String renderI105() {
-      return controller.renderI105();
+    String renderI105(final int chainDiscriminant) {
+      return controller.renderI105(chainDiscriminant);
     }
 
     static AccountId parse(String accountIdStr) {
@@ -426,12 +438,15 @@ public final class TransferWirePayloadEncoder {
       return scopePayload.clone();
     }
 
-    String render() {
+    String render(final int chainDiscriminant) {
       final String accountId =
           account == null
               ? decodeAccountIdPayload(
-                  encodedAccountPayload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
-              : account.renderI105();
+                  encodedAccountPayload,
+                  chainDiscriminant,
+                  NoritoCodec.DEFAULT_FLAGS,
+                  NoritoHeader.MINOR_VERSION)
+              : account.renderI105(chainDiscriminant);
       final String definitionAddress =
           AssetDefinitionIdEncoder.encodeFromBytes(definition.definitionBytes());
       final AssetBalanceScopePayload scope = decodeAssetBalanceScopePayload(scopePayload);
@@ -1142,6 +1157,13 @@ public final class TransferWirePayloadEncoder {
       throw new IllegalArgumentException(fieldName + " too large");
     }
     return (int) length;
+  }
+
+  private static int requireChainDiscriminant(final int value) {
+    if (value < 0 || value > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    return value;
   }
 
   private static byte[] decodeFixedByteArray(

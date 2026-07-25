@@ -28,7 +28,9 @@ final class KagemushaQRStreamTests: XCTestCase {
 
     func testEveryFrameRoundTripsForEveryPeerPayloadAndReassemblesOutOfOrder() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project().request
+        let request = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
@@ -48,7 +50,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             let frames = try frameTexts.map(KagemushaQRStreamCodec.decodeFrameText)
             XCTAssertEqual(frames.map(text), frameTexts, "\(payload.kind)")
 
-            let decoder = KagemushaQRStreamDecoder()
+            let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
             var result: KagemushaQRDecodeResult?
             do {
                 for (offset, frame) in frames.reversed().enumerated() {
@@ -82,7 +84,7 @@ final class KagemushaQRStreamTests: XCTestCase {
         XCTAssertGreaterThan(frames.count, 3)
         XCTAssertTrue(frames.allSatisfy { $0.hasPrefix("PKKQ1.") })
 
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         var result: KagemushaQRDecodeResult?
         for frame in frames.reversed() {
             result = try decoder.ingest(frame)
@@ -103,7 +105,7 @@ final class KagemushaQRStreamTests: XCTestCase {
         )
         let decoded = try frames.map(KagemushaQRStreamCodec.decodeFrameText)
         let missing = try XCTUnwrap(decoded.first { $0.kind == .data && $0.index == 1 })
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         var result: KagemushaQRDecodeResult?
         for (text, frame) in zip(frames, decoded) where frame != missing {
             result = try decoder.ingest(text)
@@ -121,7 +123,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             options: KagemushaQRStreamOptions(chunkSize: 64, parityGroup: 4)
         )
         let decoded = try frames.map(KagemushaQRStreamCodec.decodeFrameText)
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         var result: KagemushaQRDecodeResult?
         for (text, frame) in zip(frames, decoded)
             where !(frame.kind == .data && (frame.index == 0 || frame.index == 1)) {
@@ -138,7 +140,7 @@ final class KagemushaQRStreamTests: XCTestCase {
         let second = try KagemushaQRStreamCodec.encode(.receiveRequest(
             KagemushaPeerTransportTestFixtures.receiveRequest(seed: 0x61)
         ))
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         _ = try decoder.ingest(first[0])
         XCTAssertThrowsError(try decoder.ingest(second[0])) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .wrongStream)
@@ -164,7 +166,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: original.total,
             payload: bytes
         )
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         _ = try decoder.ingest(originalText)
         XCTAssertThrowsError(try decoder.ingest(text(conflicting))) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .conflictingFrame)
@@ -177,7 +179,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: original.total + 1,
             payload: original.payload
         )
-        let totalDecoder = KagemushaQRStreamDecoder()
+        let totalDecoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         _ = try totalDecoder.ingest(originalText)
         XCTAssertThrowsError(try totalDecoder.ingest(text(conflictingTotal))) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .conflictingFrame)
@@ -192,11 +194,11 @@ final class KagemushaQRStreamTests: XCTestCase {
         var bytes = try XCTUnwrap(KagemushaPeerTextCodec.base64URLDecode(body))
         bytes[bytes.count - 5] ^= 1
         let corrupt = "PKKQ1." + KagemushaPeerTextCodec.base64URLEncode(bytes)
-        XCTAssertThrowsError(try KagemushaQRStreamDecoder().ingest(corrupt)) { error in
+        XCTAssertThrowsError(try KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1).ingest(corrupt)) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .checksumMismatch)
         }
         for invalid in [frameText + "=", " " + frameText, frameText + "\n", "pkkq1." + body] {
-            XCTAssertThrowsError(try KagemushaQRStreamDecoder().ingest(invalid), invalid)
+            XCTAssertThrowsError(try KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1).ingest(invalid), invalid)
         }
     }
 
@@ -218,7 +220,7 @@ final class KagemushaQRStreamTests: XCTestCase {
                 payload: frame.kind == .header ? headerPayload : frame.payload
             )
         }
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         XCTAssertThrowsError(try forged.reduce(nil as KagemushaQRDecodeResult?) { _, frame in
             try decoder.ingest(text(frame))
         }) { error in
@@ -242,7 +244,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: 1,
             payload: forgedKindPayload
         )
-        let kindDecoder = KagemushaQRStreamDecoder()
+        let kindDecoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         var kindError: Error?
         do {
             for frame in decoded {
@@ -261,7 +263,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: 1,
             payload: invalidBounds
         )
-        XCTAssertThrowsError(try KagemushaQRStreamDecoder().ingest(text(badHeader))) { error in
+        XCTAssertThrowsError(try KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1).ingest(text(badHeader))) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .invalidHeader)
         }
     }
@@ -284,7 +286,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             try KagemushaPeerTransportTestFixtures.receiveRequest(seed: 0x61)
         )
         let secondFrames = try KagemushaQRStreamCodec.encode(secondPayload)
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
 
         XCTAssertThrowsError(try decoder.ingest(text(invalidHeader))) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .invalidHeader)
@@ -311,7 +313,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: original.total,
             payload: original.payload.dropLast()
         )
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         _ = try decoder.ingest(text(header))
 
         XCTAssertThrowsError(try decoder.ingest(text(wrongLength))) { error in
@@ -341,7 +343,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: original.total,
             payload: forgedPayload
         )
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         _ = try decoder.ingest(text(header))
         _ = try decoder.ingest(text(original))
         XCTAssertThrowsError(try decoder.ingest(text(conflict))) { error in
@@ -373,7 +375,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             oversized.utf8.count,
             KagemushaQRStreamCodec.maximumFrameTextBytes + 1
         )
-        XCTAssertThrowsError(try KagemushaQRStreamDecoder().ingest(oversized)) { error in
+        XCTAssertThrowsError(try KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1).ingest(oversized)) { error in
             XCTAssertEqual(error as? KagemushaQRStreamError, .nonCanonicalFrame)
         }
 
@@ -399,7 +401,7 @@ final class KagemushaQRStreamTests: XCTestCase {
             total: Int(UInt16.max),
             payload: dataFrame.payload
         )
-        let decoder = KagemushaQRStreamDecoder()
+        let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
 
         XCTAssertNoThrow(try decoder.ingest(text(maximumRepresentableTotal)))
         decoder.reset()

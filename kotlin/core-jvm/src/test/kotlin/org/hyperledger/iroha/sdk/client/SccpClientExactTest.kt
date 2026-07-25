@@ -18,6 +18,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -63,8 +64,9 @@ class SccpClientExactTest {
             "/v1/bridge/messages",
         )
 
-        val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
+        val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
+                chainId = TAIRA_CHAIN_ID,
                 authority = authority,
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
@@ -73,8 +75,9 @@ class SccpClientExactTest {
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
         val gasBoundTransaction = Base64.getEncoder().encodeToString(
-            NoritoJavaCodecAdapter().encodeTransaction(
+            NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
+                    chainId = TAIRA_CHAIN_ID,
                     authority = authority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -167,6 +170,90 @@ class SccpClientExactTest {
         )
         assertFailsWith<CompletionException> {
             strictTransport.submitSccpDestinationProof(proof).join()
+        }
+    }
+
+    @Test
+    fun signedSubmitPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity() {
+        val selector =
+            "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+        val program = FeeSponsorProgramId.parse(selector)
+        val expectedFeePayment = FeePaymentIntent.sponsor(
+            programId = program,
+            programRevision = 1,
+            chargeLimits = emptyList(),
+            gasLimit = 9,
+        )
+        val codec = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+        val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
+
+        fun transactionBytes(feePayment: FeePaymentIntent): ByteArray =
+            codec.encodeTransaction(
+                TransactionPayload(
+                    chainId = TAIRA_CHAIN_ID,
+                    authority = authority,
+                    creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
+                    feePayment = feePayment,
+                ),
+            )
+
+        fun signedRequest(feePayment: FeePaymentIntent): SccpDestinationProofSubmitRequest =
+            SccpDestinationProofSubmitRequest(
+                authority = authority,
+                destinationProofB64 = canonicalArtifact(),
+                feePayment = expectedFeePayment,
+                signatureB64 = signature,
+                transactionPayloadB64 = Base64.getEncoder()
+                    .encodeToString(transactionBytes(feePayment)),
+                creationTimeMs = 7,
+            )
+
+        val encoded = transactionBytes(expectedFeePayment)
+        val decoded = codec.decodeTransaction(encoded)
+        val decodedSponsor = decoded.feePayment as FeePaymentIntent.Sponsor
+        assertEquals(
+            SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            AccountAddress.detectI105Discriminant(decodedSponsor.programId.sponsor),
+        )
+        assertTrue(codec.encodeTransaction(decoded).contentEquals(encoded))
+        assertEquals(selector, program.literal())
+
+        val request = signedRequest(expectedFeePayment)
+        assertEquals(selector, (request.feePayment as FeePaymentIntent.Sponsor).programId.literal())
+        SccpNativeMessageSubmitRequest(
+            authority = authority,
+            nativeProofB64 = canonicalNativeArtifact(),
+            feePayment = expectedFeePayment,
+            signatureB64 = signature,
+            transactionPayloadB64 = Base64.getEncoder().encodeToString(encoded),
+            creationTimeMs = 7,
+        )
+
+        val mutations = listOf(
+            FeePaymentIntent.sponsor(
+                FeeSponsorProgramId(otherAuthority, "cbsi_web"),
+                1,
+                emptyList(),
+                9,
+            ),
+            FeePaymentIntent.sponsor(
+                FeeSponsorProgramId(program.sponsor, "cbsi_fx"),
+                1,
+                emptyList(),
+                9,
+            ),
+            FeePaymentIntent.sponsor(program, 2, emptyList(), 9),
+            FeePaymentIntent.sponsor(program, 1, emptyList(), 10),
+            FeePaymentIntent.authority(emptyList(), 9),
+        )
+        for (mutation in mutations) {
+            assertFailsWith<IllegalArgumentException> {
+                signedRequest(mutation)
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeeSponsorProgramId(program.sponsor, "cbsi_e\u0301")
         }
     }
 
@@ -280,8 +367,9 @@ class SccpClientExactTest {
 
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
         val transaction = Base64.getEncoder().encodeToString(
-            NoritoJavaCodecAdapter().encodeTransaction(
+            NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
+                    chainId = TAIRA_CHAIN_ID,
                     authority = authority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -369,8 +457,9 @@ class SccpClientExactTest {
             destinationRequest(authority, encoded, signatureB64 = "AQ==")
         }
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
-        val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
+        val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
+                chainId = TAIRA_CHAIN_ID,
                 authority = authority,
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
@@ -412,8 +501,9 @@ class SccpClientExactTest {
             )
         }
         val wrongAuthorityTransaction = Base64.getEncoder().encodeToString(
-            NoritoJavaCodecAdapter().encodeTransaction(
+            NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
+                    chainId = TAIRA_CHAIN_ID,
                     authority = otherAuthority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -1353,8 +1443,10 @@ class SccpClientExactTest {
 
     @Test
     fun detachedSigningResponseAcceptsBothClosedBackendsAndRejectsCrossFamilyLabels() {
-        val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
+        val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
+                chainId = TAIRA_CHAIN_ID,
+                authority = authority,
                 creationTimeMs = 10,
                 executable = Executable.instructions(emptyList()),
                 feePayment = FeePaymentIntent.authority(emptyList()),
@@ -2026,11 +2118,12 @@ class SccpClientExactTest {
     }
 
     private companion object {
+        const val TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "553B2E9D6165A499853AC061D91678A2C41DE8F660EA0E8DBA0BFF19618D5DAD"
+            "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1"
         const val TRON_ROUTE_CONFIG_HASH =
-            "C09C131C9C76D46A5A49F21C1BD8128D2958E46528EDC9FBBDA10B8ABCF97BD6"
+            "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

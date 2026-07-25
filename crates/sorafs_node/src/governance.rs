@@ -27,20 +27,20 @@ use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
     GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
     GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
-    GovernanceExternalPayloadV1, GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1,
-    GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
-    ModerationLedgerCyclePublicationV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
-    SettlementReceiptV1, SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
+    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SettlementReceiptV1,
+    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
-    repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
+    repair::GcAuditEventV1,
 };
 
 use crate::{
     GovernancePublishError, GovernancePublisher, PdpGovernanceArchiveV1, PdpRejectionReasonV1,
-    PdpTerminalDecisionV1, RepairSlashStage,
+    PdpTerminalDecisionV1,
 };
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -161,20 +161,8 @@ impl FilesystemGovernancePublisher {
         self.orderbook_root().join("settlement-receipts")
     }
 
-    fn repairs_root(&self) -> PathBuf {
-        self.root.join("repairs")
-    }
-
     fn pdp_archive_root(&self) -> PathBuf {
         self.root.join("pdp").join("archives")
-    }
-
-    fn repair_audit_root(&self) -> PathBuf {
-        self.repairs_root().join("audit")
-    }
-
-    fn repair_slash_root(&self) -> PathBuf {
-        self.repairs_root().join("slash")
     }
 
     fn gc_audit_root(&self) -> PathBuf {
@@ -268,29 +256,6 @@ impl FilesystemGovernancePublisher {
         let digest_prefix = &digest_hex[..16];
         let base = format!("{:020}_{}_{}", settlement.settled_at, status, digest_prefix);
         self.settlements_root().join(deal_hex).join(base)
-    }
-
-    fn repair_audit_path(&self, event: &RepairAuditEventV1, digest_hex: &str) -> PathBuf {
-        let sequence = format!("{:020}", event.header.sequence);
-        let status = repair_status_label(event.payload.status);
-        let ticket = sanitize_label(event.payload.ticket_id.0.as_str());
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{sequence}_{status}_{ticket}_{digest_prefix}");
-        self.repair_audit_root().join(base)
-    }
-
-    fn repair_slash_path(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        stage: RepairSlashStage,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let submitted = format!("{:020}", proposal.submitted_at_unix);
-        let ticket = sanitize_label(proposal.ticket_id.0.as_str());
-        let stage_label = stage.as_str();
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{submitted}_{stage_label}_{ticket}_{digest_prefix}");
-        self.repair_slash_root().join(base)
     }
 
     fn gc_audit_path(&self, event: &GcAuditEventV1, digest_hex: &str) -> PathBuf {
@@ -595,17 +560,6 @@ fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
         PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::StorageUnavailable) => {
             "rejected_storage_unavailable"
         }
-    }
-}
-
-fn repair_status_label(status: RepairTaskStatusV1) -> &'static str {
-    match status {
-        RepairTaskStatusV1::Queued => "queued",
-        RepairTaskStatusV1::InProgress => "in_progress",
-        RepairTaskStatusV1::Verifying => "verifying",
-        RepairTaskStatusV1::Completed => "completed",
-        RepairTaskStatusV1::Failed => "failed",
-        RepairTaskStatusV1::Escalated => "escalated",
     }
 }
 
@@ -2795,223 +2749,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         result
     }
 
-    fn publish_repair_audit_event(
-        &self,
-        event: &RepairAuditEventV1,
-        encoded: &[u8],
-    ) -> Result<(), GovernancePublishError> {
-        let result = (|| -> Result<(), GovernancePublishError> {
-            let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(event, encoded, "repair audit event")?;
-            event.validate().map_err(|err| {
-                GovernancePublishError::other(format!("invalid repair audit event: {err}"))
-            })?;
-            let digest = blake3::hash(encoded);
-            let digest_hex = digest.to_hex().to_string();
-            let base_path = self.repair_audit_path(event, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&encoded_path, encoded)?;
-            write_digest_sidecar(&encoded_path, encoded)?;
-
-            let mut payload = JsonMap::new();
-            payload.insert(
-                "event".into(),
-                json::to_value(event).map_err(|err| {
-                    GovernancePublishError::other(format!("serialize audit event: {err}"))
-                })?,
-            );
-
-            let mut metadata = JsonMap::new();
-            metadata.insert(
-                "ticket_id".into(),
-                JsonValue::from(event.payload.ticket_id.0.clone()),
-            );
-            metadata.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(event.payload.manifest_digest)),
-            );
-            metadata.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(event.payload.provider_id)),
-            );
-            metadata.insert(
-                "status".into(),
-                JsonValue::from(repair_status_label(event.payload.status)),
-            );
-            metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
-            metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
-            payload.insert("metadata".into(), JsonValue::Object(metadata));
-
-            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-                GovernancePublishError::other(format!("serialize repair audit json: {err}"))
-            })?;
-
-            let json_path = base_path.with_extension("json");
-            write_atomic(&json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&json_path, json_body.as_bytes())?;
-            let mut labels = JsonMap::new();
-            labels.insert(
-                "ticket_id".into(),
-                JsonValue::from(event.payload.ticket_id.0.clone()),
-            );
-            labels.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(event.payload.manifest_digest)),
-            );
-            labels.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(event.payload.provider_id)),
-            );
-            labels.insert(
-                "status".into(),
-                JsonValue::from(repair_status_label(event.payload.status)),
-            );
-            labels.insert("sequence".into(), JsonValue::from(event.header.sequence));
-            labels.insert(
-                "occurred_at_unix".into(),
-                JsonValue::from(event.header.occurred_at_unix),
-            );
-            self.record_publish_index(
-                "repair_audit",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
-            let external = GovernanceExternalPayloadV1::from_repair_audit(event, encoded)
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            self.record_runtime_signed_payload(
-                "repair_audit",
-                GovernanceLogPayloadV1::ExternalPayload(external),
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-            )?;
-
-            Ok(())
-        })();
-        record_governance_dag_publish_result("repair_audit", &result, encoded.len());
-        result
-    }
-
-    fn publish_repair_slash_proposal(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        encoded: &[u8],
-        stage: RepairSlashStage,
-    ) -> Result<(), GovernancePublishError> {
-        let result = (|| -> Result<(), GovernancePublishError> {
-            let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(proposal, encoded, "repair slash proposal")?;
-            proposal.validate().map_err(|err| {
-                GovernancePublishError::other(format!("invalid repair slash proposal: {err}"))
-            })?;
-            if proposal.approval.is_some() {
-                return Err(GovernancePublishError::other(
-                    "repair slash proposal must not embed an approval summary",
-                ));
-            }
-            let digest = blake3::hash(encoded);
-            let digest_hex = digest.to_hex().to_string();
-            let base_path = self.repair_slash_path(proposal, stage, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&encoded_path, encoded)?;
-            write_digest_sidecar(&encoded_path, encoded)?;
-
-            let mut payload = JsonMap::new();
-            payload.insert(
-                "proposal".into(),
-                json::to_value(proposal).map_err(|err| {
-                    GovernancePublishError::other(format!("serialize slash proposal: {err}"))
-                })?,
-            );
-
-            let mut metadata = JsonMap::new();
-            metadata.insert(
-                "ticket_id".into(),
-                JsonValue::from(proposal.ticket_id.0.clone()),
-            );
-            metadata.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(proposal.manifest_digest)),
-            );
-            metadata.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(proposal.provider_id)),
-            );
-            metadata.insert("stage".into(), JsonValue::from(stage.as_str()));
-            metadata.insert("outcome".into(), JsonValue::from(stage.as_str()));
-            metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
-            metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
-            payload.insert("metadata".into(), JsonValue::Object(metadata));
-
-            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-                GovernancePublishError::other(format!("serialize slash proposal json: {err}"))
-            })?;
-
-            let json_path = base_path.with_extension("json");
-            write_atomic(&json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&json_path, json_body.as_bytes())?;
-            let mut labels = JsonMap::new();
-            labels.insert(
-                "ticket_id".into(),
-                JsonValue::from(proposal.ticket_id.0.clone()),
-            );
-            labels.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(proposal.manifest_digest)),
-            );
-            labels.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(proposal.provider_id)),
-            );
-            labels.insert("stage".into(), JsonValue::from(stage.as_str()));
-            labels.insert(
-                "submitted_at_unix".into(),
-                JsonValue::from(proposal.submitted_at_unix),
-            );
-            self.record_publish_index(
-                "repair_slash",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
-            let external_stage = match stage {
-                RepairSlashStage::Drafted => GovernanceExternalRepairSlashStageV1::Drafted,
-                RepairSlashStage::Submitted => GovernanceExternalRepairSlashStageV1::Submitted,
-            };
-            let external =
-                GovernanceExternalPayloadV1::from_repair_slash(proposal, external_stage, encoded)
-                    .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            self.record_runtime_signed_payload(
-                "repair_slash",
-                GovernanceLogPayloadV1::ExternalPayload(external),
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-            )?;
-
-            Ok(())
-        })();
-        record_governance_dag_publish_result("repair_slash", &result, encoded.len());
-        result
-    }
-
     fn publish_gc_audit_event(
         &self,
         event: &GcAuditEventV1,
@@ -4718,10 +4455,7 @@ mod tests {
     };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
-        GcAuditPayloadV1, REPAIR_AUDIT_EVENT_VERSION_V1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1,
-        RepairEscalationApprovalV1, RepairTaskEventV1, RepairTaskStatusV1, RepairTicketId,
-        SorafsAuditHeaderV1, gc_audit_payload_digest_v1, repair_audit_payload_digest_v1,
+        GcAuditPayloadV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     };
     use sorafs_manifest::{BYTES_PER_GIB, PorReportIsoWeek};
     use sorafs_manifest::{
@@ -5317,79 +5051,6 @@ mod tests {
         assert!(
             !temp.path().join("settlements").exists(),
             "semantic validation must fail before any governance artifact is written"
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_rejects_tampered_audit_binding_before_writes() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let payload = RepairTaskEventV1 {
-            version: REPAIR_TASK_EVENT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-TAMPERED-AUDIT".into()),
-            manifest_digest: [0x21; 32],
-            provider_id: [0x22; 32],
-            status: RepairTaskStatusV1::Queued,
-            occurred_at_unix: 1_700_000_111,
-            actor: None,
-            message: None,
-        };
-        let mut event = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header: SorafsAuditHeaderV1 {
-                sequence: 1,
-                occurred_at_unix: payload.occurred_at_unix,
-                signer: sorafs_manifest::repair::REPAIR_AUDIT_DEFAULT_SIGNER_V1.into(),
-                payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
-            },
-            payload,
-        };
-        event.header.payload_digest[0] ^= 0x80;
-        let encoded = norito::to_bytes(&event).expect("encode tampered audit event");
-
-        let error = publisher
-            .publish_repair_audit_event(&event, &encoded)
-            .expect_err("tampered audit digest must fail");
-        assert!(error.to_string().contains("invalid repair audit event"));
-        assert!(
-            !temp.path().join("repairs").exists(),
-            "audit validation must fail before any governance artifact is written"
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_rejects_embedded_slash_approval_before_writes() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let proposal = RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: RepairTicketId("REP-EMBEDDED-APPROVAL".into()),
-            provider_id: [0x11; 32],
-            manifest_digest: [0x22; 32],
-            auditor_account: "auditor-1".into(),
-            proposed_penalty: xor("0.00005"),
-            submitted_at_unix: 1_700_000_222,
-            rationale: "missed SLA".into(),
-            approval: Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes: 3,
-                reject_votes: 0,
-                abstain_votes: 0,
-                approved_at_unix: 1_700_000_223,
-                finalized_at_unix: 1_700_000_224,
-            }),
-        };
-        let encoded = norito::to_bytes(&proposal).expect("encode proposal");
-
-        let error = publisher
-            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Submitted)
-            .expect_err("embedded approval must not be publication authority");
-        assert!(error.to_string().contains("must not embed an approval"));
-        assert!(
-            !temp.path().join("repairs").exists(),
-            "approval rejection must happen before any governance artifact is written"
         );
     }
 
@@ -7052,149 +6713,6 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_repair_audit_files() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-
-        let payload = RepairTaskEventV1 {
-            version: REPAIR_TASK_EVENT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-901".into()),
-            manifest_digest: [0x21; 32],
-            provider_id: [0x22; 32],
-            status: RepairTaskStatusV1::Queued,
-            occurred_at_unix: 1_700_000_111,
-            actor: Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into()),
-            message: Some("queued".into()),
-        };
-        let header = SorafsAuditHeaderV1 {
-            sequence: 42,
-            occurred_at_unix: payload.occurred_at_unix,
-            signer: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
-        };
-        let event = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header,
-            payload,
-        };
-        let encoded = norito::to_bytes(&event).expect("encode repair audit event");
-
-        publisher
-            .publish_repair_audit_event(&event, &encoded)
-            .expect("publish repair audit");
-
-        let dir = temp.path().join("repairs").join("audit");
-        let entries = fs::read_dir(&dir)
-            .expect("directory exists")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
-
-        let json_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
-            .expect("json artefact present");
-        let json_bytes = fs::read(json_path).expect("read json");
-        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let manifest_hex = hex::encode(event.payload.manifest_digest);
-        let provider_hex = hex::encode(event.payload.provider_id);
-        let metadata = value
-            .get("metadata")
-            .and_then(JsonValue::as_object)
-            .expect("metadata");
-        let status = metadata
-            .get("status")
-            .and_then(JsonValue::as_str)
-            .expect("status");
-        let ticket_id = metadata
-            .get("ticket_id")
-            .and_then(JsonValue::as_str)
-            .expect("ticket_id");
-        let manifest = metadata
-            .get("manifest")
-            .and_then(JsonValue::as_str)
-            .expect("manifest");
-        let provider = metadata
-            .get("provider")
-            .and_then(JsonValue::as_str)
-            .expect("provider");
-        assert_eq!(status, "queued");
-        assert_eq!(ticket_id, event.payload.ticket_id.0.as_str());
-        assert_eq!(manifest, manifest_hex.as_str());
-        assert_eq!(provider, provider_hex.as_str());
-        assert_single_runtime_external(temp.path(), "repair_audit", &encoded);
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_repair_slash_files() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-
-        let proposal = RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: RepairTicketId("REP-902".into()),
-            provider_id: [0x11; 32],
-            manifest_digest: [0x22; 32],
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty: "0.00005".parse().expect("valid quantity"),
-            submitted_at_unix: 1_700_000_222,
-            rationale: "missed SLA".into(),
-            approval: None,
-        };
-        let encoded = norito::to_bytes(&proposal).expect("encode repair slash proposal");
-
-        publisher
-            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Drafted)
-            .expect("publish repair slash");
-
-        let dir = temp.path().join("repairs").join("slash");
-        let entries = fs::read_dir(&dir)
-            .expect("directory exists")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
-
-        let json_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
-            .expect("json artefact present");
-        let json_bytes = fs::read(json_path).expect("read json");
-        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let manifest_hex = hex::encode(proposal.manifest_digest);
-        let provider_hex = hex::encode(proposal.provider_id);
-        let metadata = value
-            .get("metadata")
-            .and_then(JsonValue::as_object)
-            .expect("metadata");
-        let stage = metadata
-            .get("stage")
-            .and_then(JsonValue::as_str)
-            .expect("stage");
-        let outcome = metadata
-            .get("outcome")
-            .and_then(JsonValue::as_str)
-            .expect("outcome");
-        let ticket_id = metadata
-            .get("ticket_id")
-            .and_then(JsonValue::as_str)
-            .expect("ticket_id");
-        let manifest = metadata
-            .get("manifest")
-            .and_then(JsonValue::as_str)
-            .expect("manifest");
-        let provider = metadata
-            .get("provider")
-            .and_then(JsonValue::as_str)
-            .expect("provider");
-        assert_eq!(stage, "drafted");
-        assert_eq!(outcome, "drafted");
-        assert_eq!(ticket_id, proposal.ticket_id.0.as_str());
-        assert_eq!(manifest, manifest_hex.as_str());
-        assert_eq!(provider, provider_hex.as_str());
-        assert_single_runtime_external(temp.path(), "repair_slash", &encoded);
     }
 
     #[test]

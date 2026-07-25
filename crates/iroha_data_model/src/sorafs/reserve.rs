@@ -33,6 +33,10 @@ pub const RESERVE_MAX_REASON_BYTES_V1: usize = 2_048;
 pub const RESERVE_MAX_PENDING_MOVEMENTS_V1: u32 = 256;
 /// Hard ceiling for open reserve appeals per provider.
 pub const RESERVE_MAX_OPEN_APPEALS_V1: u32 = 16;
+/// Consensus-visible first-release reserve-rent billing period (30 days).
+pub const RESERVE_RENT_BILLING_PERIOD_SECONDS_V1: u64 = 30 * 86_400;
+/// Maximum whole billing periods settled by one native rent instruction.
+pub const RESERVE_RENT_MAX_BILLING_PERIODS_V1: u16 = 12;
 /// Hard ceiling for one page of finalized reserve-ledger events.
 pub const RESERVE_QUERY_MAX_ITEMS_V1: u32 = 128;
 /// Hard ceiling for one encoded finalized reserve-ledger event page.
@@ -458,6 +462,16 @@ pub enum ReservePolicyError {
     /// Arithmetic overflow while computing the quote.
     #[error("reserve computation overflowed")]
     Overflow,
+    /// A finalized timestamp predates the authoritative rent-settlement anchor.
+    #[error(
+        "reserve rent timestamp {observed_at_unix} predates charged-through anchor {rent_charged_through_unix}"
+    )]
+    RentTimestampRollback {
+        /// Finalized block timestamp supplied to the computation.
+        observed_at_unix: u64,
+        /// Last fully settled rent boundary retained by the ledger.
+        rent_charged_through_unix: u64,
+    },
     /// Amount cannot be projected to the legacy micro-XOR adapter exactly.
     #[error("reserve amount has precision below one micro-XOR")]
     InexactAmountPrecision,
@@ -891,6 +905,8 @@ pub struct ReserveProviderAccountV1 {
     pub pending_movements: u32,
     /// Open appeal count.
     pub open_appeals: u32,
+    /// Last fully settled consensus rent boundary.
+    pub rent_charged_through_unix: u64,
     /// Last whole-day interest accrual anchor.
     pub interest_accrued_at_unix: u64,
     /// Block timestamp of the latest mutation.
@@ -898,6 +914,46 @@ pub struct ReserveProviderAccountV1 {
 }
 
 impl ReserveProviderAccountV1 {
+    /// Return the number of whole rent periods due at a finalized block time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReservePolicyError::RentTimestampRollback`] when the
+    /// finalized block time predates the authoritative rent anchor.
+    pub fn rent_periods_due_at(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<u64, ReservePolicyError> {
+        let elapsed = observed_at_unix
+            .checked_sub(self.rent_charged_through_unix)
+            .ok_or(ReservePolicyError::RentTimestampRollback {
+                observed_at_unix,
+                rent_charged_through_unix: self.rent_charged_through_unix,
+            })?;
+        Ok(elapsed / RESERVE_RENT_BILLING_PERIOD_SECONDS_V1)
+    }
+
+    /// Return deterministic whole days since the first unsettled rent boundary.
+    ///
+    /// The exact boundary is day zero. Values beyond the native lifecycle
+    /// representation saturate at [`u16::MAX`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a finalized timestamp rollback or anchor overflow.
+    pub fn rent_days_past_due_at(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<u16, ReservePolicyError> {
+        self.rent_periods_due_at(observed_at_unix)?;
+        let first_unsettled_boundary = self
+            .rent_charged_through_unix
+            .checked_add(RESERVE_RENT_BILLING_PERIOD_SECONDS_V1)
+            .ok_or(ReservePolicyError::Overflow)?;
+        let elapsed_overdue = observed_at_unix.saturating_sub(first_unsettled_boundary);
+        Ok(u16::try_from(elapsed_overdue / 86_400).unwrap_or(u16::MAX))
+    }
+
     /// Return principal plus accrued interest.
     ///
     /// # Errors
@@ -1610,9 +1666,59 @@ mod tests {
             days_past_due: 0,
             pending_movements: 0,
             open_appeals: 0,
+            rent_charged_through_unix: 86_400,
             interest_accrued_at_unix: 86_400,
             updated_at_unix: 86_400,
         }
+    }
+
+    #[test]
+    fn rent_due_periods_use_only_the_consensus_anchor_and_reject_time_rollback() {
+        let account = reserve_account();
+        assert_eq!(
+            account
+                .rent_periods_due_at(account.rent_charged_through_unix)
+                .expect("anchor is current"),
+            0
+        );
+        assert_eq!(
+            account
+                .rent_periods_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 / 2,
+                )
+                .expect("one whole period is due"),
+            1
+        );
+        assert_eq!(
+            account
+                .rent_days_past_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
+                )
+                .expect("the exact rent boundary is valid"),
+            0
+        );
+        assert_eq!(
+            account
+                .rent_days_past_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1
+                        + 15 * 86_400,
+                )
+                .expect("whole overdue days are deterministic"),
+            15
+        );
+        assert_eq!(
+            account
+                .rent_periods_due_at(account.rent_charged_through_unix - 1)
+                .expect_err("a finalized timestamp cannot roll the rent anchor back"),
+            ReservePolicyError::RentTimestampRollback {
+                observed_at_unix: account.rent_charged_through_unix - 1,
+                rent_charged_through_unix: account.rent_charged_through_unix,
+            }
+        );
     }
 
     #[test]

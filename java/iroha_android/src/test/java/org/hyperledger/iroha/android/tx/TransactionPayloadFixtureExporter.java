@@ -48,7 +48,7 @@ public final class TransactionPayloadFixtureExporter {
     @SuppressWarnings("unchecked")
     final List<Object> entries = (List<Object>) parsed;
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final Ed25519PrivateKeyParameters privateKey =
         new Ed25519PrivateKeyParameters(hexToBytes(SIGNING_SEED_HEX), 0);
     final byte[] publicKey = privateKey.generatePublicKey().getEncoded();

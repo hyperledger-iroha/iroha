@@ -524,10 +524,10 @@ pub mod test_utils;
 pub use gov::{
     AtWindowDto, CouncilDeriveVrfRequest, EnactDto, GovernedContractResponse, LocksGetResponse,
     ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse,
-    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_council_current,
-    handle_gov_enact, handle_gov_get_locks, handle_gov_get_proposal, handle_gov_get_referendum,
-    handle_gov_get_tally, handle_gov_protected_get, handle_gov_protected_set,
-    handle_gov_unlock_stats,
+    handle_gov_capabilities, handle_gov_citizen_draft, handle_gov_citizen_status,
+    handle_gov_contract_get, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
+    handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
+    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
 #[cfg(all(feature = "app_api", feature = "gov_vrf"))]
 pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
@@ -2083,6 +2083,10 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_repair_transaction_signer: Option<Arc<dyn SoraFsRepairTransactionSigner>>,
     #[cfg(feature = "app_api")]
+    sorafs_reserve_transaction_signer: Option<Arc<dyn SoraFsReserveTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
+    #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator:
         Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
     #[cfg(feature = "app_api")]
@@ -3513,10 +3517,15 @@ async fn enforce_preauth(
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, response::IntoResponse};
 
-    let remote_ip = req
+    let transport_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    // `inject_remote_addr_header` runs before this middleware and replaces any
+    // untrusted caller-supplied value with the accepted transport address.
+    // Use that normalized client address so trusted reverse-proxy traffic does
+    // not collapse into a single pre-auth bucket keyed by the proxy itself.
+    let remote_ip = limits::effective_remote_ip(req.headers(), transport_ip);
     let scheme = ConnScheme::from_request(&req);
     match app.acquire_preauth(remote_ip, scheme).await {
         Ok(guard) => {
@@ -3620,6 +3629,107 @@ mod preauth_connection_lifetime_tests {
             }],
         }));
         app
+    }
+
+    fn app_with_per_ip_cap() -> SharedAppState {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.trusted_proxy_nets = Arc::new(limits::parse_cidrs(&["127.0.0.0/8".to_owned()]));
+        state.preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
+            max_total: None,
+            max_per_ip: Some(1),
+            rate_per_ip: None,
+            burst_per_ip: None,
+            ban_duration: None,
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        }));
+        app
+    }
+
+    fn per_ip_preauth_router(app: SharedAppState) -> Router {
+        Router::new()
+            .route("/hold", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app,
+                inject_remote_addr_header,
+            ))
+    }
+
+    fn request_with_remote(transport_ip: &str, forwarded_ip: &str) -> Request<Body> {
+        use axum::extract::ConnectInfo;
+
+        let mut request = Request::builder()
+            .uri("/hold")
+            .header(limits::REMOTE_ADDR_HEADER, forwarded_ip)
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::new(
+                transport_ip.parse().expect("transport IP"),
+                12_345,
+            )));
+        request
+    }
+
+    #[tokio::test]
+    async fn preauth_uses_distinct_client_buckets_behind_trusted_proxy() {
+        let router = per_ip_preauth_router(app_with_per_ip_cap());
+
+        let first = router
+            .clone()
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
+            .await
+            .expect("first proxied response");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = router
+            .clone()
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.11"))
+            .await
+            .expect("second proxied response");
+        assert_eq!(
+            second.status(),
+            StatusCode::OK,
+            "distinct trusted-proxy clients must not share the loopback bucket"
+        );
+
+        let same_client = router
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
+            .await
+            .expect("same-client response");
+        assert_eq!(same_client.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        drop((first, second, same_client));
+    }
+
+    #[tokio::test]
+    async fn preauth_rejects_untrusted_forwarded_ip_spoofing() {
+        let router = per_ip_preauth_router(app_with_per_ip_cap());
+
+        let first = router
+            .clone()
+            .oneshot(request_with_remote("198.51.100.10", "203.0.113.10"))
+            .await
+            .expect("first untrusted response");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let spoofed = router
+            .oneshot(request_with_remote("198.51.100.10", "203.0.113.11"))
+            .await
+            .expect("spoofed response");
+        assert_eq!(
+            spoofed.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "an untrusted peer must not evade its bucket by changing the forwarded IP"
+        );
+
+        drop((first, spoofed));
     }
 
     const TEST_ONBOARDING_TOKEN: &str = "torii-hbl-onboarding-test-token-32-bytes";
@@ -9688,14 +9798,7 @@ async fn handler_gov_enact(
 ) -> Result<JsonBody<crate::gov::EnactResponse>, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/enact").await?;
-    crate::gov::handle_gov_enact(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
+    crate::gov::handle_gov_enact(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -9768,6 +9871,24 @@ async fn handler_gov_citizen_count(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
     crate::gov::handle_gov_citizen_count(app.state.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_capabilities(
+    State(app): State<SharedAppState>,
+) -> Result<JsonBody<crate::gov::GovernanceCapabilitiesV1>, Error> {
+    crate::gov::handle_gov_capabilities(app.state.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_citizen_draft(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::CitizenDraftRequestV1>,
+) -> Result<JsonBody<crate::gov::CitizenDraftResponseV1>, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/citizens/draft").await?;
+    crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -22606,6 +22727,18 @@ fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_candidate_launch_delay(
+    queue_plan_synced: bool,
+    hedge_delay: Duration,
+    candidate_index: usize,
+) -> Duration {
+    if queue_plan_synced || candidate_index == 0 {
+        return Duration::ZERO;
+    }
+    hedge_delay.saturating_mul(u32::try_from(candidate_index).unwrap_or(u32::MAX))
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
     let now = Instant::now();
     let mut completed = app.torii_proxy_completed.lock().await;
@@ -29671,6 +29804,16 @@ const QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2: usize = 128;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2: usize = 512;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_SYNCED_POLL_DIVISOR: u32 = 4;
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_SYNCED_CARRIER_WAIT_CADENCES: u32 = 4;
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL: Duration = Duration::from_millis(250);
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_SYNCED_MIN_CARRIER_WAIT: Duration = Duration::from_secs(2);
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2: norito::DecodeLimits =
     norito::DecodeLimits::new(
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
@@ -30167,9 +30310,32 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static 
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_synced_runtime_timing(block_cadence: Duration) -> (Duration, Duration) {
+    let maximum_carrier_wait = DEFAULT_ROUTE_TIMEOUT.saturating_sub(
+        DEFAULT_ROUTE_TIMEOUT
+            .checked_div(QUEUE_PLAN_SYNCED_POLL_DIVISOR)
+            .unwrap_or(Duration::ZERO),
+    );
+    let poll_interval = block_cadence
+        .checked_div(QUEUE_PLAN_SYNCED_POLL_DIVISOR)
+        .unwrap_or(QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL)
+        .clamp(
+            QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL,
+            QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL,
+        );
+    let carrier_wait = block_cadence
+        .saturating_mul(QUEUE_PLAN_SYNCED_CARRIER_WAIT_CADENCES)
+        .clamp(QUEUE_PLAN_SYNCED_MIN_CARRIER_WAIT, maximum_carrier_wait);
+    (poll_interval, carrier_wait)
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV4) -> Duration {
     match request {
-        ToriiProxyRequestKindV4::SubmitTransaction { .. } => Duration::from_secs(10),
+        ToriiProxyRequestKindV4::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+            ..
+        } => DEFAULT_ROUTE_TIMEOUT,
         ToriiProxyRequestKindV4::SignedQuery { .. }
         | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
         | ToriiProxyRequestKindV4::Read(_)
@@ -30807,11 +30973,11 @@ where
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
     let mut inflight = FuturesUnordered::new();
     for (index, peer_id) in candidate_peers.into_iter().enumerate() {
-        let launch_delay = if index == 0 {
-            Duration::ZERO
-        } else {
-            hedge_delay.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX))
-        };
+        // Strict admission needs a quorum of the exact, protocol-bounded coordinator roster.
+        // Launch that roster concurrently: a Byzantine prefix must not delay the first honest
+        // quorum by one hedge interval per candidate. Other proxy kinds retain staggered hedging.
+        let launch_delay =
+            torii_proxy_candidate_launch_delay(queue_plan_synced, hedge_delay, index);
         let request = request.clone();
         let response_fut = execute(peer_id.clone(), request);
         inflight.push(async move {
@@ -31174,14 +31340,8 @@ async fn persist_and_wait_for_queue_plan_admission(
         );
     }
 
-    let block_cadence = app.state.sumeragi_block_cadence();
-    let poll_interval = block_cadence
-        .checked_div(4)
-        .unwrap_or(Duration::from_millis(25))
-        .clamp(Duration::from_millis(25), Duration::from_millis(250));
-    let wait_budget = block_cadence
-        .saturating_mul(4)
-        .clamp(Duration::from_secs(2), Duration::from_secs(30));
+    let (poll_interval, wait_budget) =
+        queue_plan_synced_runtime_timing(app.state.sumeragi_block_cadence());
     match wait_for_exact_queue_plan_admission_registry(
         app.state.as_ref(),
         expected_binding,
@@ -49112,14 +49272,38 @@ fn fee_quote_routing_decision(
     app: &AppState,
     payload: &TransactionPayload,
 ) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
-    app.queue
-        .route_payload_with_state(payload, app.state.as_ref())
+    fee_quote_routing_decision_from_parts(app.queue.as_ref(), app.state.as_ref(), payload)
+}
+
+#[cfg(feature = "app_api")]
+fn fee_quote_routing_decision_from_parts(
+    queue: &Queue,
+    state: &CoreState,
+    payload: &TransactionPayload,
+) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
+    queue
+        .route_payload_with_state(payload, state)
         .map_err(|_| FeeRejectionCode::InvalidProgramConfiguration)
 }
 
 #[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment(
     app: &AppState,
+    payload: &TransactionPayload,
+) -> Result<iroha_data_model::transaction::FeePaymentIntent, Error> {
+    quote_internal_fee_payment_from_parts(
+        app.chain_id.as_ref(),
+        app.queue.as_ref(),
+        app.state.as_ref(),
+        payload,
+    )
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn quote_internal_fee_payment_from_parts(
+    chain_id: &ChainId,
+    queue: &Queue,
+    state: &CoreState,
     payload: &TransactionPayload,
 ) -> Result<iroha_data_model::transaction::FeePaymentIntent, Error> {
     let rejected = |code: FeeRejectionCode, reason: &str| {
@@ -49130,7 +49314,7 @@ pub(crate) fn quote_internal_fee_payment(
             )),
         ))
     };
-    if payload.chain != *app.chain_id
+    if payload.chain != *chain_id
         || payload.fee_payment.validate().is_err()
         || ["fee_sponsor", "gas_limit", "gas_asset_id"]
             .into_iter()
@@ -49141,18 +49325,18 @@ pub(crate) fn quote_internal_fee_payment(
             "payload chain, fee payment, or metadata is invalid",
         ));
     }
-    let route = fee_quote_routing_decision(app, payload)
+    let route = fee_quote_routing_decision_from_parts(queue, state, payload)
         .map_err(|code| rejected(code, "payload routing could not be resolved"))?;
-    let latest_header = app.state.latest_block_header_fast();
+    let latest_header = state.latest_block_header_fast();
     let ledger_time_ms = latest_header
         .as_ref()
         .map_or(0, |header| header.creation_time_ms);
     let next_block_height = latest_header
         .as_ref()
         .map_or(1, |header| header.height().get().saturating_add(1));
-    let nexus = app.state.nexus_snapshot();
-    let pipeline = app.state.pipeline_snapshot();
-    let world = app.state.world_view();
+    let nexus = state.nexus_snapshot();
+    let pipeline = state.pipeline_snapshot();
+    let world = state.world_view();
     iroha_core::executor::quote_nexus_fee_admission_draft(
         &world,
         &nexus,
@@ -51261,6 +51445,96 @@ impl SoraFsRepairTransactionSigner for KeyPair {
     }
 }
 
+/// Runtime-only signer used by the durable native SoraFS reserve/rent forwarder.
+///
+/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer
+/// receives only a fully constructed fee-quoted payload and has no access to
+/// Torii ingress or the durable outbox. The supervised worker first reconciles
+/// the retained operation against one finalized ledger view and requires this
+/// signer's authority to equal the exact governed or provider authority in
+/// that view.
+#[cfg(feature = "app_api")]
+pub trait SoraFsReserveTransactionSigner: Send + Sync {
+    /// Account bound to every reserve/rent transaction produced by this signer.
+    fn authority(&self) -> AccountId;
+
+    /// Sign the exact fee-quoted transaction payload.
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsReserveTransactionSigningError>;
+}
+
+/// Payload-free native reserve/rent transaction signing failure classification.
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraFsReserveTransactionSigningError {
+    /// The runtime signer or backing HSM is temporarily unavailable.
+    Unavailable,
+    /// The signer refused or could not sign the supplied payload.
+    Refused,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsReserveTransactionSigner for KeyPair {
+    fn authority(&self) -> AccountId {
+        AccountId::new(self.public_key().clone())
+    }
+
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsReserveTransactionSigningError> {
+        iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
+            .and_then(|builder| builder.try_sign(self.private_key()))
+            .map_err(|_| SoraFsReserveTransactionSigningError::Refused)
+    }
+}
+
+/// Runtime-only signer used by the durable native SoraFS orderbook forwarder.
+///
+/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer
+/// receives only a fully constructed fee-quoted payload and has no access to
+/// Torii ingress or the durable outbox. The supervised worker reconciles every
+/// retained operation against one finalized ledger view before signing.
+#[cfg(feature = "app_api")]
+pub trait SoraFsOrderbookTransactionSigner: Send + Sync {
+    /// Account bound to every orderbook transaction produced by this signer.
+    fn authority(&self) -> AccountId;
+
+    /// Sign the exact fee-quoted transaction payload.
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsOrderbookTransactionSigningError>;
+}
+
+/// Payload-free native orderbook transaction signing failure classification.
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraFsOrderbookTransactionSigningError {
+    /// The runtime signer or backing HSM is temporarily unavailable.
+    Unavailable,
+    /// The signer refused or could not sign the supplied payload.
+    Refused,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsOrderbookTransactionSigner for KeyPair {
+    fn authority(&self) -> AccountId {
+        AccountId::new(self.public_key().clone())
+    }
+
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsOrderbookTransactionSigningError> {
+        iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
+            .and_then(|builder| builder.try_sign(self.private_key()))
+            .map_err(|_| SoraFsOrderbookTransactionSigningError::Refused)
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -51388,6 +51662,10 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_repair_transaction_signer: Option<Arc<dyn SoraFsRepairTransactionSigner>>,
     #[cfg(feature = "app_api")]
+    sorafs_reserve_transaction_signer: Option<Arc<dyn SoraFsReserveTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
+    #[cfg(feature = "app_api")]
     sorafs_moderation_orchestrator:
         Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
     #[cfg(feature = "app_api")]
@@ -51448,8 +51726,18 @@ pub struct ToriiRuntimeDeps {
     #[cfg(feature = "app_api")]
     sorafs_repair_transaction_signer: Option<Arc<dyn SoraFsRepairTransactionSigner>>,
     #[cfg(feature = "app_api")]
-    sorafs_moderation_orchestrator:
-        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    sorafs_reserve_transaction_signer: Option<Arc<dyn SoraFsReserveTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_orderbook_transaction_signer: Option<Arc<dyn SoraFsOrderbookTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_transaction_signer:
+        Option<Arc<dyn sorafs::moderation_runtime::ModerationSignedTransactionSignerV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_settlement_handoff:
+        Option<Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_publication_handoff:
+        Option<Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>>,
     #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
@@ -51483,7 +51771,15 @@ impl ToriiRuntimeDeps {
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: None,
             #[cfg(feature = "app_api")]
-            sorafs_moderation_orchestrator: None,
+            sorafs_reserve_transaction_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_orderbook_transaction_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_transaction_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_settlement_handoff: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_publication_handoff: None,
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
@@ -51548,14 +51844,58 @@ impl ToriiRuntimeDeps {
         self
     }
 
-    /// Attach the finalized-chain SoraFS moderation transaction orchestrator.
+    /// Attach the runtime-only signer used for native SoraFS reserve/rent transactions.
     #[cfg(feature = "app_api")]
     #[must_use]
-    pub fn with_sorafs_moderation_orchestrator(
+    pub fn with_sorafs_reserve_transaction_signer(
         mut self,
-        runtime: Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>,
+        signer: Arc<dyn SoraFsReserveTransactionSigner>,
     ) -> Self {
-        self.sorafs_moderation_orchestrator = Some(runtime);
+        self.sorafs_reserve_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only signer used for native SoraFS orderbook transactions.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_orderbook_transaction_signer(
+        mut self,
+        signer: Arc<dyn SoraFsOrderbookTransactionSigner>,
+    ) -> Self {
+        self.sorafs_orderbook_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the runtime-only HSM service for exact Torii-built moderation payloads.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_transaction_signer(
+        mut self,
+        signer: Arc<dyn sorafs::moderation_runtime::ModerationSignedTransactionSignerV1>,
+    ) -> Self {
+        self.sorafs_moderation_transaction_signer = Some(signer);
+        self
+    }
+
+    /// Attach the durable appeal-finance boundary for finalized moderation outcomes.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_settlement_handoff(
+        mut self,
+        boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
+    ) -> Self {
+        self.sorafs_moderation_settlement_handoff = Some(boundary);
+        self
+    }
+
+    /// Attach the durable governance/transparency boundary for moderation outcomes.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_publication_handoff(
+        mut self,
+        boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
+    ) -> Self {
+        self.sorafs_moderation_publication_handoff = Some(boundary);
         self
     }
 
@@ -52754,6 +53094,22 @@ impl Torii {
         catalog_get(sorafs::api::handle_get_sorafs_moderation_ballot_no_show_plan),
     );
         builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_eligibility),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_SORTITION_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_sortition),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_assignment_accept),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ACTIVATE_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_activate),
+        );
+        builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_COMMITS_POST,
             catalog_post(sorafs::api::handle_post_sorafs_moderation_ballot_commit),
         );
@@ -52812,10 +53168,6 @@ impl Torii {
         builder.route(
         &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
         catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_handoff),
-    );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_BALLOT_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_moderation_quarantine_appeal_ballot),
     );
         builder.route(
         &route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
@@ -54552,6 +54904,8 @@ impl Torii {
             mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
             mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
             mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_get!(GOV_CAPABILITIES, handler_gov_capabilities);
+            mount_post!(GOV_CITIZEN_DRAFT, handler_gov_citizen_draft);
             mount_post!(
                 VALIDATION_FEE_CURRENT_POLICY_PROOF,
                 validation_fee_api::handler_current_policy_proof
@@ -54709,6 +55063,7 @@ impl Torii {
     ) -> Self {
         let runtime_deps = runtime_deps.into();
         let telemetry = runtime_deps.telemetry.clone();
+        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let soracloud_hf_config = runtime_deps.soracloud_hf_config.clone().unwrap_or_default();
         #[cfg(feature = "app_api")]
@@ -54719,8 +55074,20 @@ impl Torii {
         let shared_sorafs_repair_transaction_signer =
             runtime_deps.sorafs_repair_transaction_signer.clone();
         #[cfg(feature = "app_api")]
-        let shared_sorafs_moderation_orchestrator =
-            runtime_deps.sorafs_moderation_orchestrator.clone();
+        let shared_sorafs_reserve_transaction_signer =
+            runtime_deps.sorafs_reserve_transaction_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_orderbook_transaction_signer =
+            runtime_deps.sorafs_orderbook_transaction_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_transaction_signer =
+            runtime_deps.sorafs_moderation_transaction_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_settlement_handoff =
+            runtime_deps.sorafs_moderation_settlement_handoff.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_publication_handoff =
+            runtime_deps.sorafs_moderation_publication_handoff.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
         #[cfg(feature = "app_api")]
@@ -55088,10 +55455,7 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_node = {
             let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
-            let repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
-                &config.sorafs_repair,
-                &state.gov.sorafs_repair_escalation,
-            );
+            let repair_config = sorafs_node::config::RepairConfig::from(&config.sorafs_repair);
             let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
             let privacy_cycle_prf_required = storage_config.privacy_aggregate_schedule().is_some()
                 && storage_config.privacy_aggregate_policy().is_some_and(
@@ -55201,11 +55565,18 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_moderation_orchestrator = match (
             config.sorafs_storage.moderation_orchestrator.as_ref(),
-            shared_sorafs_moderation_orchestrator,
+            shared_sorafs_moderation_transaction_signer,
+            shared_sorafs_moderation_settlement_handoff,
+            shared_sorafs_moderation_publication_handoff,
         ) {
-            (None, None) => None,
-            (Some(config), Some(runtime)) => {
-                let expected =
+            (None, None, None, None) => None,
+            (
+                Some(config),
+                Some(transaction_signer),
+                Some(settlement_handoff),
+                Some(publication_handoff),
+            ) => {
+                let orchestrator_config =
                     sorafs_node::moderation_orchestrator::ModerationOrchestratorConfigV1 {
                         checkpoint_path: config.checkpoint_path.clone(),
                         max_cases: config.max_cases,
@@ -55216,21 +55587,71 @@ impl Torii {
                         max_submit_attempts: config.max_submit_attempts,
                         checkpoint_max_bytes: config.checkpoint_max_bytes.0,
                     };
-                assert_eq!(
-                    runtime.config(),
-                    &expected,
-                    "injected SoraFS moderation orchestrator does not match torii.sorafs.storage.moderation_orchestrator"
+                let adapter_chain_id = Arc::new(chain_id.clone());
+                let fee_quoter = Arc::new(
+                    sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
+                        Arc::clone(&adapter_chain_id),
+                        Arc::clone(&queue),
+                        Arc::clone(&state),
+                    ),
                 );
-                Some(runtime)
+                let ingress = Arc::new(
+                    sorafs::moderation_runtime::ToriiModerationStrictTransactionIngressV1::new(
+                        Arc::clone(&adapter_chain_id),
+                        Arc::clone(&queue),
+                        Arc::clone(&state),
+                        telemetry.clone(),
+                        Arc::clone(&pipeline_status_cache),
+                    ),
+                );
+                let submitter = Arc::new(
+                    sorafs::moderation_runtime::ModerationTransactionSubmitterAdapterV1::new(
+                        adapter_chain_id.as_ref().clone(),
+                        transaction_signer,
+                        fee_quoter,
+                        ingress,
+                    ),
+                );
+                let snapshot_reader = Arc::new(
+                    sorafs::moderation_runtime::ModerationStateSnapshotReaderV1::new(Arc::clone(
+                        &state,
+                    )),
+                );
+                let settlement_sink = Arc::new(
+                    sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::settlement(
+                        settlement_handoff,
+                    ),
+                );
+                let publication_sink = Arc::new(
+                    sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::publication(
+                        publication_handoff,
+                    ),
+                );
+                let deps =
+                    sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
+                        submitter,
+                        snapshot_reader,
+                        settlement_sink,
+                        publication_sink,
+                    };
+                let runtime =
+                    sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
+                        orchestrator_config,
+                        deps,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("failed to initialise SoraFS moderation orchestrator: {error}")
+                    });
+                Some(Arc::new(runtime))
             }
-            (Some(_), None) => {
+            (Some(_), _, _, _) => {
                 panic!(
-                    "torii.sorafs.storage.moderation_orchestrator is enabled but runtime-only transaction, finalized-reader, and terminal-sink dependencies were not injected"
+                    "torii.sorafs.storage.moderation_orchestrator is enabled but its runtime-only transaction signer and durable settlement/publication boundaries were not all injected"
                 )
             }
-            (None, Some(_)) => {
+            (None, _, _, _) => {
                 panic!(
-                    "a SoraFS moderation orchestrator was injected without enabling torii.sorafs.storage.moderation_orchestrator"
+                    "SoraFS moderation runtime boundaries were injected without enabling torii.sorafs.storage.moderation_orchestrator"
                 )
             }
         };
@@ -55307,7 +55728,7 @@ impl Torii {
         let (por_coordinator, por_runtime) =
             build_por_components(&config, &chain_id, &sorafs_node, sorafs_admission.clone());
         #[cfg(feature = "app_api")]
-        let gc_runtime = build_gc_runtime(&sorafs_node);
+        let gc_runtime = build_gc_runtime(&sorafs_node, state.clone());
         #[cfg(feature = "app_api")]
         let account_onboarding = config.account_onboarding.as_ref().map(|cfg| {
             let mut api_token_hashes_by_domain = BTreeMap::new();
@@ -55417,8 +55838,6 @@ impl Torii {
             Some(config.recipient_lookup.requests_per_minute),
             Some(config.recipient_lookup.requests_per_minute),
         );
-        let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
-
         Self {
             chain_id: Arc::new(chain_id),
             kiso,
@@ -55550,6 +55969,10 @@ impl Torii {
             sorafs_proof_outcome_signer: shared_sorafs_proof_outcome_signer,
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: shared_sorafs_repair_transaction_signer,
+            #[cfg(feature = "app_api")]
+            sorafs_reserve_transaction_signer: shared_sorafs_reserve_transaction_signer,
+            #[cfg(feature = "app_api")]
+            sorafs_orderbook_transaction_signer: shared_sorafs_orderbook_transaction_signer,
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator,
             #[cfg(feature = "app_api")]
@@ -55989,6 +56412,10 @@ impl Torii {
             sorafs_proof_outcome_signer: self.sorafs_proof_outcome_signer.clone(),
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: self.sorafs_repair_transaction_signer.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_reserve_transaction_signer: self.sorafs_reserve_transaction_signer.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_orderbook_transaction_signer: self.sorafs_orderbook_transaction_signer.clone(),
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator: self.sorafs_moderation_orchestrator.clone(),
             #[cfg(feature = "app_api")]
@@ -56570,11 +56997,15 @@ impl Torii {
                 app_state.clone(),
                 shutdown_signal.clone(),
             );
-            sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
+            sorafs::reserve_runtime::spawn_sorafs_reserve_transaction_forwarder_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),
             );
-            sorafs::api::spawn_sorafs_reserve_lifecycle_scheduler(
+            sorafs::orderbook_runtime::spawn_sorafs_orderbook_transaction_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
+            sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),
             );
@@ -58501,6 +58932,7 @@ mod por_runtime_readiness_tests {
 #[cfg(feature = "app_api")]
 fn build_gc_runtime(
     sorafs_node: &sorafs_node::NodeHandle,
+    state: Arc<CoreState>,
 ) -> Option<Arc<sorafs::GcSweeperRuntime>> {
     let config = sorafs_node.gc_config();
     if !config.enabled() {
@@ -58511,7 +58943,11 @@ fn build_gc_runtime(
         return None;
     }
 
-    let runtime = Arc::new(sorafs::GcSweeperRuntime::new(sorafs_node.clone(), config));
+    let runtime = Arc::new(sorafs::GcSweeperRuntime::new(
+        sorafs_node.clone(),
+        state,
+        config,
+    ));
 
     iroha_logger::info!(
         interval_secs = config.interval_secs(),
@@ -61005,6 +61441,10 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_proof_outcome_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_repair_transaction_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_reserve_transaction_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_orderbook_transaction_signer: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_orchestrator: None,
             #[cfg(feature = "app_api")]
@@ -64753,6 +65193,64 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
+    fn queue_plan_synced_runtime_timing_is_cadence_derived_and_bounded() {
+        assert_eq!(
+            super::queue_plan_synced_runtime_timing(Duration::from_millis(1)),
+            (Duration::from_millis(25), Duration::from_secs(2)),
+        );
+        assert_eq!(
+            super::queue_plan_synced_runtime_timing(Duration::from_secs(4)),
+            (Duration::from_millis(250), Duration::from_secs(16)),
+        );
+        assert_eq!(
+            super::queue_plan_synced_runtime_timing(Duration::from_secs(3_600)),
+            (Duration::from_millis(250), Duration::from_secs(45)),
+        );
+        let (poll_interval, carrier_wait) = super::queue_plan_synced_runtime_timing(Duration::MAX);
+        assert!(
+            DEFAULT_ROUTE_TIMEOUT >= carrier_wait.saturating_add(poll_interval),
+            "the proxy response budget must outlive the remote carrier wait and its final poll"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
+        let roster_len = iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS;
+        let byzantine_prefix = roster_len.saturating_sub(1) / 3;
+        let durability_threshold = roster_len.div_ceil(3);
+        let last_required_honest_index = byzantine_prefix
+            .saturating_add(durability_threshold)
+            .saturating_sub(1);
+        let hedge_delay = Duration::from_millis(250);
+
+        assert_eq!(
+            roster_len, 128,
+            "the adversarial timing case models 128 validators"
+        );
+        assert_eq!(byzantine_prefix, 42);
+        assert_eq!(durability_threshold, 43);
+        assert_eq!(last_required_honest_index, 84);
+        assert!(
+            (0..roster_len).all(|index| {
+                super::torii_proxy_candidate_launch_delay(true, hedge_delay, index)
+                    == Duration::ZERO
+            }),
+            "strict QueuePlanSynced authorities must all launch in the first bounded wave"
+        );
+        assert_eq!(
+            super::torii_proxy_candidate_launch_delay(
+                false,
+                hedge_delay,
+                last_required_honest_index,
+            ),
+            Duration::from_secs(21),
+            "ordinary proxy traffic must retain staggered hedging"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
     fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         let route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
         let query_request = ToriiProxyRequestKindV4::SignedQueryRouteScan {
@@ -64790,7 +65288,7 @@ pub(crate) mod tests_runtime_handlers {
         };
         assert_eq!(
             super::torii_proxy_attempt_timeout(&submit_request),
-            Duration::from_secs(10)
+            DEFAULT_ROUTE_TIMEOUT
         );
         assert_eq!(
             super::torii_proxy_request_kind_name(&submit_request),
@@ -65382,6 +65880,96 @@ pub(crate) mod tests_runtime_handlers {
             super::validate_queue_plan_synced_acceptance(&noncanonical_snapshot, &expectation)
                 .is_err(),
             "certificate validator-index order must be canonical"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefix() {
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let (_app, mut request) =
+            incoming_proxy_submit_fixture(0xca, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
+        let roster_len = iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS;
+        let signers = (1_u8..=u8::try_from(roster_len).expect("validator bound fits u8"))
+            .map(|seed| {
+                checked_torii_test_ed25519_keypair(
+                    seed,
+                    "derive max-roster QueuePlanSynced authority fixture key",
+                )
+            })
+            .collect::<Vec<_>>();
+        let authorities = bind_queue_plan_synced_test_authorities(&mut request, &signers);
+        let byzantine_prefix = roster_len.saturating_sub(1) / 3;
+        let durability_threshold = roster_len.div_ceil(3);
+        let first_honest_index = byzantine_prefix;
+        let last_required_honest_index = first_honest_index
+            .saturating_add(durability_threshold)
+            .saturating_sub(1);
+        let snapshots = Arc::new(
+            (first_honest_index..=last_required_honest_index)
+                .map(|index| {
+                    (
+                        authorities[index].clone(),
+                        queue_plan_synced_test_certificate_snapshot(
+                            &request,
+                            vec![exact_queue_plan_synced_test_receipt(
+                                &request,
+                                &signers[index],
+                                12_000_u64.saturating_add(
+                                    u64::try_from(index).expect("validator index fits u64"),
+                                ),
+                            )],
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let started = Arc::new(Mutex::new(HashSet::new()));
+        let started_for_attempts = started.clone();
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            super::execute_torii_proxy_request_across_candidates(
+                authorities
+                    .iter()
+                    .cloned()
+                    .map(ToriiProxyCandidate::P2p)
+                    .collect(),
+                route,
+                request,
+                Duration::from_millis(250),
+                move |candidate, _request| {
+                    let snapshots = snapshots.clone();
+                    let started = started_for_attempts.clone();
+                    async move {
+                        let peer_id = candidate.peer_id().clone();
+                        started
+                            .lock()
+                            .expect("max-roster attempt tracker should lock")
+                            .insert(peer_id.clone());
+                        let Some(snapshot) = snapshots.get(&peer_id).cloned() else {
+                            return core::future::pending::<
+                                Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>,
+                            >()
+                            .await;
+                        };
+                        Ok(snapshot)
+                    }
+                },
+                |_request_id| async move {},
+            ),
+        )
+        .await
+        .expect(
+            "42 pending Byzantine authorities must not hedge-delay the honest quorum at index 84",
+        );
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert!(
+            started
+                .lock()
+                .expect("max-roster attempt tracker should lock")
+                .contains(&authorities[last_required_honest_index]),
+            "the final honest authority required for quorum must launch without waiting 21 seconds"
         );
     }
 

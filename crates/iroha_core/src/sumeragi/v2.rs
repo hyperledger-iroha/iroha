@@ -14626,11 +14626,26 @@ mod tests {
         )
         .payload()
         .to_vec();
+        let conflicting_proposal_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal),
+        );
+        // First-release proposal admission deliberately forbids carrying a
+        // high PrepareQC through a timeout justification. Exercise the
+        // read-only embedded-certificate compatibility walk directly, then
+        // confirm ordinary ingress preserves structural-error precedence.
+        let authenticated_conflicting_proposal =
+            AuthenticatedConsensusMessage::for_test(conflicting_proposal_message.clone());
         assert!(matches!(
-            adapter.authenticate(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(conflicting_proposal),
-            )),
+            adapter.ensure_authenticated_execution_commitments_compatible(
+                &authenticated_conflicting_proposal,
+            ),
             Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+        assert!(matches!(
+            adapter.authenticate(conflicting_proposal_message),
+            Err(AdapterError::WireValidation(
+                wire::ValidationError::InvalidProposalJustification
+            ))
         ));
 
         let unbound_subject = subject(0x85);

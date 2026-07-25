@@ -50,6 +50,7 @@ fast_dsl = []
 trybuild-tests = ["dep:trybuild"]
 bench = []
 ids_projection = []
+# Authenticate governed registries against complete Parliament proposal preimages.
 governance = []
 pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 zk-ballot = []
@@ -143,6 +144,11 @@ required-features = ["test-fixtures"]
 [[bin]]
 name = "sumeragi_v2_wire_fixtures"
 path = "src/bin/sumeragi_v2_wire_fixtures.rs"
+
+[[bin]]
+name = "cbsi_offline_vectors"
+path = "src/bin/cbsi_offline_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

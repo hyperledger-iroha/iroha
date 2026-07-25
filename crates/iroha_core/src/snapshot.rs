@@ -937,6 +937,7 @@ fn read_bounded_stable_regular_file(
 #[derive(Clone, Debug)]
 struct BoundSnapshotFile {
     path: PathBuf,
+    handle: Arc<std::fs::File>,
     identity: StableSnapshotFileIdentity,
     len: u64,
     bytes_hash: Hash,
@@ -963,9 +964,22 @@ fn bind_snapshot_file(
     };
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
+    let handle =
+        std::fs::File::open(path).map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
+    let opened = handle
+        .metadata()
+        .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
+    if !opened.is_file()
+        || !regular_file_has_single_link(&opened)
+        || stable_file_identity(&opened) != stable_file_identity(&metadata)
+        || opened.len() != metadata.len()
+    {
+        return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
+    }
     Ok(Some((
         BoundSnapshotFile {
             path: path.to_path_buf(),
+            handle: Arc::new(handle),
             identity: stable_file_identity(&metadata),
             len: metadata.len(),
             bytes_hash: Hash::new(&bytes),
@@ -996,7 +1010,14 @@ fn verify_bound_snapshot_file_at(
     };
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
-    if stable_file_identity(&metadata) != binding.identity
+    let opened = binding
+        .handle
+        .metadata()
+        .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
+    if !opened.is_file()
+        || stable_file_identity(&opened) != binding.identity
+        || opened.len() != binding.len
+        || stable_file_identity(&metadata) != binding.identity
         || metadata.len() != binding.len
         || Hash::new(&bytes) != binding.bytes_hash
     {
@@ -4284,13 +4305,12 @@ mod tests {
 
     fn state_factory_with_kura(kura: Arc<Kura>) -> State {
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new(
+        State::new_with_chain(
             crate::queue::tests::world_with_test_domains(),
             kura,
             query_handle,
-        );
-        state.chain_id = ChainId::from(TEST_CHAIN_ID);
-        state
+            ChainId::from(TEST_CHAIN_ID),
+        )
     }
 
     fn state_factory() -> State {
@@ -6114,6 +6134,19 @@ mod tests {
             state.latest_block_hash_fast().expect("fixture block hash")
         );
         block_hashes[0] = json::to_value(&forged_hash).expect("encode forged block hash");
+        let Some(json::Value::Object(runtime)) = root.get_mut("nexus_runtime") else {
+            panic!("snapshot Nexus runtime is an object");
+        };
+        let Some(json::Value::Array(history)) = runtime.get_mut("autoscale_sample_history") else {
+            panic!("snapshot autoscale sample history is an array");
+        };
+        let Some(json::Value::Object(latest_sample)) = history.last_mut() else {
+            panic!("snapshot autoscale sample history retains the latest block");
+        };
+        latest_sample.insert(
+            "block_hash".to_owned(),
+            json::to_value(&forged_hash).expect("encode forged autoscale sample hash"),
+        );
         let mut forged_snapshot_bytes = Vec::new();
         json::to_writer(&mut forged_snapshot_bytes, &snapshot_value)
             .expect("encode forged snapshot");

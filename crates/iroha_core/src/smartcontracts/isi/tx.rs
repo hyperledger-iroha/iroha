@@ -268,6 +268,28 @@ fn transaction_filter_candidate_block_heights(
 ) -> Option<BTreeSet<NonZeroUsize>> {
     let mut best = None;
 
+    if let Some(block_hash) = filters.block_eq.as_ref() {
+        intersect_block_candidate_heights(
+            &mut best,
+            state_ro
+                .kura()
+                .get_block_height_by_hash(*block_hash)
+                .into_iter()
+                .collect(),
+        );
+    }
+
+    if !filters.block_in.is_empty() {
+        intersect_block_candidate_heights(
+            &mut best,
+            filters
+                .block_in
+                .iter()
+                .filter_map(|hash| state_ro.kura().get_block_height_by_hash(*hash))
+                .collect(),
+        );
+    }
+
     if let Some(entrypoint_hash) = filters.entry_eq.as_ref()
         && let Some(candidates) = state_ro
             .kura()
@@ -1335,11 +1357,15 @@ pub(crate) mod tests {
 
     /// Build an empty canonical block for transaction-query fixtures.
     pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
-        BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
             .chain(0, previous)
             .sign(&GENESIS_ACCOUNT.key)
             .unpack(|_| {})
-            .into()
+            .into();
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("empty query carrier has an exact empty result set");
+        block
     }
 
     /// Build a two-entry certified merge carrier above `previous`.
@@ -1394,11 +1420,14 @@ pub(crate) mod tests {
 
     /// Seed sixteen two-entry merge carriers above an empty genesis block.
     pub(crate) fn merge_query_fixture() -> MergeQueryFixture {
-        let sandbox = Sandbox::default();
-        let kura = sandbox.state.kura();
+        let mut sandbox = Sandbox::default();
         let genesis = Arc::new(empty_query_block(None));
-        kura.store_block(Arc::clone(&genesis))
+        sandbox
+            .state
+            .kura()
+            .store_block(Arc::clone(&genesis))
             .expect("store merge query genesis");
+        sandbox.state.push_block_hash_for_testing(genesis.hash());
 
         let target_epoch = 9;
         let mut previous = genesis;
@@ -1429,8 +1458,12 @@ pub(crate) mod tests {
                     entry.canonical_hash(),
                 ));
             }
-            kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+            sandbox
+                .state
+                .kura()
+                .store_block_with_merge_entry(Arc::clone(&carrier), &entry)
                 .expect("store certified merge query carrier");
+            sandbox.state.push_block_hash_for_testing(carrier.hash());
             previous = carrier;
         }
         let (
@@ -1476,7 +1509,7 @@ pub(crate) mod tests {
         let by_block = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
-                p.equals("block_hash", fixture.target_block_hash)
+                p.equals("block_hash", fixture.target_block_hash.to_string())
             }),
         );
         assert_eq!(by_block.len(), 2);
@@ -1489,7 +1522,10 @@ pub(crate) mod tests {
         let by_hash = execute_single_carrier_query(
             &state_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
-                p.equals("entrypoint_hash", fixture.target_entrypoint_hash)
+                p.equals(
+                    "entrypoint_hash",
+                    fixture.target_entrypoint_hash.to_string(),
+                )
             }),
         );
         assert_eq!(by_hash.len(), 1);
@@ -1553,7 +1589,10 @@ pub(crate) mod tests {
         let selected = execute_single_carrier_query(
             &unrelated_view,
             CompoundPredicate::<CommittedTransaction>::build(|p| {
-                p.equals("entrypoint_hash", unrelated.target_entrypoint_hash)
+                p.equals(
+                    "entrypoint_hash",
+                    unrelated.target_entrypoint_hash.to_string(),
+                )
             }),
         );
         assert_eq!(selected.len(), 1);
@@ -1587,7 +1626,10 @@ pub(crate) mod tests {
             ValidQuery::execute(
                 FindTransactions,
                 CompoundPredicate::<CommittedTransaction>::build(|p| {
-                    p.equals("entrypoint_hash", selected.target_entrypoint_hash)
+                    p.equals(
+                        "entrypoint_hash",
+                        selected.target_entrypoint_hash.to_string(),
+                    )
                 }),
                 &selected_view,
             )
@@ -1644,11 +1686,14 @@ pub(crate) mod tests {
     fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {
         const LARGE_SOURCE_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
 
-        let sandbox = Sandbox::default();
-        let kura = sandbox.state.kura();
+        let mut sandbox = Sandbox::default();
         let genesis = Arc::new(empty_query_block(None));
-        kura.store_block(Arc::clone(&genesis))
+        sandbox
+            .state
+            .kura()
+            .store_block(Arc::clone(&genesis))
             .expect("store large-sidecar query genesis");
+        sandbox.state.push_block_hash_for_testing(genesis.hash());
 
         let mut entry = sample_certified_merge_execution_entry(1, true);
         let batch = entry
@@ -1665,8 +1710,13 @@ pub(crate) mod tests {
         batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
 
         let (carrier, entry) = certified_query_carrier_with_entry(&genesis, entry);
-        kura.store_block_with_merge_entry(carrier, &entry)
+        let carrier_hash = carrier.hash();
+        sandbox
+            .state
+            .kura()
+            .store_block_with_merge_entry(carrier, &entry)
             .expect("store large certified merge sidecar");
+        sandbox.state.push_block_hash_for_testing(carrier_hash);
         let state_view = sandbox.state.view();
         state_view.kura().reset_merge_query_read_counters_for_test();
         reset_certified_merge_projection_calls_for_test();
@@ -1792,10 +1842,10 @@ pub(crate) mod tests {
             .with_data_trigger_transfer("dave", 20, "eve");
         sandbox.request_transfer("alice", 50, "bob");
         sandbox.request_transfer("eve", 1, "eve");
-        sandbox.request_transfer("eve", 1, "eve");
-        sandbox.request_transfer("eve", 1, "eve");
-        sandbox.request_transfer("eve", 1, "eve");
-        sandbox.request_transfer("eve", 1, "eve");
+        sandbox.request_transfer("eve", 2, "eve");
+        sandbox.request_transfer("eve", 3, "eve");
+        sandbox.request_transfer("eve", 4, "eve");
+        sandbox.request_transfer("eve", 5, "eve");
         let mut block = sandbox.block();
         block.assert_balances([
             ("alice", 60),

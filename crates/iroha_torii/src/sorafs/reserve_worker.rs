@@ -19,6 +19,7 @@ use iroha_data_model::{
 use sorafs_node::reserve_transaction_forwarder::{
     ReserveOperationV1, ReserveTransactionDeliveryStateV1, ReserveTransactionPendingV1,
     ReserveTransactionProjectionV1, ReserveTransactionReconciliationV1,
+    validate_reserve_pending_delivery_v1, validate_reserve_reconciliation_material_v1,
 };
 
 /// Complete operation-scoped data read from one immutable finalized state view.
@@ -69,13 +70,33 @@ pub(crate) enum ReserveEnvelopeReconciliationV1 {
     /// The delivery has no signed bytes yet.
     NotSigned,
     /// The exact transaction remains queued as of the supplied finalized view.
-    Pending(ReserveFinalizedCursorV1),
+    Pending {
+        /// Digest used for the exact pipeline/committed lookup.
+        transaction_digest: [u8; 32],
+        /// Current finalized view at which the pending result was observed.
+        finalized_cursor: ReserveFinalizedCursorV1,
+    },
     /// The exact transaction committed successfully.
-    Applied(ReserveFinalizedCursorV1),
+    Applied {
+        /// Digest of the exact applied canonical transaction.
+        transaction_digest: [u8; 32],
+        /// Current finalized view in which application was resolved.
+        finalized_cursor: ReserveFinalizedCursorV1,
+    },
     /// The exact transaction committed with a terminal execution rejection.
-    Rejected(ReserveFinalizedCursorV1),
+    Rejected {
+        /// Digest of the exact rejected canonical transaction.
+        transaction_digest: [u8; 32],
+        /// Current finalized view in which rejection was resolved.
+        finalized_cursor: ReserveFinalizedCursorV1,
+    },
     /// The exact transaction is absent after this finalized anchor.
-    Absent(ReserveFinalizedCursorV1),
+    Absent {
+        /// Digest used for the exact absence proof.
+        transaction_digest: [u8; 32],
+        /// Current finalized view through which absence was established.
+        finalized_cursor: ReserveFinalizedCursorV1,
+    },
     /// Durable block/index state could not be inspected coherently.
     Unavailable,
 }
@@ -164,7 +185,7 @@ pub(crate) fn reconcile_reserve_semantics(
     finalized: &ReserveFinalizedSnapshotV1,
 ) -> ReserveSemanticReconciliationV1 {
     let cursor = finalized.finalized_cursor;
-    if !retained_material_matches_delivery(delivery, retained) {
+    if validate_reserve_reconciliation_material_v1(delivery, retained).is_err() {
         return ReserveSemanticReconciliationV1::InvalidDurableState;
     }
     if &delivery.chain_id != expected_chain_id || &retained.request.chain_id != expected_chain_id {
@@ -227,7 +248,9 @@ pub(crate) fn plan_reserve_worker_action(
     semantics: ReserveSemanticReconciliationV1,
 ) -> ReserveWorkerActionV1 {
     let semantic_cursor = semantic_cursor(semantics);
-    if semantics == ReserveSemanticReconciliationV1::InvalidDurableState {
+    if semantics == ReserveSemanticReconciliationV1::InvalidDurableState
+        || !valid_pending_delivery(delivery)
+    {
         return ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState);
     }
     if semantic_cursor.is_some_and(|cursor| !valid_finalized_cursor(cursor)) {
@@ -245,16 +268,18 @@ pub(crate) fn plan_reserve_worker_action(
     }
 
     match envelope {
-        ReserveEnvelopeReconciliationV1::Applied(finalized_cursor) => {
-            return delivery.transaction_digest.map_or(
-                ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState),
-                |transaction_digest| ReserveWorkerActionV1::FinalizeExact {
-                    transaction_digest,
-                    finalized_cursor,
-                },
-            );
+        ReserveEnvelopeReconciliationV1::Applied {
+            transaction_digest,
+            finalized_cursor,
+        } => {
+            return ReserveWorkerActionV1::FinalizeExact {
+                transaction_digest,
+                finalized_cursor,
+            };
         }
-        ReserveEnvelopeReconciliationV1::Rejected(finalized_cursor) => {
+        ReserveEnvelopeReconciliationV1::Rejected {
+            finalized_cursor, ..
+        } => {
             return if delivery.transaction_digest.is_some()
                 && matches!(
                     delivery.state,
@@ -268,8 +293,8 @@ pub(crate) fn plan_reserve_worker_action(
             };
         }
         ReserveEnvelopeReconciliationV1::NotSigned
-        | ReserveEnvelopeReconciliationV1::Pending(_)
-        | ReserveEnvelopeReconciliationV1::Absent(_)
+        | ReserveEnvelopeReconciliationV1::Pending { .. }
+        | ReserveEnvelopeReconciliationV1::Absent { .. }
         | ReserveEnvelopeReconciliationV1::Unavailable => {}
     }
 
@@ -277,7 +302,7 @@ pub(crate) fn plan_reserve_worker_action(
         return ReserveWorkerActionV1::FinalizeSemantic { finalized_cursor };
     }
 
-    if matches!(envelope, ReserveEnvelopeReconciliationV1::Pending(_)) {
+    if matches!(envelope, ReserveEnvelopeReconciliationV1::Pending { .. }) {
         return match delivery.state {
             ReserveTransactionDeliveryStateV1::Signed
             | ReserveTransactionDeliveryStateV1::Ambiguous => {
@@ -340,29 +365,33 @@ pub(crate) fn plan_reserve_worker_action(
             ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::SigningClaimInProgress)
         }
         ReserveTransactionDeliveryStateV1::Signed => match envelope {
-            ReserveEnvelopeReconciliationV1::Pending(_) => ReserveWorkerActionV1::AdoptExactPending,
-            ReserveEnvelopeReconciliationV1::Absent(_) => ReserveWorkerActionV1::SubmitSignedBytes,
+            ReserveEnvelopeReconciliationV1::Pending { .. } => {
+                ReserveWorkerActionV1::AdoptExactPending
+            }
+            ReserveEnvelopeReconciliationV1::Absent { .. } => {
+                ReserveWorkerActionV1::SubmitSignedBytes
+            }
             ReserveEnvelopeReconciliationV1::Unavailable => {
                 ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::FinalizedStateUnavailable)
             }
             ReserveEnvelopeReconciliationV1::NotSigned => {
                 ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState)
             }
-            ReserveEnvelopeReconciliationV1::Applied(_)
-            | ReserveEnvelopeReconciliationV1::Rejected(_) => unreachable!(
+            ReserveEnvelopeReconciliationV1::Applied { .. }
+            | ReserveEnvelopeReconciliationV1::Rejected { .. } => unreachable!(
                 "terminal exact-envelope outcomes return before delivery-state planning"
             ),
         },
         ReserveTransactionDeliveryStateV1::Ambiguous
         | ReserveTransactionDeliveryStateV1::Submitted => match envelope {
-            ReserveEnvelopeReconciliationV1::Pending(_)
+            ReserveEnvelopeReconciliationV1::Pending { .. }
                 if delivery.state == ReserveTransactionDeliveryStateV1::Ambiguous =>
             {
                 ReserveWorkerActionV1::AdoptExactPending
             }
-            ReserveEnvelopeReconciliationV1::Absent(finalized_cursor)
-                if finalized_cursor.height > delivery.baseline_finalized_height =>
-            {
+            ReserveEnvelopeReconciliationV1::Absent {
+                finalized_cursor, ..
+            } if finalized_cursor.height > delivery.baseline_finalized_height => {
                 ReserveWorkerActionV1::MarkFinalizedAbsent { finalized_cursor }
             }
             ReserveEnvelopeReconciliationV1::Unavailable => {
@@ -371,30 +400,14 @@ pub(crate) fn plan_reserve_worker_action(
             ReserveEnvelopeReconciliationV1::NotSigned => {
                 ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState)
             }
-            ReserveEnvelopeReconciliationV1::Pending(_)
-            | ReserveEnvelopeReconciliationV1::Absent(_)
-            | ReserveEnvelopeReconciliationV1::Applied(_)
-            | ReserveEnvelopeReconciliationV1::Rejected(_) => {
+            ReserveEnvelopeReconciliationV1::Pending { .. }
+            | ReserveEnvelopeReconciliationV1::Absent { .. }
+            | ReserveEnvelopeReconciliationV1::Applied { .. }
+            | ReserveEnvelopeReconciliationV1::Rejected { .. } => {
                 ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::AwaitingFinality)
             }
         },
     }
-}
-
-fn retained_material_matches_delivery(
-    delivery: &ReserveTransactionPendingV1,
-    retained: &ReserveTransactionReconciliationV1,
-) -> bool {
-    retained.request.operation_id == delivery.operation_id
-        && retained.request.chain_id == delivery.chain_id
-        && retained.request.authority == delivery.authority
-        && retained.request.operation.kind() == delivery.kind
-        && retained.request.operation.policy_digest() == delivery.policy_digest
-        && retained.policy_record.policy_digest == delivery.policy_digest
-        && retained.policy_record.policy.revision == delivery.policy_revision
-        && retained.request.operation.provider_id() == delivery.provider_id
-        && retained.request.operation.expected_provider_revision()
-            == delivery.expected_provider_revision
 }
 
 fn envelope_is_coherent(
@@ -402,51 +415,42 @@ fn envelope_is_coherent(
     envelope: ReserveEnvelopeReconciliationV1,
     semantic_cursor: Option<ReserveFinalizedCursorV1>,
 ) -> bool {
-    let signed_material_is_complete = delivery
-        .signed_transaction_bytes
-        .as_ref()
-        .is_some_and(|bytes| !bytes.is_empty())
-        && delivery
-            .transaction_digest
-            .is_some_and(|digest| digest != [0; 32]);
-    let signed_material_is_absent =
-        delivery.signed_transaction_bytes.is_none() && delivery.transaction_digest.is_none();
-    if delivery.baseline_finalized_height == 0 || delivery.baseline_finalized_block_hash == [0; 32]
-    {
+    if !valid_pending_delivery(delivery) {
         return false;
     }
-    let delivery_material_is_valid = match delivery.state {
-        ReserveTransactionDeliveryStateV1::Ready | ReserveTransactionDeliveryStateV1::Signing => {
-            signed_material_is_absent
-        }
-        ReserveTransactionDeliveryStateV1::Signed
-        | ReserveTransactionDeliveryStateV1::Ambiguous
-        | ReserveTransactionDeliveryStateV1::Submitted => signed_material_is_complete,
-    };
-    if !delivery_material_is_valid {
-        return false;
-    }
+    let signed_material_is_complete = delivery.signed_transaction_bytes.is_some();
+    let signed_material_is_absent = delivery.signed_transaction_bytes.is_none();
 
     match envelope {
         ReserveEnvelopeReconciliationV1::NotSigned => signed_material_is_absent,
         ReserveEnvelopeReconciliationV1::Unavailable => true,
-        ReserveEnvelopeReconciliationV1::Pending(cursor)
-        | ReserveEnvelopeReconciliationV1::Absent(cursor) => {
-            signed_material_is_complete
-                && valid_finalized_cursor(cursor)
-                && semantic_cursor == Some(cursor)
+        ReserveEnvelopeReconciliationV1::Pending {
+            transaction_digest,
+            finalized_cursor,
         }
-        ReserveEnvelopeReconciliationV1::Applied(cursor)
-        | ReserveEnvelopeReconciliationV1::Rejected(cursor) => {
+        | ReserveEnvelopeReconciliationV1::Applied {
+            transaction_digest,
+            finalized_cursor,
+        }
+        | ReserveEnvelopeReconciliationV1::Rejected {
+            transaction_digest,
+            finalized_cursor,
+        }
+        | ReserveEnvelopeReconciliationV1::Absent {
+            transaction_digest,
+            finalized_cursor,
+        } => {
             signed_material_is_complete
-                && valid_finalized_cursor(cursor)
-                && semantic_cursor.is_none_or(|snapshot| {
-                    cursor.height < snapshot.height
-                        || (cursor.height == snapshot.height
-                            && cursor.block_hash == snapshot.block_hash)
-                })
+                && delivery.transaction_digest == Some(transaction_digest)
+                && transaction_digest != [0; 32]
+                && valid_finalized_cursor(finalized_cursor)
+                && semantic_cursor == Some(finalized_cursor)
         }
     }
+}
+
+fn valid_pending_delivery(delivery: &ReserveTransactionPendingV1) -> bool {
+    validate_reserve_pending_delivery_v1(delivery).is_ok()
 }
 
 fn valid_finalized_cursor(cursor: ReserveFinalizedCursorV1) -> bool {
@@ -814,6 +818,7 @@ mod tests {
             days_past_due: 2,
             pending_movements: 1,
             open_appeals: 1,
+            rent_charged_through_unix: 100,
             interest_accrued_at_unix: 100,
             updated_at_unix: 100,
         }
@@ -1110,6 +1115,39 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_rejects_a_same_summary_substituted_operation() {
+        let operations = key(0x38);
+        let decision = key(0x39);
+        let provider = key(0x3A);
+        let context = provider_context(&operations, &decision, &provider);
+        let ReserveTransactionProjectionV1::Provider { account } = &context.projection else {
+            unreachable!()
+        };
+        let original = ReserveOperationV1::ChargeRent(ChargeSorafsReserveRent::new(
+            account.terms.provider_id,
+            account.revision,
+            1,
+            context.policy_record.policy_digest,
+        ));
+        let (delivery, retained) = retained_delivery(original, &context);
+        let snapshot = snapshot_from_retained(&delivery, &retained, context.finalized_cursor);
+        let mut substituted = retained;
+        substituted.request.operation =
+            ReserveOperationV1::ChargeRent(ChargeSorafsReserveRent::new(
+                account.terms.provider_id,
+                account.revision,
+                2,
+                context.policy_record.policy_digest,
+            ));
+
+        assert_eq!(
+            reconcile_reserve_semantics(&ChainId::from(CHAIN), &delivery, &substituted, &snapshot,),
+            ReserveSemanticReconciliationV1::InvalidDurableState,
+            "same kind/provider/revision metadata must not hide a different operation payload",
+        );
+    }
+
+    #[test]
     fn policy_rotation_and_foreign_chain_are_terminal_conflicts() {
         let operations = key(0x41);
         let decision = key(0x42);
@@ -1265,16 +1303,22 @@ mod tests {
             context.policy_record.policy_digest,
         ));
         let (mut delivery, _) = retained_delivery(operation, &context);
+        let signed_transaction_bytes = vec![1, 2, 3];
+        let transaction_digest = *blake3::hash(&signed_transaction_bytes).as_bytes();
         delivery.state = ReserveTransactionDeliveryStateV1::Submitted;
-        delivery.transaction_digest = Some([0xA1; 32]);
-        delivery.signed_transaction_bytes = Some(vec![1, 2, 3]);
+        delivery.attempts = 1;
+        delivery.transaction_digest = Some(transaction_digest);
+        delivery.signed_transaction_bytes = Some(signed_transaction_bytes);
         let applied = cursor(12, 0x12);
         assert_eq!(
             plan_reserve_worker_action(
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Applied(applied),
+                ReserveEnvelopeReconciliationV1::Applied {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::InvalidDurableState,
             ),
             ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState),
@@ -1284,13 +1328,30 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Applied(applied),
+                ReserveEnvelopeReconciliationV1::Applied {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::Conflict(applied),
             ),
             ReserveWorkerActionV1::FinalizeExact {
-                transaction_digest: [0xA1; 32],
+                transaction_digest,
                 finalized_cursor: applied,
             },
+        );
+        assert_eq!(
+            plan_reserve_worker_action(
+                &ChainId::from(CHAIN),
+                Some(&delivery.authority),
+                &delivery,
+                ReserveEnvelopeReconciliationV1::Applied {
+                    transaction_digest: [0xA1; 32],
+                    finalized_cursor: applied,
+                },
+                ReserveSemanticReconciliationV1::Conflict(applied),
+            ),
+            ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::FinalizedStateUnavailable),
+            "a committed status for another transaction must not finalize this delivery",
         );
         delivery.state = ReserveTransactionDeliveryStateV1::Ambiguous;
         assert_eq!(
@@ -1298,7 +1359,10 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Pending(applied),
+                ReserveEnvelopeReconciliationV1::Pending {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::Conflict(applied),
             ),
             ReserveWorkerActionV1::AdoptExactPending,
@@ -1319,7 +1383,10 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Absent(applied),
+                ReserveEnvelopeReconciliationV1::Absent {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::Ready(applied),
             ),
             ReserveWorkerActionV1::SubmitSignedBytes,
@@ -1329,7 +1396,10 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Absent(cursor(13, 0x13)),
+                ReserveEnvelopeReconciliationV1::Absent {
+                    transaction_digest,
+                    finalized_cursor: cursor(13, 0x13),
+                },
                 ReserveSemanticReconciliationV1::Ready(applied),
             ),
             ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::FinalizedStateUnavailable),
@@ -1340,7 +1410,10 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Absent(applied),
+                ReserveEnvelopeReconciliationV1::Absent {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::Ready(applied),
             ),
             ReserveWorkerActionV1::MarkFinalizedAbsent {
@@ -1352,12 +1425,32 @@ mod tests {
                 &ChainId::from(CHAIN),
                 Some(&delivery.authority),
                 &delivery,
-                ReserveEnvelopeReconciliationV1::Rejected(applied),
+                ReserveEnvelopeReconciliationV1::Rejected {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
                 ReserveSemanticReconciliationV1::Ready(applied),
             ),
             ReserveWorkerActionV1::MarkTransactionRejected {
                 finalized_cursor: applied,
             },
+        );
+
+        let mut corrupted = delivery;
+        corrupted.signed_transaction_bytes = Some(vec![9, 9, 9]);
+        assert_eq!(
+            plan_reserve_worker_action(
+                &ChainId::from(CHAIN),
+                Some(&corrupted.authority),
+                &corrupted,
+                ReserveEnvelopeReconciliationV1::Applied {
+                    transaction_digest,
+                    finalized_cursor: applied,
+                },
+                ReserveSemanticReconciliationV1::Ready(applied),
+            ),
+            ReserveWorkerActionV1::Defer(ReserveWorkerDeferReasonV1::InvalidDurableState),
+            "signed-byte digest corruption must not be treated as transient chain absence",
         );
     }
 

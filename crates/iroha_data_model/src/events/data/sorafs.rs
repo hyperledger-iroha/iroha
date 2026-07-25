@@ -423,6 +423,8 @@ mod model {
         TradeMatched,
         /// Maintenance expired an unfilled or partially filled order.
         OrderExpired,
+        /// Maintenance retired an ask after its exact admitted provider binding was revoked.
+        OrderProviderRevoked,
         /// Maintenance expired an unsettled channel and refunded custody.
         ChannelExpired,
         /// A provider-signed settlement receipt was committed.

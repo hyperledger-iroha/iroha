@@ -96,6 +96,9 @@ pub enum OrderbookRuntimeError {
     /// A matched pair did not contain exactly one bid and one ask.
     #[error("matcher output did not contain one bid and one ask")]
     InvalidMatchedSides,
+    /// A validated matched ask lost its exact signed provider binding.
+    #[error("matched ask has no exact signed provider binding")]
+    MissingMatchedProviderBinding,
     /// The order quantity is below the configured minimum.
     #[error("order quantity {quantity_gib} GiB is below configured minimum {min_order_gib} GiB")]
     OrderBelowMinimum {
@@ -123,16 +126,6 @@ pub enum OrderbookRuntimeError {
     /// Exact settlement-ledger aggregation exceeded the bounded quantity domain.
     #[error("orderbook settlement ledger arithmetic overflow")]
     SettlementLedgerOverflow,
-    /// The provider's current reserve lifecycle state disables new adverts.
-    #[error(
-        "reserve lifecycle stage `{stage}` disables orderbook adverts for provider `{provider_id_hex}`"
-    )]
-    ReserveLifecycleAdvertDisabled {
-        /// Hex-encoded provider identifier derived from the order owner account.
-        provider_id_hex: String,
-        /// Stable reserve lifecycle stage label that triggered advert disablement.
-        stage: String,
-    },
     /// The local orderbook lock was poisoned.
     #[error("orderbook state lock poisoned")]
     StateLockPoisoned,
@@ -736,14 +729,16 @@ fn settlement_channel_for_fill(
         &fill.trade,
         derive_orderbook_settlement_channel_id_v1(&fill.trade)?,
         buyer.owner_account.clone(),
-        provider_id_for_order(provider),
+        provider_id_for_order(provider)?,
         now_unix,
     )
     .map_err(OrderbookRuntimeError::Validation)
 }
 
-fn provider_id_for_order(order: &OrderRequestV1) -> [u8; 32] {
-    local_orderbook_provider_id_for_owner_account(&order.owner_account)
+fn provider_id_for_order(order: &OrderRequestV1) -> Result<[u8; 32], OrderbookRuntimeError> {
+    order
+        .provider_id
+        .ok_or(OrderbookRuntimeError::MissingMatchedProviderBinding)
 }
 
 fn nonzero_digest(mut digest: [u8; 32]) -> [u8; 32] {
@@ -963,6 +958,7 @@ mod tests {
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account,
+                provider_id: (side == OrderSideV1::Ask).then_some([id.max(1); 32]),
                 expiry_unix: 1_800_000_100,
                 nonce,
                 maker_fee_bps: 10,
@@ -1003,12 +999,12 @@ mod tests {
     }
 
     #[test]
-    fn local_provider_id_for_owner_account_matches_channel_derivation() {
-        let provider_id = local_orderbook_provider_id_for_owner_account(b"provider");
-        assert!(provider_id.iter().any(|byte| *byte != 0));
+    fn local_channel_uses_the_exact_signed_provider_id() {
+        let ask = order(1, OrderSideV1::Ask, 1_500_000, b"provider");
+        let provider_id = ask.provider_id.expect("ask provider id");
         assert_eq!(
+            provider_id_for_order(&ask).expect("exact provider binding"),
             provider_id,
-            provider_id_for_order(&order(1, OrderSideV1::Ask, 1_500_000, b"provider"))
         );
         assert_ne!(
             provider_id,

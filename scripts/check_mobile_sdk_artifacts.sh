@@ -95,11 +95,190 @@ if [[ ! -d "$ROOT_ARG" ]]; then
   exit 66
 fi
 
-ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
+ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
 APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
 if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
   APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
 fi
+
+CHECK_PYTHON_BINARY=""
+for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [[ -x "$trusted_python" ]]; then
+    CHECK_PYTHON_BINARY="$trusted_python"
+    break
+  fi
+done
+if [[ -z "$CHECK_PYTHON_BINARY" ]]; then
+  echo "[mobile-sdk-artifacts] ERROR: pinned Python 3 is required" >&2
+  exit 69
+fi
+CHECK_PYTHON_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$CHECK_PYTHON_BINARY")"
+CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -c \
+  'import os,pathlib,pwd; print(pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True))' \
+  2>/dev/null || true)"
+if [[ -z "$CHECK_USER_HOME_DIR" ]]; then
+  CHECK_USER_HOME_DIR="$("$CHECK_PYTHON_BINARY" -I -c \
+    'import pathlib; print(pathlib.Path.home().resolve(strict=True))')"
+fi
+CHECK_TMPDIR="/tmp"
+for trusted_path in "$CHECK_PYTHON_BINARY" "$CHECK_USER_HOME_DIR" "$CHECK_TMPDIR"; do
+  if [[ "$trusted_path" != /* ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: verifier runtime path is not absolute: $trusted_path" >&2
+    exit 69
+  fi
+done
+if [[ ! -f "$CHECK_PYTHON_BINARY" || -L "$CHECK_PYTHON_BINARY" \
+  || ! -x "$CHECK_PYTHON_BINARY" || ! -d "$CHECK_USER_HOME_DIR" \
+  || ! -d "$CHECK_TMPDIR" ]]; then
+  echo "[mobile-sdk-artifacts] ERROR: verifier runtime paths are not canonical regular files/directories" >&2
+  exit 69
+fi
+
+run_isolated_checker_python() {
+  env -i \
+    HOME="$CHECK_USER_HOME_DIR" \
+    PATH="${CHECK_PYTHON_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$CHECK_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    "$CHECK_PYTHON_BINARY" -I "$@"
+}
+
+ANDROID_KOTLIN_BUILD_ROOT="$ROOT_DIR/kotlin"
+ANDROID_CORE_JVM_BUILD_DIR="$ROOT_DIR/kotlin/core-jvm/build"
+ANDROID_CLIENT_BUILD_DIR="$ROOT_DIR/kotlin/client-android/build"
+ANDROID_OFFLINE_WALLET_BUILD_DIR="$ROOT_DIR/kotlin/offline-wallet-android/build"
+if [[ -n "${MOBILE_SDK_ANDROID_ARTIFACT_DIR:-}" ]]; then
+  if ! canonical_android_artifact_dir="$(
+    run_isolated_checker_python - \
+      "$ROOT_DIR" "$MOBILE_SDK_ANDROID_ARTIFACT_DIR" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+source_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+raw = sys.argv[2]
+candidate = pathlib.Path(raw)
+if not candidate.is_absolute() or str(candidate) != raw:
+    raise SystemExit(1)
+resolved = candidate.resolve(strict=True)
+metadata = resolved.lstat()
+if (
+    resolved != candidate
+    or not stat.S_ISDIR(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or not os.access(resolved, os.R_OK | os.X_OK)
+    or resolved == source_root
+    or source_root in resolved.parents
+):
+    raise SystemExit(1)
+print(resolved)
+PY
+  )"; then
+    echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_ANDROID_ARTIFACT_DIR must be a canonical non-symbolic directory outside the Iroha source tree" >&2
+    exit 66
+  fi
+  ANDROID_KOTLIN_BUILD_ROOT="$canonical_android_artifact_dir/gradle-build/iroha_kotlin_sdk"
+  ANDROID_CORE_JVM_BUILD_DIR="$ANDROID_KOTLIN_BUILD_ROOT/core-jvm"
+  ANDROID_CLIENT_BUILD_DIR="$ANDROID_KOTLIN_BUILD_ROOT/client-android"
+  ANDROID_OFFLINE_WALLET_BUILD_DIR="$ANDROID_KOTLIN_BUILD_ROOT/offline-wallet-android"
+fi
+
+SOURCE_SEAL_TOOLS_INITIALIZED=0
+SOURCE_SEAL_CARGO_BINARY=""
+SOURCE_SEAL_RUSTC_BINARY=""
+SOURCE_SEAL_RUSTUP_BINARY=""
+SOURCE_SEAL_CARGO_HOME="$CHECK_USER_HOME_DIR/.cargo"
+SOURCE_SEAL_RUSTUP_HOME="$CHECK_USER_HOME_DIR/.rustup"
+
+initialize_source_seal_tools() {
+  local actual_toolchain
+  if [[ "$SOURCE_SEAL_TOOLS_INITIALIZED" == "1" ]]; then
+    return
+  fi
+  SOURCE_SEAL_RUSTUP_BINARY="$CHECK_USER_HOME_DIR/.cargo/bin/rustup"
+  if [[ ! -f "$SOURCE_SEAL_RUSTUP_BINARY" || -L "$SOURCE_SEAL_RUSTUP_BINARY" \
+    || ! -x "$SOURCE_SEAL_RUSTUP_BINARY" || ! -x /usr/bin/git ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: pinned rustup and Git are required for source authentication" >&2
+    exit 69
+  fi
+  actual_toolchain="$(
+    /usr/bin/sed -nE \
+      's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
+      "$ROOT_DIR/rust-toolchain.toml"
+  )"
+  if [[ "$actual_toolchain" != "1.93.1" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: source authentication requires exact Rust 1.93.1" >&2
+    exit 69
+  fi
+  SOURCE_SEAL_CARGO_BINARY="$(
+    env -i \
+      HOME="$CHECK_USER_HOME_DIR" \
+      PATH="${SOURCE_SEAL_RUSTUP_BINARY%/*}:/usr/bin:/bin" \
+      CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
+      RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
+      TMPDIR="$CHECK_TMPDIR" \
+      LANG=C.UTF-8 \
+      LC_ALL=C.UTF-8 \
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 cargo
+  )"
+  SOURCE_SEAL_RUSTC_BINARY="$(
+    env -i \
+      HOME="$CHECK_USER_HOME_DIR" \
+      PATH="${SOURCE_SEAL_RUSTUP_BINARY%/*}:/usr/bin:/bin" \
+      CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
+      RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
+      TMPDIR="$CHECK_TMPDIR" \
+      LANG=C.UTF-8 \
+      LC_ALL=C.UTF-8 \
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustc
+  )"
+  SOURCE_SEAL_CARGO_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "$SOURCE_SEAL_CARGO_BINARY")"
+  SOURCE_SEAL_RUSTC_BINARY="$("$CHECK_PYTHON_BINARY" -I -c \
+    'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+    "$SOURCE_SEAL_RUSTC_BINARY")"
+  if [[ ! -x "$SOURCE_SEAL_CARGO_BINARY" || ! -x "$SOURCE_SEAL_RUSTC_BINARY" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: exact Rust 1.93.1 Cargo/rustc are unavailable" >&2
+    exit 69
+  fi
+  SOURCE_SEAL_TOOLS_INITIALIZED=1
+}
+
+run_bridge_source_seal() {
+  initialize_source_seal_tools
+  env -i \
+    HOME="$CHECK_USER_HOME_DIR" \
+    PATH="${CHECK_PYTHON_BINARY%/*}:${SOURCE_SEAL_CARGO_BINARY%/*}:${SOURCE_SEAL_RUSTC_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$CHECK_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    NORITO_BRIDGE_SEAL_HOME="$CHECK_USER_HOME_DIR" \
+    NORITO_BRIDGE_SEAL_CARGO_HOME="$SOURCE_SEAL_CARGO_HOME" \
+    NORITO_BRIDGE_SEAL_RUSTUP_HOME="$SOURCE_SEAL_RUSTUP_HOME" \
+    NORITO_BRIDGE_SEAL_TMPDIR="$CHECK_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO="$SOURCE_SEAL_CARGO_BINARY" \
+    NORITO_BRIDGE_SEAL_RUSTC="$SOURCE_SEAL_RUSTC_BINARY" \
+    "$CHECK_PYTHON_BINARY" -I "$ROOT_DIR/scripts/norito_bridge_source_seal.py" "$@"
+}
+
+run_bridge_source_git() {
+  env -i \
+    HOME="$CHECK_USER_HOME_DIR" \
+    PATH=/usr/bin:/bin \
+    TMPDIR="$CHECK_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_OPTIONAL_LOCKS=0 \
+    /usr/bin/git "$@"
+}
+
 FAILURES=0
 CANDIDATE_LAB_MARKER="KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 CANDIDATE_LAB_SYMBOL_FRAGMENT="kagemusha_recursive_spend_candidate_lab_"
@@ -165,13 +344,11 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_create_v2
   connect_norito_kagemusha_recipient_payment_request_verify_v2
   connect_norito_kagemusha_recipient_lineage_query_create_v2
-  connect_norito_kagemusha_recipient_registration_lineage_verify_v1
   connect_norito_kagemusha_recipient_registration_lineage_verify_v2
   connect_norito_kagemusha_recipient_receive_offer_create_v2
   connect_norito_kagemusha_recipient_receive_offer_project_v2
   connect_norito_kagemusha_recipient_receive_offer_verify_v2
   connect_norito_kagemusha_request_authorization_signing_bytes_v2
-  connect_norito_kagemusha_request_authorization_create_v2
   connect_norito_kagemusha_request_authorization_finalize_hardware_v2
   connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2
   connect_norito_kagemusha_receiver_acknowledgement_payload_v2
@@ -187,6 +364,8 @@ KAGEMUSHA_C_SYMBOLS=(
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
+  connect_norito_chain_discriminant_scope_enter
+  connect_norito_chain_discriminant_scope_exit
   connect_norito_encode_transfer_signed_transaction
   connect_norito_encode_transfer_instruction_box
   connect_norito_detached_transaction_scaffold_inspect_v1
@@ -197,6 +376,17 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_validation_fee_current_policy_proof_request_v1
   connect_norito_validation_fee_current_policy_proof_verify_v1
   "${KAGEMUSHA_C_SYMBOLS[@]}"
+)
+
+# These process-global controls and fail-only compatibility entry points are
+# forbidden from every first-release Apple and Android native slice.
+FORBIDDEN_MOBILE_BRIDGE_SYMBOLS=(
+  connect_norito_get_chain_discriminant
+  connect_norito_set_chain_discriminant
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v1
+  connect_norito_kagemusha_request_authorization_create_v2
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
+  Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
 )
 
 # Exact JNI allow-list for each supported Java namespace. As with the C list,
@@ -222,7 +412,6 @@ KAGEMUSHA_JNI_METHODS=(
   nativeBuildTopUpProvenanceV4
   nativeBuildVerifyRequestV4
   nativeCreateAcknowledgementV2
-  nativeCreateAuthorizationV2
   nativeCreateRecipientLineageQueryV2
   nativeCreateRecipientReceiveOfferV2
   nativeCreateRecipientRequestV2
@@ -338,7 +527,7 @@ reject_candidate_lab_content() {
   local path="$1"
   local label="$2"
   [[ -f "$path" ]] || return
-  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+  if ! run_isolated_checker_python - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
 from pathlib import Path
 import sys
 
@@ -365,7 +554,7 @@ reject_candidate_lab_archive() {
   local path="$1"
   local label="$2"
   [[ -f "$path" ]] || return
-  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+  if ! run_isolated_checker_python - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
 import io
 import sys
 import zipfile
@@ -482,7 +671,7 @@ hash_zip_entry() {
 manifest_json_value() {
   local manifest="$1"
   local key="$2"
-  python3 - "$manifest" "$key" <<'PY'
+  run_isolated_checker_python - "$manifest" "$key" <<'PY'
 import json
 import sys
 
@@ -498,8 +687,7 @@ PY
 }
 
 bridge_source_fingerprint() {
-  python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
-    fingerprint --root "$ROOT_DIR"
+  run_bridge_source_seal fingerprint --root "$ROOT_DIR"
 }
 
 check_bridge_source_contract() {
@@ -511,7 +699,7 @@ check_bridge_source_contract() {
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
   # broader or narrower than the exact first-release allow-list.
   if [[ -f "$bridge_source" ]]; then
-    if ! python3 - "$bridge_source" "$bridge_cargo" \
+    if ! run_isolated_checker_python - "$bridge_source" "$bridge_cargo" \
         "$CANDIDATE_LAB_FEATURE" "$CANDIDATE_LAB_MARKER" \
         "$CANDIDATE_LAB_HEADER_MARKER" \
         --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
@@ -798,7 +986,7 @@ PY
   fi
 
   if [[ -f "$bridge_header" ]]; then
-    if ! python3 - "$bridge_header" "$CANDIDATE_LAB_HEADER_MARKER" \
+    if ! run_isolated_checker_python - "$bridge_header" "$CANDIDATE_LAB_HEADER_MARKER" \
         "$CANDIDATE_LAB_HEADER_MACRO" \
         --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
         --lab "${KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS[@]}" <<'PY'
@@ -994,7 +1182,7 @@ check_swift_kagemusha_source_contract() {
   local source_dir="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift"
   [[ -d "$source_dir" ]] || return
 
-  if ! python3 - "$source_dir" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+  if ! run_isolated_checker_python - "$source_dir" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1101,7 +1289,7 @@ check_android_kagemusha_source_contract() {
         expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
       done
     done
-    if ! python3 - "$rust_source" "${expected_jni[@]}" <<'PY'
+    if ! run_isolated_checker_python - "$rust_source" "${expected_jni[@]}" <<'PY'
 import re
 import sys
 
@@ -1135,7 +1323,7 @@ PY
   fi
 
   if [[ -f "$kotlin_source" || -f "$java_source" ]]; then
-    if ! python3 - "$kotlin_source" "$java_source" -- "${KAGEMUSHA_JNI_METHODS[@]}" <<'PY'
+    if ! run_isolated_checker_python - "$kotlin_source" "$java_source" -- "${KAGEMUSHA_JNI_METHODS[@]}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1191,7 +1379,7 @@ PY
 
   if [[ ! -f "$android_keymint_source" ]]; then
     fail "physical Android Kagemusha KeyMint integration source is missing"
-  elif ! python3 - "$android_keymint_source" <<'PY'
+  elif ! run_isolated_checker_python - "$android_keymint_source" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1261,7 +1449,8 @@ check_swift_package() {
   require_literal "$package" '.binaryTarget(' "NoritoBridge binary target declaration"
   require_literal "$package" 'name: "NoritoBridge"' "NoritoBridge binary target name"
   require_literal "$package" '.iOS(.v15)' "IrohaSwift iOS platform floor"
-  require_literal "$package" 'path: bridgeRelativePath' "NoritoBridge local artifact path"
+  require_literal "$package" '"MOBILE_SDK_APPLE_ARTIFACT_DIR"' "external NoritoBridge artifact directory input"
+  require_literal "$package" 'path: bridgeTargetPath' "resolved NoritoBridge artifact path"
 }
 
 check_xcframework() {
@@ -1303,6 +1492,136 @@ check_xcframework() {
   fi
   require_file "$manifest" "NoritoBridge artifact manifest"
   if [[ -f "$manifest" ]]; then
+    if ! run_isolated_checker_python - "$manifest" "$ROOT_DIR/scripts/run_mobile_hermetic_command.py" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import re
+import sys
+
+
+def reject_duplicates(pairs):
+    value = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON member: {key}")
+        value[key] = child
+    return value
+
+
+manifest = json.loads(
+    Path(sys.argv[1]).read_text(encoding="utf-8"),
+    object_pairs_hook=reject_duplicates,
+)
+environment = manifest.get("build_environment")
+expected_fields = {
+    "schema",
+    "hermetic_runner_schema",
+    "hermetic_runner_sha256",
+    "environment_profiles",
+    "rust_toolchain_channel",
+    "cargo_release",
+    "cargo_commit_hash",
+    "cargo_binary_sha256",
+    "rustc_release",
+    "rustc_commit_hash",
+    "rustc_binary_sha256",
+    "python_version",
+    "python_binary_sha256",
+    "git_version",
+    "git_binary_sha256",
+    "rustup_version",
+    "rustup_binary_sha256",
+    "xcode_version",
+    "xcode_build_version",
+    "iphoneos_sdk_version",
+    "iphonesimulator_sdk_version",
+    "macosx_sdk_version",
+}
+if not isinstance(environment, dict) or set(environment) != expected_fields:
+    raise SystemExit(1)
+common = {
+    "CARGO",
+    "CARGO_HOME",
+    "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE",
+    "CARGO_TARGET_DIR",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "NORITO_SKIP_BINDINGS_SYNC",
+    "PATH",
+    "RUSTC",
+    "RUSTUP_HOME",
+    "TMPDIR",
+}
+expected_profiles = {
+    "apple-ios-device": sorted(
+        common | {"DEVELOPER_DIR", "IPHONEOS_DEPLOYMENT_TARGET", "SDKROOT"}
+    ),
+    "apple-ios-simulator": sorted(
+        common
+        | {
+            "DEVELOPER_DIR",
+            "IPHONEOS_DEPLOYMENT_TARGET",
+            "IPHONESIMULATOR_DEPLOYMENT_TARGET",
+            "SDKROOT",
+        }
+    ),
+    "apple-macos": sorted(
+        common | {"DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT"}
+    ),
+}
+if environment["environment_profiles"] != expected_profiles:
+    raise SystemExit(1)
+if (
+    environment["schema"] != "iroha.mobile-native-build-environment.v1"
+    or environment["hermetic_runner_schema"] != "iroha.mobile-hermetic-command.v1"
+    or environment["rust_toolchain_channel"] != "1.93.1"
+    or environment["cargo_release"] != "1.93.1"
+    or environment["rustc_release"] != "1.93.1"
+):
+    raise SystemExit(1)
+sha256 = re.compile(r"^[0-9a-f]{64}$")
+commit = re.compile(r"^[0-9a-f]{40}$")
+version = re.compile(r"^[0-9]+(?:\.[0-9]+){1,2}$")
+for field in (
+    "hermetic_runner_sha256",
+    "cargo_binary_sha256",
+    "rustc_binary_sha256",
+    "python_binary_sha256",
+    "git_binary_sha256",
+    "rustup_binary_sha256",
+):
+    if not isinstance(environment[field], str) or not sha256.fullmatch(environment[field]):
+        raise SystemExit(1)
+for field in ("cargo_commit_hash", "rustc_commit_hash"):
+    if not isinstance(environment[field], str) or not commit.fullmatch(environment[field]):
+        raise SystemExit(1)
+for field in (
+    "python_version",
+    "git_version",
+    "rustup_version",
+    "xcode_version",
+    "iphoneos_sdk_version",
+    "iphonesimulator_sdk_version",
+    "macosx_sdk_version",
+):
+    if not isinstance(environment[field], str) or not version.fullmatch(environment[field]):
+        raise SystemExit(1)
+if not isinstance(environment["xcode_build_version"], str) or not re.fullmatch(
+    r"[A-Za-z0-9.]+", environment["xcode_build_version"]
+):
+    raise SystemExit(1)
+runner = Path(sys.argv[2])
+if runner.is_file() and hashlib.sha256(runner.read_bytes()).hexdigest() != environment[
+    "hermetic_runner_sha256"
+]:
+    raise SystemExit(1)
+PY
+    then
+      fail "NoritoBridge artifact build_environment is missing, malformed, or not hermetic"
+    fi
     local privacy_keys=()
     local privacy_declarations=()
     local privacy_key
@@ -1329,7 +1648,7 @@ check_xcframework() {
       elif [[ -e "$privacy_marker" ]]; then
         fail "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
       fi
-      if ! python3 - "$manifest" "$privacy_value" <<'PY'
+      if ! run_isolated_checker_python - "$manifest" "$privacy_value" <<'PY'
 import json
 import sys
 
@@ -1384,7 +1703,7 @@ PY
     if [[ "$manifest_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
-    if ! python3 - "$manifest" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'
+    if ! run_isolated_checker_python - "$manifest" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'
 import json
 import sys
 
@@ -1422,14 +1741,13 @@ PY
       if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
         fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 21"
       fi
-      source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+      source_commit="$(run_bridge_source_git -C "$ROOT_DIR" rev-parse --verify HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       if [[ "$manifest_commit" != "$source_commit" ]]; then
         fail "NoritoBridge artifact source commit does not match checkout"
       fi
       source_dirty=false
-      if [[ -n "$(python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
-          status --root "$ROOT_DIR")" ]]; then
+      if [[ -n "$(run_bridge_source_seal status --root "$ROOT_DIR")" ]]; then
         source_dirty=true
       fi
       if [[ "$manifest_dirty" != "$source_dirty" ]]; then
@@ -1481,7 +1799,12 @@ PY
             fail "NoritoBridge $slice is missing required symbol $symbol"
           fi
         done
-        if ! python3 - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+        for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
+          if grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+            fail "NoritoBridge $slice exports forbidden first-release symbol $symbol"
+          fi
+        done
+        if ! run_isolated_checker_python - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import subprocess
 import sys
 
@@ -1587,13 +1910,19 @@ check_android_native_symbols() {
       fi
     fi
   fi
+  local symbol
+  for symbol in "${FORBIDDEN_MOBILE_BRIDGE_SYMBOLS[@]}"; do
+    if grep -Eq "(^|[[:space:]])_?${symbol}$" <<<"$symbols"; then
+      fail "client-android $abi bridge exports forbidden first-release symbol $symbol"
+    fi
+  done
   for namespace in org_hyperledger_iroha_sdk_offline org_hyperledger_iroha_android_offline; do
     local method
     for method in "${KAGEMUSHA_JNI_METHODS[@]}"; do
       expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
     done
   done
-  if ! python3 - "$abi" "${KAGEMUSHA_C_SYMBOLS[@]}" -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
+  if ! run_isolated_checker_python - "$abi" "${KAGEMUSHA_C_SYMBOLS[@]}" -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
 import os
 import sys
 
@@ -1661,9 +1990,31 @@ check_android_native_stripped() {
 
 check_android_native_provenance() {
   local client_aar="$1"
+  local source_seal_python=""
+  local source_seal_home=""
+  local source_seal_cargo_home=""
+  local source_seal_rustup_home=""
+  local source_seal_tmpdir=""
+  local source_seal_cargo=""
+  local source_seal_rustc=""
 
-  python3 - "$ROOT_DIR" "$client_aar" "$ANDROID_NATIVE_PROVENANCE_ENTRY" \
-    "$ALLOW_DIRTY_SOURCE" <<'PY'
+  if [[ -d "$ROOT_DIR/.git" ]]; then
+    initialize_source_seal_tools
+    source_seal_python="$CHECK_PYTHON_BINARY"
+    source_seal_home="$CHECK_USER_HOME_DIR"
+    source_seal_cargo_home="$SOURCE_SEAL_CARGO_HOME"
+    source_seal_rustup_home="$SOURCE_SEAL_RUSTUP_HOME"
+    source_seal_tmpdir="$CHECK_TMPDIR"
+    source_seal_cargo="$SOURCE_SEAL_CARGO_BINARY"
+    source_seal_rustc="$SOURCE_SEAL_RUSTC_BINARY"
+  fi
+
+  run_isolated_checker_python - \
+    "$ROOT_DIR" "$client_aar" "$ANDROID_NATIVE_PROVENANCE_ENTRY" \
+    "$ANDROID_CLIENT_BUILD_DIR" "$ALLOW_DIRTY_SOURCE" \
+    "$source_seal_python" "$source_seal_home" \
+    "$source_seal_cargo_home" "$source_seal_rustup_home" \
+    "$source_seal_tmpdir" "$source_seal_cargo" "$source_seal_rustc" <<'PY'
 import hashlib
 import json
 import os
@@ -1677,7 +2028,15 @@ import zipfile
 root = Path(sys.argv[1])
 aar_path = Path(sys.argv[2])
 manifest_entry = sys.argv[3]
-allow_dirty_source = sys.argv[4] == "1"
+android_build_root = Path(sys.argv[4])
+allow_dirty_source = sys.argv[5] == "1"
+source_seal_python = sys.argv[6]
+source_seal_home = sys.argv[7]
+source_seal_cargo_home = sys.argv[8]
+source_seal_rustup_home = sys.argv[9]
+source_seal_tmpdir = sys.argv[10]
+source_seal_cargo = sys.argv[11]
+source_seal_rustc = sys.argv[12]
 abis = ("arm64-v8a", "x86_64")
 library_name = "libconnect_norito_bridge.so"
 sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
@@ -1701,8 +2060,62 @@ def sha256_bytes(payload):
     return hashlib.sha256(payload).hexdigest()
 
 
+def source_seal_snapshot():
+    if not all(
+        (
+            source_seal_python,
+            source_seal_home,
+            source_seal_cargo_home,
+            source_seal_rustup_home,
+            source_seal_tmpdir,
+            source_seal_cargo,
+            source_seal_rustc,
+        )
+    ):
+        fail("source-seal tool identity is unavailable")
+    environment = {
+        "HOME": source_seal_home,
+        "PATH": os.pathsep.join(
+            dict.fromkeys(
+                (
+                    str(Path(source_seal_python).parent),
+                    str(Path(source_seal_cargo).parent),
+                    str(Path(source_seal_rustc).parent),
+                    "/usr/bin",
+                    "/bin",
+                )
+            )
+        ),
+        "TMPDIR": source_seal_tmpdir,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "NORITO_BRIDGE_SEAL_HOME": source_seal_home,
+        "NORITO_BRIDGE_SEAL_CARGO_HOME": source_seal_cargo_home,
+        "NORITO_BRIDGE_SEAL_RUSTUP_HOME": source_seal_rustup_home,
+        "NORITO_BRIDGE_SEAL_TMPDIR": source_seal_tmpdir,
+        "NORITO_BRIDGE_SEAL_CARGO": source_seal_cargo,
+        "NORITO_BRIDGE_SEAL_RUSTC": source_seal_rustc,
+    }
+    return subprocess.run(
+        [
+            source_seal_python,
+            "-I",
+            str(root / "scripts/norito_bridge_source_seal.py"),
+            "snapshot",
+            "--root",
+            str(root),
+            "--platform",
+            "android",
+        ],
+        check=True,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+
+
 def read_regular_file(path, label, allowed_root=None):
-    allowed_root = allowed_root or (root / "kotlin/client-android/build")
+    allowed_root = allowed_root or android_build_root
     try:
         path.relative_to(allowed_root)
     except ValueError:
@@ -1776,6 +2189,7 @@ with archive:
         "cargo_locked",
         "privacy_production_enabled",
         "cargo_features",
+        "build_environment",
         "source_commit",
         "source_tree_dirty",
         "source_fingerprint_sha256",
@@ -1805,6 +2219,100 @@ with archive:
             "client-android native provenance cargo_features must be exactly "
             f"{expected_features}"
         )
+    build_environment = manifest["build_environment"]
+    expected_build_environment_fields = {
+        "schema",
+        "hermetic_runner_schema",
+        "hermetic_runner_sha256",
+        "environment_profile",
+        "environment_allowlist",
+        "rust_toolchain_channel",
+        "cargo_release",
+        "cargo_commit_hash",
+        "cargo_binary_sha256",
+        "rustc_release",
+        "rustc_commit_hash",
+        "rustc_binary_sha256",
+        "cargo_ndk_version",
+        "cargo_ndk_binary_sha256",
+        "python_version",
+        "python_binary_sha256",
+        "git_version",
+        "git_binary_sha256",
+        "rustup_version",
+        "rustup_binary_sha256",
+        "android_ndk_revision",
+        "android_ndk_source_properties_sha256",
+    }
+    if (
+        not isinstance(build_environment, dict)
+        or set(build_environment) != expected_build_environment_fields
+    ):
+        fail("client-android native provenance build_environment field inventory is not exact")
+    expected_environment_allowlist = [
+        "ANDROID_NDK_HOME",
+        "ANDROID_NDK_ROOT",
+        "CARGO",
+        "CARGO_HOME",
+        "CARGO_INCREMENTAL",
+        "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "NORITO_SKIP_BINDINGS_SYNC",
+        "PATH",
+        "RUSTC",
+        "RUSTUP_HOME",
+        "TMPDIR",
+    ]
+    if (
+        build_environment["schema"] != "iroha.mobile-native-build-environment.v1"
+        or build_environment["hermetic_runner_schema"]
+        != "iroha.mobile-hermetic-command.v1"
+        or build_environment["environment_profile"] != "android-cargo"
+        or build_environment["environment_allowlist"] != expected_environment_allowlist
+        or build_environment["rust_toolchain_channel"] != "1.93.1"
+        or build_environment["cargo_release"] != "1.93.1"
+        or build_environment["rustc_release"] != "1.93.1"
+        or build_environment["cargo_ndk_version"] != "4.1.2"
+    ):
+        fail("client-android native provenance build_environment is not canonical")
+    for field in (
+        "hermetic_runner_sha256",
+        "cargo_binary_sha256",
+        "rustc_binary_sha256",
+        "cargo_ndk_binary_sha256",
+        "python_binary_sha256",
+        "git_binary_sha256",
+        "rustup_binary_sha256",
+        "android_ndk_source_properties_sha256",
+    ):
+        if not isinstance(build_environment[field], str) or not sha256_pattern.fullmatch(
+            build_environment[field]
+        ):
+            fail(f"client-android native provenance build_environment {field} is malformed")
+    for field in ("cargo_commit_hash", "rustc_commit_hash"):
+        if not isinstance(build_environment[field], str) or not re.fullmatch(
+            r"[0-9a-f]{40}", build_environment[field]
+        ):
+            fail(f"client-android native provenance build_environment {field} is malformed")
+    for field in ("python_version", "git_version", "rustup_version"):
+        if not isinstance(build_environment[field], str) or not re.fullmatch(
+            r"[0-9]+(?:\.[0-9]+){1,2}", build_environment[field]
+        ):
+            fail(f"client-android native provenance build_environment {field} is malformed")
+    if build_environment["android_ndk_revision"] != manifest["android_ndk_revision"]:
+        fail("client-android native provenance Android NDK identities disagree")
+    hermetic_runner = root / "scripts/run_mobile_hermetic_command.py"
+    if hermetic_runner.is_file() and sha256_bytes(
+        read_regular_file(
+            hermetic_runner,
+            "mobile hermetic command runner",
+            root,
+        )
+    ) != build_environment["hermetic_runner_sha256"]:
+        fail("client-android native provenance hermetic runner digest does not match checkout")
     if not isinstance(manifest["source_commit"], str) or not re.fullmatch(
         r"[0-9a-f]{40}", manifest["source_commit"]
     ):
@@ -1824,25 +2332,13 @@ with archive:
         r"[0-9]+(?:\.[0-9]+){1,3}", manifest["android_ndk_revision"]
     ):
         fail("client-android native provenance Android NDK revision is not canonical")
+    if manifest["android_ndk_revision"] != "28.0.12674087":
+        fail("client-android native provenance does not bind exact Android NDK 28.0.12674087")
 
     source_snapshot_bytes = None
     if (root / ".git").exists():
-        source_seal_script = root / "scripts/norito_bridge_source_seal.py"
         try:
-            source_snapshot_bytes = subprocess.run(
-                [
-                    "python3",
-                    str(source_seal_script),
-                    "snapshot",
-                    "--root",
-                    str(root),
-                    "--platform",
-                    "android",
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ).stdout
+            source_snapshot_bytes = source_seal_snapshot()
             source_snapshot = json.loads(
                 source_snapshot_bytes.decode("utf-8"),
                 object_pairs_hook=object_without_duplicates,
@@ -1892,9 +2388,8 @@ with archive:
             fail("client-android native provenance Cargo.lock digest does not match checkout")
 
     mode = "production" if production else "default"
-    generated_manifest = root / (
-        "kotlin/client-android/build/generated/nativeProvenance/"
-        f"{mode}/iroha/native-build-provenance-v1.json"
+    generated_manifest = android_build_root / (
+        f"generated/nativeProvenance/{mode}/iroha/native-build-provenance-v1.json"
     )
     generated_manifest_bytes = read_regular_file(
         generated_manifest,
@@ -1922,7 +2417,7 @@ with archive:
     def read_exact_native_tree(directory, label):
         expected = {f"{abi}/{library_name}" for abi in abis}
         try:
-            directory.relative_to(root / "kotlin/client-android/build")
+            directory.relative_to(android_build_root)
         except ValueError:
             fail(f"{label} escapes the Android build root: {directory}")
         if directory.is_symlink() or not directory.is_dir():
@@ -1965,11 +2460,11 @@ with archive:
         }
 
     generated_by_abi = read_exact_native_tree(
-        root / f"kotlin/client-android/build/generated/jniLibs/{mode}",
+        android_build_root / f"generated/jniLibs/{mode}",
         "generated native bridge",
     )
     raw_by_abi = read_exact_native_tree(
-        root / f"kotlin/client-android/build/native/cargo-ndk/{mode}",
+        android_build_root / f"native/cargo-ndk/{mode}",
         "raw cargo-ndk native bridge",
     )
 
@@ -2014,20 +2509,7 @@ with archive:
 
     if source_snapshot_bytes is not None:
         try:
-            source_snapshot_after = subprocess.run(
-                [
-                    "python3",
-                    str(root / "scripts/norito_bridge_source_seal.py"),
-                    "snapshot",
-                    "--root",
-                    str(root),
-                    "--platform",
-                    "android",
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ).stdout
+            source_snapshot_after = source_seal_snapshot()
         except (OSError, subprocess.CalledProcessError) as error:
             fail(f"unable to re-authenticate Android source after artifact checks: {error}")
         if source_snapshot_after != source_snapshot_bytes:
@@ -2050,11 +2532,11 @@ check_android_package() {
   require_file "$ROOT_DIR/kotlin/client-android/src/main/AndroidManifest.xml" "client-android AndroidManifest"
 
   if [[ "$REQUIRE_ANDROID_OUTPUTS" == "1" ]]; then
-    local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+    local client_aar="$ANDROID_CLIENT_BUILD_DIR/outputs/aar/client-android-release.aar"
     local abi
     local native_mode
 
-    require_glob "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
+    require_glob "$ANDROID_CORE_JVM_BUILD_DIR/libs/core-jvm-*.jar" "core-jvm built jar"
     require_glob "$client_aar" "client-android release aar"
 
     require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
@@ -2071,12 +2553,12 @@ check_android_package() {
     while IFS= read -r production_archive; do
       reject_candidate_lab_archive "$production_archive" "production mobile SDK archive"
     done < <(
-      compgen -G "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" || true
-      compgen -G "$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-*.aar" || true
+      compgen -G "$ANDROID_CORE_JVM_BUILD_DIR/libs/core-jvm-*.jar" || true
+      compgen -G "$ANDROID_OFFLINE_WALLET_BUILD_DIR/outputs/aar/offline-wallet-android-*.aar" || true
     )
 
     for abi in arm64-v8a x86_64; do
-      local source_native="$ROOT_DIR/kotlin/client-android/build/generated/jniLibs/$native_mode/$abi/libconnect_norito_bridge.so"
+      local source_native="$ANDROID_CLIENT_BUILD_DIR/generated/jniLibs/$native_mode/$abi/libconnect_norito_bridge.so"
       local aar_entry="jni/$abi/libconnect_norito_bridge.so"
       if [[ -n "$native_mode" ]]; then
         require_file "$source_native" "client-android $abi generated native bridge library"

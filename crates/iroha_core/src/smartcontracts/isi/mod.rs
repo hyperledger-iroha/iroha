@@ -429,6 +429,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::ApplySccpRouteGovernance>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -443,6 +444,10 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle
+    >,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
@@ -3110,9 +3115,7 @@ mod tests {
     #[test]
     async fn register_contract_manifest_requires_provenance() -> Result<()> {
         use iroha_crypto::Hash;
-        use iroha_data_model::{
-            isi::smart_contract_code, permission, prelude as dm, smart_contract::manifest,
-        };
+        use iroha_data_model::{isi::smart_contract_code, permission, prelude as dm};
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -3124,19 +3127,9 @@ mod tests {
 
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
-        let manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: Some(h),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        };
+        let (_, mut manifest) = minimal_contract_artifact();
+        manifest.code_hash = Some(h);
+        manifest.provenance = None;
 
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
@@ -3158,9 +3151,7 @@ mod tests {
     #[test]
     async fn register_contract_manifest_rejects_wrong_signer() -> Result<()> {
         use iroha_crypto::Hash;
-        use iroha_data_model::{
-            isi::smart_contract_code, permission, prelude as dm, smart_contract::manifest,
-        };
+        use iroha_data_model::{isi::smart_contract_code, permission, prelude as dm};
 
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -3172,20 +3163,9 @@ mod tests {
 
         let alice = ALICE_ID.clone();
         let h = Hash::new(b"dummy_code");
-        let manifest = manifest::ContractManifest {
-            seiyaku_name: None,
-            code_hash: Some(h),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        }
-        .signed(&checked_keypair());
+        let (_, mut manifest) = minimal_contract_artifact();
+        manifest.code_hash = Some(h);
+        let manifest = manifest.signed(&checked_keypair());
 
         let token =
             iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;

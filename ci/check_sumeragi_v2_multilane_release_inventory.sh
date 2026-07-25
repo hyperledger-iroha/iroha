@@ -13,6 +13,8 @@ readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly grouped_fixture="fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly release_receipt_writer="scripts/write_sumeragi_v2_release_receipt.py"
+readonly prebuilt_bundle_shell="scripts/sumeragi_v2_prebuilt_bundle.sh"
+readonly prebuilt_bundle_helper="scripts/sumeragi_v2_prebuilt_bundle.py"
 readonly seed_runner="scripts/run_sumeragi_v2_seed_matrix.sh"
 readonly formal_harness="scripts/formal/run_sumeragi_v2_harness.sh"
 readonly formal_release_runner="scripts/run_sumeragi_v2_formal_release.sh"
@@ -111,10 +113,10 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
-  "readonly expected_multilane_focus_test_count=212"
+  "readonly expected_multilane_focus_test_count=256"
 require_exact_token \
   "$release_runner" \
-  "  readonly expected_corridor_leg_count=78"
+  "  readonly expected_corridor_leg_count=81"
 require_exact_token \
   "$release_runner" \
   "export CARGO_INCREMENTAL=0"
@@ -135,21 +137,21 @@ require_exact_token \
   "    native_amx_grouped_fixture_sha256 \"\$native_amx_grouped_fixture_sha256\" \\"
 require_exact_token \
   "$release_runner" \
-  "    native_amx_grouped_negative_control_count 45 \\"
+  "    native_amx_grouped_negative_control_count 50 \\"
 require_exact_token \
   "$grouped_parity_harness" \
-  "readonly expected_negative_control_count=45"
-for grouped_test_count in 4 47 48 3 6 5; do
+  "readonly expected_negative_control_count=50"
+for grouped_test_count in 7 56 54 3 6 5; do
   require_exact_token \
     "$grouped_parity_harness" \
     "    observed_test_count=${grouped_test_count}"
 done
 require_exact_token \
   "$release_receipt_writer" \
-  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 45"
+  "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50"
 require_exact_token \
   "$release_receipt_writer" \
-  "_G_UNIT_TEST_COUNT = 212"
+  "_G_UNIT_TEST_COUNT = 256"
 require_exact_token \
   "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
@@ -157,9 +159,9 @@ require_exact_token \
   "$release_receipt_writer" \
   '        "native_grouped_pruning_evidence": "passed",'
 for grouped_suite in \
-  '    ("openapi", 4),' \
-  '    ("python", 47),' \
-  '    ("javascript", 48),' \
+  '    ("openapi", 7),' \
+  '    ("python", 56),' \
+  '    ("javascript", 54),' \
   '    ("swift", 3),' \
   '    ("kotlin", 6),' \
   '    ("java", 5),'; do
@@ -214,9 +216,9 @@ native_amx_parity_inventory = """\
     java
   )
   native_amx_grouped_parity_test_counts=(
-    4
-    47
-    48
+    7
+    56
+    54
     3
     6
     5
@@ -335,9 +337,12 @@ for block in source_sealed_blocks:
         reject(f"source-sealed command/evidence block {label} is missing or duplicated")
 
 expected_focus_counts = {
-    "required_multilane_core_focus_tests": 87,
-    "required_multilane_queue_journal_focus_tests": 76,
-    "required_multilane_data_model_focus_tests": 7,
+    "required_multilane_core_focus_tests": 99,
+    "required_multilane_queue_journal_focus_tests": 101,
+    "required_multilane_config_lib_focus_tests": 3,
+    "required_multilane_config_runtime_focus_tests": 2,
+    "required_multilane_config_fixtures_focus_tests": 1,
+    "required_multilane_data_model_focus_tests": 8,
     "required_multilane_torii_focus_tests": 39,
     "required_multilane_torii_shared_focus_tests": 1,
     "required_multilane_integration_lib_focus_tests": 2,
@@ -357,7 +362,16 @@ for array_name, expected_count in expected_focus_counts.items():
         entry = line.strip()
         if not entry or entry.startswith("#"):
             continue
-        if not re.fullmatch(r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+", entry):
+        pattern = (
+            r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*"
+            if array_name
+            in {
+                "required_multilane_config_runtime_focus_tests",
+                "required_multilane_config_fixtures_focus_tests",
+            }
+            else r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+"
+        )
+        if not re.fullmatch(pattern, entry):
             reject(f"unexpected {array_name} entry: {entry!r}")
         entries.append(entry)
     if len(entries) != expected_count or len(set(entries)) != expected_count:
@@ -367,9 +381,9 @@ for array_name, expected_count in expected_focus_counts.items():
         )
     all_focus_entries.extend(entries)
 
-if len(all_focus_entries) != 212 or len(set(all_focus_entries)) != 212:
+if len(all_focus_entries) != 256 or len(set(all_focus_entries)) != 256:
     reject(
-        "multilane focus-test arrays must contain 212 globally distinct tests; "
+        "multilane focus-test arrays must contain 256 globally distinct tests; "
         f"found {len(all_focus_entries)} entries and "
         f"{len(set(all_focus_entries))} distinct entries"
     )
@@ -379,43 +393,70 @@ g_unit_groups = (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        87,
+        99,
+        "--lib",
     ),
     (
         "required_multilane_queue_journal_focus_tests",
         "g-unit-iroha-core-queue-journal",
         "iroha_core",
-        76,
+        101,
+        "--lib",
+    ),
+    (
+        "required_multilane_config_lib_focus_tests",
+        "g-unit-iroha-config-lib",
+        "iroha_config",
+        3,
+        "--lib",
+    ),
+    (
+        "required_multilane_config_runtime_focus_tests",
+        "g-unit-iroha-config-runtime",
+        "iroha_config",
+        2,
+        "--test sumeragi_v2_merge_runtime_config",
+    ),
+    (
+        "required_multilane_config_fixtures_focus_tests",
+        "g-unit-iroha-config-fixtures",
+        "iroha_config",
+        1,
+        "--test fixtures",
     ),
     (
         "required_multilane_data_model_focus_tests",
         "g-unit-iroha-data-model",
         "iroha_data_model",
-        7,
+        8,
+        "--lib",
     ),
     (
         "required_multilane_torii_focus_tests",
         "g-unit-iroha-torii",
         "iroha_torii",
         39,
+        "--lib",
     ),
     (
         "required_multilane_torii_shared_focus_tests",
         "g-unit-iroha-torii-shared",
         "iroha_torii_shared",
         1,
+        "--lib",
     ),
     (
         "required_multilane_integration_lib_focus_tests",
         "g-unit-integration-tests",
         "integration_tests",
         2,
+        "--lib",
     ),
 )
-for array_name, leg_id, package, expected_count in g_unit_groups:
+for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
     command = (
         f"'for test in {array_name}; do cargo test --locked --offline "
-        f'-p {package} --lib "$test" -- --exact --test-threads=1; done\''
+        f'-p {package} {cargo_target} "$test" -- --exact --test-threads=1; done\''
     )
     if source.count(command) != 1:
         reject(f"G-UNIT leg {leg_id} lacks its exact crate-bound Cargo command")
@@ -424,7 +465,7 @@ for array_name, leg_id, package, expected_count in g_unit_groups:
     if source.count(
         f'    g_unit_expected_test_count "$expected_multilane_focus_test_count" \\'
     ) != 1:
-        reject("G-UNIT expected 212 count is not published exactly once")
+        reject("G-UNIT expected 256 count is not published exactly once")
     if expected_count <= 0:
         reject(f"G-UNIT leg {leg_id} has an invalid expected count")
 
@@ -488,7 +529,9 @@ python3 -I -S - \
   "$chaos_runner" \
   "$taira_runner" \
   "$launcher" \
-  "$release_receipt_writer" <<'PY'
+  "$release_receipt_writer" \
+  "$prebuilt_bundle_shell" \
+  "$prebuilt_bundle_helper" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
@@ -508,6 +551,26 @@ def reject(message: str) -> None:
 # the release runner. Every edge is source-explicit so adding a new child
 # requires reviewing its Cargo policy here.
 expected_edges = (
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/sumeragi_v2_prebuilt_bundle.sh",
+        'source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
+    ),
+    (
+        "scripts/run_sumeragi_v2_seed_matrix.sh",
+        "scripts/sumeragi_v2_prebuilt_bundle.sh",
+        'source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
+    ),
+    (
+        "scripts/run_taira_v2_24h_soak.sh",
+        "scripts/sumeragi_v2_prebuilt_bundle.sh",
+        'source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"',
+    ),
+    (
+        "scripts/sumeragi_v2_prebuilt_bundle.sh",
+        "scripts/sumeragi_v2_prebuilt_bundle.py",
+        'local prebuilt_helper="${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py"',
+    ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/run_sumeragi_v2_seed_matrix.sh",
@@ -694,27 +757,11 @@ for script in (
         "export IROHA_TEST_SKIP_BUILD=1",
         "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
         "ensure_source_bound_localnet_binaries",
-        ".sumeragi-v2-prebuilt-binaries.tsv",
-        "source_manifest_sha256",
-        "cargo_lock_sha256",
-        "irohad_sha256",
-        "irohad_message_control_sha256",
-        "iroha_sha256",
-        "kagami_sha256",
+        "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256",
         "export_source_bound_localnet_binaries",
     ):
         if token not in source:
             reject(f"{script} lacks source-bound prebuild contract token {token!r}")
-    publish_block = '''\
-  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
-  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
-  export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
-  export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"'''
-    if source.count(publish_block) != 1:
-        reject(
-            f"{script} must publish the four attested, manifest-contained "
-            "localnet executable paths exactly once"
-        )
     if source.count(
         "ensure_source_bound_localnet_binaries\n"
         "export_source_bound_localnet_binaries"
@@ -723,17 +770,52 @@ for script in (
             f"{script} must publish localnet executable overrides immediately "
             "after its source-bound prebuild"
         )
-    for command in (
-        "run_cargo build --locked --offline --release -p irohad --bin iroha3d",
-        "run_cargo build --locked --offline --release -p iroha_cli --bin iroha",
-        "run_cargo build --locked --offline --release -p iroha_kagami --bin kagami",
-    ):
-        if source.splitlines().count(f"    {command}") != 1:
-            reject(f"{script} must prebuild exactly one {command!r}")
-    if source.splitlines().count("      --features test-network-message-control") != 1:
-        reject(
-            f"{script} must prebuild exactly one message-control iroha3d"
-        )
+
+prebuilt_shell = sources["scripts/sumeragi_v2_prebuilt_bundle.sh"]
+publish_block = '''\
+  export TEST_NETWORK_BIN_IROHAD="${IROHA_TEST_TARGET_DIR}/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="${IROHA_TEST_TARGET_DIR}/message-control/release/iroha3d"
+  export TEST_NETWORK_BIN_IROHA="${IROHA_TEST_TARGET_DIR}/release/iroha"
+  export KAGAMI_BIN="${IROHA_TEST_TARGET_DIR}/release/kagami"'''
+if prebuilt_shell.count(publish_block) != 1:
+    reject("shared prebuild helper must publish the four exact manifest paths once")
+for command in (
+    "run_cargo build --locked --offline --release -p irohad --bin iroha3d",
+    "run_cargo build --locked --offline --release -p iroha_cli --bin iroha",
+    "run_cargo build --locked --offline --release -p iroha_kagami --bin kagami",
+):
+    if prebuilt_shell.splitlines().count(f"      {command} || exit $?") != 1:
+        reject(f"shared prebuild helper must execute exactly one {command!r}")
+if prebuilt_shell.splitlines().count(
+    "        --features test-network-message-control || exit $?"
+) != 1:
+    reject("shared prebuild helper must build exactly one message-control iroha3d")
+for token in (
+    "unset IROHA_TEST_TARGET_DIR",
+    "command cargo --version",
+    "command rustc -vV",
+    '--manifest-sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"',
+):
+    if prebuilt_shell.count(token) != 1:
+        reject(f"shared prebuild helper lacks exact fail-closed token {token!r}")
+
+prebuilt_python = sources["scripts/sumeragi_v2_prebuilt_bundle.py"]
+for token in (
+    '_SCHEMA_VERSION = "2"',
+    "_BINARY_MODE = 0o500",
+    "_MANIFEST_MODE = 0o400",
+    "_DIRECTORY_MODE = 0o500",
+    '"release/iroha3d"',
+    '"message-control/release/iroha3d"',
+    '"release/iroha"',
+    '"release/kagami"',
+    '"cargo_version_sha256"',
+    '"rustc_version_sha256"',
+    '"bundle_dir"',
+    "_validate_exact_bundle_tree(bundle)",
+):
+    if token not in prebuilt_python:
+        reject(f"prebuilt bundle v2 helper lacks contract token {token!r}")
 
 release = sources["scripts/run_sumeragi_v2_release_gates.sh"]
 if "--no-skip-build" in release:
@@ -974,4 +1056,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 78 corridor legs, exact 212/212 G-UNIT (87 core, 76 queue-journal, 7 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 81 corridor legs, exact 256/256 G-UNIT (99 core, 101 queue-journal, 6 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

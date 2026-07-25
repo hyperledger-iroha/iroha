@@ -5051,40 +5051,20 @@ export declare const SORAFS_ORDERBOOK_PAYLOAD_KINDS: Readonly<{
 export declare const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: 256;
 
 export type SorafsOrderbookPayloadKind =
-  | "order"
   | "order-request"
-  | "orderbook-order-request"
-  | "request"
-  | "cancel"
   | "order-cancel"
-  | "orderbook-order-cancel"
-  | "trade"
   | "trade-event"
-  | "orderbook-trade-event"
-  | "channel"
   | "settlement-channel"
-  | "receipt"
   | "settlement-receipt"
-  | "snapshot"
-  | "runtime-snapshot"
-  | "orderbook-runtime-snapshot";
+  | "runtime-snapshot";
 
 export type SorafsOrderbookSignablePayloadKind =
-  | "order"
   | "order-request"
-  | "orderbook-order-request"
-  | "request"
-  | "cancel"
   | "order-cancel"
-  | "orderbook-order-cancel"
-  | "receipt"
   | "settlement-receipt";
 
 export type SorafsOrderbookCancelReason =
   | "owner-requested"
-  | "owner_requested"
-  | "owner"
-  | "requested"
   | "expired"
   | "governance"
   | "replaced";
@@ -5096,58 +5076,39 @@ export type SorafsOrderbookBytesInput = ArrayBufferView | ArrayBuffer | Buffer;
 
 export interface SorafsSignedOrderbookOrderRequestFields {
   orderId?: SorafsOrderbookBytesInput;
-  order_id?: SorafsOrderbookBytesInput;
   side: SorafsOrderbookSide;
   tier: SorafsOrderbookTier;
-  pricePerGib?: SorafsOrderbookXorQuantityInput;
-  price_per_gib?: SorafsOrderbookXorQuantityInput;
-  quantityGib?: SorafsOrderbookIntegerInput;
-  quantity_gib?: SorafsOrderbookIntegerInput;
+  pricePerGib: SorafsOrderbookXorQuantityInput;
+  quantityGib: SorafsOrderbookIntegerInput;
   remainingGib?: SorafsOrderbookIntegerInput;
-  remaining_gib?: SorafsOrderbookIntegerInput;
-  ownerAccount?: SorafsOrderbookBytesInput;
-  owner_account?: SorafsOrderbookBytesInput;
-  expiryUnix?: SorafsOrderbookIntegerInput;
-  expiry_unix?: SorafsOrderbookIntegerInput;
+  ownerAccount: SorafsOrderbookBytesInput;
+  /** Exact non-zero 32-byte provider identity for asks; omit or pass empty bytes for bids. */
+  providerId?: SorafsOrderbookBytesInput;
+  expiryUnix: SorafsOrderbookIntegerInput;
   nonce: SorafsOrderbookIntegerInput;
-  makerFeeBps?: SorafsOrderbookIntegerInput;
-  maker_fee_bps?: SorafsOrderbookIntegerInput;
-  takerFeeBps?: SorafsOrderbookIntegerInput;
-  taker_fee_bps?: SorafsOrderbookIntegerInput;
+  makerFeeBps: SorafsOrderbookIntegerInput;
+  takerFeeBps: SorafsOrderbookIntegerInput;
 }
 
 export interface SorafsSignedOrderbookOrderCancelFields {
-  orderId?: SorafsOrderbookBytesInput;
-  order_id?: SorafsOrderbookBytesInput;
-  ownerAccount?: SorafsOrderbookBytesInput;
-  owner_account?: SorafsOrderbookBytesInput;
+  orderId: SorafsOrderbookBytesInput;
+  ownerAccount: SorafsOrderbookBytesInput;
   reason: SorafsOrderbookCancelReason;
   nonce: SorafsOrderbookIntegerInput;
 }
 
 export interface SorafsSignedOrderbookSettlementReceiptFields {
-  receiptId?: SorafsOrderbookBytesInput;
-  receipt_id?: SorafsOrderbookBytesInput;
-  channelId?: SorafsOrderbookBytesInput;
-  channel_id?: SorafsOrderbookBytesInput;
-  tradeId?: SorafsOrderbookBytesInput;
-  trade_id?: SorafsOrderbookBytesInput;
-  rangeStart?: SorafsOrderbookIntegerInput;
-  range_start?: SorafsOrderbookIntegerInput;
-  rangeEnd?: SorafsOrderbookIntegerInput;
-  range_end?: SorafsOrderbookIntegerInput;
-  chunkHash?: SorafsOrderbookBytesInput;
-  chunk_hash?: SorafsOrderbookBytesInput;
-  bytesDelivered?: SorafsOrderbookIntegerInput;
-  bytes_delivered?: SorafsOrderbookIntegerInput;
-  xorDebited?: SorafsOrderbookXorQuantityInput;
-  xor_debited?: SorafsOrderbookXorQuantityInput;
-  providerCredit?: SorafsOrderbookXorQuantityInput;
-  provider_credit?: SorafsOrderbookXorQuantityInput;
-  feeAmount?: SorafsOrderbookXorQuantityInput;
-  fee_amount?: SorafsOrderbookXorQuantityInput;
-  issuedAtUnix?: SorafsOrderbookIntegerInput;
-  issued_at_unix?: SorafsOrderbookIntegerInput;
+  receiptId: SorafsOrderbookBytesInput;
+  channelId: SorafsOrderbookBytesInput;
+  tradeId: SorafsOrderbookBytesInput;
+  rangeStart: SorafsOrderbookIntegerInput;
+  rangeEnd: SorafsOrderbookIntegerInput;
+  chunkHash: SorafsOrderbookBytesInput;
+  bytesDelivered: SorafsOrderbookIntegerInput;
+  xorDebited: SorafsOrderbookXorQuantityInput;
+  providerCredit: SorafsOrderbookXorQuantityInput;
+  feeAmount: SorafsOrderbookXorQuantityInput;
+  issuedAtUnix: SorafsOrderbookIntegerInput;
 }
 
 export declare const SORAFS_PDP_PAYLOAD_KINDS: Readonly<{
@@ -5163,11 +5124,8 @@ export declare const SORAFS_REFERENCE_MAX_LABEL_BYTES_V1: 1024;
 
 export type SorafsPdpPayloadKind =
   | "commitment"
-  | "pdp-commitment"
   | "challenge"
-  | "pdp-challenge"
-  | "proof"
-  | "pdp-proof";
+  | "proof";
 
 export interface SorafsValidationContextField {
   key: string;
@@ -13978,6 +13936,17 @@ export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: { parseJson?: boolean },
 ): JsonValue;
+
+/**
+ * Compute the exact native Parliament fingerprint for a validation-fee policy.
+ *
+ * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
+ * contract. Missing, unknown, and legacy fields are rejected natively.
+ */
+export function computeValidationFeePolicyProposalFingerprintV1(
+  policy: Readonly<Record<string, JsonValue>>,
+  payoutLifecycleProposalId?: string | null,
+): string;
 
 export interface LaneRelaySample {
   valid: Buffer;

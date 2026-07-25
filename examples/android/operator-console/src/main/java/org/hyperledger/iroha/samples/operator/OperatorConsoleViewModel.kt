@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.IrohaKeyManager
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference
 import org.hyperledger.iroha.android.KeyManagementException
 import org.hyperledger.iroha.android.SigningException
+import org.hyperledger.iroha.android.address.AccountAddress
 import org.hyperledger.iroha.android.norito.NoritoException
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.android.model.TransactionPayload
@@ -29,7 +30,11 @@ class OperatorConsoleViewModel(application: Application) : AndroidViewModel(appl
     private val environment = SampleEnvironment.fromBuildConfig()
     private val harnessArtifacts = environment.harnessArtifacts()
     private val keyManager = IrohaKeyManager.withDefaultProviders()
-    private val transactionBuilder = TransactionBuilder(NoritoJavaCodecAdapter(), keyManager)
+    private val transactionBuilder =
+        TransactionBuilder(
+            NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            keyManager,
+        )
     private val clientFactory = SampleClientFactory(application.applicationContext, environment)
     private val clientArtifactsResult = runCatching { clientFactory.createArtifacts() }
     private val clientArtifacts = clientArtifactsResult.getOrNull()

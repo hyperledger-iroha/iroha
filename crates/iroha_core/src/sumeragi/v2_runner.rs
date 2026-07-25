@@ -60,8 +60,8 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
-        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PostFinalityCleanupOutcome,
-        PostFinalityCleanupTarget, V2EffectExecutor,
+        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
@@ -80,7 +80,7 @@ use super::{
 };
 use crate::{
     kura::Kura,
-    merge_sidecar::CertifiedMergeSidecarMessage,
+    merge_sidecar::{CertifiedMergeSidecarMessage, MergeSidecarLimits, MergeSigningGuardLimits},
     native_amx::NativeAmxMessage,
     queue::{GlobalQueueSelectionLease, Queue},
     state::State,
@@ -88,6 +88,43 @@ use crate::{
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
+const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
+
+/// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
+#[derive(Clone, Copy, Debug)]
+struct PendingTipRecoveryDeadline {
+    started_at: Instant,
+    deadline: Instant,
+    timeout: Duration,
+}
+
+impl PendingTipRecoveryDeadline {
+    fn new(started_at: Instant, round_timeout: Duration) -> Result<Self, V2RunnerError> {
+        let timeout = round_timeout
+            .checked_mul(PENDING_TIP_RECOVERY_DEADLINE_ROUNDS)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+        let deadline = started_at
+            .checked_add(timeout)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+        Ok(Self {
+            started_at,
+            deadline,
+            timeout,
+        })
+    }
+
+    fn expired(self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+
+    fn remaining(self, now: Instant) -> Duration {
+        self.deadline.saturating_duration_since(now)
+    }
+
+    fn elapsed(self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.started_at)
+    }
+}
 
 /// Exact reducer facts which own one local proposal-side work item.
 ///
@@ -946,6 +983,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         // constructor can observe or reject the recoverable intermediate
         // shape.
         if recovering_interrupted_tip {
+            let recovery_deadline = PendingTipRecoveryDeadline::new(Instant::now(), round_timeout)?;
+            iroha_logger::info!(
+                height = context.height,
+                timeout = ?recovery_deadline.timeout,
+                stage = ?executor
+                    .pending_kura_apply_recovery_evidence()
+                    .map(|evidence| evidence.stage()),
+                "started bounded Sumeragi v2 interrupted-tip recovery"
+            );
             let _ = reconcile_executor_locked_body(&mut executor, &mut services)?;
             executor.consume_pending_tip_recovery_effects(
                 std::mem::take(&mut startup_effects),
@@ -959,6 +1005,19 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
+                let now = Instant::now();
+                if recovery_deadline.expired(now) {
+                    executor.record_pending_tip_recovery_deadline_exceeded(&mut services)?;
+                    let error = pending_tip_recovery_deadline_error(
+                        output_guard.as_ref(),
+                        recovery_deadline.timeout,
+                        executor.pending_tip_recovery_attempts(),
+                        executor
+                            .pending_kura_apply_recovery_evidence()
+                            .map(|evidence| evidence.stage()),
+                    );
+                    return Err(error);
+                }
                 let completions = services.drain_completions(&mut executor)?;
                 let advanced = advance_pending_tip_recovery_executor(
                     &mut executor,
@@ -966,9 +1025,21 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     control_queue_capacity,
                 )?;
                 if executor.durable_finality().is_none() && completions == 0 && advanced == 0 {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    let remaining = recovery_deadline.remaining(Instant::now());
+                    if !remaining.is_zero() {
+                        let _ = wake_rx.recv_timeout(remaining.min(IDLE_POLL));
+                    }
                 }
             }
+            iroha_logger::info!(
+                height = context.height,
+                elapsed = ?recovery_deadline.elapsed(Instant::now()),
+                attempts = executor.pending_tip_recovery_attempts(),
+                stage = ?executor
+                    .pending_kura_apply_recovery_evidence()
+                    .map(|evidence| evidence.stage()),
+                "finished bounded Sumeragi v2 interrupted-tip recovery"
+            );
         }
         let recovered_applied_height = pending_recovery_identity.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| {
@@ -2433,6 +2504,21 @@ fn construct_after_pending_tip_application_recovery<T>(
     construct()
 }
 
+fn pending_tip_recovery_deadline_error(
+    output_guard: &ConsensusOutputGuard,
+    timeout: Duration,
+    attempts: u64,
+    stage: Option<PendingKuraApplyRecoveryStage>,
+) -> V2RunnerError {
+    output_guard.activate_restart_required();
+    super::status::mark_v2_restart_required();
+    V2RunnerError::PendingTipRecoveryDeadlineExceeded {
+        timeout,
+        attempts,
+        stage,
+    }
+}
+
 fn advance_pending_tip_recovery_executor(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -2539,6 +2625,33 @@ fn lane_work_limits(
         non_zero(config.limits.native_amx_signing_guard_anchor_bytes)?,
     )
     .map_err(|_| V2RunnerError::InvalidLimits)?;
+    let merge_sidecar_request_timeout_ms =
+        NonZeroU64::new(config.limits.merge_sidecar_request_timeout_ms)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+    let merge_sidecar_server_request_gate_ttl_ms =
+        NonZeroU64::new(config.limits.merge_sidecar_server_request_gate_ttl_ms)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+    let merge_sidecar_limits = MergeSidecarLimits::new(
+        non_zero(config.limits.merge_sidecar_inbound_session_capacity)?,
+        non_zero(config.limits.merge_sidecar_inbound_sessions_per_peer)?,
+        non_zero(config.limits.merge_sidecar_inbound_assembly_bytes)?,
+        non_zero(config.limits.merge_sidecar_inbound_assembly_bytes_per_peer)?,
+        non_zero(config.limits.merge_sidecar_deferred_block_capacity)?,
+        NonZeroU64::new(config.limits.merge_sidecar_future_block_distance)
+            .ok_or(V2RunnerError::InvalidLimits)?,
+        Duration::from_millis(merge_sidecar_request_timeout_ms.get()),
+        non_zero(config.limits.merge_sidecar_outbound_sessions_per_source)?,
+        non_zero(config.limits.merge_sidecar_outbound_bytes_per_source)?,
+        non_zero(config.limits.merge_sidecar_server_request_gates_per_source)?,
+        Duration::from_millis(merge_sidecar_server_request_gate_ttl_ms.get()),
+    )
+    .map_err(|_| V2RunnerError::InvalidLimits)?;
+    let merge_signing_guard_limits = MergeSigningGuardLimits::new(
+        non_zero(config.limits.merge_signing_guard_record_capacity)?,
+        non_zero(config.limits.merge_signing_guard_record_bytes)?,
+        non_zero(config.limits.merge_signing_guard_total_bytes)?,
+    )
+    .map_err(|_| V2RunnerError::InvalidLimits)?;
     Ok(V2LaneWorkLimits::new(
         non_zero(config.limits.control_queue_capacity)?,
         non_zero(config.limits.max_transactions)?,
@@ -2557,6 +2670,8 @@ fn lane_work_limits(
         non_zero_u32(config.limits.historical_recovery_retry_tier_attempts)?,
         non_zero_u32(config.limits.historical_recovery_max_retry_tier)?,
         non_zero(config.limits.sidecar_service_burst)?,
+        merge_sidecar_limits,
+        merge_signing_guard_limits,
         native_amx_signing_guard_limits,
     ))
 }
@@ -3116,6 +3231,18 @@ pub(super) enum V2RunnerError {
         "Sumeragi v2 interrupted-tip recovery did not complete post-apply metadata and Native AMX evidence repair before lane-work construction"
     )]
     PendingTipRecoveryIncomplete,
+    /// Closed-ingress interrupted-tip recovery exhausted its cadence-derived deadline.
+    #[error(
+        "Sumeragi v2 interrupted-tip recovery exceeded {timeout:?} after {attempts} serialized attempts at stage {stage:?}; process restart is required"
+    )]
+    PendingTipRecoveryDeadlineExceeded {
+        /// Cadence-derived maximum local recovery duration.
+        timeout: Duration,
+        /// Number of serialized recovery scheduler attempts completed.
+        attempts: u64,
+        /// Exact authenticated recovery stage retained at expiry.
+        stage: Option<PendingKuraApplyRecoveryStage>,
+    },
     /// Durable parent body is unavailable in Kura.
     #[error("Sumeragi v2 successor is missing its canonical parent block")]
     MissingParent,
@@ -3250,6 +3377,41 @@ mod tests {
         .expect("completed pending-tip recovery may construct lane work");
         assert_eq!(value, 7);
         assert!(constructed.get());
+    }
+
+    #[test]
+    fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
+        let _status_guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let started_at = Instant::now();
+        let round_timeout = Duration::from_secs(10);
+        let deadline = PendingTipRecoveryDeadline::new(started_at, round_timeout)
+            .expect("derive recovery deadline");
+        assert_eq!(deadline.timeout, Duration::from_secs(30));
+        assert!(!deadline.expired(started_at + Duration::from_secs(30) - Duration::from_nanos(1)));
+        assert!(deadline.expired(started_at + Duration::from_secs(30)));
+        assert_eq!(
+            deadline.remaining(started_at + Duration::from_secs(29)),
+            Duration::from_secs(1)
+        );
+
+        let output_guard = ConsensusOutputGuard::isolated();
+        let error = pending_tip_recovery_deadline_error(
+            output_guard.as_ref(),
+            deadline.timeout,
+            17,
+            Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
+        );
+        assert!(output_guard.restart_required());
+        assert!(matches!(
+            error,
+            V2RunnerError::PendingTipRecoveryDeadlineExceeded {
+                timeout,
+                attempts: 17,
+                stage: Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
+            } if timeout == Duration::from_secs(30)
+        ));
+        super::super::status::clear_v2_status();
     }
 
     #[test]
@@ -4226,9 +4388,9 @@ mod tests {
                     message.as_ref(),
                     CertifiedMergeSidecarMessage::Chunk(_)
                 ));
-                assert!(
-                    Arc::ptr_eq(&message, &first_message),
-                    "reconnect must preserve the exact cached chunk carrier"
+                assert_eq!(
+                    message, first_message,
+                    "reconnect must preserve the exact current chunk even when its bounded transport cache was rematerialized"
                 );
                 assert!(
                     reply_routes
@@ -4544,6 +4706,34 @@ mod tests {
                 ready_body_capacity: 8,
                 ready_body_bytes: 32 * 1024 * 1024,
                 certified_request_capacity: 8,
+                authenticated_merge_qc_capacity: 64,
+                merge_leader_body_frame_headroom_bytes: 1024 * 1024,
+                autonomous_carrier_headroom_bytes: 1024 * 1024,
+                autonomous_producer_recheck_ms: 100,
+                historical_recovery_stuck_attempts: 32,
+                historical_recovery_retry_tier_attempts: 4,
+                historical_recovery_max_retry_tier: 6,
+                sidecar_service_burst: 8,
+                merge_sidecar_inbound_session_capacity: 32,
+                merge_sidecar_inbound_sessions_per_peer: 4,
+                merge_sidecar_inbound_assembly_bytes: 64 * 1024 * 1024,
+                merge_sidecar_inbound_assembly_bytes_per_peer: 32 * 1024 * 1024,
+                merge_sidecar_deferred_block_capacity: 128,
+                merge_sidecar_future_block_distance: 64,
+                merge_sidecar_request_timeout_ms: 10_000,
+                merge_sidecar_outbound_sessions_per_source: 2,
+                merge_sidecar_outbound_bytes_per_source: 16 * 1024 * 1024,
+                merge_sidecar_server_request_gates_per_source: 4,
+                merge_sidecar_server_request_gate_ttl_ms: 10_000,
+                pending_certified_merge_entry_capacity: 1_024,
+                pending_queue_plan_admission_capacity: 1_024,
+                pending_control_sidecar_bytes: 256 * 1024 * 1024,
+                merge_signing_guard_record_capacity: 1_024,
+                merge_signing_guard_record_bytes: 16 * 1024 * 1024 + 64 * 1024,
+                merge_signing_guard_total_bytes: 256 * 1024 * 1024,
+                native_amx_signing_guard_record_capacity: 524_288,
+                native_amx_signing_guard_record_bytes: 16 * 1024,
+                native_amx_signing_guard_anchor_bytes: 4 * 1024,
             },
             key_policy: SumeragiV2KeyPolicy {
                 activation_lead_blocks: 1,

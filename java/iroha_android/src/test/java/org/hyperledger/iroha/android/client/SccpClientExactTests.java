@@ -20,6 +20,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpLaneIdV1;
@@ -33,20 +34,23 @@ import org.hyperledger.iroha.norito.SchemaHash;
 /** Adversarial client tests for exact SCCP discovery, readback, and submission. */
 public final class SccpClientExactTests {
   private static final String MESSAGE_ID = "11".repeat(32);
+  private static final String TAIRA_CHAIN_ID =
+      "fc56984b-2be7-431d-840e-21514d1883f0";
   private static final String AUTHORITY = canonicalAuthority(0x11);
   private static final String OTHER_AUTHORITY = canonicalAuthority(0x12);
   private static final FeePaymentIntent BRIDGE_FEE_PAYMENT =
       FeePaymentIntent.authority(Collections.emptyList());
   // These authenticate this fixture's semantic commitments and deployment code hashes.
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "553B2E9D6165A499853AC061D91678A2C41DE8F660EA0E8DBA0BFF19618D5DAD";
+      "77D2C235AABDFFE9125F27F960FE58F34E9C418BBE452CCC926B10DE18B22BD1";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "C09C131C9C76D46A5A49F21C1BD8128D2958E46528EDC9FBBDA10B8ABCF97BD6";
+      "6D14339A4E342F0F5E72947A19133426EAC1DA9F9A01FB15DCAC55078A842AE2";
 
   private SccpClientExactTests() {}
 
   public static void main(final String[] args) throws Exception {
     submitDtosExposeOnlyClosedArtifactFields();
+    signedSubmitPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity();
     submitAuthorityRequiresExactTairaDiscriminant();
     submitPreflightRejectsRetiredOverridesAndSecrets();
     artifactValidationRejectsAliasesCorruptionAndZeroSchema();
@@ -83,10 +87,11 @@ public final class SccpClientExactTests {
     final byte[] transactionBytes;
     try {
       transactionBytes =
-          new NoritoJavaCodecAdapter()
+          new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
               .encodeTransaction(
                   TransactionPayload.builder()
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+                      .setChainId(TAIRA_CHAIN_ID)
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -98,10 +103,11 @@ public final class SccpClientExactTests {
     final byte[] gasBoundTransaction;
     try {
       gasBoundTransaction =
-          new NoritoJavaCodecAdapter()
+          new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
               .encodeTransaction(
                   TransactionPayload.builder()
                       .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 9L))
+                      .setChainId(TAIRA_CHAIN_ID)
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -182,6 +188,89 @@ public final class SccpClientExactTests {
     } catch (final CompletionException expected) {
       // Expected.
     }
+  }
+
+  static void signedSubmitPreservesExactTairaSponsorAcrossControllerOnlyWireIdentity()
+      throws Exception {
+    final String selector =
+        "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web";
+    final FeeSponsorProgramId program = FeeSponsorProgramId.parse(selector);
+    final FeePaymentIntent expectedFeePayment =
+        FeePaymentIntent.sponsor(program, 1L, Collections.emptyList(), 9L);
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+    final byte[] encoded =
+        codec.encodeTransaction(
+            TransactionPayload.builder()
+                .setChainId(TAIRA_CHAIN_ID)
+                .setAuthority(AUTHORITY)
+                .setCreationTimeMs(7L)
+                .setInstructions(Collections.emptyList())
+                .setFeePayment(expectedFeePayment)
+                .build());
+    final TransactionPayload decoded = codec.decodeTransaction(encoded);
+    final FeePaymentIntent.Sponsor decodedSponsor =
+        (FeePaymentIntent.Sponsor) decoded.feePayment();
+    assert AccountAddress.detectI105Discriminant(decodedSponsor.programId().sponsor())
+        == SccpV1.TAIRA_I105_DISCRIMINANT_V1;
+    assert Arrays.equals(codec.encodeTransaction(decoded), encoded);
+    assert program.literal().equals(selector);
+
+    final String signature = Base64.getEncoder().encodeToString(fill(64, 1));
+    final String transaction = Base64.getEncoder().encodeToString(encoded);
+    final SccpDestinationProofSubmitRequest request =
+        new SccpDestinationProofSubmitRequest(
+            AUTHORITY,
+            canonicalArtifact(),
+            expectedFeePayment,
+            signature,
+            transaction,
+            7L);
+    assert ((FeePaymentIntent.Sponsor) request.feePayment()).programId().literal()
+        .equals(selector);
+    new SccpNativeMessageSubmitRequest(
+        AUTHORITY,
+        canonicalNativeArtifact(),
+        expectedFeePayment,
+        signature,
+        transaction,
+        7L);
+
+    final List<FeePaymentIntent> mutations =
+        List.of(
+            FeePaymentIntent.sponsor(
+                new FeeSponsorProgramId(OTHER_AUTHORITY, "cbsi_web"),
+                1L,
+                Collections.emptyList(),
+                9L),
+            FeePaymentIntent.sponsor(
+                new FeeSponsorProgramId(program.sponsor(), "cbsi_fx"),
+                1L,
+                Collections.emptyList(),
+                9L),
+            FeePaymentIntent.sponsor(program, 2L, Collections.emptyList(), 9L),
+            FeePaymentIntent.sponsor(program, 1L, Collections.emptyList(), 10L),
+            FeePaymentIntent.authority(Collections.emptyList(), 9L));
+    for (final FeePaymentIntent mutation : mutations) {
+      final byte[] mutationBytes =
+          codec.encodeTransaction(
+              TransactionPayload.builder()
+                  .setChainId(TAIRA_CHAIN_ID)
+                  .setAuthority(AUTHORITY)
+                  .setCreationTimeMs(7L)
+                  .setInstructions(Collections.emptyList())
+                  .setFeePayment(mutation)
+                  .build());
+      expectFailure(
+          () ->
+              new SccpDestinationProofSubmitRequest(
+                  AUTHORITY,
+                  canonicalArtifact(),
+                  expectedFeePayment,
+                  signature,
+                  Base64.getEncoder().encodeToString(mutationBytes),
+                  7L));
+    }
+    expectFailure(() -> new FeeSponsorProgramId(program.sponsor(), "cbsi_e\u0301"));
   }
 
   private static void submitAuthorityRequiresExactTairaDiscriminant() throws Exception {
@@ -286,9 +375,10 @@ public final class SccpClientExactTests {
     final byte[] transactionBytes;
     try {
       transactionBytes =
-          new NoritoJavaCodecAdapter()
+          new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
               .encodeTransaction(
                   TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                      .setChainId(TAIRA_CHAIN_ID)
                       .setAuthority(AUTHORITY)
                       .setCreationTimeMs(7)
                       .setInstructions(Collections.emptyList())
@@ -372,9 +462,10 @@ public final class SccpClientExactTests {
       transaction =
           Base64.getEncoder()
               .encodeToString(
-                  new NoritoJavaCodecAdapter()
+                  new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
                       .encodeTransaction(
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                              .setChainId(TAIRA_CHAIN_ID)
                               .setAuthority(AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
@@ -399,9 +490,10 @@ public final class SccpClientExactTests {
       wrongAuthorityTransaction =
           Base64.getEncoder()
               .encodeToString(
-                  new NoritoJavaCodecAdapter()
+                  new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
                       .encodeTransaction(
                           TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                              .setChainId(TAIRA_CHAIN_ID)
                               .setAuthority(OTHER_AUTHORITY)
                               .setCreationTimeMs(7)
                               .setInstructions(Collections.emptyList())
@@ -1227,10 +1319,12 @@ public final class SccpClientExactTests {
 
   private static void detachedSigningResponseRejectsCrossFamilyLabels() throws Exception {
     final byte[] transactionBytes =
-        new NoritoJavaCodecAdapter()
+        new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(
                 TransactionPayload.builder()
                     .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                    .setChainId(TAIRA_CHAIN_ID)
+                    .setAuthority(AUTHORITY)
                     .setCreationTimeMs(10)
                     .setInstructions(Collections.emptyList())
                     .build());

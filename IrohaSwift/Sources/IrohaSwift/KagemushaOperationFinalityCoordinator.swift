@@ -537,7 +537,8 @@ public enum KagemushaOperationSubmission: Equatable, Sendable {
 /// operation ID and kind.
 public protocol KagemushaOperationFinalityTransport: Sendable {
     func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus
 
     func submitKagemushaOperation(
@@ -614,6 +615,7 @@ public enum KagemushaOperationFinalityCoordinator {
     public static func resolve<State, Transport>(
         operation: KagemushaOperationSubmission,
         transport: Transport,
+        chainDiscriminant: UInt16,
         initialState: State,
         continuity: KagemushaOperationContinuity,
         configuration: KagemushaOperationFinalityConfiguration = .production,
@@ -660,7 +662,12 @@ public enum KagemushaOperationFinalityCoordinator {
                 },
                 existingDefinitiveSubmissionFailure:
                     existingDefinitiveSubmissionFailure,
-                fetchStatus: transport.getKagemushaOperationStatus,
+                fetchStatus: { operationId in
+                    try await transport.getKagemushaOperationStatus(
+                        operationId: operationId,
+                        chainDiscriminant: chainDiscriminant
+                    )
+                },
                 revalidateBeforeSubmission: revalidateBeforeSubmission,
                 markSubmissionAttempt: markSubmissionAttempt,
                 submit: {

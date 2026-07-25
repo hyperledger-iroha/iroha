@@ -635,7 +635,19 @@ private enum SwiftNexusTransferPayloadEncoder {
     private static func encodeAccountId(_ value: String) throws -> Data {
         do {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: 0x02F1)
+            guard trimmed.utf8.elementsEqual(value.utf8) else {
+                throw CanonicalNoritoError.invalidAccountId(value)
+            }
+            let chainDiscriminant = try AccountAddress
+                .inspectI105NetworkPrefix(trimmed).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(
+                trimmed,
+                expectedPrefix: chainDiscriminant
+            )
+            guard try address.toI105(networkPrefix: chainDiscriminant).utf8
+                .elementsEqual(trimmed.utf8) else {
+                throw CanonicalNoritoError.invalidAccountId(value)
+            }
             return try address.compactNoritoAccountControllerPayload()
         } catch {
             throw CanonicalNoritoError.invalidAccountId(value)

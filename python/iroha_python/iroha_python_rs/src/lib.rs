@@ -4628,22 +4628,13 @@ fn validate_sorafs_reference_governance_cid_py<'a>(
 }
 
 fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "order" | "order-request" | "request" | "orderbook-order-request" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
-        }
-        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
-        }
-        "trade" | "trade-event" | "orderbook-trade-event" => {
-            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
-        }
-        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
+    match kind {
+        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
+        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
+        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
+        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
+        "runtime-snapshot" => Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot),
         _ => Err(PyValueError::new_err(format!(
             "unsupported SoraFS orderbook payload kind `{kind}`"
         ))),
@@ -4651,8 +4642,7 @@ fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidati
 }
 
 fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
-    let normalized = side.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match side {
         "bid" => Ok(OrderSideV1::Bid),
         "ask" => Ok(OrderSideV1::Ask),
         _ => Err(PyValueError::new_err(format!(
@@ -4662,8 +4652,7 @@ fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
 }
 
 fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
-    let normalized = tier.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match tier {
         "hot" => Ok(OrderTierV1::Hot),
         "warm" => Ok(OrderTierV1::Warm),
         "archive" => Ok(OrderTierV1::Archive),
@@ -4674,9 +4663,8 @@ fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
 }
 
 fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
-    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+    match reason {
+        "owner_requested" => Ok(OrderCancelReasonV1::OwnerRequested),
         "expired" => Ok(OrderCancelReasonV1::Expired),
         "governance" => Ok(OrderCancelReasonV1::Governance),
         "replaced" => Ok(OrderCancelReasonV1::Replaced),
@@ -4756,11 +4744,10 @@ enum SorafsPdpPayloadKind {
 }
 
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
-        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
-        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+    match kind {
+        "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" => Ok(SorafsPdpPayloadKind::Proof),
         _ => Err(PyValueError::new_err(format!(
             "unsupported SoraFS PDP payload kind `{kind}`"
         ))),
@@ -4823,6 +4810,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     quantity_gib: &str,
     remaining_gib: Option<&str>,
     owner_account: &[u8],
+    provider_id: &[u8],
     expiry_unix: &str,
     nonce: &str,
     maker_fee_bps: u32,
@@ -4843,8 +4831,20 @@ fn sorafs_build_signed_orderbook_order_request_py(
             hex::encode(expected_order_id)
         )));
     }
+    let side = parse_sorafs_orderbook_side_py(side)?;
+    let provider_id = if provider_id.is_empty() {
+        None
+    } else {
+        let provider_id = sorafs_fixed32_from_bytes_py(provider_id, "provider_id")?;
+        if provider_id == [0; 32] {
+            return Err(PyValueError::new_err(
+                "provider_id must not be all zero",
+            ));
+        }
+        Some(provider_id)
+    };
     let fields = OrderbookOrderRequestFieldsV1 {
-        side: parse_sorafs_orderbook_side_py(side)?,
+        side,
         tier: parse_sorafs_orderbook_tier_py(tier)?,
         price_per_gib: parse_sorafs_xor_quantity_text_py(price_per_gib, "price_per_gib")?,
         quantity_gib,
@@ -4853,6 +4853,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
             None => quantity_gib,
         },
         owner_account: owner_account.to_vec(),
+        provider_id,
         expiry_unix: parse_sorafs_decimal_u64_text_py(expiry_unix, "expiry_unix")?,
         nonce,
         maker_fee_bps: parse_sorafs_fee_bps_py(maker_fee_bps, "maker_fee_bps")?,
@@ -5093,9 +5094,9 @@ mod sorafs_reference_validation_py_tests {
     use super::*;
 
     #[test]
-    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert!(matches!(
-            parse_sorafs_orderbook_payload_kind("orderbook_order_request"),
+            parse_sorafs_orderbook_payload_kind("order-request"),
             Ok(OrderbookValidationPayloadKindV1::OrderRequest)
         ));
         assert!(matches!(
@@ -5103,27 +5104,34 @@ mod sorafs_reference_validation_py_tests {
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         ));
         assert!(matches!(
-            parse_sorafs_orderbook_payload_kind("runtime_snapshot"),
+            parse_sorafs_orderbook_payload_kind("runtime-snapshot"),
             Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
         ));
-        assert!(parse_sorafs_orderbook_payload_kind("bad-kind").is_err());
+        for retired in ["order", "order_request", " ORDER-REQUEST", "request"] {
+            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
+        }
+        assert!(parse_sorafs_orderbook_side_py("Bid").is_err());
+        assert!(parse_sorafs_orderbook_tier_py(" hot").is_err());
+        assert!(parse_sorafs_orderbook_cancel_reason_py("owner-requested").is_err());
     }
 
     #[test]
-    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp_commitment").expect("commitment alias"),
+            parse_sorafs_pdp_payload_kind("commitment").expect("commitment"),
             SorafsPdpPayloadKind::Commitment
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("challenge").expect("challenge alias"),
+            parse_sorafs_pdp_payload_kind("challenge").expect("challenge"),
             SorafsPdpPayloadKind::Challenge
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp-proof").expect("proof alias"),
+            parse_sorafs_pdp_payload_kind("proof").expect("proof"),
             SorafsPdpPayloadKind::Proof
         );
-        assert!(parse_sorafs_pdp_payload_kind("bad-kind").is_err());
+        for retired in ["pdp-commitment", "pdp_challenge", " PROOF", "Proof"] {
+            assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
+        }
     }
 
     #[test]

@@ -4,5 +4,6 @@ package org.hyperledger.iroha.android.alias;
 @FunctionalInterface
 public interface AliasLifecycleInstructionFrameCodec {
   /** Decodes and canonically re-encodes one exact lifecycle frame. */
-  DecodedAliasLifecycleFrame decodeAndReencode(String wireId, byte[] framedPayload);
+  DecodedAliasLifecycleFrame decodeAndReencode(
+      String wireId, byte[] framedPayload, int chainDiscriminant);
 }

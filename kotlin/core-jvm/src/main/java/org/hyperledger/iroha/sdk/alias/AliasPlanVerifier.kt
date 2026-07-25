@@ -28,7 +28,11 @@ class DecodedEnsureAliasFrame(
 /** Registry hook that decodes an EnsureAlias frame and re-encodes the same typed value. */
 fun interface AliasEnsureInstructionFrameCodec {
     /** Decodes and canonically re-encodes one exact planner frame. */
-    fun decodeAndReencode(wireId: String, framedPayload: ByteArray): DecodedEnsureAliasFrame
+    fun decodeAndReencode(
+        wireId: String,
+        framedPayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedEnsureAliasFrame
 }
 
 /** A decoded lifecycle frame together with its canonical re-encoding. */
@@ -47,7 +51,11 @@ class DecodedAliasLifecycleFrame(
 /** Registry hook that round-trips a typed renewal or auto-renew frame. */
 fun interface AliasLifecycleInstructionFrameCodec {
     /** Decodes and canonically re-encodes one exact lifecycle frame. */
-    fun decodeAndReencode(wireId: String, framedPayload: ByteArray): DecodedAliasLifecycleFrame
+    fun decodeAndReencode(
+        wireId: String,
+        framedPayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedAliasLifecycleFrame
 }
 
 /** Verification helpers used before locally signing an alias transaction plan. */
@@ -239,13 +247,19 @@ object AliasPlanVerifier {
         plan: AliasTransactionPlanV1,
         canonicalBodyNorito: ByteArray,
         frameCodec: AliasEnsureInstructionFrameCodec,
+        chainDiscriminant: Int,
     ) {
         val decoded = mutableListOf<EnsureAlias>()
         requireExecutable(
             plan,
             canonicalBodyNorito,
             AliasInstructionFrameRoundTripper { wireId, framedPayload ->
-                val result = frameCodec.decodeAndReencode(wireId, framedPayload)
+                val result =
+                    frameCodec.decodeAndReencode(
+                        wireId,
+                        framedPayload,
+                        chainDiscriminant,
+                    )
                 decoded += result.instruction
                 result.reencodedFrame
             },
@@ -342,6 +356,7 @@ object AliasPlanVerifier {
         plan: AliasLifecycleTransactionPlanV1,
         canonicalBodyNorito: ByteArray,
         frameCodec: AliasLifecycleInstructionFrameCodec,
+        chainDiscriminant: Int,
     ) {
         val errors = validateLifecycleExecutable(plan).toMutableList()
         if (!verifyLifecycleHash(plan, canonicalBodyNorito)) {
@@ -353,7 +368,11 @@ object AliasPlanVerifier {
         val instruction = plan.body.instruction
         if (instruction != null) {
             val decoded = try {
-                frameCodec.decodeAndReencode(instruction.wireId, instruction.framedPayload)
+                frameCodec.decodeAndReencode(
+                    instruction.wireId,
+                    instruction.framedPayload,
+                    chainDiscriminant,
+                )
             } catch (_: RuntimeException) {
                 null
             }

@@ -8,6 +8,7 @@ import {
   assetReferencesMatch,
   canonicalizeMultihashHex,
   composeAssetHoldingId,
+  ensureCanonicalAccountId,
   extractAssetDefinitionId,
   normalizeAccountAliasFqn,
   normalizeAssetAliasFqn,
@@ -24,6 +25,17 @@ import { ValidationError, ValidationErrorCode } from "../src/validationError.js"
 
 const deterministicPublicKey = (seedByte) =>
   Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, seedByte)));
+
+test("ensureCanonicalAccountId preserves the parsed network discriminant", () => {
+  const address = AccountAddress.fromAccount({
+    publicKey: deterministicPublicKey(7),
+  });
+
+  for (const chainDiscriminant of [753, 369, 42]) {
+    const accountId = address.toI105(chainDiscriminant);
+    assert.equal(ensureCanonicalAccountId(accountId), accountId);
+  }
+});
 
 test("canonicalizeMultihashHex rejects non-hex characters", () => {
   assert.throws(

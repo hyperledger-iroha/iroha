@@ -18,6 +18,7 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
@@ -61,10 +62,12 @@ public final class RegisterOfflineDeviceAttestationTests {
     assertArrayEquals(hexToBytes(rust.get(1)), payload);
     assertEquals(
         registration,
-        DeviceAttestationRegistration.decodeCanonical(registration.noritoEncoded()));
+        DeviceAttestationRegistration.decodeCanonical(
+            registration.noritoEncoded(), AccountAddress.DEFAULT_I105_DISCRIMINANT));
     assertEquals(
         registration,
-        RegisterOfflineDeviceAttestation.decodeInstructionPayloadCanonical(payload));
+        RegisterOfflineDeviceAttestation.decodeInstructionPayloadCanonical(
+            payload, AccountAddress.DEFAULT_I105_DISCRIMINANT));
     request.validateExactPayload(request.transactionPayload());
   }
 
@@ -150,7 +153,9 @@ public final class RegisterOfflineDeviceAttestationTests {
     malformed[malformed.length - 1] ^= 1;
     assertThrows(
         IllegalArgumentException.class,
-        () -> DeviceAttestationRegistration.decodeCanonical(malformed));
+        () ->
+            DeviceAttestationRegistration.decodeCanonical(
+                malformed, AccountAddress.DEFAULT_I105_DISCRIMINANT));
 
     final byte[] payload =
         NoritoCodec.fromBytesView(
@@ -163,7 +168,9 @@ public final class RegisterOfflineDeviceAttestationTests {
             new RawPayloadAdapter(true));
     assertThrows(
         IllegalArgumentException.class,
-        () -> DeviceAttestationRegistration.decodeCanonical(unknownField));
+        () ->
+            DeviceAttestationRegistration.decodeCanonical(
+                unknownField, AccountAddress.DEFAULT_I105_DISCRIMINANT));
 
     final byte[] alternateFlags =
         NoritoCodec.encode(
@@ -173,7 +180,9 @@ public final class RegisterOfflineDeviceAttestationTests {
             0);
     assertThrows(
         IllegalArgumentException.class,
-        () -> DeviceAttestationRegistration.decodeCanonical(alternateFlags));
+        () ->
+            DeviceAttestationRegistration.decodeCanonical(
+                alternateFlags, AccountAddress.DEFAULT_I105_DISCRIMINANT));
   }
 
   @Test

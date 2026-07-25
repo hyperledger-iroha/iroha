@@ -793,6 +793,27 @@ pub mod isi {
             let account_id = self.destination().clone();
             let permission = self.object().clone();
 
+            if crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &permission,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle forbids delegating control of its trigger"
+                        .into(),
+                ));
+            }
+            if crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                state_transaction,
+                &permission,
+            )
+            .is_some_and(|required_owner| required_owner != account_id)
+            {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle forbids delegating its exact runtime permissions"
+                        .into(),
+                ));
+            }
+
             // Check if account exists
             state_transaction.world.account_mut(&account_id)?;
 
@@ -838,6 +859,18 @@ pub mod isi {
         ) -> Result<(), Error> {
             let account_id = self.destination().clone();
             let permission = self.object().clone();
+
+            if crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                state_transaction,
+                &permission,
+            )
+            .is_some_and(|required_owner| required_owner == account_id)
+            {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins its exact runtime permissions"
+                        .into(),
+                ));
+            }
 
             // Check if account exists
             state_transaction.world.account(&account_id)?;
@@ -1270,9 +1303,9 @@ pub mod query {
             vec![iroha_data_model::sns::NameControllerV1::account(&address)],
             0,
             0,
-            1_000,
-            2_000,
-            3_000,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
             Metadata::default(),
         );
         state_transaction.world.smart_contract_state.insert(
@@ -1342,12 +1375,25 @@ pub mod query {
         matches!(field, "id" | "account" | "account_id")
     }
 
+    fn account_field_is_domain(field: &str) -> bool {
+        matches!(field, "domain" | "id.domain" | "account.domain")
+    }
+
     fn parse_account_id_value(value: &Value) -> Option<AccountId> {
         match value {
             Value::String(raw) => AccountId::parse_encoded(raw)
                 .ok()
                 .map(|parsed| parsed.into_account_id())
                 .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
+            _ => None,
+        }
+    }
+
+    fn parse_account_domain_value(value: &Value) -> Option<DomainId> {
+        match value {
+            Value::String(raw) => DomainId::parse_fully_qualified(raw)
+                .ok()
+                .or_else(|| DomainId::try_new(raw, "universal").ok()),
             _ => None,
         }
     }
@@ -1390,6 +1436,39 @@ pub mod query {
                 .values
                 .iter()
                 .filter_map(parse_account_id_value)
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        candidates.map(Arc::new)
+    }
+
+    fn account_predicate_candidate_domain_ids(
+        world: &impl WorldReadOnly,
+        predicate: &PredicateJson,
+    ) -> Option<Arc<BTreeSet<AccountId>>> {
+        let mut candidates: Option<BTreeSet<AccountId>> = None;
+
+        for cond in &predicate.equals {
+            if !account_field_is_domain(&cond.field) {
+                continue;
+            }
+            let next = parse_account_domain_value(&cond.value)
+                .into_iter()
+                .flat_map(|domain| world.account_subjects_in_domain(&domain))
+                .collect::<BTreeSet<_>>();
+            intersect_account_id_candidates(&mut candidates, next);
+        }
+
+        for cond in &predicate.r#in {
+            if !account_field_is_domain(&cond.field) {
+                continue;
+            }
+            let next = cond
+                .values
+                .iter()
+                .filter_map(parse_account_domain_value)
+                .flat_map(|domain| world.account_subjects_in_domain(&domain))
                 .collect::<BTreeSet<_>>();
             intersect_account_id_candidates(&mut candidates, next);
         }
@@ -1488,7 +1567,7 @@ pub mod query {
     /// Fields consumed here are stripped from the JSON fallback so synthetic account-domain
     /// aliases are not re-evaluated against the plain `Account` JSON shape.
     fn predicate_matches_account_aliases(
-        _world: &impl WorldReadOnly,
+        world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         account_id: &AccountId,
         account_value: &AccountValue,
@@ -1503,6 +1582,14 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(&cond.field) => {
+                    let Some(domain) = parse_account_domain_value(&cond.value) else {
+                        return AccountPredicateMatch::Mismatched;
+                    };
+                    if !world.account_has_alias_domain(account_id, &domain) {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
                 None => remaining.equals.push(cond.clone()),
             }
         }
@@ -1515,6 +1602,16 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(&cond.field) => {
+                    if !cond
+                        .values
+                        .iter()
+                        .filter_map(parse_account_domain_value)
+                        .any(|domain| world.account_has_alias_domain(account_id, &domain))
+                    {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
                 None => remaining.r#in.push(cond.clone()),
             }
         }
@@ -1523,6 +1620,14 @@ pub mod query {
             match account_alias_value(account_id, account_value, field) {
                 Some(Some(_)) => {}
                 Some(None) => return AccountPredicateMatch::Mismatched,
+                None if account_field_is_domain(field) => {
+                    let Ok(domains) = world.account_domains(account_id) else {
+                        return AccountPredicateMatch::Mismatched;
+                    };
+                    if domains.is_empty() {
+                        return AccountPredicateMatch::Mismatched;
+                    }
+                }
                 None => remaining.exists.push(field.clone()),
             }
         }
@@ -1647,7 +1752,9 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                None,
+                predicate_json
+                    .as_ref()
+                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -1823,7 +1930,9 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                None,
+                predicate_json
+                    .as_ref()
+                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -2195,6 +2304,7 @@ pub mod query {
             Register::account(Account::new(account_id.clone()))
                 .execute(authority, state_transaction)
                 .expect("register account");
+            seed_account_alias_lease(state_transaction, account_id, alias);
             state_transaction
                 .world
                 .account_mut(account_id)
@@ -2876,7 +2986,25 @@ pub mod query {
                 .map(|account| account.id)
                 .collect();
 
-            assert_eq!(results, vec![acc1]);
+            assert_eq!(results, vec![acc1.clone()]);
+
+            let predicate = CompoundPredicate::<Account>::build(|p| {
+                p.in_values("domain", [wonderland_id.to_string()])
+            });
+            let results: Vec<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, vec![acc1.clone()]);
+
+            let predicate = CompoundPredicate::<Account>::build(|p| p.exists("domain"));
+            let results: BTreeSet<_> = FindAccounts
+                .execute(predicate, &view)
+                .unwrap()
+                .map(|account| account.id)
+                .collect();
+            assert_eq!(results, BTreeSet::from([acc1, acc2]));
         }
 
         #[test]
@@ -3496,7 +3624,7 @@ pub mod query {
                 Some(alias_domain(&linked_domain)),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
-            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
                 .with_label(Some(primary_label.clone()))
                 .build(&account_id);
@@ -3505,6 +3633,10 @@ pub mod query {
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                primary_label.clone(),
+                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
+            );
 
             stx.apply();
             state_block.commit().unwrap();
@@ -3540,7 +3672,11 @@ pub mod query {
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
             stx.world
-                .insert_account_alias_binding(alias, ALICE_ID.clone());
+                .insert_account_alias_binding(alias.clone(), ALICE_ID.clone());
+            stx.world.account_rekey_records.insert(
+                alias.clone(),
+                AccountRekeyRecord::new(alias, ALICE_ID.clone()),
+            );
 
             stx.apply();
             state_block.commit().unwrap();
@@ -3598,7 +3734,7 @@ pub mod query {
                 Some(alias_domain(&linked_domain)),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
-            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
                 .with_label(Some(primary_label.clone()))
                 .build(&account_id);
@@ -3607,6 +3743,10 @@ pub mod query {
             stx.world.accounts.insert(stored_account_id, stored_value);
             stx.world
                 .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                primary_label.clone(),
+                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
+            );
 
             stx.apply();
             state_block.commit().unwrap();
@@ -3663,13 +3803,19 @@ pub mod query {
                 Some(alias_domain(&linked_domain)),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
-            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
                 .with_label(Some(primary_label.clone()))
                 .build(&account_id);
             let (stored_account_id, stored_value) =
                 iroha_data_model::IntoKeyValue::into_key_value(account);
             stx.world.accounts.insert(stored_account_id, stored_value);
+            stx.world
+                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                primary_label.clone(),
+                AccountRekeyRecord::new(primary_label.clone(), account_id.clone()),
+            );
 
             stx.apply();
             state_block.commit().unwrap();
@@ -3716,7 +3862,7 @@ pub mod query {
                 None,
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
-            seed_account_alias_lease(&mut stx, &ALICE_ID, &root_label);
+            seed_account_alias_lease(&mut stx, &account_id, &root_label);
             Register::account(Account::new(account_id.clone()).with_label(Some(root_label)))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();

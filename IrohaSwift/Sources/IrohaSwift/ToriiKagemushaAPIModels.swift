@@ -74,6 +74,7 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
     public init(
         chainID: String,
         recipient: String,
+        chainDiscriminant: UInt16,
         receiverDeviceID: String,
         assetDefinitionID: String,
         trustedCheckpointHeight: UInt64
@@ -83,7 +84,11 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
             field: "lineageQuery.chainID",
             maximum: 256
         )
-        _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            recipient,
+            field: "lineageQuery.recipient",
+            expectedChainDiscriminant: chainDiscriminant
+        )
         try KagemushaRecursiveSpend.requirePortableText(
             receiverDeviceID,
             field: "lineageQuery.receiverDeviceID"
@@ -91,13 +96,14 @@ public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil,
               (1...UInt64(Int64.max)).contains(trustedCheckpointHeight),
               let archive = try NoritoNativeBridge.shared
-                .kagemushaRecipientLineageQueryCreateV2(
-                    chainID: Data(chainID.utf8),
-                    recipient: Data(recipient.utf8),
-                    receiverDeviceID: Data(receiverDeviceID.utf8),
-                    assetDefinitionID: Data(assetDefinitionID.utf8),
-                    trustedCheckpointHeight: trustedCheckpointHeight
-                ) else {
+                  .kagemushaRecipientLineageQueryCreateV2(
+                      chainDiscriminant: chainDiscriminant,
+                      chainID: Data(chainID.utf8),
+                      recipient: Data(recipient.utf8),
+                      receiverDeviceID: Data(receiverDeviceID.utf8),
+                      assetDefinitionID: Data(assetDefinitionID.utf8),
+                      trustedCheckpointHeight: trustedCheckpointHeight
+                  ) else {
             if AssetDefinitionAddress.decode(assetDefinitionID) == nil
                 || !(1...UInt64(Int64.max)).contains(trustedCheckpointHeight) {
                 throw KagemushaRecursiveSpendError.invalidField("lineageQuery")
@@ -175,12 +181,19 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
     public static let maximumArchiveBytes = 24_576
     public static let maximumPublisherEnvelopeBytes = 2_048
     public let noritoArchive: Data
+    private let chainDiscriminant: UInt16
 
     public init(
         request: KagemushaRecipientPaymentRequest,
         lineageArchive: Data,
-        publisherCheckpointEnvelope: Data
+        publisherCheckpointEnvelope: Data,
+        chainDiscriminant: UInt16
     ) throws {
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            request.payload.recipient,
+            field: "recipientReceiveOffer.request.recipient",
+            expectedChainDiscriminant: chainDiscriminant
+        )
         guard !lineageArchive.isEmpty,
               lineageArchive.count <= KagemushaRecipientRegistrationLineage.maximumArchiveBytes,
               (1...Self.maximumPublisherEnvelopeBytes)
@@ -199,20 +212,39 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
             }
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
-        try self.init(validatingNativeArchive: archive)
+        try self.init(
+            validatingNativeArchive: archive,
+            chainDiscriminant: chainDiscriminant
+        )
     }
 
-    public init(noritoArchive: Data) throws {
-        try self.init(validatingNativeArchive: noritoArchive)
+    public init(
+        noritoArchive: Data,
+        chainDiscriminant: UInt16
+    ) throws {
+        try self.init(
+            validatingNativeArchive: noritoArchive,
+            chainDiscriminant: chainDiscriminant
+        )
     }
 
-    public func project() throws -> KagemushaProjectedRecipientReceiveOfferV2 {
+    public func project(
+        chainDiscriminant: UInt16
+    ) throws -> KagemushaProjectedRecipientReceiveOfferV2 {
+        guard chainDiscriminant == self.chainDiscriminant else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "recipientReceiveOffer.chainDiscriminant"
+            )
+        }
         guard let result = try NoritoNativeBridge.shared
             .kagemushaRecipientReceiveOfferProjectV2(offerArchive: noritoArchive) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
         return KagemushaProjectedRecipientReceiveOfferV2(
-            request: try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(result.request),
+            request: try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+                result.request,
+                chainDiscriminant: chainDiscriminant
+            ),
             lineageArchive: result.lineage,
             publisherCheckpointEnvelope: result.publisherEnvelope
         )
@@ -221,6 +253,7 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
     /// Verify the exact offer after app policy authenticated the projected
     /// publisher envelope and selected the corresponding durable checkpoint.
     public func verify(
+        chainDiscriminant: UInt16,
         atMilliseconds: UInt64,
         trustedCheckpoint: KagemushaFinalityCheckpointV2,
         authenticatedPublisherCheckpointEnvelope: Data
@@ -230,7 +263,7 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
                 .contains(authenticatedPublisherCheckpointEnvelope.count) else {
             throw KagemushaRecursiveSpendError.invalidField("recipientReceiveOffer.verify")
         }
-        let projected = try project()
+        let projected = try project(chainDiscriminant: chainDiscriminant)
         guard projected.publisherCheckpointEnvelope
                 == authenticatedPublisherCheckpointEnvelope else {
             throw KagemushaRecursiveSpendError.invalidArchive(
@@ -265,12 +298,33 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
         )
     }
 
-    private init(validatingNativeArchive archive: Data) throws {
+    private init(
+        validatingNativeArchive archive: Data,
+        chainDiscriminant: UInt16
+    ) throws {
         guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
             throw KagemushaRecursiveSpendError.invalidArchive("recipientReceiveOffer")
         }
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecipientReceiveOfferProjectV2(offerArchive: archive) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        let request = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+            result.request,
+            chainDiscriminant: chainDiscriminant
+        )
+        guard request.archive == result.request,
+              !result.lineage.isEmpty,
+              result.lineage.count
+                <= KagemushaRecipientRegistrationLineage.maximumArchiveBytes,
+              (1...Self.maximumPublisherEnvelopeBytes)
+                .contains(result.publisherEnvelope.count) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "recipientReceiveOffer.nativeProjection"
+            )
+        }
         self.noritoArchive = Data(archive)
-        _ = try project()
+        self.chainDiscriminant = chainDiscriminant
     }
 }
 
@@ -418,14 +472,18 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
     public let finalizedBlockHeight: UInt64
 
     /// Validates and retains a canonical top-up anchor Norito archive.
-    public init(noritoArchive: Data) throws {
+    public init(
+        noritoArchive: Data,
+        chainDiscriminant: UInt16
+    ) throws {
         guard !noritoArchive.isEmpty,
               noritoArchive.count
                 <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
         let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
-            Data(noritoArchive)
+            Data(noritoArchive),
+            chainDiscriminant: chainDiscriminant
         )
         self.archive = Data(wireValue.noritoArchive)
         self.anchorDigest = Data(wireValue.anchorDigest)
@@ -803,7 +861,10 @@ public enum KagemushaOperationCodec {
         )
     }
 
-    public static func decodeStatus(_ archive: Data) throws -> KagemushaOperationStatus {
+    public static func decodeStatus(
+        _ archive: Data,
+        chainDiscriminant: UInt16
+    ) throws -> KagemushaOperationStatus {
         guard !archive.isEmpty,
               archive.count <= statusMaximumArchiveBytes,
               let frame = noritoDecodeFrame(archive),
@@ -837,7 +898,11 @@ public enum KagemushaOperationCodec {
         case 1:
             let operationId = try readOperationIdField(&reader, compact: true)
             let result = try readField(&reader, compact: true) {
-                try decodeResult(&$0, compact: true)
+                try decodeResult(
+                    &$0,
+                    compact: true,
+                    chainDiscriminant: chainDiscriminant
+                )
             }
             status = .applied(try .init(operationId: operationId, result: result))
         case 2:
@@ -868,12 +933,17 @@ public enum KagemushaOperationCodec {
 
     private static func decodeResult(
         _ reader: inout CanonicalNoritoReader,
-        compact: Bool
+        compact: Bool,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaOperationResult {
         switch try reader.readUInt32LE() {
         case 0:
             return try readField(&reader, compact: compact) {
-                .topUp(try decodeTopUpResult(&$0, compact: compact))
+                .topUp(try decodeTopUpResult(
+                    &$0,
+                    compact: compact,
+                    chainDiscriminant: chainDiscriminant
+                ))
             }
         case 1:
             return try readField(&reader, compact: compact) {
@@ -886,7 +956,8 @@ public enum KagemushaOperationCodec {
 
     private static func decodeTopUpResult(
         _ reader: inout CanonicalNoritoReader,
-        compact: Bool
+        compact: Bool,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaTopUpResult {
         let transactionHash = try readExactTextField(
             &reader,
@@ -906,7 +977,10 @@ public enum KagemushaOperationCodec {
             schema: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
             payload: anchorPayload
         )
-        let anchor = try KagemushaTopUpAnchor(noritoArchive: anchorArchive)
+        let anchor = try KagemushaTopUpAnchor(
+            noritoArchive: anchorArchive,
+            chainDiscriminant: chainDiscriminant
+        )
         let finalityProofPayload = try readField(&reader, compact: compact) {
             try $0.readBytes($0.remaining())
         }

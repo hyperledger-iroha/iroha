@@ -164,6 +164,31 @@ public func decodePdpCommitmentHeader(from response: HTTPURLResponse) throws -> 
     return try decodePdpCommitmentHeader(normalized)
 }
 
+fileprivate func exactCanonicalToriiAccountAddress(
+    _ raw: String
+) throws -> (address: AccountAddress, chainDiscriminant: UInt16) {
+    guard !raw.isEmpty,
+          raw.utf8.elementsEqual(
+              raw.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+          ),
+          !raw.contains("@"),
+          !raw.contains("#"),
+          !raw.contains("$") else {
+        throw AccountAddressError.unsupportedAddressFormat
+    }
+    let chainDiscriminant = try AccountAddress
+        .inspectI105NetworkPrefix(raw).chainDiscriminant
+    let address = try AccountAddress.parseEncodedSwiftOnly(
+        raw,
+        expectedPrefix: chainDiscriminant
+    )
+    let canonical = try address.toI105(networkPrefix: chainDiscriminant)
+    guard canonical.utf8.elementsEqual(raw.utf8) else {
+        throw AccountAddressError.unsupportedAddressFormat
+    }
+    return (address, chainDiscriminant)
+}
+
 fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -177,8 +202,10 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
             "\(field) must be an encoded account id (i105)."
         )
     }
-    if let address = try? AccountAddress.parseEncoded(trimmed) {
-        return try address.toI105(networkPrefix: 0x02F1)
+    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
+        )
     }
     throw ToriiClientError.invalidPayload(
         "\(field) must be an encoded account id (i105)."
@@ -212,8 +239,10 @@ fileprivate func normalizeToriiParticipantQueryValue(_ raw: String, field: Strin
     if trimmed.contains("@") {
         return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
     }
-    if let address = try? AccountAddress.parseEncoded(trimmed) {
-        return try address.toI105(networkPrefix: 0x02F1)
+    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
+        )
     }
     return trimmed
 }
@@ -1400,7 +1429,7 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
             )
         }
         do {
-            _ = try AccountAddress.parseEncoded(raw, expectedPrefix: 0x02F1)
+            _ = try exactCanonicalToriiAccountAddress(raw)
         } catch {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
@@ -1860,8 +1889,8 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
                     "payload.accountId must be an exact canonical account identifier."
                 )
             }
-            let address = try AccountAddress.parseEncoded(raw, expectedPrefix: 0x02F1)
-            return try address.compactNoritoAccountControllerPayload()
+            return try exactCanonicalToriiAccountAddress(raw).address
+                .compactNoritoAccountControllerPayload()
         } catch {
             throw ToriiClientError.invalidPayload(
                 "payload.accountId must be a canonical account identifier."
@@ -4192,9 +4221,8 @@ public enum ToriiAccountOnboardingReceiptVerifier {
             guard literal == literal.trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw ToriiAccountOnboardingReceiptVerificationError.invalidAuthority
             }
-            let address = try AccountAddress.parseEncoded(literal)
-            guard try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix) == literal,
-                  let controller = address.singleControllerInfo() else {
+            let canonical = try exactCanonicalToriiAccountAddress(literal)
+            guard let controller = canonical.address.singleControllerInfo() else {
                 throw ToriiAccountOnboardingReceiptVerificationError.invalidAuthority
             }
             let keyMaterial = try splitControllerKey(
@@ -10475,12 +10503,17 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
     public let backend: String
     public let name: String
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case backend
         case name
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "ToriiVerifyingKeyId"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawBackend = try container.decode(String.self, forKey: .backend)
         backend = try ToriiValidation.normalizedProductionVerifyBackend(
@@ -13921,11 +13954,10 @@ public struct ToriiContractTriggerDescriptor: Codable, Sendable, Equatable {
 
     private static func isCanonicalAuthority(_ value: String) -> Bool {
         guard isExactContractManifestString(value),
-              let address = try? AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1),
-              let rendered = try? address.toI105(networkPrefix: 0x02F1) else {
+              (try? exactCanonicalToriiAccountAddress(value)) != nil else {
             return false
         }
-        return rendered == value
+        return true
     }
 
     private var isCanonical: Bool {
@@ -18917,17 +18949,14 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
-    let address: AccountAddress
     do {
-        address = try AccountAddress.parseEncoded(
-            trimmed,
-            expectedPrefix: 0x02F1
+        let canonical = try exactCanonicalToriiAccountAddress(trimmed)
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
         )
     } catch {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
-    let i105 = try address.toI105(networkPrefix: 0x02F1)
-    return i105
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
@@ -19975,7 +20004,43 @@ public struct ToriiDataspaceCommitmentSnapshot: Decodable, Sendable, Equatable {
     }
 }
 
-private enum ToriiNativeAmxWire {
+enum ToriiNativeAmxWire {
+    private struct BlsNormalPeerId {
+        let literal: String
+        let compressedKey: Data
+
+        var orderingKey: Data {
+            var bytes = Data([SigningAlgorithm.blsNormal.noritoDiscriminant])
+            bytes.append(compressedKey)
+            return bytes
+        }
+    }
+
+    private static let descriptorPreimageType =
+        "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage"
+    private static let proposalPreimageType =
+        "iroha_data_model::block::consensus::LaneBlockProposalPreimage"
+    private static let settlementType =
+        "iroha_data_model::block::consensus::LaneBlockCommitment"
+    private static let blsKeyAdmissionMessage =
+        Data("native-amx:bls-normal-key-admission:v1".utf8)
+    /// A valid compressed BLS-Normal signature used only to make the native
+    /// bridge parse candidate public keys. Verification is intentionally
+    /// performed with a key unrelated to this deterministic signing key;
+    /// either Boolean result proves that both curve points passed the same
+    /// parser used by Rust production.
+    private static let blsKeyAdmissionSignature = Data(
+        hexString:
+            "93E02B6052719F607DACD3A088274F65596BD0D09920B61AB5DA61BBDC7F5049"
+            + "334CF11213945D57E5AC7D055D042B7E024AA2B2F08F0A91260805272DC51051"
+            + "C6E47AD4FA403B02B4510B647AE3D1770BAC0326A805BBEFD48056C8C121BDB8"
+    )!
+    private static let blsNormalPeerCache: NSCache<NSString, NSData> = {
+        let cache = NSCache<NSString, NSData>()
+        cache.countLimit = 512
+        return cache
+    }()
+
     static func isAsciiHex(_ character: Character, uppercaseOnly: Bool = false) -> Bool {
         if character >= "0" && character <= "9" {
             return true
@@ -20126,6 +20191,363 @@ private enum ToriiNativeAmxWire {
             )
         }
         return value
+    }
+
+    private static func littleEndian<T: FixedWidthInteger>(_ value: T) -> Data {
+        var encoded = value.littleEndian
+        return withUnsafeBytes(of: &encoded) { Data($0) }
+    }
+
+    private static func compactLength(_ value: Int) -> Data {
+        precondition(value >= 0)
+        var remaining = UInt64(value)
+        var encoded = Data()
+        repeat {
+            var byte = UInt8(remaining & 0x7F)
+            remaining >>= 7
+            if remaining != 0 {
+                byte |= 0x80
+            }
+            encoded.append(byte)
+        } while remaining != 0
+        return encoded
+    }
+
+    private static func field(_ payload: Data) -> Data {
+        var encoded = compactLength(payload.count)
+        encoded.append(payload)
+        return encoded
+    }
+
+    private static func structure(_ fields: [Data]) -> Data {
+        fields.reduce(into: Data()) { encoded, value in
+            encoded.append(field(value))
+        }
+    }
+
+    private static func string(_ value: String) -> Data {
+        let utf8 = Data(value.utf8)
+        var encoded = compactLength(utf8.count)
+        encoded.append(utf8)
+        return encoded
+    }
+
+    private static func vector<T>(
+        _ values: [T],
+        encode: (T) -> Data?
+    ) -> Data? {
+        var encoded = littleEndian(UInt64(values.count))
+        for value in values {
+            guard let item = encode(value) else {
+                return nil
+            }
+            encoded.append(field(item))
+        }
+        return encoded
+    }
+
+    private static func hashBytes(_ literal: String) -> Data? {
+        guard isCanonicalHash(literal) else {
+            return nil
+        }
+        let bodyStart = literal.index(literal.startIndex, offsetBy: 5)
+        let bodyEnd = literal.index(bodyStart, offsetBy: 64)
+        return Data(hexString: String(literal[bodyStart..<bodyEnd]))
+    }
+
+    private static func hashLiteral(_ payload: Data) -> String {
+        let body = IrohaHash.hash(payload).hexUppercased()
+        let checksum = crc16(Array("hash:\(body)".utf8))
+        return "hash:\(body)#\(String(format: "%04X", checksum))"
+    }
+
+    private static func noritoFrame(typeName: String, payload: Data) -> Data {
+        noritoEncode(typeName: typeName, payload: payload, flags: NoritoHeader.compactLen)
+    }
+
+    private static func parseBlsNormalPeerId(_ value: String) -> BlsNormalPeerId? {
+        let bare: String
+        if value.hasPrefix("bls_normal:") {
+            bare = String(value.dropFirst("bls_normal:".count))
+        } else {
+            bare = value
+        }
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+              bare.count == 102,
+              bare.hasPrefix("ea0130")
+        else {
+            return nil
+        }
+        if let cached = blsNormalPeerCache.object(forKey: bare as NSString) {
+            return BlsNormalPeerId(literal: bare, compressedKey: cached as Data)
+        }
+        let payloadStart = bare.index(bare.startIndex, offsetBy: 6)
+        let payloadHex = String(bare[payloadStart...])
+        guard payloadHex.count == 96,
+              payloadHex.allSatisfy({ isAsciiHex($0, uppercaseOnly: true) }),
+              let compressedKey = Data(hexString: payloadHex),
+              compressedKey.count == 48,
+              NoritoNativeBridge.shared.verifyDetached(
+                  algorithm: .blsNormal,
+                  publicKey: compressedKey,
+                  message: blsKeyAdmissionMessage,
+                  signature: blsKeyAdmissionSignature
+              ) != nil
+        else {
+            return nil
+        }
+        blsNormalPeerCache.setObject(compressedKey as NSData, forKey: bare as NSString)
+        return BlsNormalPeerId(literal: bare, compressedKey: compressedKey)
+    }
+
+    static func isCanonicalBlsNormalPeerId(_ value: String) -> Bool {
+        parseBlsNormalPeerId(value) != nil
+    }
+
+    static func canonicalBlsNormalValidatorSet<K: CodingKey>(
+        _ values: [String],
+        key: K,
+        container: KeyedDecodingContainer<K>,
+        field fieldName: String
+    ) throws -> [String] {
+        let parsed = values.compactMap(parseBlsNormalPeerId)
+        let strictlyOrdered = zip(parsed, parsed.dropFirst()).allSatisfy {
+            $0.0.orderingKey.lexicographicallyPrecedes($0.1.orderingKey)
+        }
+        guard parsed.count == values.count, strictlyOrdered else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription:
+                    "\(fieldName) must contain strictly ordered canonical BLS-Normal PeerIds."
+            )
+        }
+        return parsed.map(\.literal)
+    }
+
+    private static func peerId(_ value: String) -> Data? {
+        guard let parsed = parseBlsNormalPeerId(value) else {
+            return nil
+        }
+        let key = parsed.orderingKey
+        var compactKey = littleEndian(UInt64(key.count))
+        for byte in key {
+            compactKey.append(field(Data([byte])))
+        }
+        return field(compactKey)
+    }
+
+    private static func validatorVector(_ validators: [String]) -> Data? {
+        vector(validators, encode: peerId)
+    }
+
+    static func validatorSetHash(_ validators: [String]) -> String? {
+        guard let encoded = validatorVector(validators) else {
+            return nil
+        }
+        return hashLiteral(encoded)
+    }
+
+    static func descriptorHash(
+        _ descriptor: ToriiNativeAmxParticipantLaneBlockDescriptor
+    ) -> String? {
+        guard let laneIncarnation = hashBytes(descriptor.laneIncarnation),
+              let subjectHash = hashBytes(descriptor.subjectHash),
+              let payloadOwnershipHash = hashBytes(descriptor.payloadOwnershipHash),
+              let rbcInstanceHash = hashBytes(descriptor.rbcInstanceHash),
+              let validatorSetHash = hashBytes(descriptor.validatorSetHash),
+              let validators = validatorVector(descriptor.validatorSet),
+              let candidateIndices = vector(
+                  descriptor.acceptedCandidateIndices,
+                  encode: { littleEndian($0) }
+              ),
+              let candidateHashes = vector(
+                  descriptor.acceptedTransactionHashes,
+                  encode: hashBytes
+              )
+        else {
+            return nil
+        }
+        let predecessor: Data
+        if let literal = descriptor.previousLaneBlockDescriptorHash {
+            guard let bytes = hashBytes(literal) else {
+                return nil
+            }
+            predecessor = Data([1]) + field(bytes)
+        } else {
+            predecessor = Data([0])
+        }
+        let payload = structure([
+            string("nexus:lane-block-descriptor:v1"),
+            Data([1]),
+            field(littleEndian(descriptor.laneId)),
+            field(littleEndian(descriptor.dataspaceId)),
+            laneIncarnation,
+            littleEndian(descriptor.proposalHeight),
+            littleEndian(descriptor.previousLaneBlockHeight),
+            predecessor,
+            littleEndian(descriptor.laneBlockHeight),
+            littleEndian(descriptor.laneBlockView),
+            subjectHash,
+            payloadOwnershipHash,
+            rbcInstanceHash,
+            candidateIndices,
+            candidateHashes,
+            littleEndian(descriptor.validatorSetHashVersion),
+            validatorSetHash,
+            validators,
+            littleEndian(descriptor.validatorCount),
+            littleEndian(descriptor.minQuorum),
+            string(descriptor.qcModeTag),
+        ])
+        return hashLiteral(noritoFrame(typeName: descriptorPreimageType, payload: payload))
+    }
+
+    static func proposalHash(
+        _ descriptor: ToriiNativeAmxParticipantLaneBlockDescriptor
+    ) -> String? {
+        guard let descriptorHash = hashBytes(descriptor.descriptorHash),
+              let laneIncarnation = hashBytes(descriptor.laneIncarnation),
+              let subjectHash = hashBytes(descriptor.subjectHash),
+              let payloadOwnershipHash = hashBytes(descriptor.payloadOwnershipHash),
+              let rbcInstanceHash = hashBytes(descriptor.rbcInstanceHash),
+              let validatorSetHash = hashBytes(descriptor.validatorSetHash),
+              let validators = validatorVector(descriptor.validatorSet),
+              let candidateIndices = vector(
+                  descriptor.acceptedCandidateIndices,
+                  encode: { littleEndian($0) }
+              ),
+              let candidateHashes = vector(
+                  descriptor.acceptedTransactionHashes,
+                  encode: hashBytes
+              )
+        else {
+            return nil
+        }
+        let payload = structure([
+            string("nexus:lane-block-proposal:v1"),
+            Data([1]),
+            littleEndian(descriptor.proposalHeight),
+            descriptorHash,
+            field(littleEndian(descriptor.laneId)),
+            field(littleEndian(descriptor.dataspaceId)),
+            laneIncarnation,
+            littleEndian(descriptor.laneBlockHeight),
+            littleEndian(descriptor.laneBlockView),
+            subjectHash,
+            payloadOwnershipHash,
+            rbcInstanceHash,
+            candidateIndices,
+            candidateHashes,
+            littleEndian(descriptor.validatorSetHashVersion),
+            validatorSetHash,
+            validators,
+            littleEndian(descriptor.validatorCount),
+            littleEndian(descriptor.minQuorum),
+            string(descriptor.qcModeTag),
+        ])
+        return hashLiteral(noritoFrame(typeName: proposalPreimageType, payload: payload))
+    }
+
+    private static func unsignedMagnitude(_ decimal: String) -> Data? {
+        var bytes: [UInt8] = []
+        for character in decimal {
+            guard let digit = character.wholeNumberValue, digit < 10 else {
+                return nil
+            }
+            var carry = digit
+            for index in bytes.indices {
+                let next = Int(bytes[index]) * 10 + carry
+                bytes[index] = UInt8(next & 0xFF)
+                carry = next >> 8
+            }
+            while carry != 0 {
+                bytes.append(UInt8(carry & 0xFF))
+                carry >>= 8
+            }
+        }
+        while bytes.last == 0 {
+            bytes.removeLast()
+        }
+        if let last = bytes.last, last & 0x80 != 0 {
+            bytes.append(0)
+        }
+        return Data(bytes)
+    }
+
+    private static func quantity(_ value: String) -> Data? {
+        let parts = value.split(
+            separator: ".",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard !parts.isEmpty, parts.count <= 2 else {
+            return nil
+        }
+        let whole = String(parts[0])
+        let fraction = parts.count == 2 ? String(parts[1]) : ""
+        guard let magnitude = unsignedMagnitude(whole + fraction) else {
+            return nil
+        }
+        var bigint = littleEndian(UInt32(magnitude.count))
+        bigint.append(magnitude)
+        return structure([
+            bigint,
+            littleEndian(UInt32(fraction.count)),
+        ])
+    }
+
+    private static func settlementReceipt(_ receipt: ToriiLaneSettlementReceipt) -> Data? {
+        guard let sourceId = Data(hexString: receipt.sourceId),
+              sourceId.count == 32,
+              let localAmount = quantity(receipt.localAmount),
+              let xorDue = quantity(receipt.xorDue),
+              let xorAfterHaircut = quantity(receipt.xorAfterHaircut),
+              let xorVariance = quantity(receipt.xorVariance)
+        else {
+            return nil
+        }
+        return structure([
+            sourceId,
+            localAmount,
+            xorDue,
+            xorAfterHaircut,
+            xorVariance,
+            littleEndian(receipt.timestampMs),
+        ])
+    }
+
+    static func settlementHash(_ settlement: ToriiLaneSettlementCommitment) -> String? {
+        guard settlement.swapMetadata == nil,
+              settlement.nexusFeeReceipts.isEmpty,
+              settlement.nativeAmxReceipts.isEmpty,
+              let laneIncarnation = hashBytes(settlement.laneIncarnation),
+              let totalLocalAmount = quantity(settlement.totalLocalAmount),
+              let totalXorDue = quantity(settlement.totalXorDue),
+              let totalXorAfterHaircut = quantity(settlement.totalXorAfterHaircut),
+              let totalXorVariance = quantity(settlement.totalXorVariance),
+              let receipts = vector(settlement.receipts, encode: settlementReceipt),
+              let emptyNexusReceipts = vector([Data](), encode: { $0 }),
+              let emptyNativeReceipts = vector([Data](), encode: { $0 })
+        else {
+            return nil
+        }
+        let payload = structure([
+            littleEndian(settlement.blockHeight),
+            field(littleEndian(settlement.laneId)),
+            laneIncarnation,
+            field(littleEndian(settlement.dataspaceId)),
+            littleEndian(settlement.transactionCount),
+            totalLocalAmount,
+            totalXorDue,
+            totalXorAfterHaircut,
+            totalXorVariance,
+            Data([0]),
+            receipts,
+            emptyNexusReceipts,
+            emptyNativeReceipts,
+        ])
+        return hashLiteral(noritoFrame(typeName: settlementType, payload: payload))
     }
 }
 
@@ -20517,18 +20939,32 @@ public struct ToriiNativeAmxAttestationQc: Decodable, Sendable, Equatable {
             container: container,
             field: "native AMX validator_set_hash"
         )
-        validatorSet = try container.decode([String].self, forKey: .validatorSet)
-        guard !validatorSet.isEmpty,
-              validatorSet.count <= 128,
-              validatorSet.allSatisfy({ !$0.isEmpty && $0.trimmingCharacters(in: .whitespacesAndNewlines) == $0 }),
-              zip(validatorSet, validatorSet.dropFirst()).allSatisfy({ $0.0 < $0.1 }),
-              validatorSet.count == Int(body.participantValidatorCount),
-              validatorSetHash == body.participantValidatorSetHash
+        validatorSet = try ToriiNativeAmxWire.canonicalBlsNormalValidatorSet(
+            container.decode([String].self, forKey: .validatorSet),
+            key: .validatorSet,
+            container: container,
+            field: "native AMX validator_set"
+        )
+        guard let computedValidatorSetHash =
+                ToriiNativeAmxWire.validatorSetHash(validatorSet)
         else {
             throw DecodingError.dataCorruptedError(
                 forKey: .validatorSet,
                 in: container,
-                debugDescription: "native AMX validator_set must be non-empty and unique."
+                debugDescription: "native AMX validator_set could not be hashed canonically."
+            )
+        }
+        guard !validatorSet.isEmpty,
+              validatorSet.count <= 128,
+              validatorSet.count == Int(body.participantValidatorCount),
+              validatorSetHash == body.participantValidatorSetHash,
+              validatorSetHash == computedValidatorSetHash
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .validatorSet,
+                in: container,
+                debugDescription:
+                    "native AMX validator_set must be non-empty, canonical, and match its signed hash."
             )
         }
         validatorSetPops = try container.decode([[UInt8]].self, forKey: .validatorSetPops)
@@ -20712,7 +21148,12 @@ public struct ToriiNativeAmxParticipantLaneBlockDescriptor: Decodable, Sendable,
             container: container,
             field: "native AMX participant descriptor validator_set_hash"
         )
-        validatorSet = try container.decode([String].self, forKey: .validatorSet)
+        validatorSet = try ToriiNativeAmxWire.canonicalBlsNormalValidatorSet(
+            container.decode([String].self, forKey: .validatorSet),
+            key: .validatorSet,
+            container: container,
+            field: "native AMX participant descriptor validator_set"
+        )
         validatorCount = try container.decode(UInt32.self, forKey: .validatorCount)
         minQuorum = try container.decode(UInt32.self, forKey: .minQuorum)
         qcModeTag = try ToriiNativeAmxWire.nonEmpty(
@@ -20744,10 +21185,6 @@ public struct ToriiNativeAmxParticipantLaneBlockDescriptor: Decodable, Sendable,
               Set(acceptedTransactionHashes).count == acceptedTransactionHashes.count,
               !validatorSet.isEmpty,
               validatorSet.count <= 128,
-              validatorSet.allSatisfy({
-                  !$0.isEmpty && $0.trimmingCharacters(in: .whitespacesAndNewlines) == $0
-              }),
-              zip(validatorSet, validatorSet.dropFirst()).allSatisfy({ $0.0 < $0.1 }),
               validatorSetHashVersion == 1,
               validatorCount == UInt32(validatorSet.count),
               minQuorum == expectedMinQuorum else {
@@ -20755,6 +21192,19 @@ public struct ToriiNativeAmxParticipantLaneBlockDescriptor: Decodable, Sendable,
                 forKey: .descriptorHash,
                 in: container,
                 debugDescription: "native AMX participant descriptor has invalid heights, work, or committee fields"
+            )
+        }
+        guard let computedValidatorSetHash =
+                ToriiNativeAmxWire.validatorSetHash(validatorSet),
+              validatorSetHash == computedValidatorSetHash,
+              let computedDescriptorHash = ToriiNativeAmxWire.descriptorHash(self),
+              descriptorHash == computedDescriptorHash
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .descriptorHash,
+                in: container,
+                debugDescription:
+                    "native AMX participant descriptor validator-set or descriptor hash mismatch"
             )
         }
     }
@@ -20787,6 +21237,15 @@ public struct ToriiNativeAmxParticipantLaneBlockProposal: Decodable, Sendable, E
             container: container,
             field: "native AMX participant proposal_hash"
         )
+        guard let computedProposalHash = ToriiNativeAmxWire.proposalHash(descriptor),
+              proposalHash == computedProposalHash
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .proposalHash,
+                in: container,
+                debugDescription: "native AMX participant proposal_hash mismatch"
+            )
+        }
     }
 }
 
@@ -20905,6 +21364,8 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
               presentEntrypointMembershipIsAligned,
               coordinatorParticipantProposalMatches,
               participantSettlementHash == body.participantSettlementCommitment,
+              participantSettlementHash
+                == ToriiNativeAmxWire.settlementHash(participantSettlement),
               participantSettlement.blockHeight == body.participantLaneBlockHeight,
               participantSettlement.laneId == laneId,
               participantSettlement.dataspaceId == dataspaceId,
@@ -24778,22 +25239,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaRecipientRegistrationLineage(
-        request: KagemushaRecipientPaymentRequest,
-        readiness: ToriiKagemushaReadiness,
-        verifiedAtMilliseconds: UInt64,
-        completion: @escaping (Result<KagemushaRecipientRegistrationLineage, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getKagemushaRecipientRegistrationLineage(
-                request: request,
-                readiness: readiness,
-                verifiedAtMilliseconds: verifiedAtMilliseconds
-            )
-        }
-    }
-
-    @discardableResult
     public func submitKagemushaTopUp(
         _ request: KagemushaTopUpRequest,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
@@ -24812,10 +25257,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func getKagemushaOperationStatus(
         operationId: String,
+        chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getKagemushaOperationStatus(operationId: operationId)
+            try await self.getKagemushaOperationStatus(
+                operationId: operationId,
+                chainDiscriminant: chainDiscriminant
+            )
         }
     }
 
@@ -28270,59 +28719,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return responseData
     }
 
-    @available(*, deprecated, message: "Use the request-independent V2 lineage query and whole receive offer")
-    public func getKagemushaRecipientRegistrationLineage(
-        request requestBody: KagemushaRecipientPaymentRequest,
-        readiness: ToriiKagemushaReadiness,
-        verifiedAtMilliseconds: UInt64
-    ) async throws -> KagemushaRecipientRegistrationLineage {
-        guard verifiedAtMilliseconds > 0 else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha receiver lineage verification time must be positive"
-            )
-        }
-        guard requestBody.payload.assetDefinitionID == readiness.assetDefinitionId else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha readiness asset does not match the recipient request"
-            )
-        }
-        let request = try makeRequest(
-            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
-            method: .post,
-            body: requestBody.archive,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-            ]
-        )
-        let (responseData, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha receiver registration lineage",
-            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !responseData.isEmpty else {
-            throw ToriiClientError.emptyBody
-        }
-        guard let verified = try NoritoNativeBridge.shared
-            .kagemushaRecipientRegistrationLineageVerifyV1(
-                requestArchive: requestBody.archive,
-                lineageArchive: responseData,
-                verifiedAtMilliseconds: verifiedAtMilliseconds,
-                expectedEvaluatedBlockHeight: readiness.evaluatedBlockHeight,
-                expectedEvaluatedBlockHash: readiness.evaluatedBlockHashBytes
-            ) else {
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
-        }
-        guard verified == responseData else {
-            throw ToriiClientError.invalidPayload(
-                "Native receiver lineage verification did not preserve canonical bytes"
-            )
-        }
-        return try KagemushaRecipientRegistrationLineage(verifiedArchive: verified)
-    }
-
     public func submitKagemushaTopUp(
         _ requestBody: KagemushaTopUpRequest
     ) async throws -> KagemushaOperationReference {
@@ -28346,7 +28742,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         let path = try KagemushaToriiAPI.operationPath(operationId)
         let request = try makeRequest(
@@ -28363,7 +28760,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard !responseData.isEmpty else {
             throw ToriiClientError.emptyBody
         }
-        let status = try KagemushaOperationCodec.decodeStatus(responseData)
+        let status = try KagemushaOperationCodec.decodeStatus(
+            responseData,
+            chainDiscriminant: chainDiscriminant
+        )
         guard status.operationId == operationId else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation status operation_id does not match the requested resource"

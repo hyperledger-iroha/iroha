@@ -63,6 +63,13 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 import requests
 from blake3 import blake3
 
+from .native_amx import (
+    compute_native_amx_descriptor_hash,
+    compute_native_amx_participant_settlement_hash,
+    compute_native_amx_proposal_hash,
+    compute_native_amx_validator_set_hash,
+    validate_bls_normal_validator_set,
+)
 from .norito_frame import validate_norito_frame
 from .sccp import (
     SccpBridgeSubmitResponse,
@@ -9139,29 +9146,30 @@ class _SumeragiV2StatusParser:
         )
         if version != 1:
             raise RuntimeError(f"{context}.validator_set_hash_version must equal 1")
-        validators = [
-            cls._non_empty_string(item, f"{context}.validator_set[{index}]")
-            for index, item in enumerate(
-                cls._array(
-                    record.get("validator_set"),
+        try:
+            validators = list(
+                validate_bls_normal_validator_set(
+                    cls._array(
+                        record.get("validator_set"),
+                        f"{context}.validator_set",
+                        minimum=1,
+                        maximum=cls.MAX_VALIDATORS,
+                    ),
                     f"{context}.validator_set",
-                    minimum=1,
-                    maximum=cls.MAX_VALIDATORS,
                 )
             )
-        ]
-        if any(left >= right for left, right in zip(validators, validators[1:])):
-            raise RuntimeError(
-                f"{context}.validator_set must be strictly ordered by validator id"
-            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
         validator_hash = cls._hash(
             record.get("validator_set_hash"), f"{context}.validator_set_hash"
         )
+        computed_validator_hash = compute_native_amx_validator_set_hash(validators)
         expected_quorum = len(validators) - (len(validators) - 1) // 3
         if (
             len(validators) != body["participant_validator_count"]
             or body["participant_min_quorum"] != expected_quorum
             or validator_hash != body["participant_validator_set_hash"]
+            or validator_hash != computed_validator_hash
         ):
             raise RuntimeError(f"{context} committee fields differ from its signed body")
         pops_raw = cls._array(
@@ -9301,21 +9309,20 @@ class _SumeragiV2StatusParser:
         ):
             raise RuntimeError(f"{descriptor_context} accepted work is inconsistent")
 
-        validators = [
-            cls._non_empty_string(item, f"{descriptor_context}.validator_set[{index}]")
-            for index, item in enumerate(
-                cls._array(
-                    descriptor.get("validator_set"),
+        try:
+            validators = list(
+                validate_bls_normal_validator_set(
+                    cls._array(
+                        descriptor.get("validator_set"),
+                        f"{descriptor_context}.validator_set",
+                        minimum=1,
+                        maximum=cls.MAX_VALIDATORS,
+                    ),
                     f"{descriptor_context}.validator_set",
-                    minimum=1,
-                    maximum=cls.MAX_VALIDATORS,
                 )
             )
-        ]
-        if any(left >= right for left, right in zip(validators, validators[1:])):
-            raise RuntimeError(
-                f"{descriptor_context}.validator_set must be strictly ordered by validator id"
-            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
         validator_count = cls._exact_unsigned(
             descriptor.get("validator_count"),
             f"{descriptor_context}.validator_count",
@@ -9340,74 +9347,96 @@ class _SumeragiV2StatusParser:
             or min_quorum != expected_quorum
         ):
             raise RuntimeError(f"{descriptor_context} committee fields are inconsistent")
-        return {
-            "descriptor": {
-                "lane_id": cls._exact_unsigned(
-                    descriptor.get("lane_id"),
-                    f"{descriptor_context}.lane_id",
-                    maximum=cls.MAX_U32,
-                ),
-                "dataspace_id": cls._exact_unsigned(
-                    descriptor.get("dataspace_id"),
-                    f"{descriptor_context}.dataspace_id",
-                    maximum=cls.MAX_U64,
-                ),
-                "lane_incarnation": cls._nonzero_hash(
-                    descriptor.get("lane_incarnation"),
-                    f"{descriptor_context}.lane_incarnation",
-                ),
-                "proposal_height": cls._exact_unsigned(
-                    descriptor.get("proposal_height"),
-                    f"{descriptor_context}.proposal_height",
-                    positive=True,
-                    maximum=cls.MAX_U64,
-                ),
-                "previous_lane_block_height": previous_height,
-                **(
-                    {"previous_lane_block_descriptor_hash": previous_hash}
-                    if previous_hash is not None
-                    else {}
-                ),
-                "lane_block_height": lane_height,
-                "lane_block_view": cls._exact_unsigned(
-                    descriptor.get("lane_block_view"),
-                    f"{descriptor_context}.lane_block_view",
-                    maximum=cls.MAX_U64,
-                ),
-                "subject_hash": cls._nonzero_hash(
-                    descriptor.get("subject_hash"),
-                    f"{descriptor_context}.subject_hash",
-                ),
-                "payload_ownership_hash": cls._nonzero_hash(
-                    descriptor.get("payload_ownership_hash"),
-                    f"{descriptor_context}.payload_ownership_hash",
-                ),
-                "rbc_instance_hash": cls._nonzero_hash(
-                    descriptor.get("rbc_instance_hash"),
-                    f"{descriptor_context}.rbc_instance_hash",
-                ),
-                "accepted_candidate_indices": indices,
-                "accepted_transaction_hashes": transaction_hashes,
-                "validator_set_hash_version": validator_hash_version,
-                "validator_set_hash": cls._hash(
-                    descriptor.get("validator_set_hash"),
-                    f"{descriptor_context}.validator_set_hash",
-                ),
-                "validator_set": validators,
-                "validator_count": validator_count,
-                "min_quorum": min_quorum,
-                "qc_mode_tag": cls._non_empty_string(
-                    descriptor.get("qc_mode_tag"),
-                    f"{descriptor_context}.qc_mode_tag",
-                ),
-                "descriptor_hash": cls._nonzero_hash(
-                    descriptor.get("descriptor_hash"),
-                    f"{descriptor_context}.descriptor_hash",
-                ),
-            },
-            "proposal_hash": cls._nonzero_hash(
-                proposal.get("proposal_hash"), f"{context}.proposal_hash"
+        normalized_descriptor = {
+            "lane_id": cls._exact_unsigned(
+                descriptor.get("lane_id"),
+                f"{descriptor_context}.lane_id",
+                maximum=cls.MAX_U32,
             ),
+            "dataspace_id": cls._exact_unsigned(
+                descriptor.get("dataspace_id"),
+                f"{descriptor_context}.dataspace_id",
+                maximum=cls.MAX_U64,
+            ),
+            "lane_incarnation": cls._nonzero_hash(
+                descriptor.get("lane_incarnation"),
+                f"{descriptor_context}.lane_incarnation",
+            ),
+            "proposal_height": cls._exact_unsigned(
+                descriptor.get("proposal_height"),
+                f"{descriptor_context}.proposal_height",
+                positive=True,
+                maximum=cls.MAX_U64,
+            ),
+            "previous_lane_block_height": previous_height,
+            **(
+                {"previous_lane_block_descriptor_hash": previous_hash}
+                if previous_hash is not None
+                else {}
+            ),
+            "lane_block_height": lane_height,
+            "lane_block_view": cls._exact_unsigned(
+                descriptor.get("lane_block_view"),
+                f"{descriptor_context}.lane_block_view",
+                maximum=cls.MAX_U64,
+            ),
+            "subject_hash": cls._nonzero_hash(
+                descriptor.get("subject_hash"),
+                f"{descriptor_context}.subject_hash",
+            ),
+            "payload_ownership_hash": cls._nonzero_hash(
+                descriptor.get("payload_ownership_hash"),
+                f"{descriptor_context}.payload_ownership_hash",
+            ),
+            "rbc_instance_hash": cls._nonzero_hash(
+                descriptor.get("rbc_instance_hash"),
+                f"{descriptor_context}.rbc_instance_hash",
+            ),
+            "accepted_candidate_indices": indices,
+            "accepted_transaction_hashes": transaction_hashes,
+            "validator_set_hash_version": validator_hash_version,
+            "validator_set_hash": cls._hash(
+                descriptor.get("validator_set_hash"),
+                f"{descriptor_context}.validator_set_hash",
+            ),
+            "validator_set": validators,
+            "validator_count": validator_count,
+            "min_quorum": min_quorum,
+            "qc_mode_tag": cls._exact_non_empty_string(
+                descriptor.get("qc_mode_tag"),
+                f"{descriptor_context}.qc_mode_tag",
+            ),
+            "descriptor_hash": cls._nonzero_hash(
+                descriptor.get("descriptor_hash"),
+                f"{descriptor_context}.descriptor_hash",
+            ),
+        }
+        if (
+            normalized_descriptor["validator_set_hash"]
+            != compute_native_amx_validator_set_hash(validators)
+        ):
+            raise RuntimeError(
+                f"{descriptor_context}.validator_set_hash does not match "
+                "the canonical committee"
+            )
+        if (
+            normalized_descriptor["descriptor_hash"]
+            != compute_native_amx_descriptor_hash(normalized_descriptor)
+        ):
+            raise RuntimeError(
+                f"{descriptor_context}.descriptor_hash does not match "
+                "its canonical preimage"
+            )
+        proposal_hash = cls._nonzero_hash(
+            proposal.get("proposal_hash"), f"{context}.proposal_hash"
+        )
+        if proposal_hash != compute_native_amx_proposal_hash(normalized_descriptor):
+            raise RuntimeError(
+                f"{context}.proposal_hash does not match its canonical preimage"
+            )
+        return {
+            "descriptor": normalized_descriptor,
+            "proposal_hash": proposal_hash,
         }
 
     @classmethod
@@ -9456,6 +9485,14 @@ class _SumeragiV2StatusParser:
             record.get("participant_settlement_hash"),
             f"{context}.participant_settlement_hash",
         )
+        if (
+            settlement_hash
+            != compute_native_amx_participant_settlement_hash(settlement)
+        ):
+            raise RuntimeError(
+                f"{context}.participant_settlement_hash does not match "
+                "its canonical commitment"
+            )
         prepare = cls._native_amx_qc(record.get("prepare_qc"), context=f"{context}.prepare_qc")
         commit = cls._native_amx_qc(record.get("commit_qc"), context=f"{context}.commit_qc")
         if prepare["body"]["phase"]["phase"] != "prepare":
@@ -9946,6 +9983,14 @@ class _SumeragiV2StatusParser:
         if not isinstance(value, str) or not value.strip():
             raise RuntimeError(f"{context} must be a non-empty string")
         return value.strip()
+
+    @staticmethod
+    def _exact_non_empty_string(value: Any, context: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"{context} must be a non-empty string")
+        if value.strip() != value:
+            raise RuntimeError(f"{context} must not contain surrounding whitespace")
+        return value
 
 
 class _SumeragiDiagnosticsParser:

@@ -412,7 +412,10 @@ This Gradle task (and every `client-android` release assembly):
    `libconnect_norito_bridge.so` name is promoted into the authoritative raw
    directory under `client-android/build/native/cargo-ndk/<mode>/`. Compiler
    state remains isolated in `client-android/build/native/cargo-target/<mode>/`
-   through a mode-specific `CARGO_TARGET_DIR`.
+   through a mode-specific `CARGO_TARGET_DIR`. Every raw and stripped/provenance
+   promotion re-authenticates the saved source commit and selected dependency-
+   closure fingerprint immediately before and after the promotion; the source
+   sampler itself rejects commit or fingerprint drift during authentication.
 3. Copies the raw libraries to a distinct generated directory, then canonically
    strips only those copies with the selected Android NDK's
    `llvm-strip --strip-unneeded`

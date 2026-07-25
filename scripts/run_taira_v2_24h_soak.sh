@@ -255,27 +255,18 @@ if [[ -n "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" ]]; then
   fi
 fi
 
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed before Taira completion" >&2
+  exit 1
+fi
 mv -- "$partial_evidence_path" "$evidence_path"
 evidence_sha256="$(sha256_file "$evidence_path")"
 log_sha256="$(sha256_file "$run_log")"
-completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
-printf '%s\t%s\n' \
-  schema_version 1 \
-  head_commit "$head_commit" \
-  head_tree "$head_tree" \
-  source_manifest_sha256 "$source_manifest_sha256" \
-  cargo_lock_sha256 "$cargo_lock_sha256" \
-  prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
-  evidence_sha256 "$evidence_sha256" \
-  log_sha256 "$log_sha256" \
-  >"$completion_tmp"
-mv -- "$completion_tmp" "$completion_attestation"
 
 post_completion_manifest="$(
   python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
 )"
 if [[ "$post_completion_manifest" != "$source_manifest_sha256" ]]; then
-  rm -f -- "$completion_attestation" "$evidence_path"
   echo "workspace sources changed while publishing Taira completion evidence" >&2
   exit 1
 fi
@@ -285,16 +276,37 @@ if [[ -n "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" ]]; then
       --root "$REPO_ROOT" --release-identity-json
   )"
   if [[ "$post_completion_identity" != "$expected_identity" ]]; then
-    rm -f -- "$completion_attestation" "$evidence_path"
     echo "release identity changed while publishing Taira completion evidence" >&2
     exit 1
   fi
 fi
-
-if [[ -n "${IROHA_TAIRA_COMPLETION_PATH_FILE:-}" ]]; then
-  completion_path_tmp="${IROHA_TAIRA_COMPLETION_PATH_FILE}.$$"
-  printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
-  mv -- "$completion_path_tmp" "$IROHA_TAIRA_COMPLETION_PATH_FILE"
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed while publishing Taira completion" >&2
+  exit 1
 fi
+
+completion_body="$(
+  printf '%s\t%s\n' \
+    schema_version 1 \
+    head_commit "$head_commit" \
+    head_tree "$head_tree" \
+    source_manifest_sha256 "$source_manifest_sha256" \
+    cargo_lock_sha256 "$cargo_lock_sha256" \
+    prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
+    evidence_sha256 "$evidence_sha256" \
+    log_sha256 "$log_sha256"
+)"
+marker_publish_args=(
+  --output "$completion_attestation"
+  --maximum-bytes 4096
+)
+if [[ -n "${IROHA_TAIRA_COMPLETION_PATH_FILE:-}" ]]; then
+  marker_publish_args+=(
+    --pointer "$IROHA_TAIRA_COMPLETION_PATH_FILE"
+  )
+fi
+printf '%s\n' "$completion_body" |
+  python3 -I -S "${REPO_ROOT}/scripts/publish_release_marker.py" \
+    "${marker_publish_args[@]}"
 
 echo "Taira v2 production soak passed with exactly one test; retained evidence=${evidence_path}; completion=${completion_attestation}" >&2

@@ -33,43 +33,48 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
-internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
+internal class TransactionPayloadAdapter private constructor(
+    private val chainDiscriminant: Int,
+) : TypeAdapter<TransactionPayload> {
 
     override fun encode(encoder: NoritoEncoder, value: TransactionPayload) {
-        require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
-            "feePayment.gasLimit is required for IVM and contract-call executables"
+        withChainContext(chainDiscriminant) {
+            require(!value.executable.requiresTransactionGasLimit() || value.feePayment.gasLimit != null) {
+                "feePayment.gasLimit is required for IVM and contract-call executables"
+            }
+            encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId)
+            encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
+            encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
+            encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable)
+            encodeSizedField(encoder, TTL_ADAPTER, Optional.ofNullable(value.timeToLiveMs))
+            encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
+            encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
+            encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
         }
-        encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId)
-        encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority)
-        encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs)
-        encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable)
-        encodeSizedField(encoder, TTL_ADAPTER, Optional.ofNullable(value.timeToLiveMs))
-        encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
-        encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
-        encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
     }
 
-    override fun decode(decoder: NoritoDecoder): TransactionPayload {
-        val chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER)
-        val authority = decodeAuthorityField(decoder)
-        val creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER)
-        val executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER)
-        val ttl: Optional<Long> = decodeSizedField(decoder, TTL_ADAPTER)
-        val nonceRaw: Optional<Long> = decodeSizedField(decoder, NONCE_ADAPTER)
-        val feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER)
-        val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
+    override fun decode(decoder: NoritoDecoder): TransactionPayload =
+        withChainContext(chainDiscriminant) {
+            val chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER)
+            val authority = decodeAuthorityField(decoder)
+            val creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER)
+            val executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER)
+            val ttl: Optional<Long> = decodeSizedField(decoder, TTL_ADAPTER)
+            val nonceRaw: Optional<Long> = decodeSizedField(decoder, NONCE_ADAPTER)
+            val feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER)
+            val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
 
-        return TransactionPayload(
-            chainId = chainId,
-            authority = authority,
-            creationTimeMs = creationTimeMs,
-            executable = executable,
-            timeToLiveMs = ttl.orElse(null),
-            nonce = nonceRaw.orElse(null),
-            feePayment = feePayment,
-            metadata = metadata,
-        )
-    }
+            TransactionPayload(
+                chainId = chainId,
+                authority = authority,
+                creationTimeMs = creationTimeMs,
+                executable = executable,
+                timeToLiveMs = ttl.orElse(null),
+                nonce = nonceRaw.orElse(null),
+                feePayment = feePayment,
+                metadata = metadata,
+            )
+        }
 
     private class FeePaymentIntentAdapter : TypeAdapter<FeePaymentIntent> {
         override fun encode(encoder: NoritoEncoder, value: FeePaymentIntent) {
@@ -337,7 +342,10 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             private fun parseAuthority(authority: String): ControllerPayload {
                 val canonicalAuthority = requireCanonicalI105Address(authority, "authority")
                 val parsed = try {
-                    AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null)
+                    AccountAddress.parseEncodedIgnoringCurveSupport(
+                        canonicalAuthority,
+                        requiredChainDiscriminant(),
+                    )
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException("authority must use canonical I105 encoding", e)
                 }
@@ -383,7 +391,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                     )
                 return try {
                     val address = AccountAddress.fromAccount(payload.keyBytes, algorithm)
-                    address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+                    address.toI105(requiredChainDiscriminant())
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException("Invalid single-key AccountController payload", e)
                 }
@@ -392,7 +400,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
             private fun renderMultisigAuthority(policy: MultisigPolicyPayload): String {
                 try {
                     val address = AccountAddress.fromMultisigPolicy(policy)
-                    return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+                    return address.toI105(requiredChainDiscriminant())
                 } catch (ex: AccountAddressException) {
                     throw IllegalArgumentException("Invalid multisig policy for AccountId", ex)
                 }
@@ -561,6 +569,52 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
     }
 
     companion object {
+        // Validation never exposes rendered account text. Controller bytes are independent of the
+        // I105 display prefix, so this private synthetic context does not become a network default.
+        private const val CANONICAL_VALIDATION_DISCRIMINANT = 0
+        private val CHAIN_DISCRIMINANT = ThreadLocal<Int?>()
+
+        fun forChain(chainDiscriminant: Int): TransactionPayloadAdapter {
+            require(chainDiscriminant in 0..0xffff) {
+                "chainDiscriminant must fit in u16"
+            }
+            return TransactionPayloadAdapter(chainDiscriminant)
+        }
+
+        fun validateCanonicalPayloadBytes(encoded: ByteArray) {
+            val validator = forChain(CANONICAL_VALIDATION_DISCRIMINANT)
+            val decoded = NoritoCodec.decodeAdaptive(encoded, validator)
+            val reencoded = NoritoCodec.encodeAdaptive(decoded, validator).payload()
+            require(encoded.contentEquals(reencoded)) {
+                "transaction payload bytes are not the exact canonical encoding"
+            }
+        }
+
+        private fun requiredChainDiscriminant(): Int =
+            checkNotNull(CHAIN_DISCRIMINANT.get()) {
+                "Account controller encoding/rendering requires an explicit chainDiscriminant"
+            }
+
+        private fun <T> withChainContext(chainDiscriminant: Int, operation: () -> T): T {
+            require(chainDiscriminant in 0..0xffff) {
+                "chainDiscriminant must fit in u16"
+            }
+            val previous = CHAIN_DISCRIMINANT.get()
+            check(previous == null || previous == chainDiscriminant) {
+                "Conflicting nested chainDiscriminant context"
+            }
+            CHAIN_DISCRIMINANT.set(chainDiscriminant)
+            return try {
+                operation()
+            } finally {
+                if (previous == null) {
+                    CHAIN_DISCRIMINANT.remove()
+                } else {
+                    CHAIN_DISCRIMINANT.set(previous)
+                }
+            }
+        }
+
         private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
         private val ACCOUNT_ID_ADAPTER: TypeAdapter<String> = AccountIdAdapter()
         private val CHAIN_ID_ADAPTER: TypeAdapter<String> = ChainIdAdapter()

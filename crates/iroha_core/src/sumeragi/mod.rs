@@ -545,6 +545,8 @@ pub(crate) fn prf_seed_for_height_from_world(
 
 #[cfg(test)]
 mod exact_epoch_seed_tests {
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
 
@@ -556,6 +558,13 @@ mod exact_epoch_seed_tests {
             LiveQueryStore::start_test(),
         );
         let authenticated_seed = [0xA7; 32];
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+            parameters.commit();
+        }
         {
             let mut world = state.world.block();
             world.vrf_epochs.insert(
@@ -6595,7 +6604,7 @@ mod authoritative_runtime_gate_tests {
     #[test]
     fn fair_v2_ingress_wire_index_keeps_non_validator_relay_origins_distinct() {
         let (_handle, ingress, _relay_receiver) =
-            test_sumeragi_handle_with_source_geometry(3, Some(1));
+            test_sumeragi_handle_with_source_geometry(4, Some(1));
         let authenticated_via = validator_peers(1)
             .pop()
             .expect("authenticated relay fixture");

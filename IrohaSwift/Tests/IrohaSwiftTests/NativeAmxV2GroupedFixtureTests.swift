@@ -422,6 +422,27 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         let group = try XCTUnwrap(diagnostics.laneSettlementCommitments.first)
         XCTAssertEqual(group.nativeAmxReceipts.map(\.sourceId.rawValue), sourceOrder)
         XCTAssertEqual(group.nativeAmxReceipts.count, 2)
+        let firstLeg = try XCTUnwrap(group.nativeAmxReceipts.first?.legs.first)
+        XCTAssertEqual(
+            firstLeg.participantProposal.descriptor.validatorSetHash,
+            "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8"
+        )
+        XCTAssertEqual(
+            firstLeg.participantProposal.descriptor.descriptorHash,
+            "hash:568077DEBB5ECE0F6655571DBD81F8B8935CA5FB064F6B74864B4F58F3CB1A33#E6A5"
+        )
+        XCTAssertEqual(
+            firstLeg.participantProposal.proposalHash,
+            "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
+        )
+        XCTAssertEqual(
+            firstLeg.participantSettlementHash,
+            "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C"
+        )
+        let firstValidator = try XCTUnwrap(
+            firstLeg.participantProposal.descriptor.validatorSet.first
+        )
+        XCTAssertTrue(ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(firstValidator))
         for receipt in group.nativeAmxReceipts {
             XCTAssertEqual(receipt.legs.count, 2)
             XCTAssertEqual(receipt.laneBlockView, 9)
@@ -585,6 +606,25 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     func testRustOwnedGroupedNativeAmxV2NegativeCorpus() throws {
         let canonical = try loadNativeAmxGroupedFixture()
         let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
+        let identifiers = Set(controls.compactMap { $0["id"] as? String })
+        XCTAssertTrue(
+            Set([
+                "coherent_forged_validator_set_hash",
+                "coherent_stale_descriptor_hash",
+                "coherent_stale_proposal_hash",
+                "coherent_stale_settlement_hash",
+                "non_canonical_validator_peer_id",
+            ]).isSubset(of: identifiers)
+        )
+
+        // This value has the exact multihash tag and byte length expected for
+        // BLS-Normal, but its all-zero compressed point is invalid. Exercise
+        // key admission directly so rejection does not depend on stale hashes
+        // in the corpus mutation.
+        let invalidCompressedPoint = "ea0130" + String(repeating: "00", count: 48)
+        XCTAssertFalse(
+            ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(invalidCompressedPoint)
+        )
         for control in controls {
             let identifier = try XCTUnwrap(control["id"] as? String)
             try XCTContext.runActivity(named: identifier) { _ in

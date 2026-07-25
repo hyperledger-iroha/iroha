@@ -1859,6 +1859,35 @@ impl TieredStateBackend {
         }
 
         let retired_root = root.join("retired").join("lanes");
+        // Replay rollback can provision the same empty lane image that an earlier
+        // rollback already archived. Retain the first durable archive and remove
+        // only the redundant empty live image; any lane carrying state still
+        // follows the normal unique-archive path below.
+        if lane_snapshot_dir_is_empty(&dir)?
+            && has_matching_empty_retired_lane_snapshot(&retired_root, &entry.kura_segment)?
+        {
+            fs::remove_dir(&dir).wrap_err_with(|| {
+                format!(
+                    "failed to remove redundant empty lane snapshot directory {path}",
+                    path = dir.display()
+                )
+            })?;
+            if let Some(parent) = dir.parent() {
+                Self::sync_dir(parent).wrap_err_with(|| {
+                    format!(
+                        "failed to sync lane snapshot directory {path}",
+                        path = parent.display()
+                    )
+                })?;
+            }
+            iroha_logger::info!(
+                lane = %entry.lane_id.as_u32(),
+                alias = entry.alias,
+                source = %dir.display(),
+                "tiered-state: removed redundant empty lane snapshot directory"
+            );
+            return Ok(());
+        }
         fs::create_dir_all(&retired_root).wrap_err_with(|| {
             format!(
                 "failed to create retired lane directory {path}",
@@ -4192,6 +4221,80 @@ mod measured_bytes_impls {
 
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
     root.join(&entry.kura_segment)
+}
+
+fn lane_snapshot_dir_is_empty(path: &Path) -> Result<bool> {
+    Ok(fs::read_dir(path)
+        .wrap_err_with(|| {
+            format!(
+                "failed to inspect lane snapshot directory {path}",
+                path = path.display()
+            )
+        })?
+        .next()
+        .transpose()
+        .wrap_err_with(|| {
+            format!(
+                "failed to inspect lane snapshot entry below {path}",
+                path = path.display()
+            )
+        })?
+        .is_none())
+}
+
+fn has_matching_empty_retired_lane_snapshot(retired_root: &Path, stem: &str) -> Result<bool> {
+    if !retired_root.exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(retired_root).wrap_err_with(|| {
+        format!(
+            "failed to inspect retired lane snapshot directory {path}",
+            path = retired_root.display()
+        )
+    })? {
+        let entry = entry.wrap_err_with(|| {
+            format!(
+                "failed to inspect retired lane snapshot entry below {path}",
+                path = retired_root.display()
+            )
+        })?;
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Some(suffix) = name
+            .strip_prefix(stem)
+            .and_then(|suffix| suffix.strip_prefix('_'))
+        else {
+            continue;
+        };
+        let mut suffix_parts = suffix.split('_');
+        let Some(stamp) = suffix_parts.next() else {
+            continue;
+        };
+        let counter = suffix_parts.next();
+        if stamp.is_empty()
+            || !stamp.bytes().all(|byte| byte.is_ascii_digit())
+            || counter.is_some_and(|part| {
+                part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit())
+            })
+            || suffix_parts.next().is_some()
+            || !entry
+                .file_type()
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to inspect retired lane snapshot entry type at {path}",
+                        path = entry.path().display()
+                    )
+                })?
+                .is_dir()
+        {
+            continue;
+        }
+        if lane_snapshot_dir_is_empty(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
@@ -6647,6 +6750,80 @@ mod tests {
         assert!(
             !retired_entries.is_empty(),
             "expected retired lane snapshot archive"
+        );
+    }
+
+    #[test]
+    fn repeated_empty_lane_retirement_reuses_exact_archive() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
+
+        let lane = LaneConfig {
+            id: LaneId::from(1),
+            alias: "retry".to_string(),
+            ..LaneConfig::default()
+        };
+        let expanded_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
+            .expect("expanded catalog");
+        let expanded_cfg = RuntimeLaneConfig::from_catalog(&expanded_catalog);
+        let baseline_cfg = RuntimeLaneConfig::default();
+        let lane_entry = expanded_cfg
+            .entry(LaneId::from(1))
+            .expect("expanded lane entry");
+        let lanes_root = temp.path().join("lanes");
+        let live_dir = lane_snapshot_dir(&lanes_root, lane_entry);
+        let retired_root = temp.path().join("retired").join("lanes");
+
+        backend
+            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
+            .expect("provision lane");
+        backend
+            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
+            .expect("retire lane");
+        let initial_archives = fs::read_dir(&retired_root)
+            .expect("retired lane root")
+            .map(|entry| entry.expect("retired lane entry").file_name())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(initial_archives.len(), 1);
+
+        backend
+            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
+            .expect("reprovision lane");
+        backend
+            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
+            .expect("repeat lane retirement");
+        let retry_archives = fs::read_dir(&retired_root)
+            .expect("retired lane root")
+            .map(|entry| entry.expect("retired lane entry").file_name())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            retry_archives, initial_archives,
+            "an exact empty retry must not create a rollback-only archive"
+        );
+        assert!(!live_dir.exists());
+
+        backend
+            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
+            .expect("reprovision populated lane");
+        fs::write(live_dir.join("marker"), b"retained state").expect("seed retained state");
+        backend
+            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
+            .expect("retire populated lane");
+        let populated_archives = fs::read_dir(&retired_root)
+            .expect("retired lane root")
+            .map(|entry| entry.expect("retired lane entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            populated_archives.len(),
+            initial_archives.len() + 1,
+            "a populated normal retirement must retain a distinct archive"
+        );
+        assert!(
+            populated_archives
+                .iter()
+                .any(|archive| archive.join("marker").is_file()),
+            "the populated retirement archive must preserve lane state"
         );
     }
 

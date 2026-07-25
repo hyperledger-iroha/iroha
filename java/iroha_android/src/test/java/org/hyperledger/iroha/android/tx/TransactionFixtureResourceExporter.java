@@ -66,7 +66,7 @@ public final class TransactionFixtureResourceExporter {
             "python/iroha_python/tests/fixtures/transaction_fixtures.manifest.json"
           });
 
-  private static final NoritoJavaCodecAdapter CODEC = new NoritoJavaCodecAdapter();
+  private static final NoritoJavaCodecAdapter CODEC = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
   private TransactionFixtureResourceExporter() {}
 

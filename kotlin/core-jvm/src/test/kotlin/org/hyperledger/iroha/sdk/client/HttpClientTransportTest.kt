@@ -54,6 +54,10 @@ class HttpClientTransportTest {
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x37), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
+    private fun testAccountId(seed: Int): String =
+        AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
     private fun noncanonicalStandardBase64PadBitAlias(encoded: String): String {
         require(encoded.endsWith("==")) { "64-byte signatures encode with == padding" }
         val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -2634,12 +2638,13 @@ class HttpClientTransportTest {
 
     @Test
     fun resolveAccountAliasParsesSuccessfulResponse() {
+        val accountId = testAccountId(0x11)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "alias": "alice@universal",
-                  "account_id": "aid:alice-123",
+                  "account_id": "$accountId",
                   "index": 42,
                   "source": "directory"
                 }
@@ -2655,7 +2660,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertEquals("alice@universal", parsed.alias)
-        assertEquals("aid:alice-123", parsed.accountId)
+        assertEquals(accountId, parsed.accountId)
         assertEquals(BigInteger.valueOf(42), parsed.index)
         assertEquals("directory", parsed.source)
 
@@ -2671,12 +2676,13 @@ class HttpClientTransportTest {
 
     @Test
     fun resolveRestrictedAccountAliasUsesCanonicalAuthentication() {
+        val accountId = testAccountId(0x42)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "alias": "merchant@private",
-                  "account_id": "aid:merchant-123",
+                  "account_id": "$accountId",
                   "source": "world_state"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
@@ -2696,7 +2702,7 @@ class HttpClientTransportTest {
         val response = transport.resolveAccountAlias("merchant@private", auth).join()
 
         assertTrue(response.isPresent)
-        assertEquals("aid:merchant-123", response.get().accountId)
+        assertEquals(accountId, response.get().accountId)
         val request = assertNotNull(executor.lastRequest)
         assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
@@ -3138,12 +3144,13 @@ class HttpClientTransportTest {
 
     @Test
     fun resolveAccountAliasParsesSuccessfulResponseWithoutIndex() {
+        val accountId = testAccountId(0x13)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "alias": "banking@centralbank.universal",
-                  "account_id": "aid:banking-123",
+                  "account_id": "$accountId",
                   "source": "rekey_record"
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
@@ -3158,7 +3165,7 @@ class HttpClientTransportTest {
         assertTrue(response.isPresent)
         val parsed = response.get()
         assertEquals("banking@centralbank.universal", parsed.alias)
-        assertEquals("aid:banking-123", parsed.accountId)
+        assertEquals(accountId, parsed.accountId)
         assertNull(parsed.index)
         assertEquals("rekey_record", parsed.source)
     }
@@ -3182,12 +3189,13 @@ class HttpClientTransportTest {
 
     @Test
     fun resolveAccountAliasRejectsNonIntegerIndex() {
+        val accountId = testAccountId(0x14)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
                 {
                   "alias": "alice@universal",
-                  "account_id": "aid:alice-123",
+                  "account_id": "$accountId",
                   "index": 3.5
                 }
             """.trimIndent().toByteArray(StandardCharsets.UTF_8),
@@ -3205,11 +3213,12 @@ class HttpClientTransportTest {
 
     @Test
     fun accountAliasParserRejectsNonExactResponseFields() {
+        val accountId = testAccountId(0x15)
         val canonical =
             """
                 {
                   "alias": "alice@universal",
-                  "account_id": "aid:alice-123",
+                  "account_id": "$accountId",
                   "index": 7,
                   "source": "directory"
                 }
@@ -3220,8 +3229,8 @@ class HttpClientTransportTest {
                 "\"alias\": \" alice@universal\"",
             ),
             "account alias resolution.account_id" to canonical.replace(
-                "\"account_id\": \"aid:alice-123\"",
-                "\"account_id\": \"aid:alice-123 \"",
+                "\"account_id\": \"$accountId\"",
+                "\"account_id\": \"$accountId \"",
             ),
             "account alias resolution.source" to canonical.replace(
                 "\"source\": \"directory\"",
@@ -3702,10 +3711,11 @@ class HttpClientTransportTest {
     }
 
     private fun sampleTransaction(seed: Int): SignedTransaction {
-        val codec = NoritoJavaCodecAdapter()
+        val codec = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val encoded = codec.encodeTransaction(
             TransactionPayload(
                 chainId = String.format("%08x", seed),
+                authority = testMultisigAccountId(),
                 creationTimeMs = 1_700_000_000_000L + seed,
                 executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,

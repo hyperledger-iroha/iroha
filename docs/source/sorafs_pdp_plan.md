@@ -26,9 +26,10 @@ native repair-transaction handoff, and storage execution is gated by the exact
 finalized task cursor, revision, lease owner, generation, and expiry. Canonical
 terminal archives also use the authorized retry-safe
 `SubmitSorafsProofOutcome` transaction forwarder and reconcile the committed
-record. SF-13 remains open because the residual public `RepairManager` and
-filesystem/GC reconciliation consumers still expose a competing local
-projection, cross-peer exactly-once repair has not been proved, and genuine
+record. The former public `RepairManager` and filesystem repair authority have
+been deleted, and GC/reconciliation now consume one complete bounded native
+task projection from a single immutable finalized view. SF-13 remains open
+because cross-peer exactly-once repair has not yet been proved and genuine
 multi-provider transport, restart, key-rotation, metrics, archive, and repair
 evidence remains external rollout work.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
@@ -270,8 +271,8 @@ The local V1 protocol gates are shipped:
    provider routes and challenge-bound proof streaming.
 
 The sixth item and terminal archive now use durable signed native transaction
-forwarders with exact finalized reconciliation. Remaining authority work is to
-remove the residual local repair manager/checkpoint consumers and prove that
+forwarders with exact finalized reconciliation. The competing local repair
+manager/checkpoint path is removed. Remaining rollout work is to prove that
 duplicate submissions through different peers still produce one live lease and
 one terminal outcome.
 
@@ -335,8 +336,6 @@ Implemented:
 
 Required before production enablement:
 
-- Remove the residual public local repair manager and its filesystem,
-  GC-protection, and reconciliation checkpoint consumers.
 - Prove restart and cross-peer exactly-once behavior for the existing durable
   proof-outcome and repair transaction forwarders, including one live lease and
   one terminal outcome.
@@ -390,8 +389,9 @@ Remaining production gates:
 - Keep every canonical provider terminal archive reconciled against the native
   proof-outcome ledger; the provider protocol's local status/export store is a
   rebuildable projection only.
-- Delete the residual local repair manager/checkpoint path and prove the
-  existing finalized native handoff across peer and process restarts.
+- Prove the finalized native handoff across peer and process restarts. The
+  deleted local manager/checkpoint format has no production compatibility
+  branch.
 - Exercise admission-bound provider signatures, archive publication, restart,
   retry, revocation, and exactly-once repair across multiple providers and
   validators.

@@ -7,7 +7,7 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=45
+readonly expected_negative_control_count=50
 readonly source_paths=(
   ci/run_native_amx_v2_grouped_sdk_parity.sh
   ci/native_amx_v2_grouped_gradle_init.gradle
@@ -17,14 +17,23 @@ readonly source_paths=(
   python/iroha_python/src/iroha_python/client.py
   python/iroha_python/src/iroha_python/__init__.py
   python/iroha_torii_client/client.py
+  python/iroha_torii_client/native_amx.py
   javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js
   javascript/iroha_js/src/toriiClient.js
   javascript/iroha_js/dist/toriiClient.js
   javascript/iroha_js/index.d.ts
+  javascript/iroha_js/package.json
+  javascript/iroha_js/package-lock.json
   IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift
+  IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift
+  IrohaSwift/Sources/IrohaSwift/Crypto.swift
+  IrohaSwift/Sources/IrohaSwift/NativeBridge.swift
+  IrohaSwift/Sources/IrohaSwift/Norito.swift
   IrohaSwift/Sources/IrohaSwift/ToriiClient.swift
   IrohaSwift/Package.swift
   IrohaSwift/Package.resolved
+  crates/connect_norito_bridge/include/connect_norito_bridge.h
+  crates/connect_norito_bridge/src/lib.rs
   kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/NativeAmxV2GroupedFixtureTest.kt
   kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/NativeAmxV2.kt
   kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt
@@ -256,7 +265,7 @@ PY
 observed_test_count=0
 case "$surface" in
   openapi)
-    observed_test_count=4
+    observed_test_count=7
     run_and_capture \
       env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
       python3 -m pytest -q -p no:cacheprovider \
@@ -264,7 +273,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   python)
-    observed_test_count=47
+    observed_test_count=56
     python3 -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     run_and_capture \
@@ -275,7 +284,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=48
+    observed_test_count=54
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1

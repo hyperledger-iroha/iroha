@@ -11,8 +11,8 @@ use thiserror::Error;
 use sorafs_manifest::deal::XorQuantity;
 
 use crate::{
-    account::AccountId, escrow::EscrowId, events::data::sorafs::SorafsOrderbookLedgerEvent,
-    sorafs::capacity::ProviderId,
+    account::AccountId, asset::AssetDefinitionId, escrow::EscrowId,
+    events::data::sorafs::SorafsOrderbookLedgerEvent, sorafs::capacity::ProviderId,
 };
 
 /// First-release schema version for [`OrderbookAdmissionPolicyV1`].
@@ -29,6 +29,8 @@ pub const ORDERBOOK_MAX_RECEIPT_BYTES_V1: u64 = 1 << 40;
 pub const ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1: u32 = 8_192;
 /// Hard ceiling for open orders retained by the authoritative V1 book.
 pub const ORDERBOOK_MAX_OPEN_ORDERS_V1: u32 = 4_096;
+/// Hard ceiling for simultaneously open settlement channels.
+pub const ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1: u32 = 4_096;
 /// Hard ceiling for fills committed by one deterministic matching instruction.
 pub const ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1: u32 = 64;
 /// Hard ceiling for orders/channels examined by one maintenance instruction.
@@ -50,14 +52,32 @@ pub const ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.settlement-escrow-id.v1";
 /// Domain separator for bid-order custody locks.
 pub const ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-escrow-id.v1";
+/// Reserved four-byte namespace tag for bid-order custody locks.
+pub const ORDERBOOK_ORDER_ESCROW_ID_PREFIX_V1: [u8; 4] = *b"SFO1";
+/// Reserved four-byte namespace tag for settlement-channel custody locks.
+pub const ORDERBOOK_SETTLEMENT_ESCROW_ID_PREFIX_V1: [u8; 4] = *b"SFC1";
+
+fn namespaced_orderbook_escrow_id(domain: &[u8], namespace: [u8; 4], id: [u8; 32]) -> EscrowId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    hasher.update(&id);
+    let mut digest = *hasher.finalize().as_bytes();
+    digest[..namespace.len()].copy_from_slice(&namespace);
+    EscrowId::new(iroha_crypto::Hash::prehashed(digest))
+}
 
 /// Derive the native asset-lock identifier that funds an admitted bid.
+///
+/// Four reserved namespace bytes prevent public escrow creators from
+/// front-running this deterministic identifier while retaining 224 bits of
+/// domain-separated digest material.
 #[must_use]
 pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1);
-    hasher.update(&order_id);
-    EscrowId::new(iroha_crypto::Hash::prehashed(*hasher.finalize().as_bytes()))
+    namespaced_orderbook_escrow_id(
+        ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1,
+        ORDERBOOK_ORDER_ESCROW_ID_PREFIX_V1,
+        order_id,
+    )
 }
 
 /// Derive the native asset-lock identifier required for a settlement channel.
@@ -67,10 +87,36 @@ pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
 /// asset definition, settlement release authority, and remaining custody.
 #[must_use]
 pub fn orderbook_settlement_escrow_id(channel_id: [u8; 32]) -> EscrowId {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1);
-    hasher.update(&channel_id);
-    EscrowId::new(iroha_crypto::Hash::prehashed(*hasher.finalize().as_bytes()))
+    namespaced_orderbook_escrow_id(
+        ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1,
+        ORDERBOOK_SETTLEMENT_ESCROW_ID_PREFIX_V1,
+        channel_id,
+    )
+}
+
+/// Return whether `escrow_id` belongs to the reserved bid-order namespace.
+#[must_use]
+pub fn is_orderbook_order_escrow_id_v1(escrow_id: &EscrowId) -> bool {
+    escrow_id
+        .as_hash()
+        .as_ref()
+        .starts_with(&ORDERBOOK_ORDER_ESCROW_ID_PREFIX_V1)
+}
+
+/// Return whether `escrow_id` belongs to the reserved settlement-channel namespace.
+#[must_use]
+pub fn is_orderbook_settlement_escrow_id_v1(escrow_id: &EscrowId) -> bool {
+    escrow_id
+        .as_hash()
+        .as_ref()
+        .starts_with(&ORDERBOOK_SETTLEMENT_ESCROW_ID_PREFIX_V1)
+}
+
+/// Return whether public escrow creation must reject `escrow_id`.
+#[must_use]
+pub fn is_reserved_orderbook_escrow_id_v1(escrow_id: &EscrowId) -> bool {
+    is_orderbook_order_escrow_id_v1(escrow_id)
+        || is_orderbook_settlement_escrow_id_v1(escrow_id)
 }
 
 /// Governance-controlled order admission and receipt-retention policy.
@@ -320,6 +366,23 @@ pub enum OrderbookOrderStatusV1 {
     Cancelled,
     /// Ledger maintenance retired the order after its signed expiry.
     Expired,
+    /// Ledger maintenance retired an ask after its admitted provider binding was revoked.
+    ProviderRevoked,
+}
+
+/// Native custody created atomically with one admitted bid.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookBidEscrowBindingV1 {
+    /// Deterministic order-scoped native lock identifier.
+    pub escrow_id: EscrowId,
+    /// Exact governed asset definition locked at admission.
+    pub asset_definition: AssetDefinitionId,
+    /// Conservative full-order amount initially moved into custody.
+    pub initial_xor_locked: XorQuantity,
 }
 
 /// Canonical signed order and its authoritative ledger status.
@@ -346,6 +409,10 @@ pub struct OrderbookOrderRecord {
     pub admission_sequence: u64,
     /// Quantity not yet filled.
     pub remaining_gib: u64,
+    /// Atomic native custody binding for bids; absent for non-custodial asks.
+    pub bid_escrow: Option<OrderbookBidEscrowBindingV1>,
+    /// Provider registry identity bound at ask admission; absent for bids.
+    pub provider_id: Option<ProviderId>,
     /// Current authoritative lifecycle status.
     pub status: OrderbookOrderStatusV1,
     /// Block timestamp of the latest lifecycle mutation.
@@ -425,7 +492,10 @@ pub struct OrderbookSettlementReceiptRecord {
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
-    /// Permissioned settlement authority that recorded the receipt.
+    /// Relayer account that submitted the provider-signed receipt.
+    ///
+    /// Relayers are audit provenance only and are not trusted receipt signers
+    /// or native custody release authorities.
     pub recorded_by: AccountId,
 }
 
@@ -507,6 +577,10 @@ pub struct OrderbookSettlementChannelRecord {
     pub initial_xor_locked: XorQuantity,
     /// XOR still held by channel custody.
     pub remaining_xor_locked: XorQuantity,
+    /// Immutable maker-plus-taker fee custody derived from the trade.
+    pub initial_fee_xor_locked: XorQuantity,
+    /// Trade-derived fee custody not yet paid to treasury.
+    pub remaining_fee_xor_locked: XorQuantity,
     /// Current channel lifecycle.
     pub status: OrderbookSettlementChannelStatusV1,
     /// Block timestamp assigned when matching opened the channel.
@@ -569,6 +643,8 @@ pub struct OrderbookLedgerStatusV1 {
     pub cancelled_orders: u64,
     /// Number of terminal expired orders.
     pub expired_orders: u64,
+    /// Number of terminal asks retired after their admitted provider binding was revoked.
+    pub provider_revoked_orders: u64,
     /// Number of immutable deterministic trades.
     pub trades: u64,
     /// Number of immutable settlement receipts.
@@ -580,6 +656,12 @@ pub struct OrderbookLedgerStatusV1 {
     /// Revision of the authoritative book. Every order, fill, cancellation, or
     /// expiry mutation advances this value exactly once.
     pub book_revision: u64,
+    /// Latest book revision exhaustively scanned by a bounded matcher.
+    ///
+    /// A value equal to `book_revision` seals a valid zero-fill or
+    /// below-capacity terminal scan. Any order mutation or capped fill advances
+    /// `book_revision` and makes another bounded pass eligible.
+    pub last_match_scan_book_revision: u64,
     /// Next monotonic order admission sequence.
     pub next_admission_sequence: u64,
     /// Next monotonic trade sequence.
@@ -829,6 +911,25 @@ mod tests {
         let first = orderbook_settlement_escrow_id(channel);
         assert_eq!(first, orderbook_settlement_escrow_id(channel));
         assert_ne!(first, orderbook_settlement_escrow_id([0x43; 32]));
+        assert!(is_orderbook_settlement_escrow_id_v1(&first));
+        assert!(is_reserved_orderbook_escrow_id_v1(&first));
+        assert!(!is_orderbook_order_escrow_id_v1(&first));
+        assert_ne!(first.as_hash().as_ref(), &[0; 32]);
+    }
+
+    #[test]
+    fn order_and_channel_escrow_namespaces_are_reserved_and_disjoint() {
+        let subject = [0x42; 32];
+        let order = orderbook_order_escrow_id(subject);
+        let channel = orderbook_settlement_escrow_id(subject);
+
+        assert_eq!(order, orderbook_order_escrow_id(subject));
+        assert_ne!(order, orderbook_order_escrow_id([0x43; 32]));
+        assert_ne!(order, channel);
+        assert!(is_orderbook_order_escrow_id_v1(&order));
+        assert!(is_reserved_orderbook_escrow_id_v1(&order));
+        assert!(!is_orderbook_settlement_escrow_id_v1(&order));
+        assert_ne!(order.as_hash().as_ref(), &[0; 32]);
     }
 
     #[test]

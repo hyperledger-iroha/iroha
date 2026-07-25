@@ -188,6 +188,7 @@ public final class KagemushaQRStreamDecoder: @unchecked Sendable {
             / KagemushaQRStreamOptions.minimumParityGroup
 
     private let lock = NSLock()
+    private let chainDiscriminant: UInt16
     private var streamID: Data?
     private var envelope: KagemushaQRStreamEnvelope?
     private var dataFrames: [Int: Data] = [:]
@@ -208,7 +209,9 @@ public final class KagemushaQRStreamDecoder: @unchecked Sendable {
         let completedPayload: KagemushaPeerPayload?
     }
 
-    public init() {}
+    public init(chainDiscriminant: UInt16) {
+        self.chainDiscriminant = chainDiscriminant
+    }
 
     public func reset() {
         lock.lock()
@@ -403,7 +406,8 @@ public final class KagemushaQRStreamDecoder: @unchecked Sendable {
         do {
             let payload = try KagemushaPeerPayload.decode(
                 archive: archive,
-                kind: envelope.payloadKind
+                kind: envelope.payloadKind,
+                chainDiscriminant: chainDiscriminant
             )
             guard payload.kind == envelope.payloadKind else {
                 throw KagemushaQRStreamError.kindMismatch(

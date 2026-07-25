@@ -10,7 +10,9 @@ use std::env;
 
 use iroha_crypto::{Hash, PublicKey, default_bfv_programmed_hidden_program, sha256};
 use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
-use iroha_data_model::account::{AccountId, NewAccount, OpaqueAccountId};
+use iroha_data_model::account::{
+    AccountId, NewAccount, OpaqueAccountId, address::ChainDiscriminantGuard,
+};
 use iroha_data_model::asset::{AssetBalanceScope, AssetDefinitionId, AssetId};
 use iroha_data_model::domain::DomainId;
 use iroha_data_model::identifier::{
@@ -37,6 +39,7 @@ use iroha_data_model::ram_lfe::{
 /// Well-known public key shared with the Kotlin parity tests.
 const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 
 fn parity_account_id() -> AccountId {
     let pk: PublicKey = PARITY_PUBLIC_KEY.parse().expect("parse public key");
@@ -163,6 +166,7 @@ fn emit_register_account() {
 }
 
 fn emit_transfer_asset() {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
     let account_id = parity_account_id();
     let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let name: Name = "rose".parse().unwrap();
@@ -186,6 +190,7 @@ fn emit_transfer_asset() {
 }
 
 fn emit_transfer_asset_scoped() {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
     let account_id = parity_account_id();
     let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let name: Name = "rose".parse().unwrap();

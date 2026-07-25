@@ -6,10 +6,11 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class NoritoJavaCodecAdapter @JvmOverloads constructor(
+    val chainDiscriminant: Int,
     private val schemaName: String = DEFAULT_SCHEMA,
 ) : NoritoCodecAdapter {
 
-    private val adapter = TransactionPayloadAdapter()
+    private val adapter = TransactionPayloadAdapter.forChain(chainDiscriminant)
 
     @Throws(NoritoException::class)
     override fun encodeTransaction(payload: TransactionPayload): ByteArray {

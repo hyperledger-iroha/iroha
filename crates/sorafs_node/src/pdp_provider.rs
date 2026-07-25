@@ -3299,18 +3299,27 @@ mod tests {
     }
 
     #[test]
-    fn proof_outcome_forwarder_node_startup_resumes_pdp_handoff_exactly_once_and_fails_closed() {
-        fn persist_archive_handoff_pending(config: &StorageConfig, epoch_id: u64) -> Fixture {
+    fn node_startup_defers_pdp_handoff_until_an_explicit_adapter_is_available() {
+        fn persist_archive_handoff_pending(
+            config: &StorageConfig,
+            epoch_id: u64,
+            repair_required: bool,
+        ) -> Fixture {
             let fixture = fixture(epoch_id);
             let state_dir = config.data_dir().join("pdp-provider");
             let protocol = PdpProviderProtocol::open(config.pdp_provider_policy(), &state_dir)
                 .expect("open PDP protocol");
             enqueue(&protocol, &fixture);
+            let mut proof = fixture.proof.clone();
+            if repair_required {
+                proof.manifest_digest = [0xA7; 32];
+                resign(&fixture, &mut proof);
+            }
             let sink = RecordingHandoff::failing(1, 0);
             assert!(matches!(
                 protocol.submit_proof_for_challenge_bytes(
                     fixture.challenge.challenge_id,
-                    &norito::to_bytes(&fixture.proof).expect("encode proof"),
+                    &norito::to_bytes(&proof).expect("encode proof"),
                     &fixture.admission,
                     1_100,
                     &sink,
@@ -3339,10 +3348,31 @@ mod tests {
             .enabled(true)
             .data_dir(happy_root.join("storage"))
             .build();
-        let happy_fixture = persist_archive_handoff_pending(&happy_config, 51);
+        let happy_fixture = persist_archive_handoff_pending(&happy_config, 51, false);
 
-        let first_restart =
-            NodeHandle::try_new(happy_config.clone()).expect("startup resumes PDP handoff");
+        let first_restart = NodeHandle::try_new(happy_config.clone())
+            .expect("startup must leave the PDP handoff durable");
+        assert!(
+            first_restart
+                .pending_proof_outcome_deliveries(8)
+                .expect("pending proof outcomes before explicit resume")
+                .is_empty()
+        );
+        assert!(
+            first_restart
+                .pdp_provider_protocol()
+                .expect("durable PDP protocol")
+                .terminal_outcome(&happy_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_none(),
+            "node startup must not acknowledge a handoff before an explicit adapter runs"
+        );
+        assert_eq!(
+            first_restart
+                .resume_pdp_terminal_handoffs(&first_restart, 8)
+                .expect("explicit archive-only handoff"),
+            1
+        );
         let first_pending = first_restart
             .pending_proof_outcome_deliveries(8)
             .expect("pending proof outcomes");
@@ -3378,6 +3408,53 @@ mod tests {
         assert_eq!(second_pending[0].outcome_digest, outcome_digest);
         drop(second_restart);
 
+        let repair_dir = TempDir::new().expect("repair-required tempdir");
+        let repair_root = repair_dir.path().canonicalize().expect("canonical tempdir");
+        let repair_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(repair_root.join("storage"))
+            .build();
+        let repair_fixture = persist_archive_handoff_pending(&repair_config, 52, true);
+        let repair_restart = NodeHandle::try_new(repair_config.clone())
+            .expect("repair-required PDP handoff must not brick node startup");
+        assert!(matches!(
+            repair_restart.resume_pdp_terminal_handoffs(&repair_restart, 8),
+            Err(PdpProviderProtocolError::RepairHandoff(_))
+        ));
+        let repair_status = repair_restart
+            .pdp_provider_protocol()
+            .expect("durable PDP protocol")
+            .challenge_status(&repair_fixture.challenge.challenge_id)
+            .expect("challenge status")
+            .expect("retained repair-required challenge");
+        assert_eq!(
+            repair_status.lifecycle,
+            PdpChallengeLifecycleV1::HandoffPending
+        );
+        assert!(
+            repair_restart
+                .pdp_provider_protocol()
+                .expect("durable PDP protocol")
+                .terminal_outcome(&repair_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_none(),
+            "a repair-incapable adapter must not fabricate a terminal receipt"
+        );
+        drop(repair_restart);
+        let repair_second_restart = NodeHandle::try_new(repair_config)
+            .expect("pending repair-required PDP handoff must remain restart-safe");
+        assert_eq!(
+            repair_second_restart
+                .pdp_provider_protocol()
+                .expect("durable PDP protocol")
+                .challenge_status(&repair_fixture.challenge.challenge_id)
+                .expect("challenge status")
+                .expect("retained repair-required challenge")
+                .lifecycle,
+            PdpChallengeLifecycleV1::HandoffPending
+        );
+        drop(repair_second_restart);
+
         let poisoned_dir = TempDir::new().expect("poisoned-path tempdir");
         let poisoned_root = poisoned_dir
             .path()
@@ -3387,7 +3464,7 @@ mod tests {
             .enabled(true)
             .data_dir(poisoned_root.join("storage"))
             .build();
-        let poisoned_fixture = persist_archive_handoff_pending(&poisoned_config, 52);
+        let poisoned_fixture = persist_archive_handoff_pending(&poisoned_config, 53, false);
         let outbox_dir = poisoned_config.data_dir().join("proof-outcome-forwarder");
         fs::create_dir_all(&outbox_dir).expect("create outbox directory");
         fs::write(

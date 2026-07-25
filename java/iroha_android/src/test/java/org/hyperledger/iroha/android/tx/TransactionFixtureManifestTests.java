@@ -60,7 +60,7 @@ public final class TransactionFixtureManifestTests {
   private static final String PAYLOAD_SCHEMA = "iroha.android.transaction.Payload.v1";
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
   private static final byte VERSION_BYTE = 0x01;
-  private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
+  private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
   private static final TypeAdapter<String> JSON_ADAPTER = new JsonAdapter();

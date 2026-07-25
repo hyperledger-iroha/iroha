@@ -4,12 +4,16 @@
 package org.hyperledger.iroha.sdk.consensus
 
 import java.math.BigInteger
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import kotlin.test.Test
@@ -178,6 +182,50 @@ class SumeragiDiagnosticsModelsTest {
     }
 
     @Test
+    fun `complete diagnostics parser validates Native AMX settlement and relay evidence`() {
+        val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
+        val settlement = nativeAmxReceiptGroupFixture()
+        val relay = JsonObject(mapOf("settlement_commitment" to settlement))
+        val wire = JsonObject(
+            root + mapOf(
+                "lane_settlement_commitments" to JsonArray(listOf(settlement)),
+                "lane_relay_envelopes" to JsonArray(listOf(relay)),
+            ),
+        )
+
+        val parsed = SumeragiDiagnosticsStatus.parseJson(wire.toString())
+
+        assertEquals(listOf(settlement), parsed.laneSettlementCommitments)
+        assertEquals(listOf(relay), parsed.laneRelayEnvelopes)
+    }
+
+    @Test
+    fun `complete diagnostics parser rejects malformed Native AMX settlement and relay evidence`() {
+        val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
+        val malformed = malformedNativeAmxReceiptGroup(nativeAmxReceiptGroupFixture())
+
+        val directError = assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(
+                    root +
+                        ("lane_settlement_commitments" to JsonArray(listOf(malformed))),
+                ).toString(),
+            )
+        }
+        assertStrictNativeAmxFailure(directError)
+
+        val relay = JsonObject(mapOf("settlement_commitment" to malformed))
+        val relayError = assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(
+                    root + ("lane_relay_envelopes" to JsonArray(listOf(relay))),
+                ).toString(),
+            )
+        }
+        assertStrictNativeAmxFailure(relayError)
+    }
+
+    @Test
     fun `complete diagnostics parser rejects unknown and missing fields`() {
         val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
 
@@ -238,6 +286,43 @@ class SumeragiDiagnosticsModelsTest {
                         ("autonomous_lane_executions" to JsonArray(listOf(autonomous, autonomous))),
                 ).toString(),
             )
+        }
+    }
+
+    private fun malformedNativeAmxReceiptGroup(group: JsonObject): JsonObject {
+        val receipts = group.getValue("native_amx_receipts") as JsonArray
+        val first = receipts.first().jsonObject
+        val malformedFirst = JsonObject(first + ("version" to JsonPrimitive(1)))
+        val malformedReceipts = JsonArray(
+            listOf(malformedFirst) + receipts.drop(1),
+        )
+        return JsonObject(group + ("native_amx_receipts" to malformedReceipts))
+    }
+
+    private fun assertStrictNativeAmxFailure(error: Throwable) {
+        assertTrue(
+            generateSequence(error) { it.cause }.any {
+                it.message?.contains("version must equal 2") == true
+            },
+            "diagnostics rejection must originate from strict Native AMX V2 validation: $error",
+        )
+    }
+
+    private fun nativeAmxReceiptGroupFixture(): JsonObject {
+        val fixture = Json.parseToJsonElement(
+            String(Files.readAllBytes(nativeAmxFixturePath()), StandardCharsets.UTF_8),
+        ).jsonObject
+        return fixture.getValue("golden").jsonObject.getValue("receipt_group").jsonObject
+    }
+
+    private fun nativeAmxFixturePath(): Path {
+        var current = Paths.get("").toAbsolutePath()
+        while (true) {
+            val candidate =
+                current.resolve("fixtures/sumeragi_v2/native_amx_v2_grouped.json")
+            if (Files.isRegularFile(candidate)) return candidate
+            current = current.parent
+                ?: error("fixtures/sumeragi_v2/native_amx_v2_grouped.json was not found")
         }
     }
 

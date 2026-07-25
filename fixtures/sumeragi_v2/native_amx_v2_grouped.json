@@ -10384,6 +10384,151 @@
         }
       ],
       "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "coherent_forged_validator_set_hash",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/validator_set_hash",
+          "value": "hash:E6F0E406C7F6044DD5F1D0A01598B8F48CF28DA9B33A64B393E3DB544EDC030F#C087"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/descriptor_hash",
+          "value": "hash:FCD883BF1422608E654A7467A79AF38A736607D49094CE7EDDFBFCE777D30B5B#4F7E"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/proposal_hash",
+          "value": "hash:B0E042F81E0CA72DB99AEB02775DB015CC5D52FF02771508DF67DFFDEFB24D4D#A138"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/validator_set_hash",
+          "value": "hash:E6F0E406C7F6044DD5F1D0A01598B8F48CF28DA9B33A64B393E3DB544EDC030F#C087"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/body/participant_validator_set_hash",
+          "value": "hash:E6F0E406C7F6044DD5F1D0A01598B8F48CF28DA9B33A64B393E3DB544EDC030F#C087"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/body/participant_proposal_hash",
+          "value": "hash:B0E042F81E0CA72DB99AEB02775DB015CC5D52FF02771508DF67DFFDEFB24D4D#A138"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/validator_set_hash",
+          "value": "hash:E6F0E406C7F6044DD5F1D0A01598B8F48CF28DA9B33A64B393E3DB544EDC030F#C087"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/body/participant_validator_set_hash",
+          "value": "hash:E6F0E406C7F6044DD5F1D0A01598B8F48CF28DA9B33A64B393E3DB544EDC030F#C087"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/body/participant_proposal_hash",
+          "value": "hash:B0E042F81E0CA72DB99AEB02775DB015CC5D52FF02771508DF67DFFDEFB24D4D#A138"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "coherent_stale_descriptor_hash",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/subject_hash",
+          "value": "hash:D03C51A39A1D9686C20AA1C4C9CC8623BC8B65594AA334D3587F6530EE8A4A3F#E490"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/proposal_hash",
+          "value": "hash:C196E28223C53AA3CEBEE726107B85C0F99F1BC79F5F90E25D6940C6B0990D7D#8354"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/body/participant_proposal_hash",
+          "value": "hash:C196E28223C53AA3CEBEE726107B85C0F99F1BC79F5F90E25D6940C6B0990D7D#8354"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/body/participant_proposal_hash",
+          "value": "hash:C196E28223C53AA3CEBEE726107B85C0F99F1BC79F5F90E25D6940C6B0990D7D#8354"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "coherent_stale_proposal_hash",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/proposal_hash",
+          "value": "hash:CAC625FC5BA0EA5D80ABD786EE721DFB8A812AD030C063DF20CAB5C06C8E93BB#4ECB"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/body/participant_proposal_hash",
+          "value": "hash:CAC625FC5BA0EA5D80ABD786EE721DFB8A812AD030C063DF20CAB5C06C8E93BB#4ECB"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/body/participant_proposal_hash",
+          "value": "hash:CAC625FC5BA0EA5D80ABD786EE721DFB8A812AD030C063DF20CAB5C06C8E93BB#4ECB"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "coherent_stale_settlement_hash",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_settlement_hash",
+          "value": "hash:1D6E9F7FE41B579C050474FF2F6932BA0C0ECD766C5ACF8E4B6F144C349C0AD7#9512"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/body/participant_settlement_commitment",
+          "value": "hash:1D6E9F7FE41B579C050474FF2F6932BA0C0ECD766C5ACF8E4B6F144C349C0AD7#9512"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/body/participant_settlement_commitment",
+          "value": "hash:1D6E9F7FE41B579C050474FF2F6932BA0C0ECD766C5ACF8E4B6F144C349C0AD7#9512"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "non_canonical_validator_peer_id",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/validator_set/3",
+          "value": "not-a-canonical-bls-peer-id"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/prepare_qc/validator_set/3",
+          "value": "not-a-canonical-bls-peer-id"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/commit_qc/validator_set/3",
+          "value": "not-a-canonical-bls-peer-id"
+        }
+      ],
+      "validator": "receipt_group"
     }
   ],
   "rust_owner": "iroha_data_model::block::consensus"

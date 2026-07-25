@@ -39,8 +39,9 @@ PROGRAM_TARGET = (
 )
 
 
-def _install_source_bound_fake_localnet_binaries() -> tuple[Path, str]:
-    program_target = PROGRAM_TARGET
+def _install_source_bound_fake_localnet_binaries(
+    program_target: Path = PROGRAM_TARGET,
+) -> tuple[Path, str]:
     attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
@@ -116,10 +117,26 @@ def _stubbed_environment(
     tmp_path: Path,
     *,
     run_mode: str = "pass",
+    program_target: Path = PROGRAM_TARGET,
 ) -> tuple[dict[str, str], Path, Path]:
-    program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries()
+    program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries(
+        program_target
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    ps = bin_dir / "ps"
+    ps.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "-axo pid,etime,command") printf '%s\n' '  PID ELAPSED COMMAND' ;;
+  "-axo pid=,command=") ;;
+  *) exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    ps.chmod(0o755)
     capture = tmp_path / "cargo-invocations.tsv"
     cargo = bin_dir / "cargo"
     inventory = "\n".join(
@@ -229,6 +246,19 @@ case "${{SEED_MATRIX_FAKE_RUN_MODE:-pass}}" in
     emit_success
     exit 73
     ;;
+  tamper-bundle)
+    emit_success
+    chmod 0700 "$SEED_MATRIX_TAMPER_BINARY"
+    printf '%s\n' 'tampered after process admission' >"$SEED_MATRIX_TAMPER_BINARY"
+    chmod 0500 "$SEED_MATRIX_TAMPER_BINARY"
+    ;;
+  marker-temp-symlink)
+    marker_temp="$TEST_NETWORK_TMP_DIR/../../.COMPLETED.tsv.publish.tmp"
+    if [[ ! -e "$marker_temp" && ! -L "$marker_temp" ]]; then
+      ln -s "$SEED_MATRIX_ESCAPE_TARGET" "$marker_temp"
+    fi
+    emit_success
+    ;;
   unsafe-symlink)
     ln -s "$SEED_MATRIX_ESCAPE_TARGET" "$TEST_NETWORK_TMP_DIR/mock_validator/escape"
     emit_success
@@ -245,6 +275,36 @@ esac
         encoding="utf-8",
     )
     cargo.chmod(0o755)
+    marker_failure_harness = tmp_path / "fail-marker-parent-fsync.py"
+    marker_failure_harness.write_text(
+        """import errno
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+publisher = Path(os.environ["SEED_MATRIX_EXPECTED_MARKER_PUBLISHER"])
+spec = importlib.util.spec_from_file_location("release_marker_publisher", publisher)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_fsync = module.os.fsync
+fsync_calls = 0
+
+
+def fail_completion_parent_fsync(descriptor: int) -> None:
+    global fsync_calls
+    fsync_calls += 1
+    if fsync_calls == 4:
+        raise OSError(errno.EIO, "mocked completion-parent fsync failure")
+    real_fsync(descriptor)
+
+
+module.os.fsync = fail_completion_parent_fsync
+raise SystemExit(module.main(sys.argv[1:]))
+""",
+        encoding="utf-8",
+    )
     python3 = bin_dir / "python3"
     python3.write_text(
         f"""#!/usr/bin/env bash
@@ -260,7 +320,19 @@ if [[ "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
   || "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
+    && "${{3-}}" == "-c" ) \
+  || ( "${{1-}}" == "-I" \
+    && "${{2-}}" == "-S" \
     && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then
+  exec "$SEED_MATRIX_REAL_PYTHON3" "$@"
+fi
+if [[ "${{1-}}" == "-I" \
+  && "${{2-}}" == "-S" \
+  && "${{3-}}" == */scripts/publish_release_marker.py ]]; then
+  if [[ "${{SEED_MATRIX_FAIL_MARKER_PUBLISH:-0}}" == 1 ]]; then
+    exec "$SEED_MATRIX_REAL_PYTHON3" \
+      "$SEED_MATRIX_MARKER_FAILURE_HARNESS" "${{@:4}}"
+  fi
   exec "$SEED_MATRIX_REAL_PYTHON3" "$@"
 fi
 printf 'unexpected mocked python3 invocation: %s\n' "$*" >&2
@@ -278,6 +350,10 @@ exit 65
     env["SEED_MATRIX_CAPTURE"] = str(capture)
     env["SEED_MATRIX_FAKE_RUN_MODE"] = run_mode
     env["SEED_MATRIX_REAL_PYTHON3"] = sys.executable
+    env["SEED_MATRIX_EXPECTED_MARKER_PUBLISHER"] = str(
+        ROOT_DIR / "scripts" / "publish_release_marker.py"
+    )
+    env["SEED_MATRIX_MARKER_FAILURE_HARNESS"] = str(marker_failure_harness)
     env["IROHA_TEST_TARGET_DIR"] = str(program_target)
     env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"] = manifest_sha256
     evidence = tmp_path / "mocked-command-evidence"
@@ -698,6 +774,77 @@ def test_mocked_seed_matrix_preserves_cargo_failure_through_tee(
     assert not (invocation / "COMPLETED.tsv").exists()
 
 
+def test_mocked_seed_matrix_rejects_bundle_tampering_before_completion(
+    tmp_path: Path,
+) -> None:
+    invocation_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    program_target = PROGRAM_TARGET.parent / f"invocation.S{invocation_suffix}"
+    env, _capture, evidence = _stubbed_environment(
+        tmp_path,
+        run_mode="tamper-bundle",
+        program_target=program_target,
+    )
+    binary = program_target / "release" / "iroha3d"
+    original = binary.read_bytes()
+    env["SEED_MATRIX_TAMPER_BINARY"] = str(binary)
+    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
+    try:
+        result = _run_launcher(env)
+    finally:
+        binary.chmod(0o700)
+        binary.write_bytes(original)
+        binary.chmod(0o500)
+
+    assert result.returncode == 1
+    assert "binary bundle changed before seed-matrix completion" in result.stderr
+    invocation = _single_invocation(evidence)
+    assert not (invocation / "COMPLETED.tsv").exists()
+    assert not completion_pointer.exists()
+
+
+def test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion(
+    tmp_path: Path,
+) -> None:
+    env, _capture, evidence = _stubbed_environment(
+        tmp_path,
+        run_mode="marker-temp-symlink",
+    )
+    escape = tmp_path / "marker-temp-escape"
+    escape.write_text("must remain unchanged\n", encoding="utf-8")
+    env["SEED_MATRIX_ESCAPE_TARGET"] = str(escape)
+    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "completion marker temporary already exists as symlink" in result.stderr
+    invocation = _single_invocation(evidence)
+    marker_temp = invocation / ".COMPLETED.tsv.publish.tmp"
+    assert marker_temp.is_symlink()
+    assert escape.read_text(encoding="utf-8") == "must remain unchanged\n"
+    assert not (invocation / "COMPLETED.tsv").exists()
+    assert not completion_pointer.exists()
+
+
+def test_mocked_seed_matrix_marker_durability_failure_is_not_terminal(
+    tmp_path: Path,
+) -> None:
+    env, _capture, evidence = _stubbed_environment(tmp_path)
+    env["SEED_MATRIX_FAIL_MARKER_PUBLISH"] = "1"
+    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "mocked completion-parent fsync failure" in result.stderr
+    invocation = _single_invocation(evidence)
+    assert not (invocation / "COMPLETED.tsv").exists()
+    assert not completion_pointer.exists()
+
+
 def test_mocked_seed_matrix_rejects_parent_source_manifest_mismatch(
     tmp_path: Path,
 ) -> None:
@@ -725,6 +872,9 @@ def test_mocked_seed_matrix_rejects_source_drift_before_completion(
 set -euo pipefail
 if [[ "${{1-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py \
   || "${{1-}}" == "scripts/sumeragi_v2_localnet_manifest.py" \
+  || ( "${{1-}}" == "-I" \
+    && "${{2-}}" == "-S" \
+    && "${{3-}}" == "-c" ) \
   || ( "${{1-}}" == "-I" \
     && "${{2-}}" == "-S" \
     && "${{3-}}" == */scripts/sumeragi_v2_prebuilt_bundle.py ) ]]; then

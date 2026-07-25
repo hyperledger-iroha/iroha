@@ -3129,6 +3129,8 @@ pub struct OrderbookOrderRequestFieldsV1 {
     pub remaining_gib: u64,
     /// Canonical owner account bytes.
     pub owner_account: Vec<u8>,
+    /// Exact provider registry identity for asks; absent for bids.
+    pub provider_id: Option<[u8; 32]>,
     /// Unix timestamp (seconds) after which the order expires.
     pub expiry_unix: u64,
     /// Owner nonce used to prevent replay.
@@ -3217,6 +3219,7 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
         quantity_gib: fields.quantity_gib,
         remaining_gib: fields.remaining_gib,
         owner_account: fields.owner_account,
+        provider_id: fields.provider_id,
         expiry_unix: fields.expiry_unix,
         nonce: fields.nonce,
         maker_fee_bps: fields.maker_fee_bps,
@@ -7049,6 +7052,7 @@ mod tests {
                 quantity_gib: 64,
                 remaining_gib: 64,
                 owner_account,
+                provider_id: None,
                 expiry_unix: 1_800_000_000,
                 nonce,
                 maker_fee_bps: 10,
@@ -7138,6 +7142,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let mut open = orderbook_order_request();
         open.side = OrderSideV1::Ask;
+        open.provider_id = Some([0x91; 32]);
         open.owner_account = b"provider@sora".to_vec();
         open.expiry_unix = 1_800_000_500;
         open.nonce = 8;
@@ -7149,6 +7154,16 @@ mod tests {
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
+        let split = crate::deterministic_settlement_split_v1(
+            &channel.xor_locked,
+            &channel.remaining_fee_xor_locked,
+            receipt.bytes_delivered,
+            channel.remaining_bytes,
+        )
+        .expect("derive runtime snapshot settlement split");
+        receipt.xor_debited = split.xor_debited;
+        receipt.provider_credit = split.provider_credit;
+        receipt.fee_amount = split.fee_amount;
         let receipt = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
             .expect("re-sign runtime snapshot settlement receipt");
         let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
@@ -9239,6 +9254,7 @@ mod tests {
                 quantity_gib: 10,
                 remaining_gib: 10,
                 owner_account: owner_account.clone(),
+                provider_id: None,
                 expiry_unix: 1_800_000_000,
                 nonce: order_nonce,
                 maker_fee_bps: 5,
@@ -9306,6 +9322,7 @@ mod tests {
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),
+                provider_id: None,
                 expiry_unix: 1,
                 nonce: 1,
                 maker_fee_bps: 0,
@@ -9349,6 +9366,7 @@ mod tests {
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),
+                provider_id: None,
                 expiry_unix: 1,
                 nonce: 1,
                 maker_fee_bps: 0,

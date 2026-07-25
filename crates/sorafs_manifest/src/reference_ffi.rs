@@ -1926,6 +1926,7 @@ mod tests {
                 quantity_gib: 4,
                 remaining_gib: 4,
                 owner_account,
+                provider_id: Some([0x91; 32]),
                 expiry_unix: 1_800_000_500,
                 nonce,
                 maker_fee_bps: 10,
@@ -1965,6 +1966,16 @@ mod tests {
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
+        let split = crate::deterministic_settlement_split_v1(
+            &channel.xor_locked,
+            &channel.remaining_fee_xor_locked,
+            receipt.bytes_delivered,
+            channel.remaining_bytes,
+        )
+        .expect("derive runtime snapshot settlement split");
+        receipt.xor_debited = split.xor_debited;
+        receipt.provider_credit = split.provider_credit;
+        receipt.fee_amount = split.fee_amount;
         let receipt = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
             .expect("re-sign runtime snapshot receipt");
         let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
@@ -2540,6 +2551,50 @@ mod tests {
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn ffi_orderbook_validator_rejects_bad_signature_fixture() {
+        let payload = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
+        ))
+        .expect("read bad-signature order request fixture");
+        let label = b"order_request_bad_signature_v1.to";
+
+        // SAFETY: the pointers reference live test vectors for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_orderbook_json(
+                SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                payload.as_ptr(),
+                payload.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-SIG-007")
+        );
+        assert_eq!(
+            outcome.get("category").and_then(Value::as_str),
+            Some("signature")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(Value::as_u64),
+            Some(123)
+        );
+        assert_eq!(
+            outcome
+                .get("inputs")
+                .and_then(Value::as_array)
+                .and_then(|inputs| inputs.first())
+                .and_then(|input| input.get("path"))
+                .and_then(Value::as_str),
+            Some("order_request_bad_signature_v1.to")
         );
     }
 

@@ -6,11 +6,12 @@
 //! process-local proof, repair, orderbook, dispute, token, or reserve outcome
 //! into an authoritative event.
 //!
-//! The first-release required-source mask includes PoR, dispute, and token
-//! feeds. Those native committed-event queries do not exist yet, so
-//! [`ReputationIngestService::unsigned_signing_material`] fails closed until
-//! those adapters can be implemented. PDP/PoTR, repair, orderbook, and reserve
-//! pages can already be ingested and reconciled durably.
+//! PDP/PoTR, repair, orderbook, reserve, and the unified PoR/dispute/token
+//! journal each retain one global contiguous cursor. The three semantic journal
+//! sources intentionally share that physical cursor and finality anchor so an
+//! interleaved committed journal cannot be partially projected.
+//! This module defines the complete projection contract; ledger mutation,
+//! storage, and native query/Torii wiring remain outside this service layer.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,7 +26,7 @@ use iroha_data_model::{
     ChainId,
     events::data::sorafs::SorafsRepairLedgerEventKind,
     sorafs::{
-        capacity::ProviderId,
+        capacity::{CapacityDisputeOutcome, ProviderId},
         moderation_ledger::{
             REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1, REPAIR_QUERY_MAX_ITEMS_V1,
             RepairFinalizedEventPageV1, RepairFinalizedEventV1,
@@ -38,6 +39,13 @@ use iroha_data_model::{
             PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1, PROOF_OUTCOME_QUERY_MAX_ITEMS_V1,
             PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedEventPageV1,
             ProofOutcomeFinalizedEventV1, ProofOutcomeProjectionV1,
+        },
+        reputation::{
+            REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, PorTerminalStatusV1,
+            ProviderDisputeStatusV1, ReputationJournalFinalizedEventPageV1,
+            ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
+            ReputationJournalValidationError, StreamTokenValidationStatusV1,
         },
         reserve::{
             RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
@@ -167,12 +175,8 @@ impl ReputationRequiredSourceMaskV1 {
             | ReputationSourceV1::Reserve.bit(),
     );
 
-    /// Sources whose native typed finalized feeds are not yet exposed.
-    pub const UNAVAILABLE_NATIVE_V1: Self = Self(
-        ReputationSourceV1::Por.bit()
-            | ReputationSourceV1::Dispute.bit()
-            | ReputationSourceV1::Token.bit(),
-    );
+    /// No V1 source is intentionally omitted from the projector model.
+    pub const UNAVAILABLE_NATIVE_V1: Self = Self::EMPTY;
 
     /// Empty source set.
     pub const EMPTY: Self = Self(0);
@@ -195,10 +199,6 @@ impl ReputationRequiredSourceMaskV1 {
 
     const fn difference(self, other: Self) -> Self {
         Self(self.0 & !other.0)
-    }
-
-    const fn intersection(self, other: Self) -> Self {
-        Self(self.0 & other.0)
     }
 
     const fn is_empty(self) -> bool {
@@ -362,6 +362,8 @@ pub struct ReputationFinalizedBatchV1 {
     pub finalized_at_unix_ms: u64,
     /// Ordered pages from `FindSorafsProofOutcomeEvents`.
     pub proof_pages: Vec<ProofOutcomeFinalizedEventPageV1>,
+    /// Ordered pages from the unified PoR/dispute/token reputation journal.
+    pub journal_pages: Vec<ReputationJournalFinalizedEventPageV1>,
     /// Ordered pages from `FindSorafsRepairEvents`.
     pub repair_pages: Vec<RepairFinalizedEventPageV1>,
     /// Ordered pages from `FindSorafsOrderbookEvents`.
@@ -568,12 +570,9 @@ pub enum ReputationIngestError {
     /// No provider can be scored from the committed source set.
     #[error("reputation committed source set contains no providers")]
     EmptyProviderSet,
-    /// Not every available required source is finalized at the target.
+    /// Not every governed required source is finalized at the target.
     #[error("reputation required sources are incomplete")]
     MissingRequiredSources,
-    /// Required V1 sources have no native typed finalized-event API yet.
-    #[error("reputation required native source API is unavailable")]
-    NativeSourceUnavailable,
     /// The common target is not the governed release-window endpoint.
     #[error("reputation release window is not finalized")]
     WindowNotFinalized,
@@ -646,11 +645,40 @@ impl SourceProgressV1 {
     }
 }
 
+/// Physical committed feed whose sequence is globally contiguous.
+///
+/// PoR, dispute, and token entries deliberately share `Journal`; their
+/// semantic source rows are three views of this one cursor.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+enum ReputationCommittedFeedV1 {
+    Proof,
+    Journal,
+    Repair,
+    Orderbook,
+    Reserve,
+}
+
+const ALL_COMMITTED_FEEDS: [ReputationCommittedFeedV1; 5] = [
+    ReputationCommittedFeedV1::Proof,
+    ReputationCommittedFeedV1::Journal,
+    ReputationCommittedFeedV1::Repair,
+    ReputationCommittedFeedV1::Orderbook,
+    ReputationCommittedFeedV1::Reserve,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EventReceiptV1 {
-    source: ReputationSourceV1,
+    feed: ReputationCommittedFeedV1,
     identity: ReputationCommittedEventIdentityV1,
     event_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum ReputationDisputeSignalV1 {
+    Opened,
+    Resolved { upheld: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -661,6 +689,11 @@ enum ReputationSignalV1 {
     },
     Pdp {
         provider_id: ProviderId,
+        success: bool,
+    },
+    Por {
+        provider_id: ProviderId,
+        counts_for_provider: bool,
         success: bool,
     },
     Potr {
@@ -675,6 +708,15 @@ enum ReputationSignalV1 {
         breach: bool,
         slashing: bool,
     },
+    Dispute {
+        provider_id: ProviderId,
+        transition: ReputationDisputeSignalV1,
+    },
+    Token {
+        provider_id: ProviderId,
+        counts_for_provider: bool,
+        violation: bool,
+    },
 }
 
 impl ReputationSignalV1 {
@@ -683,15 +725,18 @@ impl ReputationSignalV1 {
             Self::Noop => None,
             Self::ProviderObserved { provider_id }
             | Self::Pdp { provider_id, .. }
+            | Self::Por { provider_id, .. }
             | Self::Potr { provider_id, .. }
-            | Self::Repair { provider_id, .. } => Some(provider_id),
+            | Self::Repair { provider_id, .. }
+            | Self::Dispute { provider_id, .. }
+            | Self::Token { provider_id, .. } => Some(provider_id),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PendingEventV1 {
-    source: ReputationSourceV1,
+    feed: ReputationCommittedFeedV1,
     identity: ReputationCommittedEventIdentityV1,
     event_digest: [u8; 32],
     occurred_at_unix_ms: u64,
@@ -740,7 +785,7 @@ struct ProviderAccumulatorV1 {
     token_observations: u64,
     repair_breaches: u64,
     repair_terminals: u64,
-    active_dispute: bool,
+    active_disputes: u64,
     slashing_event: bool,
     reserve_stage: Option<ReputationReserveStageV1>,
 }
@@ -763,19 +808,47 @@ impl ProviderAccumulatorV1 {
             token_observations: 0,
             repair_breaches: 0,
             repair_terminals: 0,
-            active_dispute: false,
+            active_disputes: 0,
             slashing_event: false,
             reserve_stage: None,
         }
+    }
+
+    const fn has_active_dispute(&self) -> bool {
+        self.active_disputes > 0
     }
 
     fn apply(&mut self, signal: ReputationSignalV1) -> Result<(), ReputationIngestError> {
         match signal {
             ReputationSignalV1::Noop | ReputationSignalV1::ProviderObserved { .. } => {}
             ReputationSignalV1::Pdp { success, .. } => {
-                checked_increment(&mut self.pdp_total)?;
-                if success {
-                    checked_increment(&mut self.pdp_successes)?;
+                let total = checked_next(self.pdp_total)?;
+                let successes = if success {
+                    checked_next(self.pdp_successes)?
+                } else {
+                    self.pdp_successes
+                };
+                self.pdp_total = total;
+                self.pdp_successes = successes;
+            }
+            ReputationSignalV1::Por {
+                counts_for_provider,
+                success,
+                ..
+            } => {
+                if !counts_for_provider {
+                    if success {
+                        return Err(ReputationIngestError::InvalidCheckpoint);
+                    }
+                } else {
+                    let total = checked_next(self.por_total)?;
+                    let successes = if success {
+                        checked_next(self.por_successes)?
+                    } else {
+                        self.por_successes
+                    };
+                    self.por_total = total;
+                    self.por_successes = successes;
                 }
             }
             ReputationSignalV1::Potr {
@@ -784,15 +857,30 @@ impl ProviderAccumulatorV1 {
                 latency_healthy,
                 ..
             } => {
-                if counts_for_provider {
-                    checked_increment(&mut self.potr_total)?;
-                    checked_increment(&mut self.latency_total)?;
-                    if success {
-                        checked_increment(&mut self.potr_successes)?;
+                if latency_healthy && !success {
+                    return Err(ReputationIngestError::InvalidCheckpoint);
+                }
+                if !counts_for_provider {
+                    if success || latency_healthy {
+                        return Err(ReputationIngestError::InvalidCheckpoint);
                     }
-                    if latency_healthy {
-                        checked_increment(&mut self.latency_healthy)?;
-                    }
+                } else {
+                    let total = checked_next(self.potr_total)?;
+                    let latency_total = checked_next(self.latency_total)?;
+                    let successes = if success {
+                        checked_next(self.potr_successes)?
+                    } else {
+                        self.potr_successes
+                    };
+                    let latency_healthy_count = if latency_healthy {
+                        checked_next(self.latency_healthy)?
+                    } else {
+                        self.latency_healthy
+                    };
+                    self.potr_total = total;
+                    self.latency_total = latency_total;
+                    self.potr_successes = successes;
+                    self.latency_healthy = latency_healthy_count;
                 }
             }
             ReputationSignalV1::Repair {
@@ -801,13 +889,60 @@ impl ProviderAccumulatorV1 {
                 slashing,
                 ..
             } => {
+                if breach && !terminal {
+                    return Err(ReputationIngestError::InvalidCheckpoint);
+                }
                 if terminal {
-                    checked_increment(&mut self.repair_terminals)?;
-                    if breach {
-                        checked_increment(&mut self.repair_breaches)?;
-                    }
+                    let terminals = checked_next(self.repair_terminals)?;
+                    let breaches = if breach {
+                        checked_next(self.repair_breaches)?
+                    } else {
+                        self.repair_breaches
+                    };
+                    self.repair_terminals = terminals;
+                    self.repair_breaches = breaches;
                 }
                 self.slashing_event |= slashing;
+            }
+            ReputationSignalV1::Dispute { transition, .. } => match transition {
+                ReputationDisputeSignalV1::Opened => {
+                    self.active_disputes = checked_next(self.active_disputes)?;
+                }
+                ReputationDisputeSignalV1::Resolved { upheld } => {
+                    let active_disputes = self
+                        .active_disputes
+                        .checked_sub(1)
+                        .ok_or(ReputationIngestError::ArithmeticOverflow)?;
+                    let resolved = checked_next(self.disputes_resolved)?;
+                    let upheld_count = if upheld {
+                        checked_next(self.disputes_upheld)?
+                    } else {
+                        self.disputes_upheld
+                    };
+                    self.active_disputes = active_disputes;
+                    self.disputes_resolved = resolved;
+                    self.disputes_upheld = upheld_count;
+                }
+            },
+            ReputationSignalV1::Token {
+                counts_for_provider,
+                violation,
+                ..
+            } => {
+                if !counts_for_provider {
+                    if violation {
+                        return Err(ReputationIngestError::InvalidCheckpoint);
+                    }
+                } else {
+                    let observations = checked_next(self.token_observations)?;
+                    let violations = if violation {
+                        checked_next(self.token_violations)?
+                    } else {
+                        self.token_violations
+                    };
+                    self.token_observations = observations;
+                    self.token_violations = violations;
+                }
             }
         }
         Ok(())
@@ -856,6 +991,35 @@ impl ReputationIngestCheckpointV1 {
             .find(|progress| progress.source == source)
             .expect("validated checkpoint contains every reputation source")
     }
+}
+
+const fn committed_feed_for_source(source: ReputationSourceV1) -> ReputationCommittedFeedV1 {
+    match source {
+        ReputationSourceV1::Proof => ReputationCommittedFeedV1::Proof,
+        ReputationSourceV1::Por | ReputationSourceV1::Dispute | ReputationSourceV1::Token => {
+            ReputationCommittedFeedV1::Journal
+        }
+        ReputationSourceV1::Repair => ReputationCommittedFeedV1::Repair,
+        ReputationSourceV1::Orderbook => ReputationCommittedFeedV1::Orderbook,
+        ReputationSourceV1::Reserve => ReputationCommittedFeedV1::Reserve,
+    }
+}
+
+const fn primary_source_for_feed(feed: ReputationCommittedFeedV1) -> ReputationSourceV1 {
+    match feed {
+        ReputationCommittedFeedV1::Proof => ReputationSourceV1::Proof,
+        ReputationCommittedFeedV1::Journal => ReputationSourceV1::Por,
+        ReputationCommittedFeedV1::Repair => ReputationSourceV1::Repair,
+        ReputationCommittedFeedV1::Orderbook => ReputationSourceV1::Orderbook,
+        ReputationCommittedFeedV1::Reserve => ReputationSourceV1::Reserve,
+    }
+}
+
+fn checkpoint_progress_for_feed(
+    checkpoint: &ReputationIngestCheckpointV1,
+    feed: ReputationCommittedFeedV1,
+) -> &SourceProgressV1 {
+    checkpoint.progress(primary_source_for_feed(feed))
 }
 
 #[derive(Debug)]
@@ -978,10 +1142,8 @@ impl ReputationIngestService {
     ///
     /// # Errors
     ///
-    /// Returns a fail-closed source-completeness error while any available feed
-    /// is behind. Once available feeds are complete, V1 currently returns
-    /// [`ReputationIngestError::NativeSourceUnavailable`] because native PoR,
-    /// dispute, and token committed-event queries are not yet defined.
+    /// Returns a fail-closed source-completeness error while any governed feed
+    /// is behind the exact release target.
     pub fn unsigned_signing_material(
         &self,
     ) -> Result<ReputationUnsignedSigningMaterialV1, ReputationIngestError> {
@@ -1005,20 +1167,9 @@ impl ReputationIngestService {
             return Err(ReputationIngestError::WindowNotFinalized);
         }
         let missing = missing_sources(checkpoint, self.policy.required_sources, target);
-        let missing_available =
-            missing.difference(ReputationRequiredSourceMaskV1::UNAVAILABLE_NATIVE_V1);
-        if !missing_available.is_empty() {
+        if !missing.is_empty() {
             saturating_increment(&self.metrics.incomplete_material_rejections);
             return Err(ReputationIngestError::MissingRequiredSources);
-        }
-        if !self
-            .policy
-            .required_sources
-            .intersection(ReputationRequiredSourceMaskV1::UNAVAILABLE_NATIVE_V1)
-            .is_empty()
-        {
-            saturating_increment(&self.metrics.incomplete_material_rejections);
-            return Err(ReputationIngestError::NativeSourceUnavailable);
         }
         build_signing_material(checkpoint, &self.policy, self.policy_digest)
     }
@@ -1170,8 +1321,9 @@ struct PrepareContext<'a> {
     policy: &'a ReputationIngestPolicyV1,
     target: ReputationFinalizedIdentityV1,
     finalized_at_unix_ms: u64,
-    working_last: BTreeMap<ReputationSourceV1, Option<ReputationCommittedEventIdentityV1>>,
-    receipt_index: BTreeMap<(ReputationSourceV1, u64), EventReceiptV1>,
+    working_last:
+        BTreeMap<ReputationCommittedFeedV1, Option<ReputationCommittedEventIdentityV1>>,
+    receipt_index: BTreeMap<(ReputationCommittedFeedV1, u64), EventReceiptV1>,
     block_hashes: BTreeMap<u64, [u8; 32]>,
     events: Vec<PendingEventV1>,
     presented_events: usize,
@@ -1186,15 +1338,14 @@ impl<'a> PrepareContext<'a> {
         target: ReputationFinalizedIdentityV1,
         finalized_at_unix_ms: u64,
     ) -> Self {
-        let working_last = checkpoint
-            .source_progress
-            .iter()
-            .map(|progress| (progress.source, progress.last_event))
+        let working_last = ALL_COMMITTED_FEEDS
+            .into_iter()
+            .map(|feed| (feed, checkpoint_progress_for_feed(checkpoint, feed).last_event))
             .collect();
         let receipt_index = checkpoint
             .receipts
             .iter()
-            .map(|receipt| ((receipt.source, receipt.identity.sequence), *receipt))
+            .map(|receipt| ((receipt.feed, receipt.identity.sequence), *receipt))
             .collect();
         let mut block_hashes = BTreeMap::new();
         for identity in checkpoint
@@ -1235,8 +1386,11 @@ impl<'a> PrepareContext<'a> {
         }
     }
 
-    fn last(&self, source: ReputationSourceV1) -> Option<ReputationCommittedEventIdentityV1> {
-        self.working_last.get(&source).copied().flatten()
+    fn last(
+        &self,
+        feed: ReputationCommittedFeedV1,
+    ) -> Option<ReputationCommittedEventIdentityV1> {
+        self.working_last.get(&feed).copied().flatten()
     }
 
     fn accept_encoded_page<T: norito::NoritoSerialize>(
@@ -1263,7 +1417,7 @@ impl<'a> PrepareContext<'a> {
 
     fn accept_event<T: norito::NoritoSerialize>(
         &mut self,
-        source: ReputationSourceV1,
+        feed: ReputationCommittedFeedV1,
         identity: ReputationCommittedEventIdentityV1,
         occurred_at_unix_ms: u64,
         signal: ReputationSignalV1,
@@ -1288,6 +1442,9 @@ impl<'a> PrepareContext<'a> {
         {
             return Err(ReputationIngestError::InvalidProvider);
         }
+        if !signal_is_well_formed(signal) {
+            return Err(ReputationIngestError::InvalidPage);
+        }
         let presented_limit = usize::try_from(self.policy.max_pending_events)
             .map_err(|_| ReputationIngestError::CapacityExceeded)?;
         if self.presented_events >= presented_limit {
@@ -1298,13 +1455,13 @@ impl<'a> PrepareContext<'a> {
             .checked_add(1)
             .ok_or(ReputationIngestError::CapacityExceeded)?;
         self.reject_known_block_fork(identity)?;
-        let event_digest = hash_canonical(source_event_domain(source), event)?;
-        let last = self.last(source);
+        let event_digest = hash_canonical(feed_event_domain(feed), event)?;
+        let last = self.last(feed);
 
         if last.is_some_and(|cursor| identity.sequence <= cursor.sequence) {
             let retained = self
                 .receipt_index
-                .get(&(source, identity.sequence))
+                .get(&(feed, identity.sequence))
                 .ok_or(ReputationIngestError::ReplayOutsideRetention)?;
             if retained.identity != identity || retained.event_digest != event_digest {
                 return Err(ReputationIngestError::EventEquivocation);
@@ -1335,22 +1492,22 @@ impl<'a> PrepareContext<'a> {
             }
         }
         let receipt = EventReceiptV1 {
-            source,
+            feed,
             identity,
             event_digest,
         };
         self.receipt_index
-            .insert((source, identity.sequence), receipt);
+            .insert((feed, identity.sequence), receipt);
         self.block_hashes
             .insert(identity.block_height, identity.block_hash);
         self.events.push(PendingEventV1 {
-            source,
+            feed,
             identity,
             event_digest,
             occurred_at_unix_ms,
             signal,
         });
-        self.working_last.insert(source, Some(identity));
+        self.working_last.insert(feed, Some(identity));
         Ok(())
     }
 
@@ -1383,7 +1540,8 @@ fn prepare_pending_batch(
     let page_count = batch
         .proof_pages
         .len()
-        .checked_add(batch.repair_pages.len())
+        .checked_add(batch.journal_pages.len())
+        .and_then(|count| count.checked_add(batch.repair_pages.len()))
         .and_then(|count| count.checked_add(batch.orderbook_pages.len()))
         .and_then(|count| count.checked_add(batch.reserve_pages.len()))
         .and_then(|count| count.checked_add(batch.reserve_provider_pages.len()))
@@ -1413,6 +1571,13 @@ fn prepare_pending_batch(
         updates.push(prepare_proof_pages(
             &mut context,
             &batch.proof_pages,
+            batch.finalized_at_unix_ms,
+        )?);
+    }
+    if !batch.journal_pages.is_empty() {
+        updates.extend(prepare_journal_pages(
+            &mut context,
+            &batch.journal_pages,
             batch.finalized_at_unix_ms,
         )?);
     }
@@ -1483,7 +1648,7 @@ fn prepare_pending_batch(
         (
             event.identity.block_height,
             event.identity.event_index,
-            event.source,
+            event.feed,
             event.identity.sequence,
         )
     });
@@ -1521,6 +1686,15 @@ fn batch_target(
             height: page.finalized_cursor.height,
             block_hash: page.finalized_cursor.block_hash,
         })
+        .chain(
+            batch
+                .journal_pages
+                .iter()
+                .map(|page| ReputationFinalizedIdentityV1 {
+                    height: page.finalized_cursor.height,
+                    block_hash: page.finalized_cursor.block_hash,
+                }),
+        )
         .chain(
             batch
                 .repair_pages
@@ -1646,7 +1820,7 @@ fn prepare_proof_pages(
                 }
             };
             context.accept_event(
-                ReputationSourceV1::Proof,
+                ReputationCommittedFeedV1::Proof,
                 identity,
                 event.outcome.committed_at_unix_ms,
                 signal,
@@ -1660,6 +1834,136 @@ fn prepare_proof_pages(
         finalized_at_unix_ms,
         pages.last().is_some_and(|page| !page.has_more),
     )
+}
+
+fn prepare_journal_pages(
+    context: &mut PrepareContext<'_>,
+    pages: &[ReputationJournalFinalizedEventPageV1],
+    finalized_at_unix_ms: u64,
+) -> Result<[SourceFinalityUpdateV1; 3], ReputationIngestError> {
+    let mut previous_page_event = None;
+    validate_event_page_chain(
+        pages.len(),
+        pages.iter().map(|page| {
+            (
+                page.has_more,
+                page.next_after
+                    .map(|cursor| ReputationCommittedEventIdentityV1 {
+                        sequence: cursor.sequence,
+                        block_height: cursor.block_height,
+                        block_hash: cursor.block_hash,
+                        event_index: cursor.event_index,
+                    }),
+                page.events.last().map(journal_event_identity),
+            )
+        }),
+    )?;
+    for page in pages {
+        validate_page_item_count(page.events.len(), REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1)?;
+        context.accept_encoded_page(page, REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1)?;
+        page.validate().map_err(map_journal_page_error)?;
+        assert_page_target(
+            context.target,
+            ReputationFinalizedIdentityV1 {
+                height: page.finalized_cursor.height,
+                block_hash: page.finalized_cursor.block_hash,
+            },
+        )?;
+        if page.finalized_cursor.finalized_at_unix_ms != finalized_at_unix_ms {
+            return Err(ReputationIngestError::PageAnchorMismatch);
+        }
+        for event in &page.events {
+            let identity = journal_event_identity(event);
+            validate_page_event_order(&mut previous_page_event, identity)?;
+            let signal = match &event.entry.payload {
+                ReputationJournalPayloadV1::PorTerminal(outcome) => match outcome.status {
+                    PorTerminalStatusV1::Excluded(_) => ReputationSignalV1::Noop,
+                    status => ReputationSignalV1::Por {
+                        provider_id: event.entry.provider_id,
+                        counts_for_provider: status.counts_for_provider(),
+                        success: status.is_success(),
+                    },
+                },
+                ReputationJournalPayloadV1::ProviderDispute(dispute) => {
+                    let transition = match &dispute.status {
+                        ProviderDisputeStatusV1::Opened => ReputationDisputeSignalV1::Opened,
+                        ProviderDisputeStatusV1::Resolved { outcome, .. } => {
+                            ReputationDisputeSignalV1::Resolved {
+                                upheld: *outcome == CapacityDisputeOutcome::Upheld,
+                            }
+                        }
+                    };
+                    ReputationSignalV1::Dispute {
+                        provider_id: event.entry.provider_id,
+                        transition,
+                    }
+                }
+                ReputationJournalPayloadV1::StreamTokenValidation(outcome) => {
+                    match outcome.status {
+                        StreamTokenValidationStatusV1::Excluded(_) => ReputationSignalV1::Noop,
+                        status => ReputationSignalV1::Token {
+                            provider_id: event.entry.provider_id,
+                            counts_for_provider: status.counts_for_provider(),
+                            violation: status.is_violation(),
+                        },
+                    }
+                }
+            };
+            context.accept_event(
+                ReputationCommittedFeedV1::Journal,
+                identity,
+                event.entry.recorded_at_unix_ms,
+                signal,
+                event,
+            )?;
+        }
+    }
+    let complete = pages.last().is_some_and(|page| !page.has_more);
+    Ok([
+        source_update(
+            context,
+            ReputationSourceV1::Por,
+            finalized_at_unix_ms,
+            complete,
+        )?,
+        source_update(
+            context,
+            ReputationSourceV1::Dispute,
+            finalized_at_unix_ms,
+            complete,
+        )?,
+        source_update(
+            context,
+            ReputationSourceV1::Token,
+            finalized_at_unix_ms,
+            complete,
+        )?,
+    ])
+}
+
+const fn map_journal_page_error(
+    error: ReputationJournalValidationError,
+) -> ReputationIngestError {
+    match error {
+        ReputationJournalValidationError::EventSequenceGap => ReputationIngestError::EventGap,
+        ReputationJournalValidationError::EventSequenceReordered
+        | ReputationJournalValidationError::BlockEventReordered
+        | ReputationJournalValidationError::EventTimestampReordered => {
+            ReputationIngestError::EventReordered
+        }
+        ReputationJournalValidationError::BlockHashMismatch
+        | ReputationJournalValidationError::FinalizedBlockHashMismatch => {
+            ReputationIngestError::FinalizedFork
+        }
+        ReputationJournalValidationError::EventSequenceOverflow => {
+            ReputationIngestError::ArithmeticOverflow
+        }
+        ReputationJournalValidationError::TooManyPageItems { .. }
+        | ReputationJournalValidationError::EncodedPageTooLarge { .. } => {
+            ReputationIngestError::CapacityExceeded
+        }
+        _ => ReputationIngestError::InvalidPage,
+    }
 }
 
 fn prepare_repair_pages(
@@ -1711,7 +2015,7 @@ fn prepare_repair_pages(
                 | SorafsRepairLedgerEventKind::Appealed => (false, false, false),
             };
             context.accept_event(
-                ReputationSourceV1::Repair,
+                ReputationCommittedFeedV1::Repair,
                 identity,
                 event.event.occurred_at_unix_ms,
                 ReputationSignalV1::Repair {
@@ -1778,7 +2082,7 @@ fn prepare_orderbook_pages(
                     ReputationSignalV1::ProviderObserved { provider_id }
                 });
             context.accept_event(
-                ReputationSourceV1::Orderbook,
+                ReputationCommittedFeedV1::Orderbook,
                 identity,
                 event.event.occurred_at_unix_ms,
                 signal,
@@ -1840,7 +2144,7 @@ fn prepare_reserve_pages(
                     ReputationSignalV1::ProviderObserved { provider_id }
                 });
             context.accept_event(
-                ReputationSourceV1::Reserve,
+                ReputationCommittedFeedV1::Reserve,
                 identity,
                 event.event.occurred_at_unix_ms,
                 signal,
@@ -1921,6 +2225,8 @@ fn prepare_reserve_projection(
                 || account.policy_digest == [0; 32]
                 || account.updated_at_unix == 0
                 || account.updated_at_unix > finalized_at_unix_ms / 1_000
+                || account.rent_charged_through_unix == 0
+                || account.rent_charged_through_unix > account.updated_at_unix
                 || account.interest_accrued_at_unix > account.updated_at_unix
                 || previous_provider.is_some_and(|previous| previous >= provider_id)
             {
@@ -1966,9 +2272,10 @@ fn source_update(
     complete: bool,
 ) -> Result<SourceFinalityUpdateV1, ReputationIngestError> {
     let existing = context.checkpoint.progress(source);
+    let last_event = context.last(committed_feed_for_source(source));
     if existing.observed_through == Some(context.target) {
         if existing.observed_at_unix_ms != finalized_at_unix_ms
-            || existing.last_event != context.last(source)
+            || existing.last_event != last_event
         {
             return Err(ReputationIngestError::EventEquivocation);
         }
@@ -1977,7 +2284,7 @@ fn source_update(
         source,
         target: context.target,
         finalized_at_unix_ms,
-        last_event: context.last(source),
+        last_event,
         complete,
         reserve_projection_digest: existing.reserve_projection_digest,
     })
@@ -2080,6 +2387,17 @@ fn assert_page_target(
 
 const fn proof_event_identity(
     event: &ProofOutcomeFinalizedEventV1,
+) -> ReputationCommittedEventIdentityV1 {
+    ReputationCommittedEventIdentityV1 {
+        sequence: event.sequence,
+        block_height: event.block_height,
+        block_hash: event.block_hash,
+        event_index: event.event_index,
+    }
+}
+
+const fn journal_event_identity(
+    event: &ReputationJournalFinalizedEventV1,
 ) -> ReputationCommittedEventIdentityV1 {
     ReputationCommittedEventIdentityV1 {
         sequence: event.sequence,
@@ -2198,13 +2516,13 @@ fn apply_pending_batch(
     checkpoint
         .receipts
         .extend(pending.events.iter().map(|event| EventReceiptV1 {
-            source: event.source,
+            feed: event.feed,
             identity: event.identity,
             event_digest: event.event_digest,
         }));
     checkpoint.receipts.sort_by_key(receipt_order_key);
     for pair in checkpoint.receipts.windows(2) {
-        if pair[0].source == pair[1].source
+        if pair[0].feed == pair[1].feed
             && pair[0].identity.sequence == pair[1].identity.sequence
         {
             if pair[0] != pair[1] {
@@ -2235,11 +2553,13 @@ fn apply_pending_batch(
     validate_checkpoint(checkpoint, policy, checkpoint.policy_digest)
 }
 
-fn receipt_order_key(receipt: &EventReceiptV1) -> (u64, u32, ReputationSourceV1, u64) {
+fn receipt_order_key(
+    receipt: &EventReceiptV1,
+) -> (u64, u32, ReputationCommittedFeedV1, u64) {
     (
         receipt.identity.block_height,
         receipt.identity.event_index,
-        receipt.source,
+        receipt.feed,
         receipt.identity.sequence,
     )
 }
@@ -2318,7 +2638,7 @@ fn build_signing_material(
             },
             reserve_stage,
             previous_score_bps: None,
-            active_dispute: provider.active_dispute,
+            active_dispute: provider.has_active_dispute(),
             slashing_event: provider.slashing_event,
         });
     }
@@ -2434,11 +2754,10 @@ fn zero_safe_ratio_bps(successes: u64, total: u64) -> Result<u16, ReputationInge
     ratio_bps(successes, total)
 }
 
-fn checked_increment(value: &mut u64) -> Result<(), ReputationIngestError> {
-    *value = value
+fn checked_next(value: u64) -> Result<u64, ReputationIngestError> {
+    value
         .checked_add(1)
-        .ok_or(ReputationIngestError::ArithmeticOverflow)?;
-    Ok(())
+        .ok_or(ReputationIngestError::ArithmeticOverflow)
 }
 
 fn decode_checkpoint(
@@ -2582,11 +2901,13 @@ fn validate_checkpoint(
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
-        if !native_source_adapter_available(progress.source)
-            && (progress.last_event.is_some()
-                || progress.observed_through.is_some()
-                || progress.observed_at_unix_ms != 0
-                || progress.reserve_projection_digest.is_some())
+    }
+    let journal_progress = checkpoint.progress(ReputationSourceV1::Por);
+    for source in [ReputationSourceV1::Dispute, ReputationSourceV1::Token] {
+        let progress = checkpoint.progress(source);
+        if progress.last_event != journal_progress.last_event
+            || progress.observed_through != journal_progress.observed_through
+            || progress.observed_at_unix_ms != journal_progress.observed_at_unix_ms
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
@@ -2594,15 +2915,14 @@ fn validate_checkpoint(
 
     let mut receipt_keys = BTreeSet::new();
     let mut previous_order = None;
-    let mut final_source_receipt = BTreeMap::new();
+    let mut final_feed_receipt = BTreeMap::new();
     for receipt in &checkpoint.receipts {
         receipt
             .identity
             .validate()
             .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
         if receipt.event_digest == [0; 32]
-            || !native_source_adapter_available(receipt.source)
-            || !receipt_keys.insert((receipt.source, receipt.identity.sequence))
+            || !receipt_keys.insert((receipt.feed, receipt.identity.sequence))
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
@@ -2611,22 +2931,21 @@ fn validate_checkpoint(
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
         previous_order = Some(order);
-        let source_progress = checkpoint.progress(receipt.source);
-        let Some(source_last) = source_progress.last_event else {
+        let feed_progress = checkpoint_progress_for_feed(checkpoint, receipt.feed);
+        let Some(feed_last) = feed_progress.last_event else {
             return Err(ReputationIngestError::InvalidCheckpoint);
         };
         if receipt.identity.block_height > policy.window_end_height
             || checkpoint
                 .latest_finalized
                 .is_none_or(|latest| receipt.identity.block_height > latest.height)
-            || receipt.identity.sequence > source_last.sequence
-            || (receipt.identity.sequence == source_last.sequence
-                && receipt.identity != source_last)
+            || receipt.identity.sequence > feed_last.sequence
+            || (receipt.identity.sequence == feed_last.sequence && receipt.identity != feed_last)
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
-        if final_source_receipt
-            .insert(receipt.source, *receipt)
+        if final_feed_receipt
+            .insert(receipt.feed, *receipt)
             .is_some_and(|previous: EventReceiptV1| {
                 previous
                     .identity
@@ -2638,8 +2957,8 @@ fn validate_checkpoint(
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
     }
-    for (source, receipt) in final_source_receipt {
-        if checkpoint.progress(source).last_event != Some(receipt.identity) {
+    for (feed, receipt) in final_feed_receipt {
+        if checkpoint_progress_for_feed(checkpoint, feed).last_event != Some(receipt.identity) {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
     }
@@ -2677,13 +2996,6 @@ fn validate_checkpoint(
             || provider.disputes_upheld > provider.disputes_resolved
             || provider.token_violations > provider.token_observations
             || provider.repair_breaches > provider.repair_terminals
-            || provider.por_successes != 0
-            || provider.por_total != 0
-            || provider.disputes_upheld != 0
-            || provider.disputes_resolved != 0
-            || provider.token_violations != 0
-            || provider.token_observations != 0
-            || provider.active_dispute
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
@@ -2729,19 +3041,19 @@ fn validate_pending(
 
     let mut previous_event_order = None;
     let mut event_keys = BTreeSet::new();
-    let mut event_sources = BTreeSet::new();
+    let mut event_feeds = BTreeSet::new();
     for event in &pending.events {
         event
             .identity
             .validate()
             .map_err(|_| ReputationIngestError::InvalidCheckpoint)?;
         if event.event_digest == [0; 32]
-            || !native_source_adapter_available(event.source)
             || event.occurred_at_unix_ms == 0
             || event.occurred_at_unix_ms > pending.finalized_at_unix_ms
             || event.identity.block_height > pending.target.height
-            || !signal_matches_source(event.signal, event.source)
-            || !event_keys.insert((event.source, event.identity.sequence))
+            || !signal_matches_feed(event.signal, event.feed)
+            || !signal_is_well_formed(event.signal)
+            || !event_keys.insert((event.feed, event.identity.sequence))
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
@@ -2752,11 +3064,11 @@ fn validate_pending(
         {
             return Err(ReputationIngestError::InvalidCheckpoint);
         }
-        event_sources.insert(event.source);
+        event_feeds.insert(event.feed);
         let order = (
             event.identity.block_height,
             event.identity.event_index,
-            event.source,
+            event.feed,
             event.identity.sequence,
         );
         if previous_event_order.is_some_and(|previous| previous >= order) {
@@ -2789,9 +3101,8 @@ fn validate_pending(
             .chain(Some(finalized_identity_as_event_identity(pending.target))),
     )?;
 
-    for source in &event_sources {
-        let mut expected = checkpoint
-            .progress(*source)
+    for feed in &event_feeds {
+        let mut expected = checkpoint_progress_for_feed(checkpoint, *feed)
             .last_event
             .map_or(Ok(1), |identity| {
                 identity
@@ -2799,16 +3110,16 @@ fn validate_pending(
                     .checked_add(1)
                     .ok_or(ReputationIngestError::InvalidCheckpoint)
             })?;
-        let mut source_events = pending
+        let mut feed_events = pending
             .events
             .iter()
-            .filter(|event| event.source == *source)
+            .filter(|event| event.feed == *feed)
             .peekable();
-        while let Some(event) = source_events.next() {
+        while let Some(event) = feed_events.next() {
             if event.identity.sequence != expected {
                 return Err(ReputationIngestError::InvalidCheckpoint);
             }
-            if source_events.peek().is_some() {
+            if feed_events.peek().is_some() {
                 expected = expected
                     .checked_add(1)
                     .ok_or(ReputationIngestError::InvalidCheckpoint)?;
@@ -2820,7 +3131,6 @@ fn validate_pending(
     let mut update_sources = BTreeSet::new();
     for update in &pending.finality_updates {
         if previous_source.is_some_and(|previous| previous >= update.source)
-            || !native_source_adapter_available(update.source)
             || update.target != pending.target
             || update.finalized_at_unix_ms != pending.finalized_at_unix_ms
             || update.last_event != pending_last_event(checkpoint, pending, update.source)
@@ -2835,7 +3145,33 @@ fn validate_pending(
         previous_source = Some(update.source);
         update_sources.insert(update.source);
     }
-    if !event_sources.is_subset(&update_sources) {
+    for feed in event_feeds {
+        if !updates_cover_feed(&update_sources, feed) {
+            return Err(ReputationIngestError::InvalidCheckpoint);
+        }
+    }
+    let journal_updates = pending
+        .finality_updates
+        .iter()
+        .filter(|update| {
+            matches!(
+                update.source,
+                ReputationSourceV1::Por
+                    | ReputationSourceV1::Dispute
+                    | ReputationSourceV1::Token
+            )
+        })
+        .collect::<Vec<_>>();
+    if !journal_updates.is_empty()
+        && (journal_updates.len() != 3
+            || journal_updates.windows(2).any(|pair| {
+                pair[0].target != pair[1].target
+                    || pair[0].finalized_at_unix_ms != pair[1].finalized_at_unix_ms
+                    || pair[0].last_event != pair[1].last_event
+                    || pair[0].complete != pair[1].complete
+                    || pair[0].reserve_projection_digest != pair[1].reserve_projection_digest
+            }))
+    {
         return Err(ReputationIngestError::InvalidCheckpoint);
     }
     if !pending.reserve_stages.is_empty()
@@ -2864,36 +3200,93 @@ fn pending_last_event(
     pending: &PendingBatchV1,
     source: ReputationSourceV1,
 ) -> Option<ReputationCommittedEventIdentityV1> {
+    let feed = committed_feed_for_source(source);
     pending
         .events
         .iter()
-        .filter(|event| event.source == source)
+        .filter(|event| event.feed == feed)
         .map(|event| event.identity)
         .max_by_key(|identity| identity.sequence)
-        .or_else(|| checkpoint.progress(source).last_event)
+        .or_else(|| checkpoint_progress_for_feed(checkpoint, feed).last_event)
 }
 
-const fn signal_matches_source(signal: ReputationSignalV1, source: ReputationSourceV1) -> bool {
-    match signal {
-        ReputationSignalV1::Pdp { .. } | ReputationSignalV1::Potr { .. } => {
-            matches!(source, ReputationSourceV1::Proof)
-        }
-        ReputationSignalV1::Repair { .. } => matches!(source, ReputationSourceV1::Repair),
-        ReputationSignalV1::ProviderObserved { .. } => {
-            matches!(
-                source,
-                ReputationSourceV1::Orderbook | ReputationSourceV1::Reserve
-            )
-        }
-        ReputationSignalV1::Noop => true,
+fn updates_cover_feed(
+    sources: &BTreeSet<ReputationSourceV1>,
+    feed: ReputationCommittedFeedV1,
+) -> bool {
+    match feed {
+        ReputationCommittedFeedV1::Journal => [
+            ReputationSourceV1::Por,
+            ReputationSourceV1::Dispute,
+            ReputationSourceV1::Token,
+        ]
+        .into_iter()
+        .all(|source| sources.contains(&source)),
+        _ => sources.contains(&primary_source_for_feed(feed)),
     }
 }
 
-const fn native_source_adapter_available(source: ReputationSourceV1) -> bool {
-    !matches!(
-        source,
-        ReputationSourceV1::Por | ReputationSourceV1::Dispute | ReputationSourceV1::Token
-    )
+const fn signal_matches_feed(
+    signal: ReputationSignalV1,
+    feed: ReputationCommittedFeedV1,
+) -> bool {
+    match signal {
+        ReputationSignalV1::Pdp { .. } | ReputationSignalV1::Potr { .. } => {
+            matches!(feed, ReputationCommittedFeedV1::Proof)
+        }
+        ReputationSignalV1::Por { .. }
+        | ReputationSignalV1::Dispute { .. }
+        | ReputationSignalV1::Token { .. } => {
+            matches!(feed, ReputationCommittedFeedV1::Journal)
+        }
+        ReputationSignalV1::Repair { .. } => {
+            matches!(feed, ReputationCommittedFeedV1::Repair)
+        }
+        ReputationSignalV1::ProviderObserved { .. } => {
+            matches!(
+                feed,
+                ReputationCommittedFeedV1::Orderbook | ReputationCommittedFeedV1::Reserve
+            )
+        }
+        ReputationSignalV1::Noop => matches!(
+            feed,
+            ReputationCommittedFeedV1::Journal
+                | ReputationCommittedFeedV1::Orderbook
+                | ReputationCommittedFeedV1::Reserve
+        ),
+    }
+}
+
+const fn signal_is_well_formed(signal: ReputationSignalV1) -> bool {
+    match signal {
+        ReputationSignalV1::Noop
+        | ReputationSignalV1::ProviderObserved { .. }
+        | ReputationSignalV1::Pdp { .. }
+        | ReputationSignalV1::Dispute { .. } => true,
+        ReputationSignalV1::Por {
+            counts_for_provider,
+            ..
+        }
+        | ReputationSignalV1::Token {
+            counts_for_provider,
+            ..
+        } => counts_for_provider,
+        ReputationSignalV1::Potr {
+            counts_for_provider,
+            success,
+            latency_healthy,
+            ..
+        } => {
+            (!latency_healthy || success)
+                && (counts_for_provider || (!success && !latency_healthy))
+        }
+        ReputationSignalV1::Repair {
+            terminal,
+            breach,
+            slashing,
+            ..
+        } => (!breach || terminal) && (!slashing || terminal),
+    }
 }
 
 fn validate_known_block_hashes<I>(identities: I) -> Result<(), ReputationIngestError>
@@ -2944,15 +3337,13 @@ fn update_len_prefixed(
     Ok(())
 }
 
-const fn source_event_domain(source: ReputationSourceV1) -> &'static [u8] {
-    match source {
-        ReputationSourceV1::Proof => b"sorafs-reputation-proof-event-v1",
-        ReputationSourceV1::Por => b"sorafs-reputation-por-event-v1",
-        ReputationSourceV1::Repair => b"sorafs-reputation-repair-event-v1",
-        ReputationSourceV1::Orderbook => b"sorafs-reputation-orderbook-event-v1",
-        ReputationSourceV1::Dispute => b"sorafs-reputation-dispute-event-v1",
-        ReputationSourceV1::Token => b"sorafs-reputation-token-event-v1",
-        ReputationSourceV1::Reserve => b"sorafs-reputation-reserve-event-v1",
+const fn feed_event_domain(feed: ReputationCommittedFeedV1) -> &'static [u8] {
+    match feed {
+        ReputationCommittedFeedV1::Proof => b"sorafs-reputation-proof-event-v1",
+        ReputationCommittedFeedV1::Journal => b"sorafs-reputation-journal-event-v1",
+        ReputationCommittedFeedV1::Repair => b"sorafs-reputation-repair-event-v1",
+        ReputationCommittedFeedV1::Orderbook => b"sorafs-reputation-orderbook-event-v1",
+        ReputationCommittedFeedV1::Reserve => b"sorafs-reputation-reserve-event-v1",
     }
 }
 
@@ -2977,13 +3368,21 @@ mod tests {
             SorafsOrderbookLedgerEvent, SorafsOrderbookLedgerEventKind, SorafsRepairLedgerEvent,
         },
         sorafs::{
+            capacity::{CapacityDisputeId, CapacityDisputeOutcome},
             moderation_ledger::{RepairFinalizedCursorV1, RepairFinalizedEventCursorV1},
             orderbook::{OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1},
             pin_registry::{ManifestDigest, StorageClass},
             proof_ledger::{
                 PROOF_OUTCOME_RECORD_VERSION_V1, PdpOutcomeProjectionV1,
-                ProofOutcomeEd25519AttestationV1, ProofOutcomeFinalizedCursorV1,
-                ProofOutcomeFinalizedEventCursorV1, ProofOutcomeRecordV1,
+                PotrOutcomeProjectionV1, ProofOutcomeEd25519AttestationV1,
+                ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
+                ProofOutcomeRecordV1,
+            },
+            reputation::{
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, PorTerminalOutcomeV1,
+                ProviderDisputeEventV1, ProviderDisputeKindV1,
+                ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
+                ReputationJournalFinalizedCursorV1, StreamTokenValidationOutcomeV1,
             },
             reserve::{
                 ReserveDuration, ReserveFinalizedCursorV1, ReserveProviderAccountV1,
@@ -3063,6 +3462,209 @@ mod tests {
         }
     }
 
+    fn potr_event(
+        sequence: u64,
+        block_height: u64,
+        block_hash: [u8; 32],
+        event_index: u32,
+        provider_id: ProviderId,
+        outcome_marker: u8,
+    ) -> ProofOutcomeFinalizedEventV1 {
+        ProofOutcomeFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+            outcome: ProofOutcomeRecordV1 {
+                version: PROOF_OUTCOME_RECORD_VERSION_V1,
+                identity_digest: [outcome_marker; 32],
+                outcome_digest: [outcome_marker.wrapping_add(1); 32],
+                provider_id,
+                manifest_digest: ManifestDigest::new([0x41; 32]),
+                admission_envelope_digest: [0x42; 32],
+                submitted_by: account(5),
+                committed_at_unix_ms: FINALIZED_AT_MS
+                    .saturating_sub((TARGET_HEIGHT - block_height) * 1_000),
+                projection: ProofOutcomeProjectionV1::Potr(PotrOutcomeProjectionV1 {
+                    status: PotrOutcomeStatusV1::Success,
+                    deadline_ms: 250,
+                    latency_ms: 100,
+                    requested_at_ms: FINALIZED_AT_MS - 4_000,
+                    responded_at_ms: FINALIZED_AT_MS - 3_900,
+                    recorded_at_ms: FINALIZED_AT_MS - 3_500,
+                    range_start: 0,
+                    range_end: 63,
+                    gateway_public_key: [0x54; 32],
+                    governed_provider_key_digest: [0x55; 32],
+                    canonical_signed_receipt: vec![0x56; 64],
+                }),
+            },
+        }
+    }
+
+    fn journal_policy() -> ReputationJournalAuthorityPolicyV1 {
+        ReputationJournalAuthorityPolicyV1 {
+            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            por_recorder_authority: account(9),
+            dispute_recorder_authority: account(10),
+            token_recorder_authority: account(11),
+        }
+    }
+
+    fn por_journal_entry(
+        provider_id: ProviderId,
+        marker: u8,
+        recorded_at_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_policy();
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("journal policy digest"),
+            policy.por_recorder_authority,
+            recorded_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
+                challenge_id: [marker.max(1); 32],
+                manifest_digest: [0xA2; 32],
+                epoch_id: 7,
+                drand_round: 11,
+                forced: false,
+                sample_count: 4,
+                failed_samples: 0,
+                issued_at_unix_ms: recorded_at_unix_ms - 2_000,
+                deadline_at_unix_ms: recorded_at_unix_ms - 500,
+                responded_at_unix_ms: Some(recorded_at_unix_ms - 750),
+                decided_at_unix_ms: recorded_at_unix_ms,
+                proof_digest: Some([0xA3; 32]),
+                repair_task_id: None,
+                verifier_latency_ms: Some(17),
+                status: PorTerminalStatusV1::Verified,
+            }),
+        )
+        .expect("valid PoR journal entry")
+    }
+
+    fn token_journal_entry(
+        provider_id: ProviderId,
+        marker: u8,
+        recorded_at_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_policy();
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("journal policy digest"),
+            policy.token_recorder_authority,
+            recorded_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(
+                StreamTokenValidationOutcomeV1 {
+                    validation_id: [marker.max(1); 32],
+                    request_digest: [0xB2; 32],
+                    token_body_digest: Some([0xB3; 32]),
+                    token_key_version: Some(1),
+                    validated_at_unix_ms: recorded_at_unix_ms,
+                    status: StreamTokenValidationStatusV1::Accepted,
+                },
+            ),
+        )
+        .expect("valid stream-token journal entry")
+    }
+
+    fn opened_dispute_entry(
+        provider_id: ProviderId,
+        marker: u8,
+        recorded_at_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_policy();
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("journal policy digest"),
+            policy.dispute_recorder_authority,
+            recorded_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
+                dispute_id: CapacityDisputeId::new([marker.max(1); 32]),
+                kind: ProviderDisputeKindV1::ProofFailure,
+                evidence_digest: [marker.wrapping_add(1).max(1); 32],
+                submitted_at_unix_ms: recorded_at_unix_ms,
+                status: ProviderDisputeStatusV1::Opened,
+            }),
+        )
+        .expect("valid opened dispute entry")
+    }
+
+    fn resolved_dispute_entry(
+        provider_id: ProviderId,
+        opened: &ReputationJournalEntryV1,
+        recorded_at_unix_ms: u64,
+        outcome: CapacityDisputeOutcome,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_policy();
+        let ReputationJournalPayloadV1::ProviderDispute(dispute) = &opened.payload else {
+            panic!("opened dispute payload")
+        };
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("journal policy digest"),
+            policy.dispute_recorder_authority,
+            recorded_at_unix_ms,
+            Some(opened.event_id),
+            ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
+                dispute_id: dispute.dispute_id,
+                kind: dispute.kind,
+                evidence_digest: dispute.evidence_digest,
+                submitted_at_unix_ms: dispute.submitted_at_unix_ms,
+                status: ProviderDisputeStatusV1::Resolved {
+                    outcome,
+                    resolved_at_unix_ms: recorded_at_unix_ms,
+                    decision_digest: [0xC3; 32],
+                    rationale: None,
+                },
+            }),
+        )
+        .expect("valid resolved dispute entry")
+    }
+
+    fn journal_event(
+        sequence: u64,
+        event_index: u32,
+        entry: ReputationJournalEntryV1,
+    ) -> ReputationJournalFinalizedEventV1 {
+        ReputationJournalFinalizedEventV1 {
+            sequence,
+            block_height: 9,
+            block_hash: [0x91; 32],
+            event_index,
+            entry,
+        }
+    }
+
+    fn journal_page(
+        events: Vec<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalFinalizedEventPageV1 {
+        ReputationJournalFinalizedEventPageV1 {
+            finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                height: TARGET_HEIGHT,
+                block_hash: TARGET_HASH,
+                finalized_at_unix_ms: FINALIZED_AT_MS,
+            },
+            events,
+            has_more: false,
+            next_after: None,
+        }
+    }
+
+    fn journal_only_batch(
+        pages: Vec<ReputationJournalFinalizedEventPageV1>,
+    ) -> ReputationFinalizedBatchV1 {
+        ReputationFinalizedBatchV1 {
+            journal_pages: pages,
+            ..empty_batch()
+        }
+    }
+
     fn proof_page(
         target_hash: [u8; 32],
         events: Vec<ProofOutcomeFinalizedEventV1>,
@@ -3093,6 +3695,7 @@ mod tests {
             chain_id: ChainId::from("reputation-test-chain"),
             finalized_at_unix_ms: FINALIZED_AT_MS,
             proof_pages: Vec::new(),
+            journal_pages: Vec::new(),
             repair_pages: Vec::new(),
             orderbook_pages: Vec::new(),
             reserve_pages: Vec::new(),
@@ -3192,6 +3795,7 @@ mod tests {
                 days_past_due: 0,
                 pending_movements: 0,
                 open_appeals: 0,
+                rent_charged_through_unix: FINALIZED_AT_MS / 1_000,
                 interest_accrued_at_unix: FINALIZED_AT_MS / 1_000,
                 updated_at_unix: FINALIZED_AT_MS / 1_000,
             }],
@@ -3200,14 +3804,42 @@ mod tests {
         }
     }
 
-    fn available_sources_batch(provider_id: ProviderId) -> ReputationFinalizedBatchV1 {
+    fn all_sources_batch(provider_id: ProviderId) -> ReputationFinalizedBatchV1 {
+        let opened_a =
+            opened_dispute_entry(provider_id, 0x61, FINALIZED_AT_MS - 1_800);
+        let opened_b =
+            opened_dispute_entry(provider_id, 0x62, FINALIZED_AT_MS - 1_600);
+        let resolved_a = resolved_dispute_entry(
+            provider_id,
+            &opened_a,
+            FINALIZED_AT_MS - 1_400,
+            CapacityDisputeOutcome::Upheld,
+        );
         ReputationFinalizedBatchV1 {
             chain_id: ChainId::from("reputation-test-chain"),
             finalized_at_unix_ms: FINALIZED_AT_MS,
             proof_pages: vec![proof_page(
                 TARGET_HASH,
-                vec![proof_event(1, 6, [0x61; 32], 0, provider_id, 0x11)],
+                vec![
+                    proof_event(1, 6, [0x61; 32], 0, provider_id, 0x11),
+                    potr_event(2, 6, [0x61; 32], 1, provider_id, 0x12),
+                ],
             )],
+            journal_pages: vec![journal_page(vec![
+                journal_event(
+                    1,
+                    0,
+                    por_journal_entry(provider_id, 0x21, FINALIZED_AT_MS - 2_000),
+                ),
+                journal_event(2, 1, opened_a),
+                journal_event(3, 2, opened_b),
+                journal_event(4, 3, resolved_a),
+                journal_event(
+                    5,
+                    4,
+                    token_journal_entry(provider_id, 0x22, FINALIZED_AT_MS - 1_000),
+                ),
+            ])],
             repair_pages: vec![repair_page(provider_id)],
             orderbook_pages: vec![orderbook_page(provider_id)],
             reserve_pages: vec![reserve_event_page()],
@@ -3246,6 +3878,199 @@ mod tests {
             before
         );
         assert_eq!(service.metrics().exact_replays, 1);
+    }
+
+    #[test]
+    fn unified_journal_replay_is_byte_identical_and_advances_all_semantic_sources() {
+        let root = TempDir::new().expect("journal state root");
+        let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
+        let provider_id = provider(12);
+        let batch = journal_only_batch(vec![journal_page(vec![
+            journal_event(
+                1,
+                0,
+                por_journal_entry(provider_id, 0x31, FINALIZED_AT_MS - 1_000),
+            ),
+            journal_event(
+                2,
+                1,
+                token_journal_entry(provider_id, 0x32, FINALIZED_AT_MS - 500),
+            ),
+        ])]);
+        assert_eq!(
+            service
+                .ingest_finalized_batch(batch.clone())
+                .expect("apply journal"),
+            ReputationIngestOutcomeV1::Applied { events: 2 }
+        );
+        let before = service
+            .canonical_checkpoint_bytes()
+            .expect("journal checkpoint");
+        {
+            let state = service.state.lock().expect("journal state");
+            for source in [
+                ReputationSourceV1::Por,
+                ReputationSourceV1::Dispute,
+                ReputationSourceV1::Token,
+            ] {
+                let progress = state.checkpoint.progress(source);
+                assert_eq!(progress.last_event.expect("journal cursor").sequence, 2);
+                assert_eq!(
+                    progress.observed_through,
+                    Some(ReputationFinalizedIdentityV1 {
+                        height: TARGET_HEIGHT,
+                        block_hash: TARGET_HASH,
+                    })
+                );
+            }
+            let accumulator = state.checkpoint.providers.first().expect("provider");
+            assert_eq!(accumulator.por_total, 1);
+            assert_eq!(accumulator.por_successes, 1);
+            assert_eq!(accumulator.token_observations, 1);
+            assert_eq!(accumulator.token_violations, 0);
+        }
+        assert_eq!(
+            service
+                .ingest_finalized_batch(batch)
+                .expect("exact journal replay"),
+            ReputationIngestOutcomeV1::ExactReplay
+        );
+        assert_eq!(
+            service
+                .canonical_checkpoint_bytes()
+                .expect("replayed journal checkpoint"),
+            before
+        );
+        assert_eq!(service.metrics().exact_replays, 2);
+    }
+
+    #[test]
+    fn journal_gap_fork_equivocation_and_cross_page_continuation_fail_closed() {
+        let provider_id = provider(13);
+
+        let gap_root = TempDir::new().expect("journal gap root");
+        let gap = ReputationIngestService::open(gap_root.path(), policy()).expect("open gap");
+        assert_eq!(
+            gap.ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
+                journal_event(
+                    2,
+                    0,
+                    por_journal_entry(provider_id, 0x41, FINALIZED_AT_MS - 1_000),
+                ),
+            ])]))
+            .expect_err("global journal gap rejected"),
+            ReputationIngestError::EventGap
+        );
+
+        let paged_root = TempDir::new().expect("journal paged root");
+        let paged =
+            ReputationIngestService::open(paged_root.path(), policy()).expect("open paged");
+        let first_event = journal_event(
+            1,
+            0,
+            por_journal_entry(provider_id, 0x42, FINALIZED_AT_MS - 1_000),
+        );
+        let mut first_page = journal_page(vec![first_event.clone()]);
+        first_page.has_more = true;
+        first_page.next_after = Some(first_event.cursor());
+        let second_page = journal_page(vec![journal_event(
+            2,
+            1,
+            token_journal_entry(provider_id, 0x43, FINALIZED_AT_MS - 500),
+        )]);
+        assert_eq!(
+            paged
+                .ingest_finalized_batch(journal_only_batch(vec![first_page, second_page]))
+                .expect("contiguous journal pages"),
+            ReputationIngestOutcomeV1::Applied { events: 2 }
+        );
+
+        let conflict_root = TempDir::new().expect("journal conflict root");
+        let conflict =
+            ReputationIngestService::open(conflict_root.path(), policy()).expect("open conflict");
+        conflict
+            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
+                journal_event(
+                    1,
+                    0,
+                    por_journal_entry(provider_id, 0x44, FINALIZED_AT_MS - 1_000),
+                ),
+            ])]))
+            .expect("apply journal baseline");
+        assert_eq!(
+            conflict
+                .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
+                    journal_event(
+                        1,
+                        0,
+                        por_journal_entry(provider_id, 0x45, FINALIZED_AT_MS - 1_000),
+                    ),
+                ])]))
+                .expect_err("same journal sequence substitution rejected"),
+            ReputationIngestError::EventEquivocation
+        );
+        let mut fork_page = journal_page(Vec::new());
+        fork_page.finalized_cursor.block_hash = [0xD1; 32];
+        assert_eq!(
+            conflict
+                .ingest_finalized_batch(journal_only_batch(vec![fork_page]))
+                .expect_err("same-height journal fork rejected"),
+            ReputationIngestError::FinalizedFork
+        );
+    }
+
+    #[test]
+    fn multiple_disputes_preserve_active_cardinality_across_pages() {
+        let root = TempDir::new().expect("dispute state root");
+        let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
+        let provider_id = provider(14);
+        let opened_a =
+            opened_dispute_entry(provider_id, 0x51, FINALIZED_AT_MS - 1_600);
+        let opened_b =
+            opened_dispute_entry(provider_id, 0x52, FINALIZED_AT_MS - 1_400);
+        let resolved_a = resolved_dispute_entry(
+            provider_id,
+            &opened_a,
+            FINALIZED_AT_MS - 1_200,
+            CapacityDisputeOutcome::Upheld,
+        );
+        let resolved_b = resolved_dispute_entry(
+            provider_id,
+            &opened_b,
+            FINALIZED_AT_MS - 1_000,
+            CapacityDisputeOutcome::Dismissed,
+        );
+        let third = journal_event(3, 2, resolved_a);
+        let mut partial = journal_page(vec![
+            journal_event(1, 0, opened_a),
+            journal_event(2, 1, opened_b),
+            third.clone(),
+        ]);
+        partial.has_more = true;
+        partial.next_after = Some(third.cursor());
+        service
+            .ingest_finalized_batch(journal_only_batch(vec![partial]))
+            .expect("apply partial dispute journal");
+        {
+            let state = service.state.lock().expect("partial state");
+            let accumulator = state.checkpoint.providers.first().expect("provider");
+            assert_eq!(accumulator.active_disputes, 1);
+            assert!(accumulator.has_active_dispute());
+            assert_eq!(accumulator.disputes_resolved, 1);
+            assert_eq!(accumulator.disputes_upheld, 1);
+        }
+
+        service
+            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
+                journal_event(4, 3, resolved_b),
+            ])]))
+            .expect("resolve remaining dispute");
+        let state = service.state.lock().expect("resolved state");
+        let accumulator = state.checkpoint.providers.first().expect("provider");
+        assert_eq!(accumulator.active_disputes, 0);
+        assert!(!accumulator.has_active_dispute());
+        assert_eq!(accumulator.disputes_resolved, 2);
+        assert_eq!(accumulator.disputes_upheld, 1);
     }
 
     #[test]
@@ -3311,7 +4136,7 @@ mod tests {
     }
 
     #[test]
-    fn source_omission_and_unavailable_native_feeds_block_material() {
+    fn source_omission_blocks_material_until_global_journal_is_complete() {
         let root = TempDir::new().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let provider_id = provider(3);
@@ -3328,19 +4153,43 @@ mod tests {
             ReputationIngestError::MissingRequiredSources
         );
 
-        service
-            .ingest_finalized_batch(available_sources_batch(provider_id))
-            .expect("complete available sources");
-        let status = service.status().expect("status");
-        assert!(status.missing_sources.contains(ReputationSourceV1::Por));
-        assert!(status.missing_sources.contains(ReputationSourceV1::Dispute));
-        assert!(status.missing_sources.contains(ReputationSourceV1::Token));
-        assert_eq!(
-            service
-                .unsigned_signing_material()
-                .expect_err("missing native APIs block material"),
-            ReputationIngestError::NativeSourceUnavailable
-        );
+        let ready_root = TempDir::new().expect("ready state root");
+        let ready =
+            ReputationIngestService::open(ready_root.path(), policy()).expect("open ready service");
+        ready
+            .ingest_finalized_batch(all_sources_batch(provider_id))
+            .expect("complete every source");
+        let status = ready.status().expect("ready status");
+        assert_eq!(status.missing_sources, ReputationRequiredSourceMaskV1::EMPTY);
+        let material = ready
+            .unsigned_signing_material()
+            .expect("all native source material is ready");
+        let journal_finality = material
+            .source_finality
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.source,
+                    ReputationSourceV1::Por
+                        | ReputationSourceV1::Dispute
+                        | ReputationSourceV1::Token
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(journal_finality.len(), 3);
+        assert!(journal_finality.windows(2).all(|pair| {
+            pair[0].observed_through == pair[1].observed_through
+                && pair[0].last_event == pair[1].last_event
+        }));
+        let provider_input = material
+            .scoring_evidence
+            .provider_inputs
+            .first()
+            .expect("scored provider");
+        assert!(provider_input.active_dispute);
+        assert_eq!(provider_input.metrics.por_success_bps, 10_000);
+        assert_eq!(provider_input.metrics.dispute_rate_bps, 10_000);
+        assert_eq!(provider_input.metrics.token_violation_rate_bps, 0);
     }
 
     #[test]
@@ -3525,7 +4374,7 @@ mod tests {
         let right_root = TempDir::new().expect("right root");
         let left = ReputationIngestService::open(left_root.path(), policy()).expect("open left");
         let right = ReputationIngestService::open(right_root.path(), policy()).expect("open right");
-        let batch = available_sources_batch(provider(7));
+        let batch = all_sources_batch(provider(7));
         left.ingest_finalized_batch(batch.clone())
             .expect("ingest left");
         right.ingest_finalized_batch(batch).expect("ingest right");
@@ -3534,42 +4383,17 @@ mod tests {
             right.canonical_checkpoint_bytes().expect("right bytes")
         );
 
-        let mut left_checkpoint = left.state.lock().expect("left state").checkpoint.clone();
-        let mut right_checkpoint = right.state.lock().expect("right state").checkpoint.clone();
-        complete_unavailable_test_sources(&mut left_checkpoint);
-        complete_unavailable_test_sources(&mut right_checkpoint);
-        let left_material =
-            build_signing_material(&left_checkpoint, &left.policy, left.policy_digest)
-                .expect("left unsigned material");
-        let right_material =
-            build_signing_material(&right_checkpoint, &right.policy, right.policy_digest)
-                .expect("right unsigned material");
+        let left_material = left
+            .unsigned_signing_material()
+            .expect("left unsigned material");
+        let right_material = right
+            .unsigned_signing_material()
+            .expect("right unsigned material");
         assert_eq!(left_material, right_material);
         assert_eq!(
             norito::to_bytes(&left_material).expect("left material bytes"),
             norito::to_bytes(&right_material).expect("right material bytes")
         );
-    }
-
-    fn complete_unavailable_test_sources(checkpoint: &mut ReputationIngestCheckpointV1) {
-        let target = checkpoint.latest_finalized.expect("final target");
-        let finalized_at = checkpoint.latest_finalized_at_unix_ms;
-        for source in [
-            ReputationSourceV1::Por,
-            ReputationSourceV1::Dispute,
-            ReputationSourceV1::Token,
-        ] {
-            let progress = checkpoint.progress_mut(source);
-            progress.observed_through = Some(target);
-            progress.observed_at_unix_ms = finalized_at;
-        }
-        let provider = checkpoint.providers.first_mut().expect("provider");
-        provider.por_total = 1;
-        provider.por_successes = 1;
-        provider.potr_total = 1;
-        provider.potr_successes = 1;
-        provider.latency_total = 1;
-        provider.latency_healthy = 1;
     }
 
     #[test]
@@ -3586,6 +4410,58 @@ mod tests {
                 .expect_err("counter overflow rejected"),
             ReputationIngestError::ArithmeticOverflow
         );
+        assert_eq!(accumulator.pdp_total, u64::MAX);
+
+        let mut por = ProviderAccumulatorV1::new(provider_id);
+        por.por_total = u64::MAX;
+        assert_eq!(
+            por.apply(ReputationSignalV1::Por {
+                provider_id,
+                counts_for_provider: true,
+                success: false,
+            })
+            .expect_err("PoR counter overflow rejected"),
+            ReputationIngestError::ArithmeticOverflow
+        );
+        assert_eq!(por.por_total, u64::MAX);
+
+        let mut token = ProviderAccumulatorV1::new(provider_id);
+        token.token_observations = u64::MAX;
+        assert_eq!(
+            token
+                .apply(ReputationSignalV1::Token {
+                    provider_id,
+                    counts_for_provider: true,
+                    violation: false,
+                })
+                .expect_err("token counter overflow rejected"),
+            ReputationIngestError::ArithmeticOverflow
+        );
+        assert_eq!(token.token_observations, u64::MAX);
+
+        let mut dispute = ProviderAccumulatorV1::new(provider_id);
+        assert_eq!(
+            dispute
+                .apply(ReputationSignalV1::Dispute {
+                    provider_id,
+                    transition: ReputationDisputeSignalV1::Resolved { upheld: true },
+                })
+                .expect_err("dispute cardinality underflow rejected"),
+            ReputationIngestError::ArithmeticOverflow
+        );
+        assert_eq!(dispute.active_disputes, 0);
+        assert_eq!(dispute.disputes_resolved, 0);
+        dispute.active_disputes = u64::MAX;
+        assert_eq!(
+            dispute
+                .apply(ReputationSignalV1::Dispute {
+                    provider_id,
+                    transition: ReputationDisputeSignalV1::Opened,
+                })
+                .expect_err("dispute cardinality overflow rejected"),
+            ReputationIngestError::ArithmeticOverflow
+        );
+        assert_eq!(dispute.active_disputes, u64::MAX);
         assert_eq!(ratio_bps(u64::MAX, u64::MAX).expect("wide ratio"), 10_000);
         assert_eq!(
             zero_safe_ratio_bps(1, 0).expect_err("invalid zero denominator"),

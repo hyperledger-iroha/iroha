@@ -29,15 +29,9 @@ extension NoritoNativeBridge {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
-    private typealias KagemushaRecipientLineageVerifyV1Fn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64, UInt64,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
     private typealias KagemushaRecipientLineageQueryCreateV2Fn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt16,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -356,6 +350,7 @@ extension NoritoNativeBridge {
     }
 
     func kagemushaRecipientLineageQueryCreateV2(
+        chainDiscriminant: UInt16,
         chainID: Data,
         recipient: Data,
         receiverDeviceID: Data,
@@ -383,6 +378,7 @@ extension NoritoNativeBridge {
                         function(
                             chainBuffer.bindMemory(to: UInt8.self).baseAddress,
                             CUnsignedLong(chainBuffer.count),
+                            chainDiscriminant,
                             recipientBuffer.bindMemory(to: UInt8.self).baseAddress,
                             CUnsignedLong(recipientBuffer.count),
                             deviceBuffer.bindMemory(to: UInt8.self).baseAddress,
@@ -407,57 +403,6 @@ extension NoritoNativeBridge {
             throw NativeBridgeError.kagemushaProve
         }
         return result
-        #else
-        return nil
-        #endif
-    }
-
-    /// Legacy compatibility shim. New applications must use the request-
-    /// independent query plus V2 whole-offer verifier; the ABI-21 release
-    /// inventory deliberately does not depend on this retired V1 export.
-    func kagemushaRecipientRegistrationLineageVerifyV1(
-        requestArchive: Data,
-        lineageArchive: Data,
-        verifiedAtMilliseconds: UInt64,
-        expectedEvaluatedBlockHeight: UInt64,
-        expectedEvaluatedBlockHash: Data
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard verifiedAtMilliseconds > 0,
-              expectedEvaluatedBlockHeight > 0,
-              expectedEvaluatedBlockHash.count == 32,
-              expectedEvaluatedBlockHash.contains(where: { $0 != 0 }) else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
-            as: KagemushaRecipientLineageVerifyV1Fn.self
-        ) else { return nil }
-        var output: UnsafeMutablePointer<UInt8>?
-        var outputLength: CUnsignedLong = 0
-        let status = requestArchive.withUnsafeBytes { requestBuffer in
-            lineageArchive.withUnsafeBytes { lineageBuffer in
-                expectedEvaluatedBlockHash.withUnsafeBytes { hashBuffer in
-                    function(
-                        requestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(requestBuffer.count),
-                        lineageBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(lineageBuffer.count),
-                        verifiedAtMilliseconds,
-                        expectedEvaluatedBlockHeight,
-                        hashBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(hashBuffer.count),
-                        &output,
-                        &outputLength
-                    )
-                }
-            }
-        }
-        return try copyKagemushaV2Output(
-            status: status,
-            pointer: output,
-            length: outputLength
-        )
         #else
         return nil
         #endif

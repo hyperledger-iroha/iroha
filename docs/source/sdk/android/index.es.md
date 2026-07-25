@@ -64,7 +64,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.HttpClientTransport;
 
-NoritoCodecAdapter codec = new NoritoJavaCodecAdapter();
+NoritoCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
 IrohaKeyManager keyManager = IrohaKeyManager.withDefaultProviders();
 TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 

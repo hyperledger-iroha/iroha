@@ -53,36 +53,33 @@ export const SORAFS_ORDERBOOK_PAYLOAD_KINDS = Object.freeze({
 /** Canonical maximum byte length for a V1 orderbook owner account. */
 export const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256;
 
-const ORDERBOOK_KIND_ALIASES = Object.freeze({
-  order: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
-  "order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
-  "orderbook-order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
-  request: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
-  cancel: SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
-  "order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
-  "orderbook-order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_CANCEL,
-  trade: SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
-  "trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
-  "orderbook-trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS.TRADE_EVENT,
-  channel: SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_CHANNEL,
-  "settlement-channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_CHANNEL,
-  receipt: SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_RECEIPT,
-  "settlement-receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS.SETTLEMENT_RECEIPT,
-  snapshot: SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
-  "runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
-  "orderbook-runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
-});
+const ORDERBOOK_PAYLOAD_KIND_SET = new Set(
+  Object.values(SORAFS_ORDERBOOK_PAYLOAD_KINDS),
+);
+const ORDERBOOK_SIDE_SET = new Set(["bid", "ask"]);
+const ORDERBOOK_TIER_SET = new Set(["hot", "warm", "archive"]);
+const ORDERBOOK_CANCEL_REASON_SET = new Set([
+  "owner-requested",
+  "expired",
+  "governance",
+  "replaced",
+]);
+
+function requireCanonicalOrderbookSelector(value, allowed, label) {
+  if (typeof value !== "string" || !allowed.has(value)) {
+    throw new TypeError(`${label} is not a canonical V1 selector`);
+  }
+  return value;
+}
 
 function normalizeOrderbookPayloadKind(kind) {
   if (typeof kind !== "string") {
     throw new TypeError("kind must be a string");
   }
-  const normalized = kind.trim().toLowerCase().replace(/_/g, "-");
-  const canonical = ORDERBOOK_KIND_ALIASES[normalized];
-  if (!canonical) {
+  if (!ORDERBOOK_PAYLOAD_KIND_SET.has(kind)) {
     throw new TypeError(`unsupported SoraFS orderbook payload kind: ${kind}`);
   }
-  return canonical;
+  return kind;
 }
 
 export const SORAFS_PDP_PAYLOAD_KINDS = Object.freeze({
@@ -100,25 +97,16 @@ export const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
 /** Maximum UTF-8 bytes accepted by one governance DAG diagnostic label. */
 export const SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
 
-const PDP_KIND_ALIASES = Object.freeze({
-  commitment: SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
-  "pdp-commitment": SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
-  challenge: SORAFS_PDP_PAYLOAD_KINDS.CHALLENGE,
-  "pdp-challenge": SORAFS_PDP_PAYLOAD_KINDS.CHALLENGE,
-  proof: SORAFS_PDP_PAYLOAD_KINDS.PROOF,
-  "pdp-proof": SORAFS_PDP_PAYLOAD_KINDS.PROOF,
-});
+const PDP_PAYLOAD_KIND_SET = new Set(Object.values(SORAFS_PDP_PAYLOAD_KINDS));
 
 function normalizePdpPayloadKind(kind) {
   if (typeof kind !== "string") {
     throw new TypeError("kind must be a string");
   }
-  const normalized = kind.trim().toLowerCase().replace(/_/g, "-");
-  const canonical = PDP_KIND_ALIASES[normalized];
-  if (!canonical) {
+  if (!PDP_PAYLOAD_KIND_SET.has(kind)) {
     throw new TypeError(`unsupported SoraFS PDP payload kind: ${kind}`);
   }
-  return canonical;
+  return kind;
 }
 
 function readPayloadField(object, ...names) {
@@ -440,35 +428,68 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
     throw new TypeError("fields must be an object");
   }
   rejectRetiredOrderbookFields(fields, [
+    "order_id",
+    "price_per_gib",
+    "quantity_gib",
+    "remaining_gib",
+    "owner_account",
+    "provider_id",
+    "expiry_unix",
+    "maker_fee_bps",
+    "taker_fee_bps",
     "pricePerGibMicroXor",
     "price_per_gib_micro_xor",
     "pricePerGibMicro",
     "price_per_gib_micro",
   ]);
+  const side = requireCanonicalOrderbookSelector(
+    requiredField(fields, "side", "side"),
+    ORDERBOOK_SIDE_SET,
+    "side",
+  );
+  const tier = requireCanonicalOrderbookSelector(
+    requiredField(fields, "tier", "tier"),
+    ORDERBOOK_TIER_SET,
+    "tier",
+  );
   const quantityGib = decimalIntegerString(
-    requiredField(fields, "quantityGib", "quantityGib", "quantity_gib"),
+    requiredField(fields, "quantityGib", "quantityGib"),
     "quantityGib",
     { positive: true },
   );
-  const remainingValue = optionalField(fields, "remainingGib", "remaining_gib");
+  const remainingValue = optionalField(fields, "remainingGib");
   const ownerAccount = orderbookOwnerAccountField(
     fields,
     "ownerAccount",
     "ownerAccount",
-    "owner_account",
   );
+  const providerValue = optionalField(fields, "providerId");
+  const providerId =
+    providerValue === undefined ? Buffer.alloc(0) : toBuffer(providerValue);
+  if (side === "bid") {
+    if (providerId.length !== 0) {
+      throw new RangeError("providerId must be absent or empty for bid orders");
+    }
+  } else {
+    if (providerId.length !== 32) {
+      throw new RangeError("providerId must be exactly 32 bytes for ask orders");
+    }
+    if (providerId.equals(Buffer.alloc(32))) {
+      throw new RangeError("providerId must not be all zero");
+    }
+  }
   const nonce = decimalIntegerString(
     requiredField(fields, "nonce", "nonce"),
     "nonce",
     { positive: true },
   );
   const pricePerGib = canonicalXorQuantityString(
-    requiredUniqueField(fields, "pricePerGib", "pricePerGib", "price_per_gib"),
+    requiredField(fields, "pricePerGib", "pricePerGib"),
     "pricePerGib",
     { positive: true },
   );
   const orderId = deriveOrderbookOrderId(ownerAccount, nonce);
-  const suppliedOrderId = optionalField(fields, "orderId", "order_id");
+  const suppliedOrderId = optionalField(fields, "orderId");
   if (suppliedOrderId !== undefined) {
     const supplied = toBuffer(suppliedOrderId);
     if (supplied.length !== 32 || !supplied.equals(orderId)) {
@@ -484,26 +505,27 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookOrderRequest(
       orderId,
-      String(requiredField(fields, "side", "side")),
-      String(requiredField(fields, "tier", "tier")),
+      side,
+      tier,
       pricePerGib,
       quantityGib,
       remainingValue === undefined
         ? undefined
         : decimalIntegerString(remainingValue, "remainingGib", { positive: true }),
       ownerAccount,
+      providerId,
       decimalIntegerString(
-        requiredField(fields, "expiryUnix", "expiryUnix", "expiry_unix"),
+        requiredField(fields, "expiryUnix", "expiryUnix"),
         "expiryUnix",
         { positive: true },
       ),
       nonce,
       normalizeOrderbookFeeBps(
-        requiredField(fields, "makerFeeBps", "makerFeeBps", "maker_fee_bps"),
+        requiredField(fields, "makerFeeBps", "makerFeeBps"),
         "makerFeeBps",
       ),
       normalizeOrderbookFeeBps(
-        requiredField(fields, "takerFeeBps", "takerFeeBps", "taker_fee_bps"),
+        requiredField(fields, "takerFeeBps", "takerFeeBps"),
         "takerFeeBps",
       ),
       toBuffer(privateKey),
@@ -522,11 +544,16 @@ export function buildSignedOrderbookOrderCancel(fields, privateKey) {
   if (!isPlainObject(fields)) {
     throw new TypeError("fields must be an object");
   }
+  rejectRetiredOrderbookFields(fields, ["order_id", "owner_account"]);
+  const reason = requireCanonicalOrderbookSelector(
+    requiredField(fields, "reason", "reason"),
+    ORDERBOOK_CANCEL_REASON_SET,
+    "reason",
+  );
   const ownerAccount = orderbookOwnerAccountField(
     fields,
     "ownerAccount",
     "ownerAccount",
-    "owner_account",
   );
   const binding = requireSorafsNativeFunction(
     "sorafsBuildSignedOrderbookOrderCancel",
@@ -534,9 +561,9 @@ export function buildSignedOrderbookOrderCancel(fields, privateKey) {
   );
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookOrderCancel(
-      fixedBytesField(fields, "orderId", "orderId", "order_id"),
+      fixedBytesField(fields, "orderId", "orderId"),
       ownerAccount,
-      String(requiredField(fields, "reason", "reason")),
+      reason,
       decimalIntegerString(
         requiredField(fields, "nonce", "nonce"),
         "nonce",
@@ -559,6 +586,17 @@ export function buildSignedOrderbookSettlementReceipt(fields, privateKey) {
     throw new TypeError("fields must be an object");
   }
   rejectRetiredOrderbookFields(fields, [
+    "receipt_id",
+    "channel_id",
+    "trade_id",
+    "range_start",
+    "range_end",
+    "chunk_hash",
+    "bytes_delivered",
+    "xor_debited",
+    "provider_credit",
+    "fee_amount",
+    "issued_at_unix",
     "xorDebitedMicroXor",
     "xor_debited_micro_xor",
     "xorDebitedMicro",
@@ -572,39 +610,39 @@ export function buildSignedOrderbookSettlementReceipt(fields, privateKey) {
     "feeAmountMicro",
     "fee_amount_micro",
   ]);
-  const receiptId = fixedBytesField(fields, "receiptId", "receiptId", "receipt_id");
-  const channelId = fixedBytesField(fields, "channelId", "channelId", "channel_id");
-  const tradeId = fixedBytesField(fields, "tradeId", "tradeId", "trade_id");
+  const receiptId = fixedBytesField(fields, "receiptId", "receiptId");
+  const channelId = fixedBytesField(fields, "channelId", "channelId");
+  const tradeId = fixedBytesField(fields, "tradeId", "tradeId");
   const rangeStart = decimalIntegerString(
-    requiredField(fields, "rangeStart", "rangeStart", "range_start"),
+    requiredField(fields, "rangeStart", "rangeStart"),
     "rangeStart",
   );
   const rangeEnd = decimalIntegerString(
-    requiredField(fields, "rangeEnd", "rangeEnd", "range_end"),
+    requiredField(fields, "rangeEnd", "rangeEnd"),
     "rangeEnd",
     { positive: true },
   );
-  const chunkHash = fixedBytesField(fields, "chunkHash", "chunkHash", "chunk_hash");
+  const chunkHash = fixedBytesField(fields, "chunkHash", "chunkHash");
   const bytesDelivered = decimalIntegerString(
-    requiredField(fields, "bytesDelivered", "bytesDelivered", "bytes_delivered"),
+    requiredField(fields, "bytesDelivered", "bytesDelivered"),
     "bytesDelivered",
     { positive: true },
   );
   const xorDebited = canonicalXorQuantityString(
-    requiredUniqueField(fields, "xorDebited", "xorDebited", "xor_debited"),
+    requiredField(fields, "xorDebited", "xorDebited"),
     "xorDebited",
     { positive: true },
   );
   const providerCredit = canonicalXorQuantityString(
-    requiredUniqueField(fields, "providerCredit", "providerCredit", "provider_credit"),
+    requiredField(fields, "providerCredit", "providerCredit"),
     "providerCredit",
   );
   const feeAmount = canonicalXorQuantityString(
-    requiredUniqueField(fields, "feeAmount", "feeAmount", "fee_amount"),
+    requiredField(fields, "feeAmount", "feeAmount"),
     "feeAmount",
   );
   const issuedAtUnix = decimalIntegerString(
-    requiredField(fields, "issuedAtUnix", "issuedAtUnix", "issued_at_unix"),
+    requiredField(fields, "issuedAtUnix", "issuedAtUnix"),
     "issuedAtUnix",
     { positive: true },
   );
@@ -1329,7 +1367,7 @@ function canonicalXorQuantityString(value, label, { positive = false } = {}) {
 function rejectRetiredOrderbookFields(fields, names) {
   for (const name of names) {
     if (Object.prototype.hasOwnProperty.call(fields, name)) {
-      throw new TypeError(`${name} is retired; use unit-neutral XOR quantity fields`);
+      throw new TypeError(`${name} is retired from the canonical V1 SDK surface`);
     }
   }
 }
@@ -1340,14 +1378,6 @@ function requiredField(object, label, ...names) {
     throw new TypeError(`${label} is required`);
   }
   return value;
-}
-
-function requiredUniqueField(object, label, ...names) {
-  const present = names.filter((name) => Object.prototype.hasOwnProperty.call(object, name));
-  if (present.length > 1) {
-    throw new TypeError(`${label} must be supplied exactly once`);
-  }
-  return requiredField(object, label, ...names);
 }
 
 function optionalField(object, ...names) {

@@ -3152,7 +3152,7 @@ mod tests {
         query::store::LiveQueryStore,
         sns::{
             SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
-            seed_default_namespace_policies,
+            seed_default_namespace_policies, sync_default_namespace_policy_payment_asset,
         },
         state::{State, World},
     };
@@ -3692,6 +3692,13 @@ mod tests {
             ],
         );
         seed_default_namespace_policies(&mut world);
+        assert!(
+            sync_default_namespace_policy_payment_asset(
+                &mut world,
+                &payment_asset_definition_id.to_string()
+            ),
+            "fixture SNS policies must use the configured Nexus fee asset"
+        );
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
@@ -6461,40 +6468,22 @@ mod tests {
 
         let instructions: Vec<InstructionBox> = Vec::new();
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
-        execute_propose(&mut state_transaction, &signer1_id, &propose)
-            .expect("state repair should allow signatory proposal");
-
-        let repaired =
-            load_multisig_account_state(&state_transaction, &multisig_id).expect("repaired state");
-        assert_eq!(
-            repaired.home_domain,
-            Some(domain_id.clone()),
-            "repair should infer the home domain from linked domains"
-        );
+        let error = execute_propose(&mut state_transaction, &signer1_id, &propose)
+            .expect_err("controller data must not reconstruct missing authenticated state");
+        assert!(matches!(
+            error,
+            ValidationFail::QueryFailed(QueryExecutionFail::NotFound)
+        ));
         assert!(
-            repaired
-                .spec
-                .signatories
-                .keys()
-                .any(|account| account.subject_id() == signer1_id.subject_id()),
-            "repaired spec should include signer1"
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&multisig_account_state_key(&multisig_id))
+                .is_none(),
+            "failed reconstruction must leave native multisig state absent"
         );
-        assert!(
-            repaired
-                .spec
-                .signatories
-                .keys()
-                .any(|account| account.subject_id() == signer2_id.subject_id()),
-            "repaired spec should include signer2"
-        );
-        assert!(
-            !load_signatory_memberships(&state_transaction, &signer1_id).is_empty(),
-            "repair should repopulate the signatory index for signer1"
-        );
-        assert!(
-            !load_signatory_memberships(&state_transaction, &signer2_id).is_empty(),
-            "repair should repopulate the signatory index for signer2"
-        );
+        assert!(load_signatory_memberships(&state_transaction, &signer1_id).is_empty());
+        assert!(load_signatory_memberships(&state_transaction, &signer2_id).is_empty());
     }
 
     #[test]
@@ -7137,6 +7126,15 @@ seiyaku TriggerDispatch {
 
     #[test]
     fn multisig_approve_executes_staged_mint_like_trigger_with_json_args() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            transaction::Executable,
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
@@ -7194,6 +7192,7 @@ seiyaku TriggerDispatch {
         let src = format!(
             r#"
             seiyaku StagedMintRequest {{
+              // Runtime trigger authority: {multisig_id}
               error enum StagedMintError {{
                 DuplicateRequest = 1,
                 UnsupportedAction = 2,
@@ -7201,11 +7200,6 @@ seiyaku TriggerDispatch {
                 DestinationAccountMismatch = 4,
                 InvalidAmount = 5,
                 MissingOrInvalidField = 6,
-              }}
-
-              trigger staged_mint_like -> run {{
-                on execute trigger "staged_mint_like";
-                authority "{multisig_id}";
               }}
 
               state StateMap<Name, bytes> Requests_requested_by_actor;
@@ -7253,7 +7247,7 @@ seiyaku TriggerDispatch {
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(&src)
             .expect("compile staged mint-like contract");
-        let (_bytecode, contract_address) = install_trigger_contract(
+        let (bytecode, contract_address) = install_trigger_contract(
             &mut state_transaction,
             &signer1_id,
             &signer1,
@@ -7262,6 +7256,30 @@ seiyaku TriggerDispatch {
             6_455,
         );
         let trigger_id: iroha_data_model::trigger::TriggerId = "staged_mint_like".parse().unwrap();
+        let mut trigger_metadata = Metadata::default();
+        trigger_metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static metadata key"),
+            Json::new("run"),
+        );
+        trigger_metadata.insert(
+            Name::from_str("contract_address").expect("static metadata key"),
+            Json::new(contract_address.to_string()),
+        );
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Indefinitely,
+                multisig_id.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(multisig_id.clone()),
+            )
+            .with_metadata(trigger_metadata),
+        );
+        Register::trigger(trigger)
+            .execute(&multisig_id, &mut state_transaction)
+            .expect("register event-argument-aware staged mint trigger");
 
         let args_json = format!(
             r#"{{
@@ -7272,8 +7290,8 @@ seiyaku TriggerDispatch {
                     "to_account_id":"{multisig_id}",
                     "amount":"111",
                     "requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d",
-                    "created_at_ms":"1779225455574",
-                    "expires_at_ms":"1779311855574"
+                    "created_at_ms":1779225455574,
+                    "expires_at_ms":1779311855574
                 }}
             }}"#,
             multisig_id = multisig_id,

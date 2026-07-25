@@ -18,6 +18,7 @@ import {
   buildSorafsOrderbookEventsWebSocketUrl,
   statusLivenessElapsedMs,
   isStatusQueueStalled,
+  __sumeragiNativeAmxTestHelpers,
 } from "../src/toriiClient.js";
 import {
   resolveToriiClientConfig,
@@ -63,6 +64,19 @@ const toriiFixtures = JSON.parse(
 const validationFixtures = JSON.parse(
   readFileSync(new URL("./fixtures/validation_errors.json", import.meta.url), "utf8"),
 );
+const nativeAmxGroupedFixture = JSON.parse(
+  readFileSync(
+    new URL(
+      "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+const nativeAmxValidatorSet = Object.freeze([
+  ...nativeAmxGroupedFixture.golden.receipt_group.native_amx_receipts[0]
+    .legs[0].prepare_qc.validator_set,
+]);
 const txStatusErrorMessageContract = JSON.parse(
   readFileSync(
     new URL("../../../fixtures/sdk/tx_status_error_message_contract.json", import.meta.url),
@@ -1063,6 +1077,54 @@ function createNexusFeeReceipt(overrides = {}) {
   };
 }
 
+function sealNativeAmxLegFixture(leg) {
+  const descriptor = leg.participant_proposal.descriptor;
+  descriptor.validator_set_hash =
+    __sumeragiNativeAmxTestHelpers.computeValidatorSetHash(
+      descriptor.validator_set,
+    );
+  descriptor.descriptor_hash =
+    __sumeragiNativeAmxTestHelpers.computeDescriptorHash(descriptor);
+  leg.participant_proposal.proposal_hash =
+    __sumeragiNativeAmxTestHelpers.computeProposalHash(descriptor);
+  leg.participant_settlement_hash =
+    __sumeragiNativeAmxTestHelpers.computeParticipantSettlementHash(
+      leg.participant_settlement,
+    );
+  for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+    qc.validator_set_hash = descriptor.validator_set_hash;
+    qc.body.participant_validator_set_hash =
+      descriptor.validator_set_hash;
+    qc.body.participant_proposal_hash =
+      leg.participant_proposal.proposal_hash;
+    qc.body.participant_settlement_commitment =
+      leg.participant_settlement_hash;
+  }
+  return leg;
+}
+
+function sealNativeAmxReceiptFixture(receipt) {
+  for (const leg of receipt.legs) {
+    sealNativeAmxLegFixture(leg);
+  }
+  const sameRouteLeg = receipt.legs.find(
+    (leg) =>
+      leg.lane_id === receipt.lane_id &&
+      leg.dataspace_id === receipt.dataspace_id,
+  );
+  if (sameRouteLeg !== undefined) {
+    receipt.coordinator_proposal_hash =
+      sameRouteLeg.participant_proposal.proposal_hash;
+    for (const leg of receipt.legs) {
+      for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+        qc.body.coordinator_proposal_hash =
+          receipt.coordinator_proposal_hash;
+      }
+    }
+  }
+  return receipt;
+}
+
 function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
   const transactionHashes = [
     fakeSumeragiHash(0x61),
@@ -1113,13 +1175,13 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
       body,
       validator_set_hash_version: 1,
       validator_set_hash: fakeSumeragiHash(0x66),
-      validator_set: ["validator-a", "validator-b", "validator-c", "validator-d"],
+      validator_set: [...nativeAmxValidatorSet],
       validator_set_pops: Array.from({ length: 4 }, () => Array(96).fill(1)),
       signers_bitmap: [0x07],
       bls_aggregate_signature: Array(96).fill(2),
     };
   };
-  return {
+  return sealNativeAmxReceiptFixture({
     version: 2,
     source_id: sourceId,
     chain_id_hash: fakeSumeragiHash(0x63),
@@ -1152,7 +1214,7 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
             accepted_transaction_hashes: transactionHashes,
             validator_set_hash_version: 1,
             validator_set_hash: fakeSumeragiHash(0x66),
-            validator_set: ["validator-a", "validator-b", "validator-c", "validator-d"],
+            validator_set: [...nativeAmxValidatorSet],
             validator_count: 4,
             min_quorum: 3,
             qc_mode_tag: "permissioned:native-amx-v2",
@@ -1198,7 +1260,7 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
       },
     ],
     ...overrides,
-  };
+  });
 }
 
 function createNativeAmxReceiptGroup(firstOverrides = {}) {
@@ -11401,6 +11463,35 @@ test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt iden
   const maximum = "__NATIVE_RECEIPT_U64_MAX__";
   const coordinatorDataspace = "__NATIVE_COORDINATOR_DATASPACE__";
   const participantDataspace = "__NATIVE_PARTICIPANT_DATASPACE__";
+  const replacements = [
+    [authority, "9223372036854775808"],
+    [coordinatorHeight, "9223372036854775809"],
+    [participantPredecessor, "9223372036854775810"],
+    [participantHeight, "9223372036854775811"],
+    [maximum, "18446744073709551615"],
+    [coordinatorDataspace, "9223372036854775812"],
+    [participantDataspace, "9223372036854775813"],
+  ];
+  const replacementValues = new Map(
+    replacements.map(([placeholder, token]) => [placeholder, BigInt(token)]),
+  );
+  const materializeU64Placeholders = (value) => {
+    if (typeof value === "string" && replacementValues.has(value)) {
+      return replacementValues.get(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(materializeU64Placeholders);
+    }
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, child]) => [
+          key,
+          materializeU64Placeholders(child),
+        ]),
+      );
+    }
+    return value;
+  };
   const nativeReceipts = [
     createNativeAmxReceiptFixture({}, 0),
     createNativeAmxReceiptFixture({}, 1),
@@ -11436,6 +11527,24 @@ test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt iden
         qc.body.coordinator_lane_block_view = maximum;
       }
     }
+    const sealed = sealNativeAmxReceiptFixture(
+      materializeU64Placeholders(receipt),
+    );
+    for (const [index, leg] of receipt.legs.entries()) {
+      const sealedLeg = sealed.legs[index];
+      leg.participant_proposal.descriptor.descriptor_hash =
+        sealedLeg.participant_proposal.descriptor.descriptor_hash;
+      leg.participant_proposal.proposal_hash =
+        sealedLeg.participant_proposal.proposal_hash;
+      leg.participant_settlement_hash =
+        sealedLeg.participant_settlement_hash;
+      for (const phase of ["prepare_qc", "commit_qc"]) {
+        leg[phase].body.participant_proposal_hash =
+          sealedLeg[phase].body.participant_proposal_hash;
+        leg[phase].body.participant_settlement_commitment =
+          sealedLeg[phase].body.participant_settlement_commitment;
+      }
+    }
   }
   const settlement = createLaneSettlementCommitment({
     block_height: coordinatorHeight,
@@ -11447,15 +11556,6 @@ test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt iden
     lane_settlement_commitments: [settlement],
   });
   let text = JSON.stringify(payload);
-  const replacements = [
-    [authority, "9223372036854775808"],
-    [coordinatorHeight, "9223372036854775809"],
-    [participantPredecessor, "9223372036854775810"],
-    [participantHeight, "9223372036854775811"],
-    [maximum, "18446744073709551615"],
-    [coordinatorDataspace, "9223372036854775812"],
-    [participantDataspace, "9223372036854775813"],
-  ];
   for (const [placeholder, token] of replacements) {
     text = replaceJsonStringPlaceholder(text, placeholder, token);
   }
@@ -12302,6 +12402,7 @@ test("getSumeragiDiagnosticsTyped accepts the canonical first participant-lane b
     delete leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash;
     leg.participant_proposal.descriptor.lane_block_height = 1;
     leg.participant_settlement.block_height = 1;
+    sealNativeAmxReceiptFixture(native);
   }
   const status = await sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
     lane_settlement_commitments: [createLaneSettlementCommitment({
@@ -12328,6 +12429,7 @@ test("getSumeragiDiagnosticsTyped accepts mixed-role proposals without the curre
     fakeSumeragiHash(0x74),
   ];
   leg.participant_proposal.descriptor.accepted_candidate_indices = [1];
+  sealNativeAmxReceiptFixture(native);
   const status = await sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
     lane_settlement_commitments: [createLaneSettlementCommitment({
       native_amx_receipts: nativeGroup,
@@ -12368,12 +12470,8 @@ test("getSumeragiDiagnosticsTyped keeps global and coordinator views independent
 
 test("getSumeragiDiagnosticsTyped rejects unordered native QC validators", async () => {
   const native = createNativeAmxReceiptFixture();
-  native.legs[0].prepare_qc.validator_set.splice(
-    0,
-    2,
-    "validator-b",
-    "validator-a",
-  );
+  const validators = native.legs[0].prepare_qc.validator_set;
+  [validators[0], validators[1]] = [validators[1], validators[0]];
   await assert.rejects(
     () => sumeragiDiagnosticsClientForPayload(
       createSumeragiDiagnosticsPayload({
@@ -12382,7 +12480,7 @@ test("getSumeragiDiagnosticsTyped rejects unordered native QC validators", async
         ],
       }),
     ).getSumeragiDiagnosticsTyped(),
-    /strictly ordered by validator id/,
+    /strictly ordered by canonical validator id/,
   );
 });
 

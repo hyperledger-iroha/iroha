@@ -205,6 +205,7 @@ public final class SorafsReferenceValidatorsTests {
           "1",
           1L,
           oversized,
+          new byte[0],
           1L,
           7L,
           0,
@@ -239,6 +240,7 @@ public final class SorafsReferenceValidatorsTests {
           "42",
           7L,
           new byte[] {1},
+          new byte[0],
           123L,
           1L,
           0,
@@ -601,6 +603,7 @@ public final class SorafsReferenceValidatorsTests {
             "1",
             1L,
             maximumOwner,
+            new byte[0],
             1_800_000_000L,
             9L,
             0,
@@ -631,6 +634,7 @@ public final class SorafsReferenceValidatorsTests {
             MAX_SCALED_XOR,
             64L,
             owner,
+            new byte[0],
             1_800_000_000L,
             7L,
             10,
@@ -641,6 +645,64 @@ public final class SorafsReferenceValidatorsTests {
             SorafsOrderbookPayloadKind.ORDER_REQUEST, signed, null, 123L);
     assert outcome.contains("\"status\": \"Ok\"") : outcome;
 
+    final byte[] ask =
+        SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            SorafsOrderbookSide.ASK,
+            SorafsOrderbookTier.HOT,
+            "1.25",
+            4L,
+            owner,
+            repeated(0x72),
+            1_800_000_000L,
+            8L,
+            10,
+            15,
+            repeatedKey(0xB7));
+    final String askOutcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST, ask, null, 123L);
+    assert askOutcome.contains("\"status\": \"Ok\"") : askOutcome;
+
+    boolean bidProviderThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          SorafsOrderbookSide.BID,
+          SorafsOrderbookTier.HOT,
+          "1",
+          1L,
+          owner,
+          repeated(0x72),
+          1_800_000_000L,
+          17L,
+          0,
+          0,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException error) {
+      bidProviderThrew =
+          error.getMessage() != null && error.getMessage().contains("absent or empty");
+    }
+    assert bidProviderThrew : "bid provider binding must be rejected";
+
+    boolean askProviderThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          SorafsOrderbookSide.ASK,
+          SorafsOrderbookTier.HOT,
+          "1",
+          1L,
+          owner,
+          new byte[0],
+          1_800_000_000L,
+          17L,
+          0,
+          0,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException error) {
+      askProviderThrew =
+          error.getMessage() != null && error.getMessage().contains("providerId");
+    }
+    assert askProviderThrew : "ask without exact provider binding must be rejected";
+
     boolean threw = false;
     try {
       SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
@@ -650,6 +712,7 @@ public final class SorafsReferenceValidatorsTests {
           "0.000000001",
           64L,
           owner,
+          new byte[0],
           1_800_000_000L,
           7L,
           10,

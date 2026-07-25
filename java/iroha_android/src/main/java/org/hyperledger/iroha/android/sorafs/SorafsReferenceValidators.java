@@ -264,6 +264,7 @@ public final class SorafsReferenceValidators {
       final String pricePerGib,
       final long quantityGib,
       final byte[] ownerAccount,
+      final byte[] providerId,
       final long expiryUnix,
       final long nonce,
       final int makerFeeBps,
@@ -276,6 +277,7 @@ public final class SorafsReferenceValidators {
         quantityGib,
         quantityGib,
         ownerAccount,
+        providerId,
         expiryUnix,
         nonce,
         makerFeeBps,
@@ -290,6 +292,7 @@ public final class SorafsReferenceValidators {
       final long quantityGib,
       final long remainingGib,
       final byte[] ownerAccount,
+      final byte[] providerId,
       final long expiryUnix,
       final long nonce,
       final int makerFeeBps,
@@ -303,6 +306,7 @@ public final class SorafsReferenceValidators {
         quantityGib,
         remainingGib,
         ownerAccount,
+        providerId,
         expiryUnix,
         nonce,
         makerFeeBps,
@@ -317,6 +321,7 @@ public final class SorafsReferenceValidators {
       final String pricePerGib,
       final long quantityGib,
       final byte[] ownerAccount,
+      final byte[] providerId,
       final long expiryUnix,
       final long nonce,
       final int makerFeeBps,
@@ -330,6 +335,7 @@ public final class SorafsReferenceValidators {
         quantityGib,
         quantityGib,
         ownerAccount,
+        providerId,
         expiryUnix,
         nonce,
         makerFeeBps,
@@ -345,6 +351,7 @@ public final class SorafsReferenceValidators {
       final long quantityGib,
       final long remainingGib,
       final byte[] ownerAccount,
+      final byte[] providerId,
       final long expiryUnix,
       final long nonce,
       final int makerFeeBps,
@@ -358,6 +365,7 @@ public final class SorafsReferenceValidators {
     requirePositive(quantityGib, "quantityGib");
     requirePositive(remainingGib, "remainingGib");
     final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
+    final byte[] providerBytes = requireProviderId(selectedSide, providerId);
     requirePositive(expiryUnix, "expiryUnix");
     requirePositive(nonce, "nonce");
     final byte[] canonicalOrderId = deriveOrderbookOrderId(ownerBytes, nonce);
@@ -379,6 +387,7 @@ public final class SorafsReferenceValidators {
               quantityGib,
               remainingGib,
               ownerBytes,
+              providerBytes,
               expiryUnix,
               nonce,
               makerFee,
@@ -675,6 +684,29 @@ public final class SorafsReferenceValidators {
     return payload.clone();
   }
 
+  private static byte[] requireProviderId(
+      final SorafsOrderbookSide side, final byte[] providerId) {
+    if (side == SorafsOrderbookSide.BID) {
+      if (providerId != null && providerId.length != 0) {
+        throw new IllegalArgumentException(
+            "providerId must be absent or empty for bid orders");
+      }
+      return new byte[0];
+    }
+    final byte[] provider = requireFixed32(providerId, "providerId");
+    boolean nonZero = false;
+    for (final byte value : provider) {
+      if (value != 0) {
+        nonZero = true;
+        break;
+      }
+    }
+    if (!nonZero) {
+      throw new IllegalArgumentException("providerId must not be all zero");
+    }
+    return provider;
+  }
+
   private static byte[] requireNonEmptyBytes(final byte[] payload, final String field) {
     if (payload == null) {
       throw new IllegalArgumentException(field + " must be provided");
@@ -827,6 +859,7 @@ public final class SorafsReferenceValidators {
       long quantityGib,
       long remainingGib,
       byte[] ownerAccount,
+      byte[] providerId,
       long expiryUnix,
       long nonce,
       int makerFeeBps,

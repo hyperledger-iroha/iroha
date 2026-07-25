@@ -541,6 +541,7 @@ pub mod genesis_instructions_json {
             ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
             MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
             Transfer, TransferBox,
+            governance::RegisterCitizen,
             nexus::{
                 ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
                 EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
@@ -656,6 +657,7 @@ pub mod genesis_instructions_json {
                                 try_decode_set_asset_definition_alias(inner.clone())?
                             }
                             "Custom" => try_decode_custom(inner.clone())?,
+                            "RegisterCitizen" => try_decode_register_citizen(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
                                 try_decode_register_public_lane_validator(inner.clone())?
                             }
@@ -999,6 +1001,24 @@ pub mod genesis_instructions_json {
         Ok(Some(InstructionBox::from(CustomInstruction::new(
             iroha_primitives::json::Json::new(payload),
         ))))
+    }
+
+    fn try_decode_register_citizen(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = object_fields(inner, "RegisterCitizen")?;
+        let owner = parse_account_id(&take_string(&mut fields, "owner")?, "RegisterCitizen owner")?;
+        let amount = Quantity::try_from_numeric(parse_numeric(
+            fields
+                .remove("amount")
+                .ok_or_else(|| json::Error::missing_field("amount"))?,
+        )?)
+        .map_err(|error| {
+            json::Error::Message(format!("invalid RegisterCitizen amount: {error}"))
+        })?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(RegisterCitizen {
+            owner,
+            amount,
+        })))
     }
 
     fn try_decode_register_public_lane_validator(
@@ -1473,6 +1493,21 @@ pub mod genesis_instructions_json {
             return Some(Value::Object(outer));
         }
 
+        if let Some(citizen) = instruction.as_any().downcast_ref::<RegisterCitizen>() {
+            let mut fields = Map::new();
+            fields.insert(
+                "owner".to_string(),
+                Value::String(account_literal(&citizen.owner)?),
+            );
+            fields.insert(
+                "amount".to_string(),
+                Value::String(citizen.amount.to_string()),
+            );
+            let mut outer = Map::new();
+            outer.insert("RegisterCitizen".to_string(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
@@ -1680,6 +1715,7 @@ pub mod genesis_instructions_json {
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
+                governance::RegisterCitizen,
                 nexus::{
                     ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
                     EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
@@ -1820,6 +1856,33 @@ pub mod genesis_instructions_json {
                     .as_any()
                     .downcast_ref::<ActivateFeeSponsorProgramRevision>()
                     .is_some()
+            );
+        }
+
+        #[test]
+        fn register_citizen_uses_structured_genesis_json() {
+            let instruction = InstructionBox::from(RegisterCitizen {
+                owner: ALICE_ID.clone(),
+                amount: Quantity::from(10_000_u64),
+            });
+            let value = instructions_to_value(std::slice::from_ref(&instruction));
+            let array = value.as_array().expect("instruction array");
+            let fields = array[0]
+                .as_object()
+                .and_then(|outer| outer.get("RegisterCitizen"))
+                .and_then(Value::as_object)
+                .expect("structured RegisterCitizen");
+            assert_eq!(
+                fields.get("owner").and_then(Value::as_str),
+                ALICE_ID.canonical_i105().ok().as_deref()
+            );
+            assert_eq!(fields.get("amount").and_then(Value::as_str), Some("10000"));
+
+            let decoded = from_value(&value).expect("decode structured RegisterCitizen");
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(
+                decoded[0].as_any().downcast_ref::<RegisterCitizen>(),
+                instruction.as_any().downcast_ref::<RegisterCitizen>()
             );
         }
 
@@ -2191,13 +2254,12 @@ pub mod genesis_instructions_json {
             );
         }
 
-        #[test]
-        fn defaults_genesis_manifest_parses_structured_instructions() {
+        fn assert_genesis_manifest_parses_structured_instructions(relative_path: &str) {
             super::super::init_instruction_registry();
-            let path =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
-            let raw = std::fs::read_to_string(&path).expect("read defaults/genesis.json");
-            let value: Value = norito::json::from_str(&raw).expect("parse defaults genesis JSON");
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let value: Value = norito::json::from_str(&raw).expect("parse genesis JSON");
             let chain_discriminant = value
                 .as_object()
                 .and_then(|obj| obj.get("chain_discriminant"))
@@ -2233,7 +2295,19 @@ pub mod genesis_instructions_json {
                 }
             }
             super::RawGenesisTransaction::from_path(&path)
-                .expect("defaults genesis manifest should deserialize");
+                .unwrap_or_else(|error| panic!("{} should deserialize: {error}", path.display()));
+        }
+
+        #[test]
+        fn defaults_genesis_manifest_parses_structured_instructions() {
+            assert_genesis_manifest_parses_structured_instructions("../../defaults/genesis.json");
+        }
+
+        #[test]
+        fn taira_genesis_manifest_parses_structured_instructions() {
+            assert_genesis_manifest_parses_structured_instructions(
+                "../../configs/soranexus/taira/genesis.json",
+            );
         }
 
         #[test]

@@ -500,8 +500,10 @@ pub struct ValidationFeePayoutLifecycleProposal {
 )]
 pub struct AtWindow {
     /// First block in the enactment window (inclusive).
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub lower: u64,
     /// Last block in the enactment window (inclusive).
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub upper: u64,
 }
 
@@ -517,20 +519,27 @@ pub struct GovernanceFinalizationEvidence {
     /// Referendum identifier, equal to the proposal identifier for native governance.
     pub referendum_id: [u8; 32],
     /// Block height at which the referendum result was finalized.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub finalized_at_height: u64,
     /// Voting mode whose tally was finalized.
     pub mode: VotingMode,
     /// Final approve weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub approve: u128,
     /// Final reject weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub reject: u128,
     /// Final abstain weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub abstain: u128,
     /// Minimum turnout applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub min_turnout: u128,
     /// Approval-threshold numerator applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub approval_threshold_numerator: u64,
     /// Approval-threshold denominator applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub approval_threshold_denominator: u64,
     /// Final deterministic decision.
     pub approved: bool,

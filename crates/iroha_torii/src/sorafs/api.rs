@@ -10,7 +10,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
     sync::{
@@ -49,7 +49,7 @@ use iroha_core::{
     smartcontracts::{
         ValidSingularQuery, isi::sorafs::manifest_pin_policy_constraints_from_config,
     },
-    state::{StateReadOnly, WorldReadOnly},
+    state::{StateReadOnly, StateReadOnlyWithTransactions, TransactionsReadOnly, WorldReadOnly},
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, PublicKey, Signature,
@@ -75,8 +75,10 @@ use iroha_data_model::{
         Instruction, InstructionBox,
         escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
         sorafs::{
+            AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             ApplySorafsRepairTaskAction, CancelSorafsOrderbookOrder, FinalizeSorafsModerationCase,
-            RaiseSorafsModerationChallenge, RecordSorafsOrderbookSettlementReceipt,
+            FinalizeSorafsModerationSortition, RaiseSorafsModerationChallenge,
+            RecordSorafsOrderbookSettlementReceipt, RegisterSorafsModerationJurorEligibility,
             ResolveSorafsModerationChallenge, SorafsRepairClaimV1, SorafsRepairRenewV1,
             SorafsRepairTaskActionV1, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
@@ -102,12 +104,9 @@ use iroha_data_model::{
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_COMMITTEE_MAX_RESULTS_V1,
             ModerationCommitteeAggregateV1, ModerationReproManifestV1,
-            ModerationSignedScreeningResultV1, SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
-            SoraFsModerationBallotCommitV1, SoraFsModerationBallotContextV1,
-            SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
+            ModerationSignedScreeningResultV1,
         },
         moderation_ledger::{
-            ModerationAppealIntakeV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
             REPAIR_QUERY_MAX_ITEMS_V1, RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
             RepairFinalizedEventPageV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
@@ -138,7 +137,7 @@ use iroha_data_model::{
             ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionBuilder},
+    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -198,18 +197,12 @@ use sorafs_manifest::{
 use sorafs_node::local_orderbook_provider_id_for_owner_account;
 use sorafs_node::moderation_orchestrator::{
     ModerationNativeActionV1, ModerationOperationStatusV1, ModerationOrchestratorError,
-    ModerationSubmitOutcomeV1, moderation_request_binding_digest_v1,
 };
 use sorafs_node::{
-    EconomicsRuntimeError, ModerationAppealDeposit, ModerationAuthenticatedScreeningAdmissionError,
+    EconomicsRuntimeError, ModerationAuthenticatedScreeningAdmissionError,
     ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
-    ModerationAuthenticatedScreeningRequestV1, ModerationBallotAnnouncement,
-    ModerationBallotChallengeDecision, ModerationBallotChallengeInput,
-    ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
-    ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
-    ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
-    ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
-    ModerationCorpusRegistryRecord, ModerationEvidenceViewerAccessEventRecord,
+    ModerationAuthenticatedScreeningRequestV1, ModerationCorpusRegistryRecord,
+    ModerationEvidenceViewerAccessEventRecord,
     ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
     ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
     ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerAuditScheduleOutcome,
@@ -232,7 +225,7 @@ use sorafs_node::{
     ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
     capacity::CapacityUsageSnapshot,
-    gar_enforcement_receipt_source_entry, local_moderation_panel_roster_hash,
+    gar_enforcement_receipt_source_entry,
     metering::{FeeProjection, MeteringSnapshot},
     moderation_ballot_governance_event_source_entry,
     store::{
@@ -397,7 +390,6 @@ const MODERATION_ROUTE_QUARANTINE_OPERATOR_PANEL_SUFFIX: &str = "operator-panel"
 const MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX: &str = "review";
 const MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX: &str = "release";
 const MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX: &str = "appeal-handoff";
-const MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX: &str = "appeal-ballot";
 const SORAFS_MODERATION_OPERATOR_ROLE: &str = "sorafs_moderation_operator";
 static SORAFS_MODERATION_OPERATOR_ROLE_ID: LazyLock<RoleId> = LazyLock::new(|| {
     SORAFS_MODERATION_OPERATOR_ROLE
@@ -851,9 +843,15 @@ fn current_sorafs_repair_finalized_cursor(
     state: &SharedAppState,
 ) -> Option<RepairFinalizedCursorV1> {
     let view = state.state.query_view();
-    u64::try_from(view.block_hashes.len())
+    sorafs_repair_finalized_cursor_from_view(&view)
+}
+
+fn sorafs_repair_finalized_cursor_from_view(
+    view: &impl StateReadOnly,
+) -> Option<RepairFinalizedCursorV1> {
+    u64::try_from(view.block_hashes().len())
         .ok()
-        .zip(view.block_hashes.last())
+        .zip(view.block_hashes().last())
         .map(|(height, hash)| RepairFinalizedCursorV1 {
             height,
             block_hash: *hash.as_ref(),
@@ -2549,156 +2547,6 @@ pub struct ModerationQuarantineAppealHandoffRequestDto {
     pub expires_at_ms: Option<u64>,
     /// Exact client-supplied idempotency key used to derive the asset lock.
     pub idempotency_key: String,
-}
-
-#[cfg(feature = "app_api")]
-#[cfg(test)]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// Retired pre-V1 local quarantine-ballot fixture retained only for negative tests.
-pub struct ModerationQuarantineAppealBallotRequestDto {
-    /// Confirmed runtime asset-lock deposit to bind to the ballot announcement.
-    pub deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
-    /// Optional moderation or appeal case identifier; defaults to the confirmed deposit case id.
-    pub case_id: Option<String>,
-    /// Optional moderation round identifier; defaults to the confirmed deposit round id.
-    pub round_id: Option<String>,
-    /// Optional digest of the evidence bundle reviewed by the panel (hex, 32 bytes).
-    pub evidence_bundle_digest_hex: Option<String>,
-    /// Optional appeal pricing/settlement config version; defaults to the active baseline.
-    pub appeal_finance_config_version: Option<String>,
-    /// Optional panel roster hash (hex, 32 bytes); when omitted Torii derives it from jurors+quorum.
-    pub panel_roster_hash_hex: Option<String>,
-    /// Optional moderation policy reference; defaults to the quarantine-scoped SoraFS policy URI.
-    pub policy_reference: Option<String>,
-    /// Optional transparency or governance DAG reference for the evidence bundle.
-    pub evidence_uri: Option<String>,
-    /// Ordered juror identifiers eligible to participate.
-    pub juror_ids: Vec<String>,
-    /// Minimum number of valid reveals required before tally finalization.
-    pub quorum: u16,
-    /// Optional UTC timestamp (milliseconds) when the ballot was announced; defaults to server time.
-    pub announced_at_unix_ms: Option<u64>,
-    /// Last UTC timestamp (milliseconds) at which commits are accepted.
-    pub commit_deadline_unix_ms: u64,
-    /// Last UTC timestamp (milliseconds) for the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
-    /// Last UTC timestamp (milliseconds) at which reveals are accepted.
-    pub reveal_deadline_unix_ms: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[cfg(test)]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// Retired pre-V1 local ballot-announcement fixture retained only for negative tests.
-pub struct ModerationBallotAnnounceRequestDto {
-    /// Moderation or appeal case identifier.
-    pub case_id: String,
-    /// Required runtime asset-lock deposit confirmation for this appeal round.
-    pub deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
-    /// Digest of the evidence bundle reviewed by the panel (hex, 32 bytes).
-    pub evidence_bundle_digest_hex: String,
-    /// Appeal pricing/settlement config version used by this case.
-    pub appeal_finance_config_version: String,
-    /// Optional panel roster hash (hex, 32 bytes); when omitted Torii derives it from jurors+quorum.
-    pub panel_roster_hash_hex: Option<String>,
-    /// Moderation policy reference reviewed by the panel.
-    pub policy_reference: String,
-    /// Optional transparency or governance DAG reference for the evidence bundle.
-    pub evidence_uri: Option<String>,
-    /// Moderation ballot round identifier.
-    pub round_id: String,
-    /// Ordered juror identifiers eligible to participate.
-    pub juror_ids: Vec<String>,
-    /// Minimum number of valid reveals required before tally finalization.
-    pub quorum: u16,
-    /// UTC timestamp (milliseconds) when the ballot was announced.
-    pub announced_at_unix_ms: u64,
-    /// Last UTC timestamp (milliseconds) at which commits are accepted.
-    pub commit_deadline_unix_ms: u64,
-    /// Last UTC timestamp (milliseconds) for the challenge buffer.
-    pub challenge_deadline_unix_ms: u64,
-    /// Last UTC timestamp (milliseconds) at which reveals are accepted.
-    pub reveal_deadline_unix_ms: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Canonical native appeal intake accepted by `/v1/sorafs/moderation/ballots`.
-pub struct ModerationNativeAppealRequestDto {
-    /// Exact canonical Norito `ModerationAppealIntakeV1` bytes.
-    pub intake_b64: String,
-    /// Confirmed native asset lock whose digest is bound by the intake.
-    pub deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// JSON payload accepted by `/v1/sorafs/moderation/ballots/commits`.
-pub struct ModerationBallotCommitRequestDto {
-    /// Base64-encoded Norito `SoraFsModerationBallotCommitV1` payload.
-    pub commit_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// JSON payload accepted by `/v1/sorafs/moderation/ballots/challenges`.
-pub struct ModerationBallotChallengeRequestDto {
-    /// Moderation or appeal case identifier.
-    pub case_id: String,
-    /// Moderation ballot round identifier.
-    pub round_id: String,
-    /// Challenge id unique within the ballot.
-    pub challenge_id: String,
-    /// Canonical account id raising the challenge.
-    pub challenger_id: String,
-    /// Challenge kind: roster_mismatch, duplicate_commit, payload_mismatch, juror_eligibility, evidence_mismatch, or other.
-    pub kind: String,
-    /// Target juror id for juror-scoped challenge kinds.
-    pub target_juror_id: Option<String>,
-    /// Hex-encoded 32-byte digest of the payload-free challenge evidence packet.
-    pub evidence_digest_hex: String,
-    /// Payload-free operator-readable reason label.
-    pub reason: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// JSON payload accepted by `/v1/sorafs/moderation/ballots/challenges/resolve`.
-pub struct ModerationBallotChallengeResolutionRequestDto {
-    /// Moderation or appeal case identifier.
-    pub case_id: String,
-    /// Moderation ballot round identifier.
-    pub round_id: String,
-    /// Challenge id being resolved.
-    pub challenge_id: String,
-    /// Canonical account id resolving the challenge.
-    pub resolved_by: String,
-    /// Resolution decision: rejected or accepted.
-    pub decision: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// JSON payload accepted by `/v1/sorafs/moderation/ballots/reveals`.
-pub struct ModerationBallotRevealRequestDto {
-    /// Base64-encoded Norito `SoraFsModerationBallotRevealV1` payload.
-    pub reveal_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// JSON payload accepted by `/v1/sorafs/moderation/ballots/tally`.
-pub struct ModerationBallotTallyRequestDto {
-    /// Moderation or appeal case identifier.
-    pub case_id: String,
-    /// Moderation ballot round identifier.
-    pub round_id: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -9331,501 +9179,350 @@ fn reset_orderbook_api_outcome_for_test(route: &'static str) {
 pub(crate) async fn handle_post_sorafs_moderation_ballot_announce(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
-    }
-    let verified =
-        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-        {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-    let request = match json::from_slice::<ModerationNativeAppealRequestDto>(body.as_ref()) {
-        Ok(request) => request,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode canonical SoraFS moderation appeal JSON: {err}"),
-            );
-        }
-    };
-    let intake = match moderation_native_appeal_intake_from_request(&request) {
-        Ok(intake) => intake,
-        Err(response) => return response,
-    };
-    if verified.account != intake.appellant {
-        return json_error(
-            StatusCode::FORBIDDEN,
-            "native SoraFS moderation appeal appellant must match the authenticated account",
-        );
-    }
-    if let Err(response) = ensure_native_moderation_deposit_confirmation_matches_intake(
-        &intake,
-        &request.deposit_confirmation,
-    ) {
-        return response;
-    }
-    let (confirmed_deposit, _) = match confirm_appeal_finance_deposit_record(
-        &state,
-        &request.deposit_confirmation,
-        &verified.account,
-    ) {
-        Ok(confirmation) => confirmation,
-        Err(response) => return response,
-    };
-    let deposit_lock_digest = *confirmed_deposit.escrow_id.as_hash().as_ref();
-    if intake.appeal_deposit_lock_digest != deposit_lock_digest {
-        return json_error(
-            StatusCode::PRECONDITION_FAILED,
-            "native SoraFS moderation appeal deposit digest does not match the confirmed asset lock",
-        );
-    }
-    let case_id = intake.case_id.clone();
-    let round_id = intake.round_id.clone();
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &case_id,
-        &round_id,
-        ModerationNativeActionV1::SubmitAppeal(SubmitSorafsModerationAppeal::new(intake)),
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::SubmitAppeal,
     )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_eligibility(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::RegisterEligibility,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_sortition(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::FinalizeSortition,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_assignment_accept(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::AcceptAssignment,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_activate(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::ActivateCase,
+    )
+    .await
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_ballot_commit(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
-    }
-    let request = match json::from_slice::<ModerationBallotCommitRequestDto>(body.as_ref()) {
-        Ok(request) => request,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS moderation ballot commit JSON: {err}"),
-            );
-        }
-    };
-    let commit = match moderation_commit_from_request(&request) {
-        Ok(commit) => commit,
-        Err(response) => return response,
-    };
-    let expected_account = match moderation_juror_account_id(&state, &commit.juror_id) {
-        Ok(account) => account,
-        Err(response) => return response,
-    };
-    let verified = match require_moderation_request_auth(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        Some(&expected_account),
-    ) {
-        Ok(verified) => verified,
-        Err(response) => return response,
-    };
-    let case_id = commit.context.case_id.clone();
-    let round_id = commit.round_id.clone();
-    let canonical_commit = match norito::to_bytes(&commit) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                "failed to encode canonical SoraFS moderation commit",
-            );
-        }
-    };
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &case_id,
-        &round_id,
-        ModerationNativeActionV1::SubmitCommit(SubmitSorafsModerationCommit::new(canonical_commit)),
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::SubmitCommit,
     )
+    .await
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_ballot_challenge(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
-    }
-    let request = match json::from_slice::<ModerationBallotChallengeRequestDto>(body.as_ref()) {
-        Ok(request) => request,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS moderation ballot challenge JSON: {err}"),
-            );
-        }
-    };
-    let expected_account =
-        match moderation_canonical_account_id(&state, &request.challenger_id, "challenger_id") {
-            Ok(account) => account,
-            Err(response) => return response,
-        };
-    let verified = match require_moderation_request_auth(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        Some(&expected_account),
-    ) {
-        Ok(verified) => verified,
-        Err(response) => return response,
-    };
-    let kind = match moderation_native_challenge_kind_from_label(&request.kind) {
-        Ok(kind) => kind,
-        Err(response) => return response,
-    };
-    let target_juror = match request.target_juror_id.as_deref() {
-        Some(target) => match moderation_canonical_account_id(&state, target, "target_juror_id") {
-            Ok(account) => Some(account),
-            Err(response) => return response,
-        },
-        None => None,
-    };
-    let evidence_digest =
-        match decode_hex_32_field(&request.evidence_digest_hex, "evidence_digest_hex") {
-            Ok(digest) => digest,
-            Err(response) => return response,
-        };
-    let case_id = request.case_id.clone();
-    let round_id = request.round_id.clone();
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &case_id,
-        &round_id,
-        ModerationNativeActionV1::RaiseChallenge(RaiseSorafsModerationChallenge::new(
-            request.case_id,
-            request.round_id,
-            request.challenge_id,
-            kind,
-            target_juror,
-            evidence_digest,
-            request.reason,
-        )),
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::RaiseChallenge,
     )
+    .await
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_ballot_challenge_resolution(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
-    }
-    let request =
-        match json::from_slice::<ModerationBallotChallengeResolutionRequestDto>(body.as_ref()) {
-            Ok(request) => request,
-            Err(err) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "failed to decode SoraFS moderation ballot challenge resolution JSON: {err}"
-                    ),
-                );
-            }
-        };
-    let expected_account =
-        match moderation_canonical_account_id(&state, &request.resolved_by, "resolved_by") {
-            Ok(account) => account,
-            Err(response) => return response,
-        };
-    let verified = match require_moderation_request_auth(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        Some(&expected_account),
-    ) {
-        Ok(verified) => verified,
-        Err(response) => return response,
-    };
-    let decision = match moderation_native_challenge_decision_from_label(&request.decision) {
-        Ok(decision) => decision,
-        Err(response) => return response,
-    };
-    let case_id = request.case_id.clone();
-    let round_id = request.round_id.clone();
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &case_id,
-        &round_id,
-        ModerationNativeActionV1::ResolveChallenge(ResolveSorafsModerationChallenge::new(
-            request.case_id,
-            request.round_id,
-            request.challenge_id,
-            decision,
-        )),
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::ResolveChallenge,
     )
+    .await
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_ballot_reveal(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
-    }
-    let request = match json::from_slice::<ModerationBallotRevealRequestDto>(body.as_ref()) {
-        Ok(request) => request,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS moderation ballot reveal JSON: {err}"),
-            );
-        }
-    };
-    let reveal = match moderation_reveal_from_request(&request) {
-        Ok(reveal) => reveal,
-        Err(response) => return response,
-    };
-    let expected_account = match moderation_juror_account_id(&state, &reveal.juror_id) {
-        Ok(account) => account,
-        Err(response) => return response,
-    };
-    let verified = match require_moderation_request_auth(
-        &state,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        Some(&expected_account),
-    ) {
-        Ok(verified) => verified,
-        Err(response) => return response,
-    };
-    let case_id = reveal.context.case_id.clone();
-    let round_id = reveal.round_id.clone();
-    let canonical_reveal = match norito::to_bytes(&reveal) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                "failed to encode canonical SoraFS moderation reveal",
-            );
-        }
-    };
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &case_id,
-        &round_id,
-        ModerationNativeActionV1::SubmitReveal(SubmitSorafsModerationReveal::new(canonical_reveal)),
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::SubmitReveal,
     )
+    .await
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_moderation_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        ModerationCommandRouteV1::FinalizeCase,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModerationCommandRouteV1 {
+    SubmitAppeal,
+    RegisterEligibility,
+    FinalizeSortition,
+    AcceptAssignment,
+    ActivateCase,
+    SubmitCommit,
+    RaiseChallenge,
+    ResolveChallenge,
+    SubmitReveal,
+    FinalizeCase,
+}
+
+async fn submit_moderation_signed_transaction(
+    state: SharedAppState,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    transaction: SignedTransaction,
+    route: ModerationCommandRouteV1,
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation ballot API is not enabled on this node");
     }
-    let verified =
-        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-        {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-    let request = match json::from_slice::<ModerationBallotTallyRequestDto>(body.as_ref()) {
-        Ok(request) => request,
-        Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode SoraFS moderation ballot tally JSON: {err}"),
-            );
-        }
-    };
-    let action = ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
-        request.case_id.clone(),
-        request.round_id.clone(),
-    ));
-    submit_moderation_native_action_response(
-        &state,
-        &method,
-        &uri,
-        body.as_ref(),
-        verified.account,
-        &request.case_id,
-        &request.round_id,
-        action,
-    )
-}
-
-fn submit_moderation_native_action_response(
-    state: &SharedAppState,
-    method: &Method,
-    uri: &Uri,
-    body: &[u8],
-    authority: AccountId,
-    case_id: &str,
-    round_id: &str,
-    action: ModerationNativeActionV1,
-) -> Response {
-    let Some(orchestrator) = state.sorafs_moderation_orchestrator.as_ref() else {
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "finalized-chain SoraFS moderation orchestration is unavailable",
-        );
-    };
-    let expects_appeal_projection = matches!(&action, ModerationNativeActionV1::SubmitAppeal(_));
-    let requires_terminal_projection = matches!(&action, ModerationNativeActionV1::FinalizeCase(_));
-    let canonical_target = uri
-        .path_and_query()
-        .map_or_else(|| uri.path(), |target| target.as_str());
-    let request_binding_digest = match moderation_request_binding_digest_v1(
-        method.as_str(),
-        canonical_target,
-        body,
-        &authority,
-        &action,
-    ) {
-        Ok(digest) => digest,
-        Err(error) => return moderation_orchestrator_error_response(error),
-    };
-    let outcome = match orchestrator.submit(authority, action, request_binding_digest) {
-        Ok(outcome) => outcome,
-        Err(error) => return moderation_orchestrator_error_response(error),
-    };
-    let terminal_projection_missing = requires_terminal_projection
-        && orchestrator
-            .case(case_id, round_id)
-            .as_ref()
-            .is_none_or(|projection| projection.outcome.is_none());
-    let projection = if expects_appeal_projection {
-        orchestrator
-            .appeal(case_id, round_id)
-            .as_ref()
-            .map(json::to_value)
-            .transpose()
-    } else {
-        orchestrator
-            .case(case_id, round_id)
-            .as_ref()
-            .map(json::to_value)
-            .transpose()
-    };
-    if outcome.status == ModerationOperationStatusV1::Finalized
-        && (projection.as_ref().is_ok_and(Option::is_none) || terminal_projection_missing)
-    {
-        warn!("finalized SoraFS moderation operation is missing its committed projection");
-        return json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "finalized moderation projection is unavailable",
-        );
+    if let Err(response) = validate_moderation_signed_transaction(&state, &transaction, route) {
+        return response;
     }
-    let projection_json = match projection {
-        Ok(Some(value)) => value,
-        Ok(None) => Value::Null,
-        Err(_) => {
-            warn!("failed to encode finalized SoraFS moderation projection");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to encode finalized moderation projection",
-            );
-        }
-    };
-    let status = match outcome.status {
-        ModerationOperationStatusV1::Pending => StatusCode::ACCEPTED,
-        ModerationOperationStatusV1::Finalized => StatusCode::OK,
-        ModerationOperationStatusV1::Rejected => StatusCode::CONFLICT,
-    };
-    (
-        status,
-        JsonBody(moderation_orchestrator_submit_json(
-            case_id,
-            round_id,
-            &outcome,
-            projection_json,
-        )),
+    match crate::submit_signed_transaction_for_ingress_strict_durable(
+        state,
+        headers,
+        accept,
+        transaction,
     )
-        .into_response()
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
 }
 
-fn moderation_orchestrator_submit_json(
-    case_id: &str,
-    round_id: &str,
-    outcome: &ModerationSubmitOutcomeV1,
-    projection: Value,
-) -> Value {
-    let status = match outcome.status {
-        ModerationOperationStatusV1::Pending => "pending",
-        ModerationOperationStatusV1::Finalized => "finalized",
-        ModerationOperationStatusV1::Rejected => "rejected",
+fn validate_moderation_signed_transaction(
+    state: &SharedAppState,
+    transaction: &SignedTransaction,
+    route: ModerationCommandRouteV1,
+) -> Result<(), Response> {
+    if transaction.chain() != state.chain_id.as_ref() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation transaction chain does not match this peer",
+        ));
+    }
+    transaction.verify_signature().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS moderation transaction signature or authority binding is invalid",
+        )
+    })?;
+    if transaction.creation_time().is_zero()
+        || transaction.time_to_live()
+            != Some(Duration::from_millis(
+                sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+            ))
+        || transaction.nonce().is_some()
+        || !transaction.metadata().is_empty()
+        || transaction.fee_payment_intent().validate().is_err()
+        || transaction.attachments().is_some()
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation transaction violates the exact V1 signed-envelope policy",
+        ));
+    }
+    let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "failed to encode canonical SoraFS moderation transaction",
+        )
+    })?;
+    if canonical_transaction.len()
+        > sorafs_node::moderation_orchestrator::MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1
+    {
+        return Err(json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "SoraFS moderation transaction exceeds the canonical V1 byte bound",
+        ));
+    }
+
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation command transaction must contain one native instruction",
+        ));
     };
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.moderation.native_operation.v1"),
+    if instructions.len() != 1 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation command transaction must contain exactly one native instruction",
+        ));
+    }
+
+    let instruction = &instructions[0];
+    let action = match route {
+        ModerationCommandRouteV1::SubmitAppeal => instruction
+            .as_any()
+            .downcast_ref::<SubmitSorafsModerationAppeal>()
+            .cloned()
+            .map(ModerationNativeActionV1::SubmitAppeal),
+        ModerationCommandRouteV1::RegisterEligibility => instruction
+            .as_any()
+            .downcast_ref::<RegisterSorafsModerationJurorEligibility>()
+            .cloned()
+            .map(ModerationNativeActionV1::RegisterEligibility),
+        ModerationCommandRouteV1::FinalizeSortition => instruction
+            .as_any()
+            .downcast_ref::<FinalizeSorafsModerationSortition>()
+            .cloned()
+            .map(ModerationNativeActionV1::FinalizeSortition),
+        ModerationCommandRouteV1::AcceptAssignment => instruction
+            .as_any()
+            .downcast_ref::<AcceptSorafsModerationJurorAssignment>()
+            .cloned()
+            .map(ModerationNativeActionV1::AcceptAssignment),
+        ModerationCommandRouteV1::ActivateCase => instruction
+            .as_any()
+            .downcast_ref::<ActivateSorafsModerationCase>()
+            .cloned()
+            .map(ModerationNativeActionV1::ActivateCase),
+        ModerationCommandRouteV1::SubmitCommit => instruction
+            .as_any()
+            .downcast_ref::<SubmitSorafsModerationCommit>()
+            .cloned()
+            .map(ModerationNativeActionV1::SubmitCommit),
+        ModerationCommandRouteV1::RaiseChallenge => instruction
+            .as_any()
+            .downcast_ref::<RaiseSorafsModerationChallenge>()
+            .cloned()
+            .map(ModerationNativeActionV1::RaiseChallenge),
+        ModerationCommandRouteV1::ResolveChallenge => instruction
+            .as_any()
+            .downcast_ref::<ResolveSorafsModerationChallenge>()
+            .cloned()
+            .map(ModerationNativeActionV1::ResolveChallenge),
+        ModerationCommandRouteV1::SubmitReveal => instruction
+            .as_any()
+            .downcast_ref::<SubmitSorafsModerationReveal>()
+            .cloned()
+            .map(ModerationNativeActionV1::SubmitReveal),
+        ModerationCommandRouteV1::FinalizeCase => instruction
+            .as_any()
+            .downcast_ref::<FinalizeSorafsModerationCase>()
+            .cloned()
+            .map(ModerationNativeActionV1::FinalizeCase),
+    }
+    .ok_or_else(|| moderation_route_instruction_mismatch_response(route))?;
+
+    action
+        .validate_for_authority(transaction.authority())
+        .map_err(moderation_orchestrator_error_response)
+}
+
+fn moderation_route_instruction_mismatch_response(route: ModerationCommandRouteV1) -> Response {
+    json_error(
+        StatusCode::BAD_REQUEST,
+        format!(
+            "SoraFS moderation route requires exactly one `{}` native instruction",
+            moderation_route_instruction_label(route)
         ),
-        json_entry("source", Value::from("finalized_chain")),
-        json_entry("case_id", Value::from(case_id.to_owned())),
-        json_entry("round_id", Value::from(round_id.to_owned())),
-        json_entry(
-            "operation_id_hex",
-            Value::from(hex::encode(outcome.operation_id)),
-        ),
-        json_entry(
-            "transaction_id_hex",
-            outcome
-                .transaction_id
-                .map_or(Value::Null, |id| Value::from(hex::encode(id))),
-        ),
-        json_entry("status", Value::from(status)),
-        json_entry("replay", Value::from(outcome.replay)),
-        json_entry(
-            "finalized_height",
-            Value::from(outcome.finalized_cursor.height),
-        ),
-        json_entry(
-            "finalized_block_hash_hex",
-            Value::from(hex::encode(outcome.finalized_cursor.block_hash)),
-        ),
-        json_entry("projection", projection),
-    ])
+    )
+}
+
+const fn moderation_route_instruction_label(route: ModerationCommandRouteV1) -> &'static str {
+    match route {
+        ModerationCommandRouteV1::SubmitAppeal => "SubmitSorafsModerationAppeal",
+        ModerationCommandRouteV1::RegisterEligibility => {
+            "RegisterSorafsModerationJurorEligibility"
+        }
+        ModerationCommandRouteV1::FinalizeSortition => "FinalizeSorafsModerationSortition",
+        ModerationCommandRouteV1::AcceptAssignment => {
+            "AcceptSorafsModerationJurorAssignment"
+        }
+        ModerationCommandRouteV1::ActivateCase => "ActivateSorafsModerationCase",
+        ModerationCommandRouteV1::SubmitCommit => "SubmitSorafsModerationCommit",
+        ModerationCommandRouteV1::RaiseChallenge => "RaiseSorafsModerationChallenge",
+        ModerationCommandRouteV1::ResolveChallenge => "ResolveSorafsModerationChallenge",
+        ModerationCommandRouteV1::SubmitReveal => "SubmitSorafsModerationReveal",
+        ModerationCommandRouteV1::FinalizeCase => "FinalizeSorafsModerationCase",
+    }
 }
 
 fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) -> Response {
@@ -10111,12 +9808,13 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
         Err(err) => return err.into_response(),
     };
     let limit = normalize_limit(query.limit);
+    let since = query.since.unwrap_or(0);
     let snapshot = match reconciled_moderation_snapshot(&state) {
         Ok(snapshot) => snapshot,
         Err(response) => return response,
     };
     let tip_sequence = snapshot.events.last().map_or(0, |event| event.sequence);
-    if query.since > tip_sequence {
+    if since > tip_sequence {
         return json_error(
             StatusCode::BAD_REQUEST,
             "SoraFS moderation event cursor is ahead of the finalized event tip",
@@ -10124,7 +9822,7 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
     }
     if let Some(first) = snapshot.events.first() {
         let minimum_after_sequence = first.sequence.saturating_sub(1);
-        if query.since < minimum_after_sequence {
+        if since < minimum_after_sequence {
             return json_error(
                 StatusCode::CONFLICT,
                 "SoraFS moderation event cursor is older than the retained finalized event suffix",
@@ -10134,14 +9832,14 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
     let events = snapshot
         .events
         .iter()
-        .filter(|event| event.sequence > query.since)
+        .filter(|event| event.sequence > since)
         .take(limit)
         .cloned()
         .collect::<Vec<_>>();
     let etag = moderation_finalized_events_etag(
         snapshot.finalized_height,
         snapshot.finalized_block_hash,
-        query.since,
+        since,
         limit,
         tip_sequence,
     );
@@ -10184,7 +9882,7 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
                 "finalized_block_hash_hex",
                 Value::from(hex::encode(snapshot.finalized_block_hash)),
             ),
-            json_entry("after_sequence", Value::from(query.since)),
+            json_entry("after_sequence", Value::from(since)),
             json_entry("limit", limit as u64),
             json_entry("tip_sequence", Value::from(tip_sequence)),
             json_entry(
@@ -10716,30 +10414,6 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
         )),
     )
         .into_response()
-}
-
-pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_ballot(
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    Path(_quarantine_id_hex): Path<String>,
-    body: Bytes,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled(
-            "sorafs moderation quarantine appeal ballot API is not enabled on this node",
-        );
-    }
-    if let Err(response) =
-        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-    {
-        return response;
-    }
-    json_error(
-        StatusCode::GONE,
-        "the local quarantine appeal-ballot format is retired; submit a canonical native moderation appeal intake to /v1/sorafs/moderation/ballots",
-    )
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_quarantine_object(
@@ -11871,12 +11545,6 @@ fn validate_orderbook_signed_transaction(
                     "SoraFS orderbook receipt trade does not match its finalized channel",
                 ));
             }
-            if transaction.authority().subject_id() != channel.settlement_authority.subject_id() {
-                return Err(json_error(
-                    StatusCode::FORBIDDEN,
-                    "SoraFS orderbook receipt transaction authority is not the finalized channel settlement authority",
-                ));
-            }
             ensure_orderbook_signature_matches_authority(
                 &channel.provider,
                 &receipt.settlement_signature,
@@ -11985,265 +11653,6 @@ fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Respon
     )
 }
 
-fn moderation_native_appeal_intake_from_request(
-    request: &ModerationNativeAppealRequestDto,
-) -> Result<ModerationAppealIntakeV1, Response> {
-    let intake = decode_canonical_moderation_norito_base64::<ModerationAppealIntakeV1>(
-        &request.intake_b64,
-        "native SoraFS moderation appeal intake",
-        sorafs_node::moderation_orchestrator::MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
-    )?;
-    intake.validate().map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            "native SoraFS moderation appeal intake is invalid",
-        )
-    })?;
-    Ok(intake)
-}
-
-fn ensure_native_moderation_deposit_confirmation_matches_intake(
-    intake: &ModerationAppealIntakeV1,
-    deposit_confirmation: &AppealFinanceDepositConfirmRequestDto,
-) -> Result<(), Response> {
-    if deposit_confirmation.case_id != intake.case_id
-        || deposit_confirmation.round_id.as_deref() != Some(intake.round_id.as_str())
-    {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "native SoraFS moderation appeal deposit scope must exactly match the intake",
-        ));
-    }
-    if deposit_confirmation.payer_account != intake.appellant.to_string() {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "native SoraFS moderation appeal deposit payer must equal the appellant",
-        ));
-    }
-    let evidence_hash = Hash::prehashed(intake.evidence_bundle_digest).to_string();
-    if deposit_confirmation
-        .evidence_hashes_hex
-        .as_ref()
-        .is_none_or(|hashes| hashes.as_slice() != std::slice::from_ref(&evidence_hash))
-    {
-        return Err(json_error(
-            StatusCode::PRECONDITION_FAILED,
-            "native SoraFS moderation appeal deposit evidence must exactly bind the intake digest",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn moderation_announcement_from_request(
-    request: ModerationBallotAnnounceRequestDto,
-    appeal_deposit_escrow_id_hex: Option<String>,
-    appeal_deposit: Option<ModerationAppealDeposit>,
-) -> Result<ModerationBallotAnnouncement, Response> {
-    let evidence_bundle_digest = decode_hex_32_field(
-        &request.evidence_bundle_digest_hex,
-        "evidence_bundle_digest_hex",
-    )?;
-    let panel_roster_hash = match request.panel_roster_hash_hex {
-        Some(value) => decode_hex_32_field(&value, "panel_roster_hash_hex")?,
-        None => local_moderation_panel_roster_hash(&request.juror_ids, request.quorum),
-    };
-    Ok(ModerationBallotAnnouncement {
-        context: SoraFsModerationBallotContextV1 {
-            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
-            case_id: request.case_id,
-            evidence_bundle_digest,
-            appeal_finance_config_version: request.appeal_finance_config_version,
-            panel_roster_hash,
-            policy_reference: request.policy_reference,
-            evidence_uri: request.evidence_uri,
-        },
-        appeal_deposit_escrow_id_hex,
-        appeal_deposit,
-        round_id: request.round_id,
-        juror_ids: request.juror_ids,
-        quorum: request.quorum,
-        announced_at_unix_ms: request.announced_at_unix_ms,
-        commit_deadline_unix_ms: request.commit_deadline_unix_ms,
-        challenge_deadline_unix_ms: request.challenge_deadline_unix_ms,
-        reveal_deadline_unix_ms: request.reveal_deadline_unix_ms,
-    })
-}
-
-fn moderation_native_challenge_kind_from_label(
-    label: &str,
-) -> Result<ModerationChallengeKindV1, Response> {
-    match label.trim() {
-        "roster_mismatch" => Ok(ModerationChallengeKindV1::RosterMismatch),
-        "duplicate_commit" => Ok(ModerationChallengeKindV1::DuplicateCommit),
-        "payload_mismatch" => Ok(ModerationChallengeKindV1::PayloadMismatch),
-        "juror_eligibility" => Ok(ModerationChallengeKindV1::JurorEligibility),
-        "evidence_mismatch" => Ok(ModerationChallengeKindV1::EvidenceMismatch),
-        "other" => Ok(ModerationChallengeKindV1::Other),
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid native SoraFS moderation challenge kind",
-        )),
-    }
-}
-
-fn moderation_native_challenge_decision_from_label(
-    label: &str,
-) -> Result<ModerationChallengeDecisionV1, Response> {
-    match label.trim() {
-        "rejected" => Ok(ModerationChallengeDecisionV1::Rejected),
-        "accepted" => Ok(ModerationChallengeDecisionV1::Accepted),
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid native SoraFS moderation challenge decision",
-        )),
-    }
-}
-
-#[cfg(test)]
-fn moderation_appeal_deposit_from_confirmation(
-    expected: &AppealFinanceDepositExpectation,
-    record: &AssetEscrowRecord,
-) -> Result<ModerationAppealDeposit, Response> {
-    let deposit_xor =
-        XorQuantity::try_from_quantity(expected.deposit_xor.clone()).map_err(|err| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                format!("invalid SoraFS moderation appeal deposit amount: {err}"),
-            )
-        })?;
-    Ok(ModerationAppealDeposit {
-        escrow_id_hex: expected.escrow_id.as_hash().to_string(),
-        payer_account: expected.payer_account.to_string(),
-        destination_account: expected.destination_account.to_string(),
-        release_authority_account: expected
-            .release_authority_account
-            .as_ref()
-            .map(ToString::to_string),
-        asset_definition_id: expected.asset_definition_id.to_string(),
-        custody_account: record.custody.to_string(),
-        deposit_xor,
-        expires_at_ms: expected.expires_at_ms,
-        idempotency_key: expected.idempotency_key.clone(),
-        evidence_hashes_hex: expected
-            .evidence_hashes
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-    })
-}
-
-#[cfg(test)]
-fn ensure_moderation_deposit_confirmation_matches_request(
-    request: &ModerationBallotAnnounceRequestDto,
-    deposit_confirmation: &AppealFinanceDepositConfirmRequestDto,
-) -> Result<(), Response> {
-    if deposit_confirmation.case_id.trim() != request.case_id.trim() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS moderation ballot deposit_confirmation.case_id must match case_id",
-        ));
-    }
-    if deposit_confirmation.round_id.as_deref().map(str::trim) != Some(request.round_id.trim()) {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS moderation ballot deposit_confirmation.round_id must match round_id",
-        ));
-    }
-    let evidence_bundle_digest = decode_hex_32_field(
-        &request.evidence_bundle_digest_hex,
-        "evidence_bundle_digest_hex",
-    )?;
-    let expected_evidence_hash = Hash::prehashed(evidence_bundle_digest).to_string();
-    let includes_evidence_hash = deposit_confirmation
-        .evidence_hashes_hex
-        .as_ref()
-        .is_some_and(|hashes| {
-            hashes
-                .iter()
-                .any(|hash| hash.trim() == expected_evidence_hash)
-        });
-    if !includes_evidence_hash {
-        return Err(json_error(
-            StatusCode::PRECONDITION_FAILED,
-            "SoraFS moderation ballot deposit_confirmation.evidence_hashes_hex must include evidence_bundle_digest_hex",
-        ));
-    }
-    Ok(())
-}
-
-fn moderation_commit_from_request(
-    request: &ModerationBallotCommitRequestDto,
-) -> Result<SoraFsModerationBallotCommitV1, Response> {
-    let commit = decode_canonical_moderation_norito_base64::<SoraFsModerationBallotCommitV1>(
-        &request.commit_b64,
-        "SoraFS moderation ballot commit",
-        sorafs_node::moderation_orchestrator::MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
-    )?;
-    commit.validate().map_err(|err| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS moderation ballot commit: {err}"),
-        )
-    })?;
-    Ok(commit)
-}
-
-fn moderation_reveal_from_request(
-    request: &ModerationBallotRevealRequestDto,
-) -> Result<SoraFsModerationBallotRevealV1, Response> {
-    let reveal = decode_canonical_moderation_norito_base64::<SoraFsModerationBallotRevealV1>(
-        &request.reveal_b64,
-        "SoraFS moderation ballot reveal",
-        sorafs_node::moderation_orchestrator::MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1,
-    )?;
-    reveal.validate().map_err(|err| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS moderation ballot reveal: {err}"),
-        )
-    })?;
-    Ok(reveal)
-}
-
-fn moderation_juror_account_id(
-    state: &SharedAppState,
-    juror_id: &str,
-) -> Result<AccountId, Response> {
-    moderation_canonical_account_id(state, juror_id, "juror_id")
-}
-
-fn moderation_canonical_account_id(
-    state: &SharedAppState,
-    account_id: &str,
-    field: &'static str,
-) -> Result<AccountId, Response> {
-    if account_id.trim().is_empty() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("SoraFS moderation {field} must not be empty"),
-        ));
-    }
-    let (account, canonical) = crate::routing::parse_account_literal_with_state(
-        &state.state,
-        account_id,
-        &state.telemetry,
-        field,
-    )
-    .map_err(|err| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS moderation {field}: {}", err.reason()),
-        )
-    })?;
-    if account_id != canonical {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("SoraFS moderation {field} must be a canonical AccountId"),
-        ));
-    }
-    Ok(account)
-}
 
 fn require_moderation_request_auth(
     state: &SharedAppState,
@@ -14968,9 +14377,6 @@ pub(crate) fn spawn_sorafs_proof_outcome_forwarder_worker(
                     let scan = run_sorafs_proof_outcome_forwarder_scan(&state, &mut cursor).await;
                     if scan.scanned != 0 {
                         debug!(
-                            task_scanned = scan.task_scanned,
-                            lease_enqueued = scan.lease_enqueued,
-                            terminal_enqueued = scan.terminal_enqueued,
                             scanned = scan.scanned,
                             finalized = scan.finalized,
                             signed = scan.signed,
@@ -15340,6 +14746,8 @@ const SORAFS_NATIVE_REPAIR_TASK_SCAN_LIMIT_V1: u32 = 32;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SorafsRepairTransactionForwarderScanV1 {
+    pdp_handoffs_resumed: usize,
+    potr_handoffs_resumed: usize,
     task_scanned: usize,
     lease_enqueued: usize,
     terminal_enqueued: usize,
@@ -15396,6 +14804,17 @@ fn classify_native_repair_task(
         }
     } else {
         NativeRepairTaskDispositionV1::Execute
+    }
+}
+
+fn gate_native_repair_task_generation(
+    enabled: bool,
+    disposition: NativeRepairTaskDispositionV1,
+) -> NativeRepairTaskDispositionV1 {
+    if enabled {
+        disposition
+    } else {
+        NativeRepairTaskDispositionV1::Defer
     }
 }
 
@@ -15463,6 +14882,119 @@ enum RepairTransactionReconciliationV1 {
     },
     Deferred,
     Conflict(RepairFinalizedCursorV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairCommittedExternalOutcomeV1 {
+    Applied,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairAuthoritativeTransactionOutcomeV1 {
+    Absent,
+    Applied,
+    Rejected,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairExactDeliveryDispositionV1 {
+    Applied,
+    Rejected,
+    FinalizedAbsent,
+    Pending,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RepairExactTransactionObservationV1 {
+    reconciliation: RepairTransactionReconciliationV1,
+    finalized_cursor: RepairFinalizedCursorV1,
+    transaction_outcome: RepairAuthoritativeTransactionOutcomeV1,
+}
+
+fn classify_exact_repair_entrypoint_outcome(
+    expected_hash: &HashOf<SignedTransaction>,
+    block_available: bool,
+    results: impl IntoIterator<Item = (HashOf<SignedTransaction>, RepairCommittedExternalOutcomeV1)>,
+) -> RepairAuthoritativeTransactionOutcomeV1 {
+    if !block_available {
+        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
+    }
+    let mut exact = results
+        .into_iter()
+        .filter_map(|(hash, outcome)| (&hash == expected_hash).then_some(outcome));
+    let Some(outcome) = exact.next() else {
+        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
+    };
+    if exact.next().is_some() {
+        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
+    }
+    match outcome {
+        RepairCommittedExternalOutcomeV1::Applied => {
+            RepairAuthoritativeTransactionOutcomeV1::Applied
+        }
+        RepairCommittedExternalOutcomeV1::Rejected => {
+            RepairAuthoritativeTransactionOutcomeV1::Rejected
+        }
+    }
+}
+
+fn local_repair_evidence_blocks_absence_retry(
+    queue_pending: bool,
+    cache_kind: Option<crate::PipelineStatusKind>,
+) -> bool {
+    queue_pending
+        || matches!(
+            cache_kind,
+            Some(
+                crate::PipelineStatusKind::Queued
+                    | crate::PipelineStatusKind::Approved
+                    | crate::PipelineStatusKind::Committed
+                    | crate::PipelineStatusKind::Applied
+            )
+        )
+}
+
+fn classify_exact_repair_delivery(
+    transaction_outcome: RepairAuthoritativeTransactionOutcomeV1,
+    finalized_cursor: RepairFinalizedCursorV1,
+    baseline_finalized_height: u64,
+    local_evidence_blocks_absence_retry: bool,
+) -> RepairExactDeliveryDispositionV1 {
+    match transaction_outcome {
+        RepairAuthoritativeTransactionOutcomeV1::Applied => {
+            RepairExactDeliveryDispositionV1::Applied
+        }
+        RepairAuthoritativeTransactionOutcomeV1::Rejected => {
+            RepairExactDeliveryDispositionV1::Rejected
+        }
+        RepairAuthoritativeTransactionOutcomeV1::Unavailable => {
+            RepairExactDeliveryDispositionV1::Unavailable
+        }
+        RepairAuthoritativeTransactionOutcomeV1::Absent if local_evidence_blocks_absence_retry => {
+            RepairExactDeliveryDispositionV1::Pending
+        }
+        RepairAuthoritativeTransactionOutcomeV1::Absent
+            if finalized_cursor.height > baseline_finalized_height =>
+        {
+            RepairExactDeliveryDispositionV1::FinalizedAbsent
+        }
+        RepairAuthoritativeTransactionOutcomeV1::Absent => {
+            RepairExactDeliveryDispositionV1::Unavailable
+        }
+    }
+}
+
+fn retained_repair_transaction_digest_for_finalization(
+    retained_digest: Option<[u8; 32]>,
+    signed_transaction_bytes: Option<&[u8]>,
+) -> Option<[u8; 32]> {
+    let retained_digest = retained_digest.filter(|digest| *digest != [0; 32])?;
+    let signed_transaction_bytes = signed_transaction_bytes?;
+    (*blake3_hash(signed_transaction_bytes).as_bytes() == retained_digest)
+        .then_some(retained_digest)
 }
 
 fn decode_canonical_repair_report(bytes: &[u8]) -> Option<RepairReportV1> {
@@ -15606,26 +15138,18 @@ fn classify_repair_semantic_reconciliation(
     }
 }
 
-fn reconcile_sorafs_repair_transaction(
-    state: &SharedAppState,
+fn reconcile_sorafs_repair_transaction_in_view(
+    view: &impl StateReadOnly,
     request: &sorafs_node::repair_transaction_forwarder::RepairTransactionSigningRequestV1,
+    finalized_cursor: RepairFinalizedCursorV1,
 ) -> Option<RepairTransactionReconciliationV1> {
     let ticket_id = repair_operation_ticket_id(&request.operation)?;
-    let view = state.state.query_view();
-    let finalized_cursor = u64::try_from(view.block_hashes.len())
-        .ok()
-        .zip(view.block_hashes.last())
-        .map(|(height, hash)| RepairFinalizedCursorV1 {
-            height,
-            block_hash: *hash.as_ref(),
-        })
-        .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])?;
-    let finalized =
-        match FindSorafsRepairTask::new(ticket_id, Some(finalized_cursor)).execute(&view) {
-            Ok(finalized) => Some(finalized),
-            Err(QueryExecutionFail::Find(FindError::SorafsRepairTask(_))) => None,
-            Err(_) => return None,
-        };
+    let finalized = match FindSorafsRepairTask::new(ticket_id, Some(finalized_cursor)).execute(view)
+    {
+        Ok(finalized) => Some(finalized),
+        Err(QueryExecutionFail::Find(FindError::SorafsRepairTask(_))) => None,
+        Err(_) => return None,
+    };
     let semantic = classify_repair_semantic_reconciliation(request, finalized.as_ref())?;
     Some(match semantic {
         RepairSemanticReconciliationV1::Finalized(cursor) => {
@@ -15639,6 +15163,96 @@ fn reconcile_sorafs_repair_transaction(
         RepairSemanticReconciliationV1::Conflict(cursor) => {
             RepairTransactionReconciliationV1::Conflict(cursor)
         }
+    })
+}
+
+fn reconcile_sorafs_repair_transaction(
+    state: &SharedAppState,
+    request: &sorafs_node::repair_transaction_forwarder::RepairTransactionSigningRequestV1,
+) -> Option<RepairTransactionReconciliationV1> {
+    let view = state.state.query_view();
+    let finalized_cursor = sorafs_repair_finalized_cursor_from_view(&view)?;
+    reconcile_sorafs_repair_transaction_in_view(&view, request, finalized_cursor)
+}
+
+fn inspect_indexed_repair_transaction(
+    kura: &iroha_core::kura::Kura,
+    transaction_hash: &HashOf<SignedTransaction>,
+    block_height: NonZeroUsize,
+    expected_block_hash: HashOf<BlockHeader>,
+) -> RepairAuthoritativeTransactionOutcomeV1 {
+    let Some(block) = kura.get_block(block_height) else {
+        return classify_exact_repair_entrypoint_outcome(
+            transaction_hash,
+            false,
+            std::iter::empty::<(HashOf<SignedTransaction>, RepairCommittedExternalOutcomeV1)>(),
+        );
+    };
+    let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
+        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
+    };
+    if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
+        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
+    }
+    let external_entrypoint_count = block.external_entrypoint_count();
+    classify_exact_repair_entrypoint_outcome(
+        transaction_hash,
+        true,
+        block
+            .entrypoint_results()
+            .take(external_entrypoint_count)
+            .filter_map(|(_, entrypoint, result)| {
+                let TransactionEntrypoint::External(transaction) = entrypoint else {
+                    return None;
+                };
+                let outcome = if result.0.is_ok() {
+                    RepairCommittedExternalOutcomeV1::Applied
+                } else {
+                    RepairCommittedExternalOutcomeV1::Rejected
+                };
+                Some((transaction.hash(), outcome))
+            }),
+    )
+}
+
+fn observe_exact_sorafs_repair_transaction(
+    state: &SharedAppState,
+    request: &sorafs_node::repair_transaction_forwarder::RepairTransactionSigningRequestV1,
+    transaction_hash: &HashOf<SignedTransaction>,
+) -> Option<RepairExactTransactionObservationV1> {
+    let view = state.state.view();
+    let finalized_cursor = sorafs_repair_finalized_cursor_from_view(&view)?;
+    let reconciliation =
+        reconcile_sorafs_repair_transaction_in_view(&view, request, finalized_cursor)?;
+    let transaction_outcome = match view.transactions().get(transaction_hash) {
+        None => RepairAuthoritativeTransactionOutcomeV1::Absent,
+        Some(block_height) if block_height.get() > view.block_hashes().len() => {
+            RepairAuthoritativeTransactionOutcomeV1::Unavailable
+        }
+        Some(block_height) => {
+            let Some(expected_block_hash) = view
+                .block_hashes()
+                .get(block_height.get().saturating_sub(1))
+                .copied()
+            else {
+                return Some(RepairExactTransactionObservationV1 {
+                    reconciliation,
+                    finalized_cursor,
+                    transaction_outcome: RepairAuthoritativeTransactionOutcomeV1::Unavailable,
+                });
+            };
+            inspect_indexed_repair_transaction(
+                view.kura(),
+                transaction_hash,
+                block_height,
+                expected_block_hash,
+            )
+        }
+    };
+    Some(RepairExactTransactionObservationV1 {
+        reconciliation,
+        finalized_cursor,
+        transaction_outcome,
     })
 }
 
@@ -15910,6 +15524,198 @@ mod repair_transaction_forwarder_tests {
         );
     }
 
+    fn signed_transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
+    }
+
+    #[test]
+    fn exact_entrypoint_classifier_requires_one_available_exact_result() {
+        let expected = signed_transaction_hash(0x81);
+        let other = signed_transaction_hash(0x82);
+        assert_eq!(
+            classify_exact_repair_entrypoint_outcome(
+                &expected,
+                false,
+                Vec::<(HashOf<SignedTransaction>, RepairCommittedExternalOutcomeV1,)>::new(),
+            ),
+            RepairAuthoritativeTransactionOutcomeV1::Unavailable
+        );
+        assert_eq!(
+            classify_exact_repair_entrypoint_outcome(
+                &expected,
+                true,
+                [(other, RepairCommittedExternalOutcomeV1::Applied)],
+            ),
+            RepairAuthoritativeTransactionOutcomeV1::Unavailable
+        );
+        assert_eq!(
+            classify_exact_repair_entrypoint_outcome(
+                &expected,
+                true,
+                [(expected, RepairCommittedExternalOutcomeV1::Applied)],
+            ),
+            RepairAuthoritativeTransactionOutcomeV1::Applied
+        );
+        assert_eq!(
+            classify_exact_repair_entrypoint_outcome(
+                &expected,
+                true,
+                [(expected, RepairCommittedExternalOutcomeV1::Rejected)],
+            ),
+            RepairAuthoritativeTransactionOutcomeV1::Rejected
+        );
+        assert_eq!(
+            classify_exact_repair_entrypoint_outcome(
+                &expected,
+                true,
+                [
+                    (expected, RepairCommittedExternalOutcomeV1::Applied),
+                    (expected, RepairCommittedExternalOutcomeV1::Applied),
+                ],
+            ),
+            RepairAuthoritativeTransactionOutcomeV1::Unavailable
+        );
+    }
+
+    #[test]
+    fn exact_delivery_uses_authoritative_presence_despite_cache_miss() {
+        let cursor = finalized_cursor();
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Applied,
+                cursor,
+                cursor.height.saturating_sub(1),
+                false,
+            ),
+            RepairExactDeliveryDispositionV1::Applied
+        );
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Rejected,
+                cursor,
+                cursor.height.saturating_sub(1),
+                false,
+            ),
+            RepairExactDeliveryDispositionV1::Rejected
+        );
+    }
+
+    #[test]
+    fn authoritative_absence_requires_cursor_advance_and_no_pending_signal() {
+        let cursor = finalized_cursor();
+        assert!(local_repair_evidence_blocks_absence_retry(true, None));
+        assert!(local_repair_evidence_blocks_absence_retry(
+            false,
+            Some(crate::PipelineStatusKind::Queued),
+        ));
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Absent,
+                cursor,
+                cursor.height.saturating_sub(1),
+                false,
+            ),
+            RepairExactDeliveryDispositionV1::FinalizedAbsent
+        );
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Absent,
+                cursor,
+                cursor.height,
+                false,
+            ),
+            RepairExactDeliveryDispositionV1::Unavailable
+        );
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Absent,
+                cursor,
+                cursor.height.saturating_sub(1),
+                true,
+            ),
+            RepairExactDeliveryDispositionV1::Pending
+        );
+    }
+
+    #[test]
+    fn expired_cache_entry_is_neither_pending_nor_authoritative_rejection() {
+        let cursor = finalized_cursor();
+        let blocks_retry = local_repair_evidence_blocks_absence_retry(
+            false,
+            Some(crate::PipelineStatusKind::Expired),
+        );
+        assert!(!blocks_retry);
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Absent,
+                cursor,
+                cursor.height.saturating_sub(1),
+                blocks_retry,
+            ),
+            RepairExactDeliveryDispositionV1::FinalizedAbsent
+        );
+    }
+
+    #[test]
+    fn unavailable_exact_block_or_entrypoint_always_defers() {
+        let cursor = finalized_cursor();
+        assert_eq!(
+            classify_exact_repair_delivery(
+                RepairAuthoritativeTransactionOutcomeV1::Unavailable,
+                cursor,
+                cursor.height.saturating_sub(1),
+                false,
+            ),
+            RepairExactDeliveryDispositionV1::Unavailable
+        );
+    }
+
+    #[test]
+    fn exact_finalization_requires_the_retained_canonical_byte_digest() {
+        let bytes = b"canonical signed transaction bytes";
+        let digest = *blake3_hash(bytes).as_bytes();
+        assert_eq!(
+            retained_repair_transaction_digest_for_finalization(Some(digest), Some(bytes)),
+            Some(digest)
+        );
+        assert_eq!(
+            retained_repair_transaction_digest_for_finalization(None, Some(bytes)),
+            None
+        );
+        assert_eq!(
+            retained_repair_transaction_digest_for_finalization(Some([0; 32]), Some(bytes)),
+            None
+        );
+        assert_eq!(
+            retained_repair_transaction_digest_for_finalization(Some([0xA5; 32]), Some(bytes)),
+            None
+        );
+        assert_eq!(
+            retained_repair_transaction_digest_for_finalization(Some(digest), None),
+            None
+        );
+    }
+
+    #[test]
+    fn disabled_native_repair_gate_suppresses_claim_renew_and_execute() {
+        for disposition in [
+            NativeRepairTaskDispositionV1::Claim,
+            NativeRepairTaskDispositionV1::Renew {
+                lease_generation: 7,
+            },
+            NativeRepairTaskDispositionV1::Execute,
+        ] {
+            assert_eq!(
+                gate_native_repair_task_generation(false, disposition),
+                NativeRepairTaskDispositionV1::Defer
+            );
+            assert_eq!(
+                gate_native_repair_task_generation(true, disposition),
+                disposition
+            );
+        }
+    }
+
     #[test]
     fn native_repair_task_disposition_requires_the_exact_live_lease_owner() {
         let authority = account(0x74);
@@ -15981,6 +15787,10 @@ async fn enqueue_sorafs_finalized_native_repair_work(
         RepairOperationV1, RepairTransactionContextV1,
     };
 
+    let repair_generation_enabled = state.sorafs_node.repair_config().enabled();
+    if !repair_generation_enabled {
+        return;
+    }
     let Some(signer) = state.sorafs_repair_transaction_signer.as_ref() else {
         return;
     };
@@ -16064,7 +15874,10 @@ async fn enqueue_sorafs_finalized_native_repair_work(
         if task.provider_id != local_provider_id {
             continue;
         }
-        match classify_native_repair_task(&task, &authority, now_unix_ms, renew_before_ms) {
+        match gate_native_repair_task_generation(
+            repair_generation_enabled,
+            classify_native_repair_task(&task, &authority, now_unix_ms, renew_before_ms),
+        ) {
             NativeRepairTaskDispositionV1::Claim => {
                 let operation = RepairOperationV1::Action(ApplySorafsRepairTaskAction::new(
                     task.ticket_id.clone(),
@@ -16150,6 +15963,39 @@ async fn enqueue_sorafs_finalized_native_repair_work(
     }
 }
 
+fn resume_sorafs_protocol_repair_handoffs(
+    state: &SharedAppState,
+    scan: &mut SorafsRepairTransactionForwarderScanV1,
+) {
+    let repair_handoff = SoraFsRepairTransactionHandoff::new(state);
+    match state.sorafs_node.resume_pdp_terminal_handoffs(
+        &repair_handoff,
+        SORAFS_REPAIR_TRANSACTION_FORWARDER_SCAN_LIMIT_V1,
+    ) {
+        Ok(resumed) => scan.pdp_handoffs_resumed = resumed,
+        Err(error) => {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!(
+                ?error,
+                "failed to resume durable PDP terminal handoffs through the native repair adapter"
+            );
+        }
+    }
+    match state
+        .sorafs_node
+        .resume_potr_terminal_handoffs(&repair_handoff)
+    {
+        Ok(resumed) => scan.potr_handoffs_resumed = resumed,
+        Err(error) => {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!(
+                ?error,
+                "failed to resume durable PoTR terminal handoffs through the native repair adapter"
+            );
+        }
+    }
+}
+
 pub(crate) fn spawn_sorafs_repair_transaction_forwarder_worker(
     state: SharedAppState,
     shutdown_signal: ShutdownSignal,
@@ -16179,8 +16025,13 @@ pub(crate) fn spawn_sorafs_repair_transaction_forwarder_worker(
                 _ = interval.tick() => {
                     let scan =
                         run_sorafs_repair_transaction_forwarder_scan(&state, &mut cursor).await;
-                    if scan.scanned != 0 {
+                    if scan.scanned != 0
+                        || scan.pdp_handoffs_resumed != 0
+                        || scan.potr_handoffs_resumed != 0
+                    {
                         debug!(
+                            pdp_handoffs_resumed = scan.pdp_handoffs_resumed,
+                            potr_handoffs_resumed = scan.potr_handoffs_resumed,
                             scanned = scan.scanned,
                             finalized = scan.finalized,
                             signed = scan.signed,
@@ -16206,6 +16057,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
     use sorafs_node::repair_transaction_forwarder::RepairTransactionDeliveryStateV1;
 
     let mut scan = SorafsRepairTransactionForwarderScanV1::default();
+    resume_sorafs_protocol_repair_handoffs(state, &mut scan);
     enqueue_sorafs_finalized_native_repair_work(state, cursor, &mut scan).await;
     let pending = match state.sorafs_node.pending_repair_transactions_after(
         cursor.after_sequence,
@@ -16254,10 +16106,57 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                 continue;
             }
         };
-        let Some(reconciliation) = reconcile_sorafs_repair_transaction(state, &request) else {
-            scan.deferred = scan.deferred.saturating_add(1);
-            warn!("authoritative SoraFS repair transaction reconciliation failed");
-            continue;
+        let exact_transaction_hash = if matches!(
+            delivery.state,
+            RepairTransactionDeliveryStateV1::Ambiguous
+                | RepairTransactionDeliveryStateV1::Submitted
+        ) {
+            let Some(transaction_bytes) = delivery.signed_transaction_bytes.as_deref() else {
+                scan.deferred = scan.deferred.saturating_add(1);
+                continue;
+            };
+            let Some(transaction) =
+                decode_sorafs_repair_signed_transaction(transaction_bytes, &delivery.chain_id)
+            else {
+                scan.deferred = scan.deferred.saturating_add(1);
+                warn!("durable native SoraFS repair transaction bytes failed validation");
+                continue;
+            };
+            Some(transaction.hash())
+        } else {
+            None
+        };
+        let local_evidence_before_observation =
+            exact_transaction_hash
+                .as_ref()
+                .is_some_and(|transaction_hash| {
+                    let queue_pending = state
+                        .queue
+                        .contains_pending_hash(transaction_hash.clone(), &state.state);
+                    let cache_kind = state
+                        .pipeline_status_cache
+                        .lookup(transaction_hash)
+                        .map(|entry| entry.kind);
+                    local_repair_evidence_blocks_absence_retry(queue_pending, cache_kind)
+                });
+        let (reconciliation, exact_observation) = if let Some(transaction_hash) =
+            exact_transaction_hash.as_ref()
+        {
+            let Some(observation) =
+                observe_exact_sorafs_repair_transaction(state, &request, transaction_hash)
+            else {
+                scan.deferred = scan.deferred.saturating_add(1);
+                warn!("authoritative SoraFS repair transaction observation failed");
+                continue;
+            };
+            (observation.reconciliation, Some(observation))
+        } else {
+            let Some(reconciliation) = reconcile_sorafs_repair_transaction(state, &request) else {
+                scan.deferred = scan.deferred.saturating_add(1);
+                warn!("authoritative SoraFS repair transaction reconciliation failed");
+                continue;
+            };
+            (reconciliation, None)
         };
         let (finalized_cursor, authority_is_authorized) = match reconciliation {
             RepairTransactionReconciliationV1::Finalized(finalized_cursor) => {
@@ -16400,34 +16299,54 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
             }
             RepairTransactionDeliveryStateV1::Ambiguous
             | RepairTransactionDeliveryStateV1::Submitted => {
-                let Some(transaction_bytes) = delivery.signed_transaction_bytes.as_deref() else {
-                    scan.deferred = scan.deferred.saturating_add(1);
-                    continue;
-                };
-                let Some(transaction) =
-                    decode_sorafs_repair_signed_transaction(transaction_bytes, &delivery.chain_id)
+                let (Some(transaction_hash), Some(observation)) =
+                    (exact_transaction_hash.as_ref(), exact_observation)
                 else {
                     scan.deferred = scan.deferred.saturating_add(1);
-                    warn!("durable native SoraFS repair transaction bytes failed validation");
                     continue;
                 };
-                match crate::pipeline_status_local_entry(state, &transaction.hash()) {
-                    Some((entry, _))
-                        if matches!(
-                            entry.kind,
-                            crate::PipelineStatusKind::Rejected
-                                | crate::PipelineStatusKind::Expired
-                        ) =>
-                    {
-                        match state.sorafs_node.mark_repair_transaction_rejected(
+                if observation.finalized_cursor != finalized_cursor {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                }
+                let queue_pending_after_observation = state
+                    .queue
+                    .contains_pending_hash(transaction_hash.clone(), &state.state);
+                let cache_kind_after_observation = state
+                    .pipeline_status_cache
+                    .lookup(transaction_hash)
+                    .map(|entry| entry.kind);
+                let local_evidence_blocks_absence_retry = local_evidence_before_observation
+                    || local_repair_evidence_blocks_absence_retry(
+                        queue_pending_after_observation,
+                        cache_kind_after_observation,
+                    );
+                match classify_exact_repair_delivery(
+                    observation.transaction_outcome,
+                    observation.finalized_cursor,
+                    delivery.baseline_finalized_height,
+                    local_evidence_blocks_absence_retry,
+                ) {
+                    RepairExactDeliveryDispositionV1::Applied => {
+                        let Some(transaction_digest) =
+                            retained_repair_transaction_digest_for_finalization(
+                                delivery.transaction_digest,
+                                delivery.signed_transaction_bytes.as_deref(),
+                            )
+                        else {
+                            scan.deferred = scan.deferred.saturating_add(1);
+                            continue;
+                        };
+                        match state.sorafs_node.mark_repair_transaction_finalized(
                             delivery.operation_id,
-                            finalized_cursor,
+                            transaction_digest,
+                            observation.finalized_cursor,
                         ) {
-                            Ok(()) => scan.rejected = scan.rejected.saturating_add(1),
+                            Ok(()) => scan.finalized = scan.finalized.saturating_add(1),
                             Err(_) => scan.deferred = scan.deferred.saturating_add(1),
                         }
                     }
-                    Some((_entry, _)) => {
+                    RepairExactDeliveryDispositionV1::Pending => {
                         if delivery.state == RepairTransactionDeliveryStateV1::Ambiguous {
                             let _ = state
                                 .sorafs_node
@@ -16435,14 +16354,33 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                         }
                         scan.deferred = scan.deferred.saturating_add(1);
                     }
-                    None if finalized_cursor.height > delivery.baseline_finalized_height => {
-                        let _ = state.sorafs_node.mark_repair_transaction_finalized_absent(
+                    RepairExactDeliveryDispositionV1::Rejected => {
+                        match state.sorafs_node.mark_repair_transaction_rejected(
                             delivery.operation_id,
-                            finalized_cursor,
-                        );
+                            observation.finalized_cursor,
+                        ) {
+                            Ok(()) => scan.rejected = scan.rejected.saturating_add(1),
+                            Err(_) => scan.deferred = scan.deferred.saturating_add(1),
+                        }
+                    }
+                    RepairExactDeliveryDispositionV1::FinalizedAbsent => {
+                        if state
+                            .sorafs_node
+                            .mark_repair_transaction_finalized_absent(
+                                delivery.operation_id,
+                                observation.finalized_cursor,
+                            )
+                            .is_err()
+                        {
+                            warn!(
+                                "failed to checkpoint authoritative absence for a native SoraFS repair transaction"
+                            );
+                        }
                         scan.deferred = scan.deferred.saturating_add(1);
                     }
-                    None => scan.deferred = scan.deferred.saturating_add(1),
+                    RepairExactDeliveryDispositionV1::Unavailable => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
                 }
             }
             RepairTransactionDeliveryStateV1::Signing => {
@@ -16659,10 +16597,8 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
             tokio::select! {
                 () = shutdown_signal.receive() => break,
                 _ = interval.tick() => {
-                    let now_unix_ms = iroha_network_time_now_ms();
                     match orchestrator.run_maintenance(
                         maintenance_authority.clone(),
-                        now_unix_ms,
                         maintenance_batch_limit,
                     ) {
                         Ok(outcomes) => {
@@ -16702,100 +16638,6 @@ pub(crate) fn spawn_sorafs_moderation_orchestrator_worker(
     });
 }
 
-#[cfg(test)]
-pub(crate) fn spawn_sorafs_appeal_finance_settlement_worker(
-    state: SharedAppState,
-    shutdown_signal: ShutdownSignal,
-) {
-    if !state.sorafs_node.is_enabled() {
-        debug!(
-            "SoraFS appeal finance moderation settlement worker disabled: SoraFS storage is disabled"
-        );
-        return;
-    }
-    let Some(worker_scan_interval) = state
-        .sorafs_appeal_settlement_submitter
-        .as_ref()
-        .map(|submitter| submitter.worker_scan_interval())
-    else {
-        debug!(
-            "SoraFS appeal finance moderation settlement worker disabled: no configured submitter signer"
-        );
-        return;
-    };
-
-    let mut receiver = state.sorafs_node.subscribe_moderation_ballot_events();
-    let replay = state
-        .sorafs_node
-        .moderation_ballot_events_since(None, usize::MAX);
-    tokio::spawn(async move {
-        let mut last_processed_sequence = 0_u64;
-        let mut submitted_steps =
-            match load_appeal_finance_settlement_worker_submitted_steps(&state) {
-                Ok(steps) => steps,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "failed to load SoraFS appeal finance settlement worker state",
-                    );
-                    BTreeMap::new()
-                }
-            };
-        let mut scan_interval = tokio::time::interval(worker_scan_interval);
-        scan_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        for event in replay {
-            last_processed_sequence = last_processed_sequence.max(event.sequence);
-            log_sorafs_appeal_finance_settlement_worker_result(
-                event.sequence,
-                process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
-                    &state,
-                    event,
-                    &mut submitted_steps,
-                )
-                .await,
-            );
-        }
-
-        loop {
-            tokio::select! {
-                () = shutdown_signal.receive() => break,
-                _ = scan_interval.tick() => {
-                    scan_sorafs_appeal_finance_settlement_worker_records(
-                        &state,
-                        &mut submitted_steps,
-                    )
-                    .await;
-                }
-                event = receiver.recv() => {
-                    match event {
-                        Ok(event) => {
-                            if event.sequence <= last_processed_sequence {
-                                continue;
-                            }
-                            last_processed_sequence = event.sequence;
-                            log_sorafs_appeal_finance_settlement_worker_result(
-                                event.sequence,
-                                process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
-                                    &state,
-                                    event,
-                                    &mut submitted_steps,
-                                )
-                                .await,
-                            );
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            warn!(
-                                skipped,
-                                "SoraFS appeal finance moderation settlement worker lagged behind moderation event stream",
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
 
 pub(crate) fn spawn_sorafs_reserve_lifecycle_scheduler(
     state: SharedAppState,
@@ -16988,691 +16830,6 @@ pub(crate) fn run_sorafs_reserve_lifecycle_scheduler_tick(
     Ok(events)
 }
 
-#[cfg(test)]
-fn log_sorafs_appeal_finance_settlement_worker_result(
-    event_sequence: u64,
-    result: Result<Option<(StatusCode, Value)>, String>,
-) {
-    match result {
-        Ok(Some((status, body))) => {
-            let submission_status = body
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            debug!(
-                event_sequence,
-                http_status = status.as_u16(),
-                submission_status,
-                "processed SoraFS appeal finance moderation settlement event",
-            );
-        }
-        Ok(None) => {}
-        Err(err) => {
-            warn!(
-                event_sequence,
-                error = %err,
-                "failed to process SoraFS appeal finance moderation settlement event",
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-fn log_sorafs_appeal_finance_settlement_worker_scan_result(
-    case_id: &str,
-    round_id: &str,
-    result: Result<Option<(StatusCode, Value)>, String>,
-) {
-    match result {
-        Ok(Some((status, body))) => {
-            let submission_status = body
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            debug!(
-                case_id,
-                round_id,
-                http_status = status.as_u16(),
-                submission_status,
-                "processed SoraFS appeal finance settlement worker scan candidate",
-            );
-        }
-        Ok(None) => {}
-        Err(err) => {
-            warn!(
-                case_id,
-                round_id,
-                error = %err,
-                "failed to process SoraFS appeal finance settlement worker scan candidate",
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AppealFinanceSettlementWorkerStepKey {
-    escrow_id_hex: String,
-    outcome: String,
-    panel_size: u32,
-    action: String,
-    reconciliation_digest_hex: String,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AppealFinanceSettlementWorkerSubmission {
-    key: AppealFinanceSettlementWorkerStepKey,
-    tx_hash_hex: Option<String>,
-    status: String,
-    attempts: u32,
-    updated_at_unix_ms: u64,
-    last_error: Option<String>,
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_state_path(state: &SharedAppState) -> Option<PathBuf> {
-    if !state.sorafs_node.is_enabled() {
-        return None;
-    }
-    Some(
-        state
-            .sorafs_node
-            .config()
-            .data_dir()
-            .join(APPEAL_FINANCE_SETTLEMENT_WORKER_STATE_FILE),
-    )
-}
-
-#[cfg(test)]
-fn load_appeal_finance_settlement_worker_submitted_steps(
-    state: &SharedAppState,
-) -> Result<
-    BTreeMap<AppealFinanceSettlementWorkerStepKey, AppealFinanceSettlementWorkerSubmission>,
-    String,
-> {
-    let Some(path) = appeal_finance_settlement_worker_state_path(state) else {
-        return Ok(BTreeMap::new());
-    };
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(err) => {
-            return Err(format!(
-                "failed to read SoraFS appeal finance settlement worker state `{}`: {err}",
-                path.display()
-            ));
-        }
-    };
-    let value: Value = json::from_slice(&bytes).map_err(|err| {
-        format!(
-            "failed to decode SoraFS appeal finance settlement worker state `{}`: {err}",
-            path.display()
-        )
-    })?;
-    if value.get("schema").and_then(Value::as_str)
-        != Some("sorafs.appeal_finance.settlement_worker_state.v1")
-    {
-        return Err(format!(
-            "SoraFS appeal finance settlement worker state `{}` has an unsupported schema",
-            path.display()
-        ));
-    }
-    let Some(steps) = value.get("submitted_steps").and_then(Value::as_array) else {
-        return Err(format!(
-            "SoraFS appeal finance settlement worker state `{}` is missing `submitted_steps`",
-            path.display()
-        ));
-    };
-    let mut submissions = BTreeMap::new();
-    for value in steps {
-        let submission = appeal_finance_settlement_worker_submission_from_json(value)?;
-        submissions.insert(submission.key.clone(), submission);
-    }
-    Ok(submissions)
-}
-
-#[cfg(test)]
-fn persist_appeal_finance_settlement_worker_submitted_steps(
-    state: &SharedAppState,
-    submitted_steps: &BTreeMap<
-        AppealFinanceSettlementWorkerStepKey,
-        AppealFinanceSettlementWorkerSubmission,
-    >,
-    updated_at_unix_ms: u64,
-) -> Result<(), String> {
-    let Some(path) = appeal_finance_settlement_worker_state_path(state) else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create SoraFS appeal finance settlement worker state directory `{}`: {err}",
-                parent.display()
-            )
-        })?;
-    }
-    let value = json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.appeal_finance.settlement_worker_state.v1"),
-        ),
-        json_entry("updated_at_unix_ms", Value::from(updated_at_unix_ms)),
-        json_entry(
-            "submitted_steps",
-            Value::Array(
-                submitted_steps
-                    .values()
-                    .map(appeal_finance_settlement_worker_submission_json)
-                    .collect(),
-            ),
-        ),
-    ]);
-    let bytes = json::to_vec(&value).map_err(|err| {
-        format!("failed to encode SoraFS appeal finance settlement worker state: {err}")
-    })?;
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, bytes).map_err(|err| {
-        format!(
-            "failed to write SoraFS appeal finance settlement worker state `{}`: {err}",
-            tmp_path.display()
-        )
-    })?;
-    fs::rename(&tmp_path, &path).map_err(|err| {
-        format!(
-            "failed to replace SoraFS appeal finance settlement worker state `{}`: {err}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_submission_json(
-    submission: &AppealFinanceSettlementWorkerSubmission,
-) -> Value {
-    json_object(vec![
-        json_entry(
-            "escrow_id_hex",
-            Value::from(submission.key.escrow_id_hex.clone()),
-        ),
-        json_entry("outcome", Value::from(submission.key.outcome.clone())),
-        json_entry(
-            "panel_size",
-            Value::from(u64::from(submission.key.panel_size)),
-        ),
-        json_entry("action", Value::from(submission.key.action.clone())),
-        json_entry(
-            "reconciliation_digest_hex",
-            Value::from(submission.key.reconciliation_digest_hex.clone()),
-        ),
-        json_entry(
-            "tx_hash_hex",
-            submission
-                .tx_hash_hex
-                .as_ref()
-                .map(|value| Value::from(value.clone()))
-                .unwrap_or(Value::Null),
-        ),
-        json_entry("status", Value::from(submission.status.clone())),
-        json_entry("attempts", Value::from(u64::from(submission.attempts))),
-        json_entry(
-            "updated_at_unix_ms",
-            Value::from(submission.updated_at_unix_ms),
-        ),
-        json_entry(
-            "last_error",
-            submission
-                .last_error
-                .as_ref()
-                .map(|value| Value::from(value.clone()))
-                .unwrap_or(Value::Null),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_submission_from_json(
-    value: &Value,
-) -> Result<AppealFinanceSettlementWorkerSubmission, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "submitted worker step must be an object".to_owned())?;
-    let escrow_id_hex =
-        required_string_from_json_object(object, "escrow_id_hex", "submitted worker step")?;
-    let outcome = required_string_from_json_object(object, "outcome", "submitted worker step")?;
-    let action = required_string_from_json_object(object, "action", "submitted worker step")?;
-    let reconciliation_digest_hex = required_string_from_json_object(
-        object,
-        "reconciliation_digest_hex",
-        "submitted worker step",
-    )?;
-    let panel_size = object
-        .get("panel_size")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "submitted worker step `panel_size` must be a u64".to_owned())
-        .and_then(|value| {
-            u32::try_from(value)
-                .map_err(|_| "submitted worker step `panel_size` exceeds u32".to_owned())
-        })?;
-    let key = AppealFinanceSettlementWorkerStepKey {
-        escrow_id_hex,
-        outcome,
-        panel_size,
-        action,
-        reconciliation_digest_hex,
-    };
-    let tx_hash_hex = optional_string_from_json_object(object, "tx_hash_hex")?;
-    let status =
-        optional_string_from_json_object(object, "status")?.unwrap_or_else(|| "queued".to_owned());
-    let attempts = object
-        .get("attempts")
-        .and_then(Value::as_u64)
-        .map_or(Ok(1_u32), |value| {
-            u32::try_from(value).map_err(|_| "submitted worker step `attempts` exceeds u32")
-        })
-        .map_err(str::to_owned)?
-        .max(1);
-    let updated_at_unix_ms = object
-        .get("updated_at_unix_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let last_error = optional_string_from_json_object(object, "last_error")?;
-    Ok(AppealFinanceSettlementWorkerSubmission {
-        key,
-        tx_hash_hex,
-        status,
-        attempts,
-        updated_at_unix_ms,
-        last_error,
-    })
-}
-
-#[cfg(test)]
-fn required_string_from_json_object(
-    object: &Map,
-    field: &'static str,
-    context: &'static str,
-) -> Result<String, String> {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| format!("{context} `{field}` must be a string"))
-}
-
-#[cfg(test)]
-fn optional_string_from_json_object(
-    object: &Map,
-    field: &'static str,
-) -> Result<Option<String>, String> {
-    match object.get(field) {
-        Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(Value::Null) | None => Ok(None),
-        Some(_) => Err(format!("submitted worker step `{field}` must be a string")),
-    }
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_signed_tx_hash(
-    tx_hash_hex: &str,
-) -> Result<HashOf<SignedTransaction>, String> {
-    let hash = Hash::from_str(tx_hash_hex)
-        .map_err(|err| format!("invalid worker settlement tx_hash_hex `{tx_hash_hex}`: {err}"))?;
-    Ok(HashOf::<SignedTransaction>::from_untyped_unchecked(hash))
-}
-
-#[cfg(test)]
-fn refresh_appeal_finance_settlement_worker_submission_status(
-    state: &SharedAppState,
-    submission: &mut AppealFinanceSettlementWorkerSubmission,
-    updated_at_unix_ms: u64,
-) -> Result<bool, String> {
-    let Some(tx_hash_hex) = submission.tx_hash_hex.as_deref() else {
-        return Ok(false);
-    };
-    let tx_hash = appeal_finance_settlement_worker_signed_tx_hash(tx_hash_hex)?;
-    let Some((entry, _resolved_from)) = crate::pipeline_status_local_entry(state, &tx_hash) else {
-        return Ok(false);
-    };
-    let (status, last_error) = match entry.kind.as_str() {
-        "Applied" => ("applied", None),
-        "Rejected" => (
-            "rejected",
-            entry.rejection.as_ref().map(ToString::to_string),
-        ),
-        "Expired" => ("expired", None),
-        _ => ("queued", None),
-    };
-    let status_changed = submission.status != status;
-    let error_changed = submission.last_error != last_error;
-    if status_changed || error_changed {
-        submission.status = status.to_owned();
-        submission.last_error = last_error;
-        submission.updated_at_unix_ms = updated_at_unix_ms;
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_submission_can_retry(
-    submission: &AppealFinanceSettlementWorkerSubmission,
-    max_retry_attempts: u32,
-) -> bool {
-    matches!(submission.status.as_str(), "rejected" | "expired")
-        && submission.attempts < max_retry_attempts.max(1)
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_max_retry_attempts(state: &SharedAppState) -> u32 {
-    state
-        .sorafs_appeal_settlement_submitter
-        .as_ref()
-        .map_or(1, |submitter| submitter.worker_max_retry_attempts())
-        .max(1)
-}
-
-#[cfg(test)]
-async fn process_sorafs_appeal_finance_settlement_worker_event(
-    state: &SharedAppState,
-    event: ModerationBallotEvent,
-) -> Result<Option<(StatusCode, Value)>, String> {
-    let mut submitted_steps = load_appeal_finance_settlement_worker_submitted_steps(state)?;
-    process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
-        state,
-        event,
-        &mut submitted_steps,
-    )
-    .await
-}
-
-#[cfg(test)]
-async fn process_sorafs_appeal_finance_settlement_worker_event_with_dedupe(
-    state: &SharedAppState,
-    event: ModerationBallotEvent,
-    submitted_steps: &mut BTreeMap<
-        AppealFinanceSettlementWorkerStepKey,
-        AppealFinanceSettlementWorkerSubmission,
-    >,
-) -> Result<Option<(StatusCode, Value)>, String> {
-    if event.kind != ModerationBallotEventKind::BallotTallied {
-        return Ok(None);
-    }
-    let Some(tally) = event.tally.as_ref() else {
-        return Err("tallied moderation event did not include a tally snapshot".to_owned());
-    };
-    let Some(ballot_record) = state
-        .sorafs_node
-        .moderation_ballot(&event.case_id, &event.round_id)
-    else {
-        return Err(format!(
-            "moderation ballot `{}`/`{}` was not found for settlement",
-            event.case_id, event.round_id
-        ));
-    };
-    process_sorafs_appeal_finance_settlement_worker_record(
-        state,
-        &ballot_record,
-        tally,
-        event.generated_at_unix_ms,
-        submitted_steps,
-    )
-    .await
-}
-
-#[cfg(test)]
-async fn scan_sorafs_appeal_finance_settlement_worker_records(
-    state: &SharedAppState,
-    submitted_steps: &mut BTreeMap<
-        AppealFinanceSettlementWorkerStepKey,
-        AppealFinanceSettlementWorkerSubmission,
-    >,
-) {
-    for ballot_record in state.sorafs_node.moderation_ballots() {
-        let Some(tally) = ballot_record.tally.as_ref() else {
-            continue;
-        };
-        let case_id = ballot_record.announcement.context.case_id.clone();
-        let round_id = ballot_record.announcement.round_id.clone();
-        log_sorafs_appeal_finance_settlement_worker_scan_result(
-            &case_id,
-            &round_id,
-            process_sorafs_appeal_finance_settlement_worker_record(
-                state,
-                &ballot_record,
-                tally,
-                unix_timestamp_now_ms(),
-                submitted_steps,
-            )
-            .await,
-        );
-    }
-}
-
-#[cfg(test)]
-async fn process_sorafs_appeal_finance_settlement_worker_record(
-    state: &SharedAppState,
-    ballot_record: &ModerationBallotRecord,
-    tally: &ModerationBallotTally,
-    generated_at_unix_ms: u64,
-    submitted_steps: &mut BTreeMap<
-        AppealFinanceSettlementWorkerStepKey,
-        AppealFinanceSettlementWorkerSubmission,
-    >,
-) -> Result<Option<(StatusCode, Value)>, String> {
-    let Some(deposit) = ballot_record.announcement.appeal_deposit.as_ref() else {
-        return Ok(None);
-    };
-    let deposit_confirmation =
-        appeal_finance_deposit_confirm_request_from_moderation_deposit(&ballot_record, deposit);
-    let (expected, escrow_record) =
-        load_appeal_finance_deposit_record_for_worker(state, &deposit_confirmation)?;
-    let outcome = appeal_finance_settlement_outcome_from_moderation_tally(tally);
-    let panel_size = moderation_ballot_panel_size(ballot_record)?;
-    let Some(step_key) =
-        appeal_finance_settlement_worker_step_key(&expected, &escrow_record, outcome, panel_size)?
-    else {
-        return Ok(None);
-    };
-    let max_retry_attempts = appeal_finance_settlement_worker_max_retry_attempts(state);
-    let mut should_skip_submission = false;
-    let mut should_persist_status = false;
-    if let Some(submission) = submitted_steps.get_mut(&step_key) {
-        let status_changed = refresh_appeal_finance_settlement_worker_submission_status(
-            state,
-            submission,
-            generated_at_unix_ms,
-        )?;
-        if !appeal_finance_settlement_worker_submission_can_retry(submission, max_retry_attempts) {
-            should_skip_submission = true;
-            should_persist_status = status_changed;
-        }
-    }
-    if should_skip_submission {
-        if should_persist_status {
-            persist_appeal_finance_settlement_worker_submitted_steps(
-                state,
-                submitted_steps,
-                generated_at_unix_ms,
-            )?;
-        }
-        return Ok(None);
-    }
-
-    let result = submit_appeal_finance_deposit_settlement_step(
-        state,
-        expected,
-        escrow_record,
-        outcome,
-        Some(panel_size),
-        generated_at_unix_ms,
-    )
-    .await
-    .map_err(|response| {
-        format!(
-            "settlement submitter returned HTTP status {}",
-            response.status()
-        )
-    })?;
-    if result.0 == StatusCode::ACCEPTED {
-        let attempts = submitted_steps
-            .get(&step_key)
-            .map_or(0_u32, |submission| submission.attempts)
-            .saturating_add(1);
-        let tx_hash_hex = result
-            .1
-            .get("tx_hash_hex")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        submitted_steps.insert(
-            step_key.clone(),
-            AppealFinanceSettlementWorkerSubmission {
-                key: step_key,
-                tx_hash_hex,
-                status: "queued".to_owned(),
-                attempts,
-                updated_at_unix_ms: generated_at_unix_ms,
-                last_error: None,
-            },
-        );
-        if let Err(err) = persist_appeal_finance_settlement_worker_submitted_steps(
-            state,
-            submitted_steps,
-            generated_at_unix_ms,
-        ) {
-            warn!(
-                error = %err,
-                "failed to persist SoraFS appeal finance settlement worker state",
-            );
-        }
-    }
-    Ok(Some(result))
-}
-
-#[cfg(test)]
-fn appeal_finance_deposit_confirm_request_from_moderation_deposit(
-    record: &ModerationBallotRecord,
-    deposit: &ModerationAppealDeposit,
-) -> AppealFinanceDepositConfirmRequestDto {
-    AppealFinanceDepositConfirmRequestDto {
-        escrow_id_hex: deposit.escrow_id_hex.clone(),
-        case_id: record.announcement.context.case_id.clone(),
-        round_id: Some(record.announcement.round_id.clone()),
-        payer_account: deposit.payer_account.clone(),
-        destination_account: deposit.destination_account.clone(),
-        release_authority_account: deposit.release_authority_account.clone(),
-        asset_definition_id: deposit.asset_definition_id.clone(),
-        deposit_xor: deposit.deposit_xor.as_quantity().clone(),
-        expires_at_ms: deposit.expires_at_ms,
-        idempotency_key: deposit.idempotency_key.clone(),
-        evidence_hashes_hex: Some(deposit.evidence_hashes_hex.clone()),
-    }
-}
-
-#[cfg(test)]
-fn load_appeal_finance_deposit_record_for_worker(
-    state: &SharedAppState,
-    req: &AppealFinanceDepositConfirmRequestDto,
-) -> Result<(AppealFinanceDepositExpectation, AssetEscrowRecord), String> {
-    let escrow_id = appeal_finance_escrow_id_from_hex(&req.escrow_id_hex)?;
-    let expected =
-        appeal_finance_deposit_expectation(appeal_finance_deposit_confirm_base_request(req))?;
-    if escrow_id != expected.escrow_id {
-        return Err(
-            "SoraFS appeal finance `escrow_id_hex` does not match the expected deposit parameters"
-                .to_owned(),
-        );
-    }
-
-    let world = state.state.world_view();
-    let record = world
-        .asset_escrows()
-        .get(&escrow_id)
-        .cloned()
-        .ok_or_else(|| {
-            "SoraFS appeal finance deposit asset lock was not found in the runtime ledger"
-                .to_owned()
-        })?;
-    let mismatches = appeal_finance_deposit_static_mismatches(&expected, &record);
-    if !mismatches.is_empty() {
-        return Err(format!(
-            "SoraFS appeal finance moderation deposit does not match runtime ledger: {}",
-            mismatches.join("; ")
-        ));
-    }
-    Ok((expected, record))
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_worker_step_key(
-    expected: &AppealFinanceDepositExpectation,
-    record: &AssetEscrowRecord,
-    outcome: &str,
-    panel_size: u32,
-) -> Result<Option<AppealFinanceSettlementWorkerStepKey>, String> {
-    let config = baseline_appeal_settlement_config();
-    let deposit_xor =
-        parse_appeal_quantity_literal("deposit_xor", &expected.deposit_xor.to_string())
-            .map_err(|err| err.to_string())?;
-    let verdict = appeal_verdict_from_request(outcome)?;
-    let breakdown = config
-        .settle(deposit_xor, panel_size, verdict)
-        .map_err(|err| err.to_string())?;
-    let reconciliation = appeal_finance_deposit_settlement_reconciliation(
-        expected,
-        record,
-        config.version(),
-        verdict,
-        panel_size,
-        &breakdown,
-    )?;
-    if reconciliation.status == "settled" {
-        return Ok(None);
-    }
-    if reconciliation.status == "mismatch" {
-        return Err(format!(
-            "SoraFS appeal finance moderation settlement reconciliation mismatch: {}",
-            reconciliation.mismatches.join("; ")
-        ));
-    }
-    let execution = appeal_finance_deposit_settlement_execution(expected, record, &breakdown)?;
-    let Some(step) =
-        appeal_finance_deposit_next_settlement_submission_step(&reconciliation, &execution)
-    else {
-        return Err(
-            "SoraFS appeal finance moderation settlement state has no submitter action".to_owned(),
-        );
-    };
-    Ok(Some(AppealFinanceSettlementWorkerStepKey {
-        escrow_id_hex: expected.escrow_id.as_hash().to_string(),
-        outcome: outcome.to_owned(),
-        panel_size,
-        action: step.action.to_owned(),
-        reconciliation_digest_hex: reconciliation.reconciliation_digest_hex,
-    }))
-}
-
-#[cfg(test)]
-fn appeal_finance_settlement_outcome_from_moderation_tally(
-    tally: &ModerationBallotTally,
-) -> &'static str {
-    match tally.winning_choice {
-        Some(SoraFsModerationVoteChoice::Uphold) => "uphold",
-        Some(SoraFsModerationVoteChoice::Overturn) => "overturn",
-        Some(SoraFsModerationVoteChoice::Modify) => "modify",
-        Some(SoraFsModerationVoteChoice::Escalate) | None => "escalated",
-    }
-}
-
-#[cfg(test)]
-fn moderation_ballot_panel_size(record: &ModerationBallotRecord) -> Result<u32, String> {
-    let panel_size = u32::try_from(record.announcement.juror_ids.len())
-        .map_err(|_| "moderation panel size exceeds settlement limits".to_owned())?;
-    if panel_size == 0 {
-        return Err("moderation panel size must be non-zero".to_owned());
-    }
-    Ok(panel_size)
-}
 
 pub(crate) async fn handle_post_sorafs_appeal_finance_deposit_reconcile(
     State(state): State<SharedAppState>,
@@ -18258,95 +17415,6 @@ fn moderation_quarantine_appeal_handoff_evidence_hash(
         hex::encode(record.screening_record_id),
         hex::encode(record.subject_digest),
     ))
-}
-
-#[cfg(test)]
-fn ensure_moderation_quarantine_appeal_ballot_deposit_binds_quarantine(
-    deposit_confirmation: &AppealFinanceDepositConfirmRequestDto,
-    handoff_evidence_hash: &str,
-) -> Result<(), Response> {
-    let includes_handoff_hash = deposit_confirmation
-        .evidence_hashes_hex
-        .as_ref()
-        .is_some_and(|hashes| {
-            hashes
-                .iter()
-                .any(|hash| hash.trim().eq_ignore_ascii_case(handoff_evidence_hash))
-        });
-    if includes_handoff_hash {
-        Ok(())
-    } else {
-        Err(json_error(
-            StatusCode::PRECONDITION_FAILED,
-            "SoraFS moderation quarantine appeal ballot deposit_confirmation.evidence_hashes_hex must include the reviewed quarantine handoff evidence hash",
-        ))
-    }
-}
-
-#[cfg(test)]
-fn moderation_quarantine_appeal_ballot_announcement_request(
-    quarantine_id_hex: &str,
-    req: ModerationQuarantineAppealBallotRequestDto,
-    handoff_evidence_hash: &str,
-) -> Result<ModerationBallotAnnounceRequestDto, Response> {
-    let case_id = match req.case_id {
-        Some(case_id) => required_appeal_finance_label("case_id", &case_id)
-            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
-        None => required_appeal_finance_label("case_id", &req.deposit_confirmation.case_id)
-            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
-    };
-    let round_id = match req
-        .round_id
-        .or_else(|| req.deposit_confirmation.round_id.clone())
-    {
-        Some(round_id) => required_appeal_finance_label("round_id", &round_id)
-            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
-        None => {
-            return Err(json_error(
-                StatusCode::PRECONDITION_FAILED,
-                "SoraFS moderation quarantine appeal ballot requires round_id or deposit_confirmation.round_id",
-            ));
-        }
-    };
-    let evidence_bundle_digest_hex = req
-        .evidence_bundle_digest_hex
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| handoff_evidence_hash.to_owned());
-    let appeal_finance_config_version = req
-        .appeal_finance_config_version
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| baseline_appeal_pricing_config().version().to_owned());
-    let policy_reference = req
-        .policy_reference
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("policy://sorafs/moderation/quarantine/{quarantine_id_hex}"));
-    let announced_at_unix_ms = req
-        .announced_at_unix_ms
-        .unwrap_or_else(iroha_network_time_now_ms);
-
-    Ok(ModerationBallotAnnounceRequestDto {
-        case_id,
-        deposit_confirmation: Some(req.deposit_confirmation),
-        evidence_bundle_digest_hex,
-        appeal_finance_config_version,
-        panel_roster_hash_hex: req.panel_roster_hash_hex,
-        policy_reference,
-        evidence_uri: req.evidence_uri.or_else(|| {
-            Some(format!(
-                "sorafs://moderation/quarantine/{quarantine_id_hex}"
-            ))
-        }),
-        round_id,
-        juror_ids: req.juror_ids,
-        quorum: req.quorum,
-        announced_at_unix_ms,
-        commit_deadline_unix_ms: req.commit_deadline_unix_ms,
-        challenge_deadline_unix_ms: req.challenge_deadline_unix_ms,
-        reveal_deadline_unix_ms: req.reveal_deadline_unix_ms,
-    })
 }
 
 fn appeal_finance_deposit_expectation(
@@ -20170,68 +19238,6 @@ fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Resp
     json_error(status, format!("sorafs reserve appeal error: {err}"))
 }
 
-#[cfg(test)]
-fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
-    let status = match err {
-        ModerationBallotRuntimeError::DuplicateBallot { .. }
-        | ModerationBallotRuntimeError::DuplicateCommit { .. }
-        | ModerationBallotRuntimeError::DuplicateReveal { .. }
-        | ModerationBallotRuntimeError::DuplicateChallenge { .. }
-        | ModerationBallotRuntimeError::ChallengeAlreadyResolved { .. }
-        | ModerationBallotRuntimeError::AlreadyTallied { .. } => StatusCode::CONFLICT,
-        ModerationBallotRuntimeError::UnknownBallot { .. }
-        | ModerationBallotRuntimeError::UnknownChallenge { .. } => StatusCode::NOT_FOUND,
-        ModerationBallotRuntimeError::IneligibleJuror { .. } => StatusCode::FORBIDDEN,
-        ModerationBallotRuntimeError::CommitWindowClosed { .. }
-        | ModerationBallotRuntimeError::RevealWindowNotOpen { .. }
-        | ModerationBallotRuntimeError::RevealWindowClosed { .. }
-        | ModerationBallotRuntimeError::ChallengeWindowNotOpen { .. }
-        | ModerationBallotRuntimeError::ChallengeWindowClosed { .. }
-        | ModerationBallotRuntimeError::ChallengePending { .. }
-        | ModerationBallotRuntimeError::ChallengeAccepted { .. }
-        | ModerationBallotRuntimeError::MissingCommit { .. }
-        | ModerationBallotRuntimeError::TallyWindowOpen { .. }
-        | ModerationBallotRuntimeError::QuorumNotMet { .. } => StatusCode::PRECONDITION_FAILED,
-        ModerationBallotRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
-        ModerationBallotRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
-        ModerationBallotRuntimeError::EventSequenceOverflow
-        | ModerationBallotRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
-        ModerationBallotRuntimeError::Validation(_)
-        | ModerationBallotRuntimeError::MissingRoundId
-        | ModerationBallotRuntimeError::MissingJurors
-        | ModerationBallotRuntimeError::BlankJurorId
-        | ModerationBallotRuntimeError::DuplicateJuror { .. }
-        | ModerationBallotRuntimeError::InvalidQuorum { .. }
-        | ModerationBallotRuntimeError::RosterHashMismatch
-        | ModerationBallotRuntimeError::MissingAppealDepositEscrowId
-        | ModerationBallotRuntimeError::AppealDepositEscrowIdMismatch
-        | ModerationBallotRuntimeError::InvalidWindows
-        | ModerationBallotRuntimeError::MissingChallengeId
-        | ModerationBallotRuntimeError::MissingChallengerId
-        | ModerationBallotRuntimeError::MissingChallengeTarget { .. }
-        | ModerationBallotRuntimeError::BlankChallengeTarget
-        | ModerationBallotRuntimeError::MissingChallengeEvidence
-        | ModerationBallotRuntimeError::MissingChallengeReason
-        | ModerationBallotRuntimeError::MissingChallengeResolver
-        | ModerationBallotRuntimeError::BlankChallengeResolutionNote
-        | ModerationBallotRuntimeError::InvalidChallengeResolutionTimestamp
-        | ModerationBallotRuntimeError::InvalidSnapshot { .. }
-        | ModerationBallotRuntimeError::PayloadContextMismatch
-        | ModerationBallotRuntimeError::PayloadRoundMismatch { .. } => StatusCode::BAD_REQUEST,
-    };
-    json_error(status, format!("sorafs moderation ballot error: {err}"))
-}
-
-#[cfg(test)]
-#[test]
-fn moderation_ballot_invalid_snapshot_errors_map_to_bad_request() {
-    let response =
-        moderation_ballot_runtime_error_response(ModerationBallotRuntimeError::InvalidSnapshot {
-            message: "duplicate moderation ballot".to_owned(),
-        });
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
 fn decode_moderation_model_registry_manifest<T>(
     manifest_b64: &str,
     manifest_label: &str,
@@ -20893,10 +19899,6 @@ fn moderation_evidence_viewer_error_response(err: ModerationEvidenceViewerError)
 fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     let limit = 1;
     let responses = [
-        moderation_ballot_runtime_error_response(ModerationBallotRuntimeError::ResourceExhausted {
-            resource: "ballots",
-            limit,
-        }),
         moderation_model_registry_error_response(ModerationModelRegistryError::ResourceExhausted {
             resource: "reproducibility_manifests",
             limit,
@@ -21417,27 +20419,6 @@ fn moderation_quarantine_appeal_handoff_json(
     ])
 }
 
-#[cfg(test)]
-fn moderation_quarantine_appeal_ballot_json(
-    record: &ModerationQuarantineRecord,
-    handoff_evidence_hash: &str,
-    ballot: &ModerationBallotRecord,
-) -> Value {
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.moderation.quarantine.appeal_ballot.v1"),
-        ),
-        json_entry("status", Value::from("announced")),
-        json_entry("record", moderation_quarantine_record_json(record)),
-        json_entry(
-            "handoff_evidence_hash_hex",
-            Value::from(handoff_evidence_hash.to_owned()),
-        ),
-        json_entry("ballot", moderation_ballot_record_json(ballot)),
-    ])
-}
-
 fn appeal_finance_deposit_request_json(request: &AppealFinanceDepositRequestDto) -> Value {
     let evidence_hashes = request
         .evidence_hashes_hex
@@ -21952,620 +20933,6 @@ fn moderation_evidence_viewer_audit_source_entry_json(
 }
 
 #[cfg(test)]
-fn moderation_ballot_commit_outcome_json(outcome: &ModerationBallotCommitOutcome) -> Value {
-    json_object(vec![
-        json_entry("status", Value::from("accepted")),
-        json_entry(
-            "committed_count",
-            Value::from(outcome.committed_count as u64),
-        ),
-        json_entry("revealed_count", Value::from(outcome.revealed_count as u64)),
-        json_entry(
-            "accepted_commit",
-            moderation_ballot_commit_json(&outcome.accepted_commit),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_reveal_outcome_json(outcome: &ModerationBallotRevealOutcome) -> Value {
-    json_object(vec![
-        json_entry("status", Value::from("accepted")),
-        json_entry(
-            "committed_count",
-            Value::from(outcome.committed_count as u64),
-        ),
-        json_entry("revealed_count", Value::from(outcome.revealed_count as u64)),
-        json_entry(
-            "accepted_reveal",
-            moderation_ballot_reveal_json(&outcome.accepted_reveal),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
-    moderation_ballot_record_json_with_array_limit(
-        record,
-        record
-            .commits
-            .len()
-            .max(record.reveals.len())
-            .max(record.challenges.len())
-            .max(DEFAULT_LIST_LIMIT),
-    )
-}
-
-#[cfg(test)]
-fn moderation_ballot_record_json_with_array_limit(
-    record: &ModerationBallotRecord,
-    limit: usize,
-) -> Value {
-    let returned_commit_count = record.commits.len().min(limit);
-    let returned_reveal_count = record.reveals.len().min(limit);
-    let returned_challenge_count = record.challenges.len().min(limit);
-    json_object(vec![
-        json_entry("schema", Value::from("sorafs.moderation.ballot.local.v1")),
-        json_entry("source", Value::from("local")),
-        json_entry(
-            "announcement",
-            moderation_ballot_announcement_json(&record.announcement),
-        ),
-        json_entry("commit_count", Value::from(record.commits.len() as u64)),
-        json_entry(
-            "returned_commit_count",
-            Value::from(returned_commit_count as u64),
-        ),
-        json_entry(
-            "truncated_commits",
-            Value::from(record.commits.len() > returned_commit_count),
-        ),
-        json_entry("reveal_count", Value::from(record.reveals.len() as u64)),
-        json_entry(
-            "returned_reveal_count",
-            Value::from(returned_reveal_count as u64),
-        ),
-        json_entry(
-            "truncated_reveals",
-            Value::from(record.reveals.len() > returned_reveal_count),
-        ),
-        json_entry(
-            "challenge_count",
-            Value::from(record.challenges.len() as u64),
-        ),
-        json_entry(
-            "returned_challenge_count",
-            Value::from(returned_challenge_count as u64),
-        ),
-        json_entry(
-            "truncated_challenges",
-            Value::from(record.challenges.len() > returned_challenge_count),
-        ),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry(
-            "commits",
-            Value::Array(
-                record
-                    .commits
-                    .iter()
-                    .take(limit)
-                    .map(moderation_ballot_commit_json)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "reveals",
-            Value::Array(
-                record
-                    .reveals
-                    .iter()
-                    .take(limit)
-                    .map(moderation_ballot_reveal_json)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "challenges",
-            Value::Array(
-                record
-                    .challenges
-                    .iter()
-                    .take(limit)
-                    .map(moderation_ballot_challenge_json)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "tally",
-            record
-                .tally
-                .as_ref()
-                .map_or(Value::Null, moderation_ballot_tally_json),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_challenge_json(challenge: &ModerationBallotChallengeRecord) -> Value {
-    json_object(vec![
-        json_entry("challenge_id", Value::from(challenge.challenge_id.clone())),
-        json_entry("case_id", Value::from(challenge.case_id.clone())),
-        json_entry("round_id", Value::from(challenge.round_id.clone())),
-        json_entry(
-            "challenger_id",
-            Value::from(challenge.challenger_id.clone()),
-        ),
-        json_entry(
-            "kind",
-            Value::from(moderation_challenge_kind_label(challenge.kind)),
-        ),
-        json_entry(
-            "target_juror_id",
-            challenge
-                .target_juror_id
-                .as_ref()
-                .map_or(Value::Null, |juror_id| Value::from(juror_id.clone())),
-        ),
-        json_entry(
-            "evidence_digest_hex",
-            Value::from(hex::encode(challenge.evidence_digest)),
-        ),
-        json_entry("reason", Value::from(challenge.reason.clone())),
-        json_entry(
-            "raised_at_unix_ms",
-            Value::from(challenge.raised_at_unix_ms),
-        ),
-        json_entry(
-            "decision",
-            challenge.decision.map_or(Value::Null, |decision| {
-                Value::from(moderation_challenge_decision_label(decision))
-            }),
-        ),
-        json_entry(
-            "resolved_by",
-            challenge
-                .resolved_by
-                .as_ref()
-                .map_or(Value::Null, |resolved_by| Value::from(resolved_by.clone())),
-        ),
-        json_entry(
-            "resolved_at_unix_ms",
-            challenge
-                .resolved_at_unix_ms
-                .map_or(Value::Null, Value::from),
-        ),
-        json_entry(
-            "resolution_note",
-            challenge
-                .resolution_note
-                .as_ref()
-                .map_or(Value::Null, |note| Value::from(note.clone())),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_announcement_json(announcement: &ModerationBallotAnnouncement) -> Value {
-    json_object(vec![
-        json_entry(
-            "context",
-            moderation_ballot_context_json(&announcement.context),
-        ),
-        json_entry(
-            "appeal_deposit_escrow_id_hex",
-            announcement
-                .appeal_deposit_escrow_id_hex
-                .as_ref()
-                .map(|escrow_id| Value::from(escrow_id.clone()))
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "appeal_deposit",
-            announcement
-                .appeal_deposit
-                .as_ref()
-                .map_or(Value::Null, moderation_appeal_deposit_json),
-        ),
-        json_entry("round_id", Value::from(announcement.round_id.clone())),
-        json_entry(
-            "juror_ids",
-            Value::Array(
-                announcement
-                    .juror_ids
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-        json_entry("quorum", Value::from(u64::from(announcement.quorum))),
-        json_entry(
-            "announced_at_unix_ms",
-            Value::from(announcement.announced_at_unix_ms),
-        ),
-        json_entry(
-            "commit_deadline_unix_ms",
-            Value::from(announcement.commit_deadline_unix_ms),
-        ),
-        json_entry(
-            "challenge_deadline_unix_ms",
-            Value::from(announcement.challenge_deadline_unix_ms),
-        ),
-        json_entry(
-            "reveal_deadline_unix_ms",
-            Value::from(announcement.reveal_deadline_unix_ms),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_appeal_deposit_json(deposit: &ModerationAppealDeposit) -> Value {
-    json_object(vec![
-        json_entry("escrow_id_hex", Value::from(deposit.escrow_id_hex.clone())),
-        json_entry("payer_account", Value::from(deposit.payer_account.clone())),
-        json_entry(
-            "destination_account",
-            Value::from(deposit.destination_account.clone()),
-        ),
-        json_entry(
-            "release_authority_account",
-            deposit
-                .release_authority_account
-                .as_ref()
-                .map(|account| Value::from(account.clone()))
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "asset_definition_id",
-            Value::from(deposit.asset_definition_id.clone()),
-        ),
-        json_entry(
-            "custody_account",
-            Value::from(deposit.custody_account.clone()),
-        ),
-        json_entry("deposit_xor", Value::from(deposit.deposit_xor.to_string())),
-        json_entry(
-            "expires_at_ms",
-            deposit
-                .expires_at_ms
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "idempotency_key",
-            Value::from(deposit.idempotency_key.clone()),
-        ),
-        json_entry(
-            "evidence_hashes_hex",
-            Value::Array(
-                deposit
-                    .evidence_hashes_hex
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_context_json(context: &SoraFsModerationBallotContextV1) -> Value {
-    json_object(vec![
-        json_entry("version", Value::from(u64::from(context.version))),
-        json_entry("case_id", Value::from(context.case_id.clone())),
-        json_entry(
-            "evidence_bundle_digest_hex",
-            Value::from(hex::encode(context.evidence_bundle_digest)),
-        ),
-        json_entry(
-            "appeal_finance_config_version",
-            Value::from(context.appeal_finance_config_version.clone()),
-        ),
-        json_entry(
-            "panel_roster_hash_hex",
-            Value::from(hex::encode(context.panel_roster_hash)),
-        ),
-        json_entry(
-            "policy_reference",
-            Value::from(context.policy_reference.clone()),
-        ),
-        json_entry(
-            "evidence_uri",
-            context
-                .evidence_uri
-                .as_ref()
-                .map_or(Value::Null, |uri| Value::from(uri.clone())),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_commit_json(commit: &SoraFsModerationBallotCommitV1) -> Value {
-    json_object(vec![
-        json_entry("version", Value::from(u64::from(commit.version))),
-        json_entry("context", moderation_ballot_context_json(&commit.context)),
-        json_entry("round_id", Value::from(commit.round_id.clone())),
-        json_entry("juror_id", Value::from(commit.juror_id.clone())),
-        json_entry(
-            "commitment_blake2b_256_hex",
-            Value::from(hex::encode(commit.commitment_blake2b_256)),
-        ),
-        json_entry(
-            "committed_at_unix_ms",
-            Value::from(commit.committed_at_unix_ms),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_reveal_json(reveal: &SoraFsModerationBallotRevealV1) -> Value {
-    json_object(vec![
-        json_entry("version", Value::from(u64::from(reveal.version))),
-        json_entry("context", moderation_ballot_context_json(&reveal.context)),
-        json_entry("round_id", Value::from(reveal.round_id.clone())),
-        json_entry("juror_id", Value::from(reveal.juror_id.clone())),
-        json_entry(
-            "choice",
-            Value::from(moderation_vote_choice_label(reveal.choice)),
-        ),
-        json_entry(
-            "nonce_b64",
-            Value::from(BASE64_STANDARD.encode(&reveal.nonce)),
-        ),
-        json_entry(
-            "revealed_at_unix_ms",
-            Value::from(reveal.revealed_at_unix_ms),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_tally_json(tally: &ModerationBallotTally) -> Value {
-    json_object(vec![
-        json_entry("case_id", Value::from(tally.case_id.clone())),
-        json_entry("round_id", Value::from(tally.round_id.clone())),
-        json_entry("counts", moderation_vote_counts_json(&tally.counts)),
-        json_entry("votes_total", Value::from(u64::from(tally.votes_total))),
-        json_entry("quorum", Value::from(u64::from(tally.quorum))),
-        json_entry(
-            "winning_choice",
-            tally.winning_choice.map_or(Value::Null, |choice| {
-                Value::from(moderation_vote_choice_label(choice))
-            }),
-        ),
-        json_entry("contested", Value::from(tally.contested)),
-        json_entry("tallied_at_unix_ms", Value::from(tally.tallied_at_unix_ms)),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_no_show_plan_json(plan: &ModerationBallotNoShowPlan) -> Value {
-    json_object(vec![
-        json_entry(
-            "schema",
-            Value::from("sorafs.moderation.ballot.no_show_plan.v1"),
-        ),
-        json_entry("source", Value::from("local")),
-        json_entry("case_id", Value::from(plan.case_id.clone())),
-        json_entry("round_id", Value::from(plan.round_id.clone())),
-        json_entry(
-            "generated_at_unix_ms",
-            Value::from(plan.generated_at_unix_ms),
-        ),
-        json_entry(
-            "reveal_deadline_unix_ms",
-            Value::from(plan.reveal_deadline_unix_ms),
-        ),
-        json_entry("quorum", Value::from(u64::from(plan.quorum))),
-        json_entry("roster_size", Value::from(u64::from(plan.roster_size))),
-        json_entry(
-            "committed_count",
-            Value::from(u64::from(plan.committed_count)),
-        ),
-        json_entry(
-            "revealed_count",
-            Value::from(u64::from(plan.revealed_count)),
-        ),
-        json_entry("no_show_count", Value::from(u64::from(plan.no_show_count))),
-        json_entry("quorum_met", Value::from(plan.quorum_met)),
-        json_entry("tally_finalized", Value::from(plan.tally_finalized)),
-        json_entry("contested", Value::from(plan.contested)),
-        json_entry(
-            "missing_commit_juror_ids",
-            Value::Array(
-                plan.missing_commit_juror_ids
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "unrevealed_committed_juror_ids",
-            Value::Array(
-                plan.unrevealed_committed_juror_ids
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "no_show_juror_ids",
-            Value::Array(
-                plan.no_show_juror_ids
-                    .iter()
-                    .cloned()
-                    .map(Value::from)
-                    .collect(),
-            ),
-        ),
-        json_entry(
-            "penalty_plan_digest_hex",
-            Value::from(hex::encode(plan.penalty_plan_digest)),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_vote_counts_json(counts: &sorafs_node::ModerationVoteCounts) -> Value {
-    json_object(vec![
-        json_entry("uphold", Value::from(u64::from(counts.uphold))),
-        json_entry("overturn", Value::from(u64::from(counts.overturn))),
-        json_entry("modify", Value::from(u64::from(counts.modify))),
-        json_entry("escalate", Value::from(u64::from(counts.escalate))),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_events_etag(
-    since: Option<u64>,
-    limit: usize,
-    tip_sequence: u64,
-    events: &[ModerationBallotEvent],
-) -> String {
-    let since = since.unwrap_or(0).to_le_bytes();
-    let limit = (limit as u64).to_le_bytes();
-    let tip = tip_sequence.to_le_bytes();
-    let count = (events.len() as u64).to_le_bytes();
-    let last_sequence = events
-        .last()
-        .map_or(0, |event| event.sequence)
-        .to_le_bytes();
-    moderation_ballot_cache_etag(
-        "events",
-        &[
-            since.as_ref(),
-            limit.as_ref(),
-            tip.as_ref(),
-            count.as_ref(),
-            last_sequence.as_ref(),
-        ],
-    )
-}
-
-#[cfg(test)]
-fn moderation_ballot_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
-    let mut material = Vec::new();
-    material.extend_from_slice(b"sorafs-moderation-ballot:");
-    material.extend_from_slice(kind.as_bytes());
-    for part in parts {
-        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
-        material.extend_from_slice(part);
-    }
-    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
-}
-
-#[cfg(test)]
-fn moderation_ballot_events_json(
-    since: Option<u64>,
-    limit: usize,
-    events: &[ModerationBallotEvent],
-) -> Value {
-    json_object(vec![
-        json_entry("since", since.map_or(Value::Null, Value::from)),
-        json_entry("limit", Value::from(limit as u64)),
-        json_entry("count", Value::from(events.len() as u64)),
-        json_entry(
-            "next_since",
-            events
-                .last()
-                .map_or(Value::Null, |event| Value::from(event.sequence)),
-        ),
-        json_entry(
-            "events",
-            Value::Array(events.iter().map(moderation_ballot_event_json).collect()),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_ballot_event_json(event: &ModerationBallotEvent) -> Value {
-    json_object(vec![
-        json_entry("sequence", Value::from(event.sequence)),
-        json_entry(
-            "kind",
-            Value::from(moderation_ballot_event_kind_label(event.kind)),
-        ),
-        json_entry(
-            "generated_at_unix_ms",
-            Value::from(event.generated_at_unix_ms),
-        ),
-        json_entry("case_id", Value::from(event.case_id.clone())),
-        json_entry("round_id", Value::from(event.round_id.clone())),
-        json_entry(
-            "juror_id",
-            event
-                .juror_id
-                .as_ref()
-                .map_or(Value::Null, |juror_id| Value::from(juror_id.clone())),
-        ),
-        json_entry("committed_count", Value::from(event.committed_count)),
-        json_entry("revealed_count", Value::from(event.revealed_count)),
-        json_entry("challenge_count", Value::from(event.challenge_count)),
-        json_entry(
-            "tally",
-            event
-                .tally
-                .as_ref()
-                .map_or(Value::Null, moderation_ballot_tally_json),
-        ),
-        json_entry(
-            "challenge",
-            event
-                .challenge
-                .as_ref()
-                .map_or(Value::Null, moderation_ballot_challenge_json),
-        ),
-    ])
-}
-
-#[cfg(test)]
-fn moderation_vote_choice_label(choice: SoraFsModerationVoteChoice) -> &'static str {
-    match choice {
-        SoraFsModerationVoteChoice::Uphold => "uphold",
-        SoraFsModerationVoteChoice::Overturn => "overturn",
-        SoraFsModerationVoteChoice::Modify => "modify",
-        SoraFsModerationVoteChoice::Escalate => "escalate",
-    }
-}
-
-#[cfg(test)]
-fn moderation_challenge_kind_label(kind: ModerationBallotChallengeKind) -> &'static str {
-    match kind {
-        ModerationBallotChallengeKind::RosterMismatch => "roster_mismatch",
-        ModerationBallotChallengeKind::DuplicateCommit => "duplicate_commit",
-        ModerationBallotChallengeKind::PayloadMismatch => "payload_mismatch",
-        ModerationBallotChallengeKind::JurorEligibility => "juror_eligibility",
-        ModerationBallotChallengeKind::EvidenceMismatch => "evidence_mismatch",
-        ModerationBallotChallengeKind::Other => "other",
-    }
-}
-
-#[cfg(test)]
-fn moderation_challenge_decision_label(
-    decision: ModerationBallotChallengeDecision,
-) -> &'static str {
-    match decision {
-        ModerationBallotChallengeDecision::Rejected => "rejected",
-        ModerationBallotChallengeDecision::Accepted => "accepted",
-    }
-}
-
-#[cfg(test)]
-fn moderation_ballot_event_kind_label(kind: ModerationBallotEventKind) -> &'static str {
-    match kind {
-        ModerationBallotEventKind::BallotAnnounced => "ballot_announced",
-        ModerationBallotEventKind::CommitAccepted => "commit_accepted",
-        ModerationBallotEventKind::ChallengeSubmitted => "challenge_submitted",
-        ModerationBallotEventKind::ChallengeResolved => "challenge_resolved",
-        ModerationBallotEventKind::RevealAccepted => "reveal_accepted",
-        ModerationBallotEventKind::BallotTallied => "ballot_tallied",
-    }
-}
-
-#[cfg(test)]
 fn orderbook_order_json(order: &OrderRequestV1) -> Value {
     let mut root = Map::new();
     root.insert("version".into(), Value::from(order.version as u64));
@@ -22690,6 +21057,18 @@ fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String
         Value::from(channel.remaining_bytes),
     );
     root.insert("xor_locked".into(), xor_quantity_json(&channel.xor_locked));
+    root.insert(
+        "initial_xor_locked".into(),
+        xor_quantity_json(&channel.initial_xor_locked),
+    );
+    root.insert(
+        "initial_fee_xor_locked".into(),
+        xor_quantity_json(&channel.initial_fee_xor_locked),
+    );
+    root.insert(
+        "remaining_fee_xor_locked".into(),
+        xor_quantity_json(&channel.remaining_fee_xor_locked),
+    );
     root.insert(
         "status".into(),
         Value::from(orderbook_channel_status_label(channel.status)),
@@ -22902,6 +21281,7 @@ fn orderbook_finalized_event_kind_label(kind: SorafsOrderbookLedgerEventKind) ->
         SorafsOrderbookLedgerEventKind::OrderCancelled => "order_cancelled",
         SorafsOrderbookLedgerEventKind::TradeMatched => "trade_matched",
         SorafsOrderbookLedgerEventKind::OrderExpired => "order_expired",
+        SorafsOrderbookLedgerEventKind::OrderProviderRevoked => "order_provider_revoked",
         SorafsOrderbookLedgerEventKind::ChannelExpired => "channel_expired",
         SorafsOrderbookLedgerEventKind::ReceiptRecorded => "receipt_recorded",
     }
@@ -41323,11 +39703,14 @@ mod advert_tests {
     ) -> OrderRequestV1 {
         let owner_account = orderbook_owner_bytes(owner);
         let nonce = u64::from(id);
+        let provider_id = (side == OrderSideV1::Ask)
+            .then(|| local_orderbook_provider_id_for_owner_account(&owner_account));
         sign_orderbook_order(
             OrderRequestV1 {
                 version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
+                provider_id,
                 tier: OrderTierV1::Hot,
                 price_per_gib: sorafs_manifest::deal::XorQuantity::try_from_micro(price_micro)
                     .expect("legacy micro-XOR value is representable"),
@@ -42164,106 +40547,6 @@ mod advert_tests {
             .await
     }
 
-    fn moderation_announce_request(
-        case_id: &str,
-        round_id: &str,
-        auth: &OrderbookAuthFixture,
-        deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
-    ) -> ModerationBallotAnnounceRequestDto {
-        let now_unix_ms = iroha_network_time_now_ms();
-        moderation_announce_request_with_windows(
-            case_id,
-            round_id,
-            auth,
-            deposit_confirmation,
-            now_unix_ms.saturating_sub(1_000),
-            now_unix_ms.saturating_add(2_000),
-            now_unix_ms.saturating_add(2_100),
-            now_unix_ms.saturating_add(10_000),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn moderation_announce_request_with_windows(
-        case_id: &str,
-        round_id: &str,
-        auth: &OrderbookAuthFixture,
-        deposit_confirmation: Option<AppealFinanceDepositConfirmRequestDto>,
-        announced_at_unix_ms: u64,
-        commit_deadline_unix_ms: u64,
-        challenge_deadline_unix_ms: u64,
-        reveal_deadline_unix_ms: u64,
-    ) -> ModerationBallotAnnounceRequestDto {
-        ModerationBallotAnnounceRequestDto {
-            case_id: case_id.to_owned(),
-            deposit_confirmation,
-            evidence_bundle_digest_hex: hex::encode([0xD1; 32]),
-            appeal_finance_config_version: "appeal-pricing-baseline-v1".to_owned(),
-            panel_roster_hash_hex: None,
-            policy_reference: "policy://sorafs/moderation/test".to_owned(),
-            evidence_uri: Some("bafy-test-evidence".to_owned()),
-            round_id: round_id.to_owned(),
-            juror_ids: vec![
-                auth.provider.account.to_string(),
-                auth.buyer.account.to_string(),
-            ],
-            quorum: 2,
-            announced_at_unix_ms,
-            commit_deadline_unix_ms,
-            challenge_deadline_unix_ms,
-            reveal_deadline_unix_ms,
-        }
-    }
-
-    async fn wait_until_after_moderation_time(deadline_unix_ms: u64) {
-        let now_unix_ms = iroha_network_time_now_ms();
-        if now_unix_ms <= deadline_unix_ms {
-            tokio::time::sleep(Duration::from_millis(
-                deadline_unix_ms.saturating_sub(now_unix_ms) + 25,
-            ))
-            .await;
-        }
-    }
-
-    fn moderation_announce_body(request: ModerationBallotAnnounceRequestDto) -> Bytes {
-        Bytes::from(norito::json::to_vec(&request).expect("encode moderation announcement"))
-    }
-
-    fn moderation_reveal_fixture(
-        context: &SoraFsModerationBallotContextV1,
-        round_id: &str,
-        juror: &OrderbookAccountFixture,
-        choice: SoraFsModerationVoteChoice,
-        nonce_byte: u8,
-        revealed_at_unix_ms: u64,
-    ) -> SoraFsModerationBallotRevealV1 {
-        SoraFsModerationBallotRevealV1 {
-            version:
-                iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
-            context: context.clone(),
-            round_id: round_id.to_owned(),
-            juror_id: juror.account.to_string(),
-            choice,
-            nonce: vec![nonce_byte; 32],
-            revealed_at_unix_ms,
-        }
-    }
-
-    fn moderation_commit_fixture(
-        reveal: &SoraFsModerationBallotRevealV1,
-        committed_at_unix_ms: u64,
-    ) -> SoraFsModerationBallotCommitV1 {
-        SoraFsModerationBallotCommitV1 {
-            version:
-                iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
-            context: reveal.context.clone(),
-            round_id: reveal.round_id.clone(),
-            juror_id: reveal.juror_id.clone(),
-            commitment_blake2b_256: reveal.compute_commitment(),
-            committed_at_unix_ms,
-        }
-    }
-
     fn moderation_repro_manifest_fixture(
         manifest_id_byte: u8,
         manifest_digest_byte: u8,
@@ -42511,35 +40794,6 @@ mod advert_tests {
         )
     }
 
-    fn moderation_quarantine_appeal_ballot_body(
-        deposit_confirmation: AppealFinanceDepositConfirmRequestDto,
-        auth: &OrderbookAuthFixture,
-    ) -> Bytes {
-        let now_unix_ms = iroha_network_time_now_ms();
-        Bytes::from(
-            norito::json::to_vec(&ModerationQuarantineAppealBallotRequestDto {
-                deposit_confirmation,
-                case_id: None,
-                round_id: None,
-                evidence_bundle_digest_hex: None,
-                appeal_finance_config_version: None,
-                panel_roster_hash_hex: None,
-                policy_reference: None,
-                evidence_uri: None,
-                juror_ids: vec![
-                    auth.provider.account.to_string(),
-                    auth.buyer.account.to_string(),
-                ],
-                quorum: 2,
-                announced_at_unix_ms: Some(now_unix_ms.saturating_sub(1_000)),
-                commit_deadline_unix_ms: now_unix_ms.saturating_add(2_000),
-                challenge_deadline_unix_ms: now_unix_ms.saturating_add(2_100),
-                reveal_deadline_unix_ms: now_unix_ms.saturating_add(10_000),
-            })
-            .expect("encode quarantine appeal ballot request"),
-        )
-    }
-
     fn moderation_screening_result_body_with_subject_digest(
         subject: &str,
         subject_digest_hex: String,
@@ -42732,68 +40986,6 @@ mod advert_tests {
         )
     }
 
-    fn moderation_commit_body(commit: SoraFsModerationBallotCommitV1, _now_unix_ms: u64) -> Bytes {
-        let commit_b64 =
-            BASE64_STANDARD.encode(norito::to_bytes(&commit).expect("encode moderation commit"));
-        let request = ModerationBallotCommitRequestDto { commit_b64 };
-        Bytes::from(norito::json::to_vec(&request).expect("encode commit request"))
-    }
-
-    fn moderation_reveal_body(reveal: SoraFsModerationBallotRevealV1, _now_unix_ms: u64) -> Bytes {
-        let reveal_b64 =
-            BASE64_STANDARD.encode(norito::to_bytes(&reveal).expect("encode moderation reveal"));
-        let request = ModerationBallotRevealRequestDto { reveal_b64 };
-        Bytes::from(norito::json::to_vec(&request).expect("encode reveal request"))
-    }
-
-    fn moderation_challenge_body(
-        case_id: &str,
-        round_id: &str,
-        challenge_id: &str,
-        challenger: &OrderbookAccountFixture,
-        kind: &str,
-        target_juror_id: Option<String>,
-        _now_unix_ms: u64,
-    ) -> Bytes {
-        let request = ModerationBallotChallengeRequestDto {
-            case_id: case_id.to_owned(),
-            round_id: round_id.to_owned(),
-            challenge_id: challenge_id.to_owned(),
-            challenger_id: challenger.account.to_string(),
-            kind: kind.to_owned(),
-            target_juror_id,
-            evidence_digest_hex: hex::encode([0xE7; 32]),
-            reason: "api-test-evidence-digest".to_owned(),
-        };
-        Bytes::from(norito::json::to_vec(&request).expect("encode challenge request"))
-    }
-
-    fn moderation_challenge_resolution_body(
-        case_id: &str,
-        round_id: &str,
-        challenge_id: &str,
-        resolver: &OrderbookAccountFixture,
-        decision: &str,
-        _now_unix_ms: u64,
-    ) -> Bytes {
-        let request = ModerationBallotChallengeResolutionRequestDto {
-            case_id: case_id.to_owned(),
-            round_id: round_id.to_owned(),
-            challenge_id: challenge_id.to_owned(),
-            resolved_by: resolver.account.to_string(),
-            decision: decision.to_owned(),
-        };
-        Bytes::from(norito::json::to_vec(&request).expect("encode challenge resolution request"))
-    }
-
-    fn moderation_tally_body(case_id: &str, round_id: &str, _now_unix_ms: u64) -> Bytes {
-        let request = ModerationBallotTallyRequestDto {
-            case_id: case_id.to_owned(),
-            round_id: round_id.to_owned(),
-        };
-        Bytes::from(norito::json::to_vec(&request).expect("encode tally request"))
-    }
-
     fn moderation_uri(path: &'static str) -> Uri {
         Uri::from_static(path)
     }
@@ -42810,79 +41002,6 @@ mod advert_tests {
         format!("{MODERATION_ROUTE_QUARANTINE}/{quarantine_id_hex}/{suffix}")
             .parse()
             .expect("moderation quarantine action URI")
-    }
-
-    async fn post_moderation_announce(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_BALLOTS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_announce(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_moderation_commit(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_COMMITS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_commit(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_moderation_challenge(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_CHALLENGES);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_challenge(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_moderation_challenge_resolution(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_CHALLENGE_RESOLUTIONS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_challenge_resolution(
-            State(app),
-            headers,
-            method,
-            uri,
-            body,
-        )
-        .await
-    }
-
-    async fn post_moderation_reveal(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_REVEALS);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_reveal(State(app), headers, method, uri, body).await
-    }
-
-    async fn post_moderation_tally(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_uri(MODERATION_ROUTE_TALLY);
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_ballot_tally(State(app), headers, method, uri, body).await
     }
 
     async fn post_moderation_registry_repro_manifest(
@@ -42991,29 +41110,6 @@ mod advert_tests {
         );
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_moderation_quarantine_appeal_handoff(
-            State(app),
-            headers,
-            method,
-            uri,
-            Path(quarantine_id_hex.to_owned()),
-            body,
-        )
-        .await
-    }
-
-    async fn post_moderation_quarantine_appeal_ballot(
-        app: SharedAppState,
-        signer: &OrderbookAccountFixture,
-        quarantine_id_hex: &str,
-        body: Bytes,
-    ) -> Response {
-        let method = Method::POST;
-        let uri = moderation_quarantine_action_uri(
-            quarantine_id_hex,
-            MODERATION_ROUTE_QUARANTINE_APPEAL_BALLOT_SUFFIX,
-        );
-        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_moderation_quarantine_appeal_ballot(
             State(app),
             headers,
             method,
@@ -43416,6 +41512,303 @@ mod advert_tests {
             StatusCode::NOT_FOUND,
             "repair-enabled authoritative state must remain visible without local storage"
         );
+    }
+
+    fn signed_moderation_transaction(
+        app: &SharedAppState,
+        signer: &OrderbookAccountFixture,
+        instruction: InstructionBox,
+    ) -> SignedTransaction {
+        let mut builder = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            signer.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        builder
+        .with_instructions([instruction])
+        .sign(signer.keypair.private_key())
+    }
+
+    #[test]
+    fn moderation_command_contract_requires_exact_chain_signature_route_and_one_instruction() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let assignment: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
+            "case-route-1".to_owned(),
+            "round-1".to_owned(),
+            [0x51; 32],
+        )
+        .into();
+        let transaction = signed_moderation_transaction(&app, &auth.provider, assignment.clone());
+        validate_moderation_signed_transaction(
+            &app,
+            &transaction,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect("matching caller-signed assignment route must pass");
+
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &transaction,
+            ModerationCommandRouteV1::ActivateCase,
+        )
+        .expect_err("wrong-route moderation ISI must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut multiple_builder = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        multiple_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        let multiple = multiple_builder
+            .with_instructions([assignment.clone(), assignment])
+            .sign(auth.provider.keypair.private_key());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &multiple,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("multiple moderation instructions must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut wrong_chain_builder = TransactionBuilder::new(
+            ChainId::from("wrong-moderation-chain"),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        wrong_chain_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        let wrong_chain = wrong_chain_builder
+            .with_instructions([AcceptSorafsModerationJurorAssignment::new(
+                "case-route-1".to_owned(),
+                "round-1".to_owned(),
+                [0x51; 32],
+            )])
+            .sign(auth.provider.keypair.private_key());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &wrong_chain,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("cross-chain moderation transaction must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let substituted = transaction
+            .clone()
+            .with_authority(auth.buyer.account.clone());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &substituted,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("authority substitution must invalidate the signed envelope");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let exact_instruction = || {
+            AcceptSorafsModerationJurorAssignment::new(
+                "case-route-1".to_owned(),
+                "round-1".to_owned(),
+                [0x51; 32],
+            )
+        };
+        let mut wrong_ttl_builder = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        wrong_ttl_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1 + 1,
+        ));
+        let wrong_ttl = wrong_ttl_builder
+            .with_instructions([exact_instruction()])
+            .sign(auth.provider.keypair.private_key());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &wrong_ttl,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("TTL variation must fail the exact signed-envelope policy");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut nonce_builder = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        nonce_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        nonce_builder.set_nonce(NonZeroU32::new(7).expect("non-zero nonce"));
+        let nonce_transaction = nonce_builder
+            .with_instructions([exact_instruction()])
+            .sign(auth.provider.keypair.private_key());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &nonce_transaction,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("nonce variation must fail the exact signed-envelope policy");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "moderation_route_hint".parse().expect("valid metadata key"),
+            Json::new("assignment".to_owned()),
+        );
+        let mut metadata_builder = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata);
+        metadata_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        let metadata_transaction = metadata_builder
+            .with_instructions([exact_instruction()])
+            .sign(auth.provider.keypair.private_key());
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &metadata_transaction,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("metadata variation must fail the exact signed-envelope policy");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn moderation_command_contract_rejects_appellant_juror_and_noncanonical_payload_substitution() {
+        use iroha_data_model::sorafs::{
+            moderation::{
+                SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+                SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
+                SoraFsModerationBallotContextV1,
+            },
+            moderation_ledger::{
+                MODERATION_APPEAL_INTAKE_VERSION_V1, ModerationAppealIntakeV1,
+            },
+        };
+
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let intake = ModerationAppealIntakeV1 {
+            version: MODERATION_APPEAL_INTAKE_VERSION_V1,
+            case_id: "case-authority-1".to_owned(),
+            round_id: "round-1".to_owned(),
+            appellant: auth.buyer.account.clone(),
+            appealed_decision_digest: [0x11; 32],
+            proof_token_digest: [0x12; 32],
+            evidence_bundle_digest: [0x13; 32],
+            appeal_deposit_lock_digest: [0x14; 32],
+            appeal_finance_config_version: "finance-v1".to_owned(),
+            policy_reference: "policy-v1".to_owned(),
+            evidence_uri: Some("ipfs://case-authority-1".to_owned()),
+            panel_size: 2,
+            waitlist_size: 1,
+            quorum: 1,
+            exclusions: vec![auth.buyer.account.clone()],
+            registration_deadline_unix_ms: 10,
+            acceptance_deadline_unix_ms: 20,
+            commit_deadline_unix_ms: 30,
+            challenge_deadline_unix_ms: 40,
+            reveal_deadline_unix_ms: 50,
+            policy_digest: [0x15; 32],
+        };
+        let transaction = signed_moderation_transaction(
+            &app,
+            &auth.provider,
+            SubmitSorafsModerationAppeal::new(intake).into(),
+        );
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &transaction,
+            ModerationCommandRouteV1::SubmitAppeal,
+        )
+        .expect_err("appellant and transaction authority must match exactly");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let context = SoraFsModerationBallotContextV1 {
+            version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            case_id: "case-authority-1".to_owned(),
+            evidence_bundle_digest: [0x21; 32],
+            appeal_finance_config_version: "finance-v1".to_owned(),
+            panel_roster_hash: [0x22; 32],
+            policy_reference: "policy-v1".to_owned(),
+            evidence_uri: None,
+        };
+        let commit = SoraFsModerationBallotCommitV1 {
+            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
+            context,
+            round_id: "round-1".to_owned(),
+            juror_id: auth.buyer.account.to_string(),
+            commitment_blake2b_256: [0x23; 32],
+            committed_at_unix_ms: 0,
+        };
+        let canonical_commit = norito::to_bytes(&commit).expect("encode canonical commit");
+        let transaction = signed_moderation_transaction(
+            &app,
+            &auth.provider,
+            SubmitSorafsModerationCommit::new(canonical_commit).into(),
+        );
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &transaction,
+            ModerationCommandRouteV1::SubmitCommit,
+        )
+        .expect_err("juror and transaction authority must match exactly");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let malformed = signed_moderation_transaction(
+            &app,
+            &auth.provider,
+            SubmitSorafsModerationCommit::new(vec![0x01, 0x02, 0x03]).into(),
+        );
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &malformed,
+            ModerationCommandRouteV1::SubmitCommit,
+        )
+        .expect_err("noncanonical embedded moderation payload must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn moderation_exact_duplicate_is_byte_identical_across_peer_validators() {
+        let (app_a, _dir_a, auth) = sorafs_app_state_with_orderbook_auth();
+        let (app_b, _dir_b, _auth_b) = sorafs_app_state_with_orderbook_auth();
+        let transaction = signed_moderation_transaction(
+            &app_a,
+            &auth.provider,
+            AcceptSorafsModerationJurorAssignment::new(
+                "case-replay-1".to_owned(),
+                "round-1".to_owned(),
+                [0x61; 32],
+            )
+            .into(),
+        );
+        let replay = transaction.clone();
+        assert_eq!(transaction.hash(), replay.hash());
+        assert_eq!(
+            norito::to_bytes(&transaction).expect("encode first exact transaction"),
+            norito::to_bytes(&replay).expect("encode exact replay"),
+        );
+        validate_moderation_signed_transaction(
+            &app_a,
+            &transaction,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect("first peer accepts the exact envelope contract");
+        validate_moderation_signed_transaction(
+            &app_b,
+            &replay,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect("second peer accepts the byte-identical replay contract");
     }
 
     #[test]
@@ -44599,6 +42992,9 @@ mod advert_tests {
             total_bytes: 1,
             remaining_bytes: 1,
             xor_locked: wide.clone(),
+            initial_xor_locked: wide.clone(),
+            initial_fee_xor_locked: sorafs_manifest::deal::XorQuantity::zero(),
+            remaining_fee_xor_locked: sorafs_manifest::deal::XorQuantity::zero(),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_001,
             updated_at_unix: 1_800_000_001,
@@ -44609,6 +43005,9 @@ mod advert_tests {
             .expect("orderbook channel object")
             .clone();
         assert_exact(&channel, "xor_locked", wide_literal);
+        assert_exact(&channel, "initial_xor_locked", wide_literal);
+        assert_exact(&channel, "initial_fee_xor_locked", "0");
+        assert_exact(&channel, "remaining_fee_xor_locked", "0");
         assert_no_legacy_unit_keys(&channel);
 
         let receipt = SettlementReceiptV1 {
@@ -45879,163 +44278,6 @@ mod advert_tests {
                 .and_then(Value::as_array)
                 .is_some_and(|instructions| !instructions.is_empty())
         );
-    }
-
-    #[cfg(any())]
-    #[tokio::test]
-    async fn moderation_quarantine_appeal_ballot_requires_handoff_bound_deposit_and_announces() {
-        let auth = orderbook_auth_fixture();
-        let asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("xor", "universal").expect("domain id"),
-            "xor".parse().expect("asset definition name"),
-        );
-        let (app, _dir) =
-            sorafs_app_state_with_appeal_finance_asset_lock_world_and_moderation_operator(
-                &auth,
-                &asset_definition_id,
-            );
-        let payload = b"moderation appeal ballot fixture";
-        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
-            app.clone(),
-            &auth.provider,
-            "bafy-appeal-ballot",
-            payload,
-            1_800_000_290,
-        )
-        .await;
-
-        let response = post_moderation_quarantine_review(
-            app.clone(),
-            &auth.provider,
-            &quarantine_id_hex,
-            moderation_quarantine_review_body("operator@moderation", 1_800_000_300),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-
-        let snapshot = app.sorafs_node.moderation_screening_snapshot();
-        let record = snapshot
-            .quarantine_records
-            .iter()
-            .find(|record| hex::encode(record.quarantine_id) == quarantine_id_hex)
-            .expect("reviewed quarantine record");
-        let reviewed_at_unix = record.reviewed_at_unix.expect("review timestamp");
-        let handoff_hash = moderation_quarantine_appeal_handoff_evidence_hash(
-            record,
-            &quarantine_id_hex,
-            reviewed_at_unix,
-        )
-        .to_string();
-
-        let mut deposit_request = appeal_finance_deposit_request(
-            &auth.provider.account,
-            &auth.buyer.account,
-            Some(&auth.provider.account),
-        );
-        deposit_request.case_id = format!("quarantine-{quarantine_id_hex}");
-        deposit_request.round_id = Some("round-reviewed-1".to_owned());
-        deposit_request.asset_definition_id = asset_definition_id.to_string();
-        deposit_request.idempotency_key = "quarantine-ballot-good".to_owned();
-        deposit_request.evidence_hashes_hex = Some(vec![handoff_hash.clone()]);
-        let expected = appeal_finance_deposit_expectation(deposit_request.clone())
-            .expect("valid handoff-bound deposit expectation");
-        let deposit_confirmation = appeal_finance_deposit_confirm_request(
-            &deposit_request,
-            expected.escrow_id.as_hash().to_string(),
-        );
-
-        let mut bad_confirmation = deposit_confirmation.clone();
-        bad_confirmation.evidence_hashes_hex =
-            Some(vec![Hash::prehashed([0xD1; Hash::LENGTH]).to_string()]);
-        let response = post_moderation_quarantine_appeal_ballot(
-            app.clone(),
-            &auth.provider,
-            &quarantine_id_hex,
-            moderation_quarantine_appeal_ballot_body(bad_confirmation, &auth),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-
-        seed_appeal_finance_asset_lock(&app, &expected);
-        let response = post_moderation_quarantine_appeal_ballot(
-            app.clone(),
-            &auth.provider,
-            &quarantine_id_hex,
-            moderation_quarantine_appeal_ballot_body(deposit_confirmation.clone(), &auth),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect appeal ballot body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode appeal ballot body");
-        assert_eq!(
-            value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.quarantine.appeal_ballot.v1")
-        );
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("announced")
-        );
-        assert_eq!(
-            value
-                .get("handoff_evidence_hash_hex")
-                .and_then(Value::as_str),
-            Some(handoff_hash.as_str())
-        );
-        let ballot = value
-            .get("ballot")
-            .and_then(Value::as_object)
-            .expect("ballot record");
-        let announcement = ballot
-            .get("announcement")
-            .and_then(Value::as_object)
-            .expect("announcement");
-        assert_eq!(
-            announcement.get("round_id").and_then(Value::as_str),
-            Some("round-reviewed-1")
-        );
-        assert_eq!(
-            announcement
-                .get("appeal_deposit_escrow_id_hex")
-                .and_then(Value::as_str),
-            Some(deposit_confirmation.escrow_id_hex.as_str())
-        );
-        let context = announcement
-            .get("context")
-            .and_then(Value::as_object)
-            .expect("ballot context");
-        assert_eq!(
-            context.get("case_id").and_then(Value::as_str),
-            Some(deposit_request.case_id.as_str())
-        );
-        assert_eq!(
-            context
-                .get("evidence_bundle_digest_hex")
-                .and_then(Value::as_str),
-            Some(handoff_hash.as_str())
-        );
-        assert!(
-            app.sorafs_node
-                .moderation_ballot(&deposit_request.case_id, "round-reviewed-1")
-                .is_some()
-        );
-    }
-
-    #[tokio::test]
-    async fn moderation_quarantine_appeal_ballot_alias_is_retired() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let response = post_moderation_quarantine_appeal_ballot(
-            app.clone(),
-            &auth.provider,
-            "00000000000000000000000000000000",
-            Bytes::from_static(b"{}"),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::GONE);
-        assert!(app.sorafs_node.moderation_ballots().is_empty());
     }
 
     #[tokio::test]
@@ -47404,1323 +45646,6 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[cfg(any())]
-    mod retired_pre_v1_local_moderation_route_tests {
-        use super::*;
-
-        #[tokio::test]
-        async fn moderation_ballot_handlers_accept_lifecycle_and_events() {
-            let case_id = "case-api";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let deposit_escrow_id_hex = deposit_confirmation.escrow_id_hex.clone();
-            let expected_evidence_hashes = deposit_confirmation
-                .evidence_hashes_hex
-                .clone()
-                .unwrap_or_default();
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation announcement body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode moderation announcement body");
-            assert_eq!(
-                value
-                    .get("announcement")
-                    .and_then(|announcement| announcement.get("appeal_deposit_escrow_id_hex"))
-                    .and_then(Value::as_str),
-                Some(deposit_escrow_id_hex.as_str())
-            );
-            let appeal_deposit = value
-                .get("announcement")
-                .and_then(|announcement| announcement.get("appeal_deposit"))
-                .and_then(Value::as_object)
-                .expect("appeal deposit metadata");
-            assert_eq!(
-                appeal_deposit.get("escrow_id_hex").and_then(Value::as_str),
-                Some(deposit_escrow_id_hex.as_str())
-            );
-            let payer_account = auth.provider.account.to_string();
-            let destination_account = auth.buyer.account.to_string();
-            assert_eq!(
-                appeal_deposit.get("payer_account").and_then(Value::as_str),
-                Some(payer_account.as_str())
-            );
-            assert_eq!(
-                appeal_deposit
-                    .get("destination_account")
-                    .and_then(Value::as_str),
-                Some(destination_account.as_str())
-            );
-            assert_eq!(
-                appeal_deposit.get("deposit_xor").and_then(Value::as_str),
-                Some("420")
-            );
-            let evidence_hashes = appeal_deposit
-                .get("evidence_hashes_hex")
-                .and_then(Value::as_array)
-                .expect("appeal deposit evidence hashes");
-            assert_eq!(evidence_hashes.len(), expected_evidence_hashes.len());
-            assert_eq!(
-                evidence_hashes.first().and_then(Value::as_str),
-                expected_evidence_hashes.first().map(String::as_str)
-            );
-            assert!(
-                appeal_deposit
-                    .get("custody_account")
-                    .and_then(Value::as_str)
-                    .is_some_and(|account| !account.is_empty())
-            );
-
-            let response = handle_get_sorafs_moderation_ballots(
-                State(app.clone()),
-                axum::extract::RawQuery(None),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation list body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode moderation list body");
-            assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
-            assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-            assert_eq!(value.get("limit").and_then(Value::as_u64), Some(50));
-            assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x11,
-                3_500,
-            );
-            let buyer_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.buyer,
-                SoraFsModerationVoteChoice::Uphold,
-                0x22,
-                3_501,
-            );
-
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.buyer,
-                moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
-
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.provider,
-                moderation_reveal_body(provider_reveal, 3_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.buyer,
-                moderation_reveal_body(buyer_reveal, 3_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let tally = app
-                .sorafs_node
-                .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
-                .expect("legacy local ballot fixture tally");
-            let value = moderation_ballot_tally_json(&tally);
-            assert_eq!(
-                value.get("winning_choice").and_then(Value::as_str),
-                Some("uphold")
-            );
-            assert_eq!(value.get("contested").and_then(Value::as_bool), Some(false));
-
-            let response = handle_get_sorafs_moderation_ballot(
-                State(app.clone()),
-                Path((case_id.to_owned(), round_id.to_owned())),
-                axum::extract::RawQuery(None),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation record body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode moderation record body");
-            assert_eq!(value.get("commit_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(value.get("reveal_count").and_then(Value::as_u64), Some(2));
-            assert!(
-                value
-                    .get("tally")
-                    .and_then(|tally| tally.get("winning_choice"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|choice| choice == "uphold")
-            );
-
-            let response = handle_get_sorafs_moderation_ballot(
-                State(app.clone()),
-                Path((case_id.to_owned(), round_id.to_owned())),
-                axum::extract::RawQuery(Some("limit=1".to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect bounded moderation record body");
-            let value: Value = norito::json::from_slice(&body_bytes)
-                .expect("decode bounded moderation record body");
-            assert_eq!(value.get("commit_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                value.get("returned_commit_count").and_then(Value::as_u64),
-                Some(1)
-            );
-            assert_eq!(
-                value.get("truncated_commits").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert_eq!(value.get("reveal_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                value.get("returned_reveal_count").and_then(Value::as_u64),
-                Some(1)
-            );
-            assert_eq!(
-                value.get("truncated_reveals").and_then(Value::as_bool),
-                Some(true)
-            );
-            assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-            let commits = value
-                .get("commits")
-                .and_then(Value::as_array)
-                .expect("bounded commits");
-            assert_eq!(commits.len(), 1);
-            let reveals = value
-                .get("reveals")
-                .and_then(Value::as_array)
-                .expect("bounded reveals");
-            assert_eq!(reveals.len(), 1);
-
-            let response = handle_get_sorafs_moderation_ballot_events(
-                State(app),
-                HeaderMap::new(),
-                axum::extract::RawQuery(Some("since=0&limit=10".to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation events body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode moderation events body");
-            assert_eq!(value.get("count").and_then(Value::as_u64), Some(6));
-            let events = value
-                .get("events")
-                .and_then(Value::as_array)
-                .expect("moderation events");
-            assert_eq!(
-                events
-                    .last()
-                    .and_then(|event| event.get("kind"))
-                    .and_then(Value::as_str),
-                Some("ballot_tallied")
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_no_show_plan_endpoint_reports_closed_payload_free_plan() {
-            let case_id = "case-api-no-show-plan";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let provider_id = auth.provider.account.to_string();
-            let buyer_id = auth.buyer.account.to_string();
-            let now_unix_ms = iroha_network_time_now_ms();
-            let commit_deadline_unix_ms = now_unix_ms.saturating_add(900);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_add(1_050);
-            let reveal_deadline_unix_ms = now_unix_ms.saturating_add(1_200);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    now_unix_ms.saturating_sub(500),
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    reveal_deadline_unix_ms,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x71,
-                now_unix_ms.saturating_add(1_100),
-            );
-
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(
-                    moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(50)),
-                    now_unix_ms.saturating_add(50),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let uri = moderation_ballot_no_show_plan_uri(case_id, round_id);
-            assert_eq!(
-                uri.path(),
-                "/v1/sorafs/moderation/ballots/case-api-no-show-plan/round-1/no-show-plan"
-            );
-
-            let response = handle_get_sorafs_moderation_ballot_no_show_plan(
-                State(app.clone()),
-                Path((case_id.to_owned(), round_id.to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-
-            wait_until_after_moderation_time(reveal_deadline_unix_ms).await;
-            let response = handle_get_sorafs_moderation_ballot_no_show_plan(
-                State(app.clone()),
-                Path((case_id.to_owned(), round_id.to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect no-show plan body");
-            let body_text = std::str::from_utf8(&body_bytes).expect("no-show plan utf8");
-            for forbidden in [
-                "commitment_blake2b_256_hex",
-                "nonce_b64",
-                "accepted_commit",
-                "accepted_reveal",
-            ] {
-                assert!(
-                    !body_text.contains(forbidden),
-                    "payload-free no-show plan leaked {forbidden}: {body_text}"
-                );
-            }
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode no-show plan body");
-            assert_eq!(
-                value.get("schema").and_then(Value::as_str),
-                Some("sorafs.moderation.ballot.no_show_plan.v1")
-            );
-            assert_eq!(value.get("source").and_then(Value::as_str), Some("local"));
-            assert_eq!(value.get("case_id").and_then(Value::as_str), Some(case_id));
-            assert_eq!(
-                value.get("round_id").and_then(Value::as_str),
-                Some(round_id)
-            );
-            assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
-            assert_eq!(value.get("roster_size").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                value.get("committed_count").and_then(Value::as_u64),
-                Some(1)
-            );
-            assert_eq!(value.get("revealed_count").and_then(Value::as_u64), Some(0));
-            assert_eq!(value.get("no_show_count").and_then(Value::as_u64), Some(2));
-            assert_eq!(
-                value.get("quorum_met").and_then(Value::as_bool),
-                Some(false)
-            );
-            assert_eq!(
-                value.get("tally_finalized").and_then(Value::as_bool),
-                Some(false)
-            );
-            let missing_commit_juror_ids = value
-                .get("missing_commit_juror_ids")
-                .and_then(Value::as_array)
-                .expect("missing commit jurors");
-            assert_eq!(
-                missing_commit_juror_ids.first().and_then(Value::as_str),
-                Some(buyer_id.as_str())
-            );
-            let unrevealed_committed_juror_ids = value
-                .get("unrevealed_committed_juror_ids")
-                .and_then(Value::as_array)
-                .expect("unrevealed committed jurors");
-            assert_eq!(
-                unrevealed_committed_juror_ids
-                    .first()
-                    .and_then(Value::as_str),
-                Some(provider_id.as_str())
-            );
-            let no_show_juror_ids = value
-                .get("no_show_juror_ids")
-                .and_then(Value::as_array)
-                .expect("no-show jurors");
-            assert_eq!(
-                no_show_juror_ids
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
-                vec![provider_id, buyer_id]
-            );
-            let digest_hex = value
-                .get("penalty_plan_digest_hex")
-                .and_then(Value::as_str)
-                .expect("penalty plan digest");
-            assert_eq!(digest_hex.len(), 64);
-            assert_ne!(digest_hex, "0".repeat(64));
-            assert_eq!(
-                app.sorafs_node.latest_moderation_ballot_event_sequence(),
-                Some(2)
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_no_show_plan_endpoint_blocks_pending_challenge() {
-            let case_id = "case-api-no-show-plan-challenge";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let provider_id = auth.provider.account.to_string();
-            let now_unix_ms = iroha_network_time_now_ms();
-            let commit_deadline_unix_ms = now_unix_ms.saturating_add(250);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_add(1_000);
-            let reveal_deadline_unix_ms = now_unix_ms.saturating_add(1_200);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    now_unix_ms.saturating_sub(500),
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    reveal_deadline_unix_ms,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Modify,
-                0x72,
-                now_unix_ms.saturating_add(1_100),
-            );
-
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(
-                    moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(50)),
-                    now_unix_ms.saturating_add(50),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            wait_until_after_moderation_time(commit_deadline_unix_ms).await;
-            let response = post_moderation_challenge(
-                app.clone(),
-                &auth.provider,
-                moderation_challenge_body(
-                    case_id,
-                    round_id,
-                    "challenge-api-no-show-plan-1",
-                    &auth.provider,
-                    "evidence_mismatch",
-                    Some(provider_id),
-                    now_unix_ms.saturating_add(400),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            wait_until_after_moderation_time(reveal_deadline_unix_ms).await;
-            let response = handle_get_sorafs_moderation_ballot_no_show_plan(
-                State(app.clone()),
-                Path((case_id.to_owned(), round_id.to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect pending challenge no-show body");
-            let body_text = std::str::from_utf8(&body_bytes).expect("pending challenge body utf8");
-            assert!(
-                body_text.contains("pending") || body_text.contains("ChallengePending"),
-                "{body_text}"
-            );
-            assert_eq!(
-                app.sorafs_node.latest_moderation_ballot_event_sequence(),
-                Some(3)
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_challenge_endpoint_blocks_until_rejected() {
-            let case_id = "case-api-challenge";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let now_unix_ms = iroha_network_time_now_ms();
-            let commit_deadline_unix_ms = now_unix_ms.saturating_add(600);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_add(2_000);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    now_unix_ms.saturating_sub(500),
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    now_unix_ms.saturating_add(6_000),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Modify,
-                0x61,
-                now_unix_ms.saturating_add(2_500),
-            );
-            let buyer_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.buyer,
-                SoraFsModerationVoteChoice::Modify,
-                0x62,
-                now_unix_ms.saturating_add(2_600),
-            );
-
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(
-                    moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(100)),
-                    now_unix_ms.saturating_add(100),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.buyer,
-                moderation_commit_body(
-                    moderation_commit_fixture(&buyer_reveal, now_unix_ms.saturating_add(101)),
-                    now_unix_ms.saturating_add(101),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            wait_until_after_moderation_time(commit_deadline_unix_ms).await;
-            let response = post_moderation_challenge(
-                app.clone(),
-                &auth.provider,
-                moderation_challenge_body(
-                    case_id,
-                    round_id,
-                    "challenge-api-1",
-                    &auth.provider,
-                    "evidence_mismatch",
-                    None,
-                    now_unix_ms.saturating_add(800),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect challenge body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode challenge body");
-            assert_eq!(
-                value.get("challenge_id").and_then(Value::as_str),
-                Some("challenge-api-1")
-            );
-            assert_eq!(
-                value.get("kind").and_then(Value::as_str),
-                Some("evidence_mismatch")
-            );
-            assert_eq!(value.get("decision"), Some(&Value::Null));
-
-            wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.provider,
-                moderation_reveal_body(provider_reveal.clone(), now_unix_ms.saturating_add(2_500)),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-
-            let response = post_moderation_challenge_resolution(
-                app.clone(),
-                &auth.provider,
-                moderation_challenge_resolution_body(
-                    case_id,
-                    round_id,
-                    "challenge-api-1",
-                    &auth.provider,
-                    "rejected",
-                    now_unix_ms.saturating_add(2_600),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect challenge resolution body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode challenge resolution body");
-            assert_eq!(
-                value.get("decision").and_then(Value::as_str),
-                Some("rejected")
-            );
-
-            let response = handle_get_sorafs_moderation_ballot_events(
-                State(app.clone()),
-                HeaderMap::new(),
-                axum::extract::RawQuery(Some("since=3&limit=4".to_owned())),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect challenge events body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode challenge events body");
-            let events = value
-                .get("events")
-                .and_then(Value::as_array)
-                .expect("challenge event array");
-            assert_eq!(
-                events
-                    .iter()
-                    .filter_map(|event| event.get("kind").and_then(Value::as_str))
-                    .collect::<Vec<_>>(),
-                vec!["challenge_submitted", "challenge_resolved"]
-            );
-            assert_eq!(
-                events[0]
-                    .get("challenge")
-                    .and_then(|challenge| challenge.get("challenge_id"))
-                    .and_then(Value::as_str),
-                Some("challenge-api-1")
-            );
-            assert_eq!(
-                events[1]
-                    .get("challenge")
-                    .and_then(|challenge| challenge.get("decision"))
-                    .and_then(Value::as_str),
-                Some("rejected")
-            );
-
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.provider,
-                moderation_reveal_body(provider_reveal, now_unix_ms.saturating_add(2_700)),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.buyer,
-                moderation_reveal_body(buyer_reveal, now_unix_ms.saturating_add(2_800)),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            app.sorafs_node
-                .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
-                .expect("legacy challenged-ballot fixture tally");
-
-            let response = handle_get_sorafs_moderation_ballot(
-                State(app),
-                Path((case_id.to_owned(), round_id.to_owned())),
-                axum::extract::RawQuery(None),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect challenge record body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode challenge record body");
-            assert_eq!(
-                value.get("challenge_count").and_then(Value::as_u64),
-                Some(1)
-            );
-            let challenges = value
-                .get("challenges")
-                .and_then(Value::as_array)
-                .expect("challenge records");
-            assert_eq!(
-                challenges[0].get("decision").and_then(Value::as_str),
-                Some("rejected")
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_challenge_endpoint_requires_challenger_auth() {
-            let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-            let response = post_moderation_challenge(
-                app,
-                &auth.buyer,
-                moderation_challenge_body(
-                    "case-api-auth",
-                    "round-1",
-                    "challenge-api-auth",
-                    &auth.provider,
-                    "evidence_mismatch",
-                    None,
-                    iroha_network_time_now_ms(),
-                ),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_list_limit_query_bounds_response_array() {
-            let round_id = "round-1";
-            let (app, _dir, auth, _deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit("case-list-1", round_id);
-
-            for case_id in ["case-list-1", "case-list-2"] {
-                let announcement = moderation_announcement_from_request(
-                    moderation_announce_request(case_id, round_id, &auth, None),
-                    None,
-                    None,
-                )
-                .expect("valid moderation announcement");
-                app.sorafs_node
-                    .announce_moderation_ballot(announcement)
-                    .expect("announce moderation ballot");
-            }
-
-            let response = handle_get_sorafs_moderation_ballots(
-                State(app),
-                axum::extract::RawQuery(Some("limit=1".to_owned())),
-            )
-            .await;
-
-            assert_eq!(response.status(), StatusCode::OK);
-            let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("collect moderation list body");
-            let value: Value =
-                norito::json::from_slice(&body_bytes).expect("decode moderation list body");
-            assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
-            assert_eq!(value.get("returned_count").and_then(Value::as_u64), Some(1));
-            assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
-            assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(true));
-            let ballots = value
-                .get("ballots")
-                .and_then(Value::as_array)
-                .expect("bounded ballots");
-            assert_eq!(ballots.len(), 1);
-        }
-
-        #[tokio::test]
-        async fn moderation_settlement_worker_submits_tallied_deposit() {
-            let case_id = "case-worker-settlement";
-            let round_id = "round-1";
-            let (mut app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x31,
-                3_500,
-            );
-            let buyer_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.buyer,
-                SoraFsModerationVoteChoice::Uphold,
-                0x32,
-                3_501,
-            );
-
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.buyer,
-                moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
-
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.provider,
-                moderation_reveal_body(provider_reveal, 3_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.buyer,
-                moderation_reveal_body(buyer_reveal, 3_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            app.sorafs_node
-                .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
-                .expect("legacy settlement-worker fixture tally");
-            let event = app
-                .sorafs_node
-                .moderation_ballot_events_since(Some(0), 10)
-                .into_iter()
-                .find(|event| event.kind == ModerationBallotEventKind::BallotTallied)
-                .expect("tallied moderation event");
-
-            let (status, body) = process_sorafs_appeal_finance_settlement_worker_event(&app, event)
-                .await
-                .expect("worker processes tallied event")
-                .expect("deposit-backed tally should submit settlement");
-
-            assert_eq!(status, StatusCode::ACCEPTED);
-            assert_eq!(body.get("status").and_then(Value::as_str), Some("queued"));
-            assert_eq!(
-                body.get("submitted_step")
-                    .and_then(|step| step.get("action"))
-                    .and_then(Value::as_str),
-                Some("drawdown_non_refund")
-            );
-            assert!(
-                body.get("tx_hash_hex")
-                    .and_then(Value::as_str)
-                    .is_some_and(|hash| hash.len() == 64)
-            );
-            let submitted_steps = load_appeal_finance_settlement_worker_submitted_steps(&app)
-                .expect("load persisted worker state");
-            assert_eq!(submitted_steps.len(), 1);
-            let state_path =
-                appeal_finance_settlement_worker_state_path(&app).expect("worker state path");
-            let state_bytes = fs::read(state_path).expect("read persisted worker state");
-            let state_json: Value =
-                norito::json::from_slice(&state_bytes).expect("decode persisted worker state");
-            assert_eq!(
-                state_json.get("schema").and_then(Value::as_str),
-                Some("sorafs.appeal_finance.settlement_worker_state.v1")
-            );
-            assert_eq!(
-                state_json
-                    .get("submitted_steps")
-                    .and_then(Value::as_array)
-                    .map(Vec::len),
-                Some(1)
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_settlement_worker_retries_expired_submission() {
-            let case_id = "case-worker-retry";
-            let round_id = "round-1";
-            let (mut app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            configure_appeal_finance_settlement_submitter(&mut app, &auth.provider);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let announcement = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement;
-            let challenge_deadline_unix_ms = announcement.challenge_deadline_unix_ms;
-            let context = announcement.context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x41,
-                3_500,
-            );
-            let buyer_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.buyer,
-                SoraFsModerationVoteChoice::Uphold,
-                0x42,
-                3_501,
-            );
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.buyer,
-                moderation_commit_body(moderation_commit_fixture(&buyer_reveal, 1_501), 1_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.provider,
-                moderation_reveal_body(provider_reveal, 3_500),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            let response = post_moderation_reveal(
-                app.clone(),
-                &auth.buyer,
-                moderation_reveal_body(buyer_reveal, 3_501),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            app.sorafs_node
-                .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
-                .expect("legacy retry-worker fixture tally");
-            let event = app
-                .sorafs_node
-                .moderation_ballot_events_since(Some(0), 10)
-                .into_iter()
-                .find(|event| event.kind == ModerationBallotEventKind::BallotTallied)
-                .expect("tallied moderation event");
-            let record = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("moderation ballot record");
-            let tally = record.tally.as_ref().expect("tally");
-            let deposit = record
-                .announcement
-                .appeal_deposit
-                .as_ref()
-                .expect("appeal deposit");
-            let confirmation =
-                appeal_finance_deposit_confirm_request_from_moderation_deposit(&record, deposit);
-            let (expected, escrow_record) =
-                load_appeal_finance_deposit_record_for_worker(&app, &confirmation)
-                    .expect("worker deposit record");
-            let outcome = appeal_finance_settlement_outcome_from_moderation_tally(tally);
-            let panel_size = moderation_ballot_panel_size(&record).expect("panel size");
-            let step_key = appeal_finance_settlement_worker_step_key(
-                &expected,
-                &escrow_record,
-                outcome,
-                panel_size,
-            )
-            .expect("worker step key")
-            .expect("pending worker step");
-            let fake_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
-                [0xE7; Hash::LENGTH],
-            ));
-            app.pipeline_status_cache.record_entry(
-                fake_hash.clone(),
-                crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Expired, None, None),
-            );
-            let fake_hash_hex = fake_hash.to_string();
-            let mut submitted_steps = BTreeMap::new();
-            submitted_steps.insert(
-                step_key.clone(),
-                AppealFinanceSettlementWorkerSubmission {
-                    key: step_key,
-                    tx_hash_hex: Some(fake_hash_hex.clone()),
-                    status: "queued".to_owned(),
-                    attempts: 1,
-                    updated_at_unix_ms: 3_600,
-                    last_error: None,
-                },
-            );
-            persist_appeal_finance_settlement_worker_submitted_steps(&app, &submitted_steps, 3_600)
-                .expect("persist seeded worker state");
-
-            let (status, body) = process_sorafs_appeal_finance_settlement_worker_event(&app, event)
-                .await
-                .expect("worker retries expired event")
-                .expect("expired submission should retry");
-
-            assert_eq!(status, StatusCode::ACCEPTED);
-            assert_eq!(body.get("status").and_then(Value::as_str), Some("queued"));
-            let persisted = load_appeal_finance_settlement_worker_submitted_steps(&app)
-                .expect("load retried worker state");
-            let submission = persisted.values().next().expect("persisted submission");
-            assert_eq!(submission.attempts, 2);
-            assert_eq!(submission.status, "queued");
-            assert_ne!(
-                submission.tx_hash_hex.as_deref(),
-                Some(fake_hash_hex.as_str())
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_announcement_requires_confirmed_appeal_deposit() {
-            let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-            let case_id = "case-no-deposit";
-            let round_id = "round-1";
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id, round_id, &auth, None,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-            assert!(
-                app.sorafs_node
-                    .moderation_ballot(case_id, round_id)
-                    .is_none()
-            );
-
-            let mut deposit_request = appeal_finance_deposit_request(
-                &auth.provider.account,
-                &auth.buyer.account,
-                Some(&auth.provider.account),
-            );
-            deposit_request.case_id = case_id.to_owned();
-            deposit_request.round_id = Some(round_id.to_owned());
-            let expected = appeal_finance_deposit_expectation(deposit_request.clone())
-                .expect("valid deposit expectation");
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(appeal_finance_deposit_confirm_request(
-                        &deposit_request,
-                        expected.escrow_id.as_hash().to_string(),
-                    )),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
-            assert!(
-                app.sorafs_node
-                    .moderation_ballot(case_id, round_id)
-                    .is_none()
-            );
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_commit_requires_juror_auth() {
-            let case_id = "case-auth";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let context = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement
-                .context;
-            let provider_reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x33,
-                3_500,
-            );
-            let body =
-                moderation_commit_body(moderation_commit_fixture(&provider_reveal, 1_500), 1_500);
-
-            let response = post_moderation_commit(app, &auth.buyer, body).await;
-
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_commit_ignores_client_timestamp_override() {
-            let case_id = "case-commit-time";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let now_unix_ms = iroha_network_time_now_ms();
-            let announced_at_unix_ms = now_unix_ms.saturating_sub(4_000);
-            let commit_deadline_unix_ms = now_unix_ms.saturating_sub(3_000);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_sub(2_000);
-            let reveal_deadline_unix_ms = now_unix_ms.saturating_sub(1_000);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    announced_at_unix_ms,
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    reveal_deadline_unix_ms,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let context = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement
-                .context;
-            let reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x44,
-                challenge_deadline_unix_ms.saturating_add(1),
-            );
-            let commit =
-                moderation_commit_fixture(&reveal, commit_deadline_unix_ms.saturating_sub(1));
-
-            let response = post_moderation_commit(
-                app,
-                &auth.provider,
-                moderation_commit_body(commit, commit_deadline_unix_ms.saturating_sub(1)),
-            )
-            .await;
-
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_reveal_ignores_client_timestamp_override() {
-            let case_id = "case-reveal-time";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let now_unix_ms = iroha_network_time_now_ms();
-            let announced_at_unix_ms = now_unix_ms.saturating_sub(1_000);
-            let commit_deadline_unix_ms = now_unix_ms.saturating_add(30_000);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_add(40_000);
-            let reveal_deadline_unix_ms = now_unix_ms.saturating_add(50_000);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    announced_at_unix_ms,
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    reveal_deadline_unix_ms,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let context = app
-                .sorafs_node
-                .moderation_ballot(case_id, round_id)
-                .expect("announced moderation ballot")
-                .announcement
-                .context;
-            let reveal = moderation_reveal_fixture(
-                &context,
-                round_id,
-                &auth.provider,
-                SoraFsModerationVoteChoice::Uphold,
-                0x55,
-                challenge_deadline_unix_ms.saturating_add(1),
-            );
-            let commit = moderation_commit_fixture(&reveal, announced_at_unix_ms.saturating_add(1));
-            let response = post_moderation_commit(
-                app.clone(),
-                &auth.provider,
-                moderation_commit_body(commit, announced_at_unix_ms.saturating_add(1)),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let response = post_moderation_reveal(
-                app,
-                &auth.provider,
-                moderation_reveal_body(reveal, challenge_deadline_unix_ms.saturating_add(1)),
-            )
-            .await;
-
-            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        }
-
-        #[tokio::test]
-        async fn moderation_ballot_tally_fails_closed_without_chain_orchestrator() {
-            let case_id = "case-tally-time";
-            let round_id = "round-1";
-            let (app, _dir, auth, deposit_confirmation) =
-                sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
-            let now_unix_ms = iroha_network_time_now_ms();
-            let announced_at_unix_ms = now_unix_ms.saturating_sub(1_000);
-            let commit_deadline_unix_ms = now_unix_ms.saturating_add(30_000);
-            let challenge_deadline_unix_ms = now_unix_ms.saturating_add(40_000);
-            let reveal_deadline_unix_ms = now_unix_ms.saturating_add(60_000);
-
-            let response = post_moderation_announce(
-                app.clone(),
-                &auth.provider,
-                moderation_announce_body(moderation_announce_request_with_windows(
-                    case_id,
-                    round_id,
-                    &auth,
-                    Some(deposit_confirmation),
-                    announced_at_unix_ms,
-                    commit_deadline_unix_ms,
-                    challenge_deadline_unix_ms,
-                    reveal_deadline_unix_ms,
-                )),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-
-            let response = post_moderation_tally(
-                app.clone(),
-                &auth.provider,
-                moderation_tally_body(case_id, round_id, reveal_deadline_unix_ms.saturating_add(1)),
-            )
-            .await;
-
-            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-            assert!(
-                app.sorafs_node
-                    .moderation_ballot(case_id, round_id)
-                    .is_some_and(|record| record.tally.is_none()),
-                "the production tally route must not mutate the local ballot runtime"
-            );
-        }
-    }
 
     #[tokio::test]
     #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]

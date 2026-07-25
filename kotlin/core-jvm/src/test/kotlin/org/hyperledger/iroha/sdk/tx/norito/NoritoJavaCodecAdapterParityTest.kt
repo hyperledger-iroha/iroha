@@ -17,12 +17,14 @@ import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.MultisigSignatures
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -36,7 +38,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class NoritoJavaCodecAdapterParityTest {
-    private val adapter = NoritoJavaCodecAdapter()
+    private val adapter = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
     private val testFeePayment = FeePaymentIntent.authority(emptyList())
     private val testIvmFeePayment = FeePaymentIntent.authority(emptyList(), 1L)
 
@@ -68,11 +70,52 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     @Test
+    fun `signed Taira SBD transfer preserves exact authority and destination`() {
+        val authority = sampleAuthority(0x39)
+        val destination = sampleAuthority(0x3A)
+        assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(authority))
+        assertEquals(SccpV1.TAIRA_I105_DISCRIMINANT_V1, AccountAddress.detectI105Discriminant(destination))
+        val transfer = TransferWirePayloadEncoder.encodeAssetTransfer(
+            "$SBD_ASSET_DEFINITION_ID#$authority",
+            "10",
+            destination,
+        )
+        val payload = TransactionPayload(
+            feePayment = testFeePayment,
+            chainId = "fc56984b-2be7-431d-840e-21514d1883f0",
+            authority = authority,
+            creationTimeMs = 1_735_369_000_000L,
+            executable = Executable.instructions(listOf(transfer)),
+        )
+        val signed = SignedTransaction(
+            adapter.encodeTransaction(payload),
+            fill(0x44, 64),
+            TestEd25519Keys.publicKey(0x39),
+            adapter.schemaName(),
+        )
+
+        val decodedSigned = SignedTransactionEncoder.decodeVersioned(
+            SignedTransactionEncoder.encodeVersioned(signed),
+        )
+        val decodedPayload = adapter.decodeTransaction(decodedSigned.encodedPayload())
+        assertEquals(authority, decodedPayload.authority)
+        val decodedInstruction = assertIs<Executable.Instructions>(decodedPayload.executable).instructions.single()
+        val wirePayload = assertIs<WirePayload>(decodedInstruction.payload)
+        val decodedTransfer =
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                wirePayload.payloadBytes,
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
+        assertEquals("$SBD_ASSET_DEFINITION_ID#$authority", decodedTransfer.assetId)
+        assertEquals(destination, decodedTransfer.destinationAccountId)
+    }
+
+    @Test
     fun `codec encodes account id authority as struct`() {
         val publicKey = TestEd25519Keys.publicKey(0x3A)
         val authority = AccountAddress
             .fromAccount(publicKey, "ed25519")
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
         val payload = TransactionPayload(
             feePayment = testIvmFeePayment,
             chainId = "00000002",
@@ -113,7 +156,7 @@ class NoritoJavaCodecAdapterParityTest {
         val policy = MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB))
         val authority = AccountAddress
             .fromMultisigPolicy(policy)
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
         val payload = TransactionPayload(
             feePayment = testIvmFeePayment,
@@ -536,9 +579,10 @@ class NoritoJavaCodecAdapterParityTest {
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
         .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
-        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
     companion object {
+        private const val SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         private const val CONTRACT_ADDRESS =
             "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()

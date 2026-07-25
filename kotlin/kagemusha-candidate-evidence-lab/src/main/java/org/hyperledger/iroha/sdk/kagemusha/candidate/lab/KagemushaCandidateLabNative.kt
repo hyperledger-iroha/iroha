@@ -88,6 +88,7 @@ object KagemushaCandidateLabNative {
         opening: ByteArray,
         membershipWitness: ByteArray,
         recipient: ByteArray,
+        chainDiscriminant: Int,
         atomicUnits: ByteArray,
         scale: Int,
         changeOpening: ByteArray,

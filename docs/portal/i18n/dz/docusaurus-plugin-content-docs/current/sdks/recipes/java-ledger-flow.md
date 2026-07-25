@@ -109,7 +109,7 @@ public final class LedgerFlow {
             .build();
 
     final TransactionBuilder builder =
-        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareFallback());
+        new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), IrohaKeyManager.withSoftwareFallback());
     final var signed = builder.encodeAndSign(payload, signer);
 
     final ClientConfig config =

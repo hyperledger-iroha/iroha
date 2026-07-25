@@ -182,6 +182,7 @@ class SorafsReferenceValidatorsTest {
                 pricePerGib = "1",
                 quantityGib = 1,
                 ownerAccount = oversized,
+                providerId = null,
                 expiryUnix = 1,
                 nonce = 7,
                 makerFeeBps = 0,
@@ -213,6 +214,7 @@ class SorafsReferenceValidatorsTest {
                 pricePerGib = "42",
                 quantityGib = 7,
                 ownerAccount = byteArrayOf(0x01),
+                providerId = null,
                 expiryUnix = 123,
                 nonce = 1,
                 makerFeeBps = 0,
@@ -582,6 +584,7 @@ class SorafsReferenceValidatorsTest {
             pricePerGib = "1",
             quantityGib = 1,
             ownerAccount = maximumOwner,
+            providerId = null,
             expiryUnix = 1_800_000_000,
             nonce = 9,
             makerFeeBps = 0,
@@ -616,6 +619,7 @@ class SorafsReferenceValidatorsTest {
             pricePerGib = maxScaledXor,
             quantityGib = 64,
             ownerAccount = owner,
+            providerId = null,
             expiryUnix = 1_800_000_000,
             nonce = 7,
             makerFeeBps = 10,
@@ -629,6 +633,60 @@ class SorafsReferenceValidatorsTest {
         )
         assertTrue(outcome.contains("\"status\": \"Ok\""), outcome)
 
+        val ask = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            side = SorafsOrderbookSide.ASK,
+            tier = SorafsOrderbookTier.HOT,
+            pricePerGib = "1.25",
+            quantityGib = 4,
+            ownerAccount = owner,
+            providerId = ByteArray(32) { 0x72 },
+            expiryUnix = 1_800_000_000,
+            nonce = 8,
+            makerFeeBps = 10,
+            takerFeeBps = 15,
+            privateKey = ByteArray(32) { 0xB7.toByte() },
+        )
+        val askOutcome = SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST,
+            ask,
+            generatedAtUnix = 123,
+        )
+        assertTrue(askOutcome.contains("\"status\": \"Ok\""), askOutcome)
+
+        val bidProviderError = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                side = SorafsOrderbookSide.BID,
+                tier = SorafsOrderbookTier.HOT,
+                pricePerGib = "1",
+                quantityGib = 1,
+                ownerAccount = owner,
+                providerId = ByteArray(32) { 0x72 },
+                expiryUnix = 1_800_000_000,
+                nonce = 17,
+                makerFeeBps = 0,
+                takerFeeBps = 0,
+                privateKey = ByteArray(32) { 0xB7.toByte() },
+            )
+        }
+        assertTrue(bidProviderError.message.orEmpty().contains("absent or empty"))
+
+        val askProviderError = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                side = SorafsOrderbookSide.ASK,
+                tier = SorafsOrderbookTier.HOT,
+                pricePerGib = "1",
+                quantityGib = 1,
+                ownerAccount = owner,
+                providerId = null,
+                expiryUnix = 1_800_000_000,
+                nonce = 17,
+                makerFeeBps = 0,
+                takerFeeBps = 0,
+                privateKey = ByteArray(32) { 0xB7.toByte() },
+            )
+        }
+        assertTrue(askProviderError.message.orEmpty().contains("providerId"))
+
         assertThrows(IllegalArgumentException::class.java) {
             SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
                 orderId = ByteArray(32) { 0x11.toByte() },
@@ -637,6 +695,7 @@ class SorafsReferenceValidatorsTest {
                 pricePerGib = "0.000000001",
                 quantityGib = 64,
                 ownerAccount = owner,
+                providerId = null,
                 expiryUnix = 1_800_000_000,
                 nonce = 7,
                 makerFeeBps = 10,

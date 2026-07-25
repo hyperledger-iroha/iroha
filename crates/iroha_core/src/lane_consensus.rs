@@ -62,7 +62,8 @@ const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
 /// view/QC envelope and the later globally certified merge transcript.
 #[cfg(test)]
 pub(crate) const LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES: usize =
-    16 * 1024 * 1024 - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
+    iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get()
+        - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
 /// Maximum canonical Norito body bytes retained for one autonomous lane payload.
 ///
 /// The payload body is at most half of one authenticated source bundle because
@@ -9691,6 +9692,12 @@ mod tests {
         cache
             .insert_proposal(protected.clone())
             .expect("insert commit-protected losing carrier");
+        for key in keys.iter().take(2) {
+            let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), key);
+            cache
+                .insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer))
+                .expect("form the prerequisite PrepareQC");
+        }
         let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
         cache
             .insert_vote(commit_vote.clone(), Some(&commit_vote.signer))

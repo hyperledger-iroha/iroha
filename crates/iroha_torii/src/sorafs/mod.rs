@@ -13,6 +13,11 @@ pub mod gateway;
 pub mod gc;
 pub mod hosts;
 pub mod limits;
+#[cfg(feature = "app_api")]
+pub mod moderation_runtime;
+#[cfg(feature = "app_api")]
+pub(crate) mod orderbook_runtime;
+pub(crate) mod orderbook_worker;
 pub mod pin;
 #[cfg(feature = "app_api")]
 pub mod pop_api;
@@ -20,6 +25,9 @@ pub mod por;
 pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
+#[cfg(feature = "app_api")]
+pub(crate) mod reserve_runtime;
+pub(crate) mod reserve_worker;
 pub mod site;
 pub mod token;
 

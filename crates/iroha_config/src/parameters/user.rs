@@ -819,6 +819,9 @@ pub enum ParseError {
     /// Torii configuration contained invalid or incomplete values.
     #[error("Invalid Torii configuration")]
     InvalidToriiConfig,
+    /// SoraFS configuration contained invalid or unsafe values.
+    #[error("Invalid SoraFS configuration")]
+    InvalidSorafsConfig,
     /// Snapshot configuration contained an invalid audited-bootstrap policy.
     #[error("Invalid snapshot configuration")]
     InvalidSnapshotConfig,
@@ -1672,70 +1675,6 @@ impl SorafsPenaltyPolicy {
     }
 }
 
-/// User-level configuration for SoraFS repair escalation governance policy.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct RepairEscalationPolicyV1 {
-    /// Approval quorum (basis points) required for escalation/slash decisions.
-    #[config(
-        env = "GOV_SORAFS_REPAIR_QUORUM_BPS",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::QUORUM_BPS"
-    )]
-    pub quorum_bps: u16,
-    /// Minimum number of distinct voters required to resolve a decision.
-    #[config(
-        env = "GOV_SORAFS_REPAIR_MINIMUM_VOTERS",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS"
-    )]
-    pub minimum_voters: u32,
-    /// Dispute window in seconds after escalation before governance finalizes.
-    #[config(
-        env = "GOV_SORAFS_REPAIR_DISPUTE_WINDOW_SECS",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS"
-    )]
-    pub dispute_window_secs: u64,
-    /// Appeal window in seconds after approval before a decision is final.
-    #[config(
-        env = "GOV_SORAFS_REPAIR_APPEAL_WINDOW_SECS",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS"
-    )]
-    pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations.
-    #[config(
-        env = "GOV_SORAFS_REPAIR_MAX_PENALTY",
-        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::max_penalty()"
-    )]
-    pub max_penalty: XorQuantity,
-}
-
-impl Default for RepairEscalationPolicyV1 {
-    fn default() -> Self {
-        Self {
-            quorum_bps:
-                crate::parameters::defaults::governance::sorafs_repair_escalation::QUORUM_BPS,
-            minimum_voters:
-                crate::parameters::defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS,
-            dispute_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
-            appeal_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
-            max_penalty: crate::parameters::defaults::governance::sorafs_repair_escalation::max_penalty(),
-        }
-    }
-}
-
-impl RepairEscalationPolicyV1 {
-    fn parse(self) -> actual::RepairEscalationPolicyV1 {
-        if self.max_penalty.is_zero() {
-            panic!("governance.sorafs_repair_escalation.max_penalty must be greater than zero");
-        }
-        actual::RepairEscalationPolicyV1 {
-            quorum_bps: self.quorum_bps.min(10_000),
-            minimum_voters: self.minimum_voters.max(1),
-            dispute_window_secs: self.dispute_window_secs,
-            appeal_window_secs: self.appeal_window_secs,
-            max_penalty: self.max_penalty,
-        }
-    }
-}
-
 /// Telemetry authentication and replay policy for SoraFS capacity windows.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct SorafsTelemetryPolicy {
@@ -2187,9 +2126,6 @@ pub struct Governance {
     /// SoraFS under-delivery penalty policy.
     #[config(nested)]
     pub sorafs_penalty: SorafsPenaltyPolicy,
-    /// SoraFS repair escalation governance policy.
-    #[config(nested)]
-    pub sorafs_repair_escalation: RepairEscalationPolicyV1,
     /// SoraFS telemetry authentication/replay policy.
     #[config(nested)]
     pub sorafs_telemetry: SorafsTelemetryPolicy,
@@ -2355,7 +2291,6 @@ impl Default for Governance {
             sorafs_pin_fee_treasury_account: defaults::governance::sorafs_pin_fee::treasury_account(
             ),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
-            sorafs_repair_escalation: RepairEscalationPolicyV1::default(),
             sorafs_telemetry: SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: BTreeMap::new(),
             conviction_step_blocks: 100,
@@ -2489,7 +2424,6 @@ impl Governance {
             ),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: self.sorafs_penalty.parse(),
-            sorafs_repair_escalation: self.sorafs_repair_escalation.parse(),
             sorafs_telemetry: self.sorafs_telemetry.parse(),
             sorafs_provider_owners: {
                 let mut bindings = BTreeMap::new();
@@ -5894,7 +5828,7 @@ pub struct SumeragiQueues {
     pub ready_bodies: NonZeroUsize,
 }
 
-/// User-facing finite runtime bounds for Sumeragi v2 lane and Native AMX services.
+/// User-facing finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiV2RuntimeLimits {
     /// Authenticated merge-QC identities retained by one height-local adapter.
@@ -5954,6 +5888,15 @@ pub struct SumeragiV2RuntimeLimits {
     /// Lifetime of a completed/rejected server request gate.
     #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL.into()")]
     pub merge_sidecar_server_request_gate_ttl_ms: DurationMs,
+    /// Certified merge entries retained in Kura before canonical carrier commitment.
+    #[config(default = "defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY")]
+    pub pending_certified_merge_entry_capacity: NonZeroUsize,
+    /// QueuePlan admission certificates retained before canonical carrier commitment.
+    #[config(default = "defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY")]
+    pub pending_queue_plan_admission_capacity: NonZeroUsize,
+    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    #[config(default = "defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES")]
+    pub pending_control_sidecar_bytes: NonZeroUsize,
     /// Durable merge-signing decisions retained before committed-frontier GC.
     #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY")]
     pub merge_signing_guard_record_capacity: NonZeroUsize,
@@ -6013,7 +5956,7 @@ pub struct Sumeragi {
     /// Bounded asynchronous adapter queues.
     #[config(nested)]
     pub queues: SumeragiQueues,
-    /// Shared finite lane, recovery, and Native AMX service bounds.
+    /// Shared finite lane, merge, recovery, and Native AMX service bounds.
     #[config(nested)]
     pub limits: SumeragiV2RuntimeLimits,
     /// Consensus key-rotation and HSM policy.
@@ -6292,51 +6235,45 @@ impl Sumeragi {
             },
             limits: actual::SumeragiV2RuntimeLimits {
                 authenticated_merge_qc_capacity: limits.authenticated_merge_qc_capacity,
-                merge_leader_body_frame_headroom_bytes:
-                    limits.merge_leader_body_frame_headroom_bytes,
+                merge_leader_body_frame_headroom_bytes: limits
+                    .merge_leader_body_frame_headroom_bytes,
                 autonomous_carrier_headroom_bytes: limits.autonomous_carrier_headroom_bytes,
                 autonomous_producer_recheck: limits.autonomous_producer_recheck_ms.0,
-                historical_recovery_stuck_attempts:
-                    limits.historical_recovery_stuck_attempts,
-                historical_recovery_retry_tier_attempts:
-                    limits.historical_recovery_retry_tier_attempts,
-                historical_recovery_max_retry_tier:
-                    limits.historical_recovery_max_retry_tier,
+                historical_recovery_stuck_attempts: limits.historical_recovery_stuck_attempts,
+                historical_recovery_retry_tier_attempts: limits
+                    .historical_recovery_retry_tier_attempts,
+                historical_recovery_max_retry_tier: limits.historical_recovery_max_retry_tier,
                 sidecar_service_burst: limits.sidecar_service_burst,
-                merge_sidecar_inbound_session_capacity:
-                    limits.merge_sidecar_inbound_session_capacity,
-                merge_sidecar_inbound_sessions_per_peer:
-                    limits.merge_sidecar_inbound_sessions_per_peer,
-                merge_sidecar_inbound_assembly_bytes:
-                    limits.merge_sidecar_inbound_assembly_bytes,
-                merge_sidecar_inbound_assembly_bytes_per_peer:
-                    limits.merge_sidecar_inbound_assembly_bytes_per_peer,
-                merge_sidecar_deferred_block_capacity:
-                    limits.merge_sidecar_deferred_block_capacity,
-                merge_sidecar_future_block_distance:
-                    limits.merge_sidecar_future_block_distance,
-                merge_sidecar_request_timeout:
-                    limits.merge_sidecar_request_timeout_ms.0,
-                merge_sidecar_outbound_sessions_per_source:
-                    limits.merge_sidecar_outbound_sessions_per_source,
-                merge_sidecar_outbound_bytes_per_source:
-                    limits.merge_sidecar_outbound_bytes_per_source,
-                merge_sidecar_server_request_gates_per_source:
-                    limits.merge_sidecar_server_request_gates_per_source,
-                merge_sidecar_server_request_gate_ttl:
-                    limits.merge_sidecar_server_request_gate_ttl_ms.0,
-                merge_signing_guard_record_capacity:
-                    limits.merge_signing_guard_record_capacity,
-                merge_signing_guard_record_bytes:
-                    limits.merge_signing_guard_record_bytes,
-                merge_signing_guard_total_bytes:
-                    limits.merge_signing_guard_total_bytes,
-                native_amx_signing_guard_record_capacity:
-                    limits.native_amx_signing_guard_record_capacity,
-                native_amx_signing_guard_record_bytes:
-                    limits.native_amx_signing_guard_record_bytes,
-                native_amx_signing_guard_anchor_bytes:
-                    limits.native_amx_signing_guard_anchor_bytes,
+                merge_sidecar_inbound_session_capacity: limits
+                    .merge_sidecar_inbound_session_capacity,
+                merge_sidecar_inbound_sessions_per_peer: limits
+                    .merge_sidecar_inbound_sessions_per_peer,
+                merge_sidecar_inbound_assembly_bytes: limits.merge_sidecar_inbound_assembly_bytes,
+                merge_sidecar_inbound_assembly_bytes_per_peer: limits
+                    .merge_sidecar_inbound_assembly_bytes_per_peer,
+                merge_sidecar_deferred_block_capacity: limits.merge_sidecar_deferred_block_capacity,
+                merge_sidecar_future_block_distance: limits.merge_sidecar_future_block_distance,
+                merge_sidecar_request_timeout: limits.merge_sidecar_request_timeout_ms.0,
+                merge_sidecar_outbound_sessions_per_source: limits
+                    .merge_sidecar_outbound_sessions_per_source,
+                merge_sidecar_outbound_bytes_per_source: limits
+                    .merge_sidecar_outbound_bytes_per_source,
+                merge_sidecar_server_request_gates_per_source: limits
+                    .merge_sidecar_server_request_gates_per_source,
+                merge_sidecar_server_request_gate_ttl: limits
+                    .merge_sidecar_server_request_gate_ttl_ms
+                    .0,
+                pending_certified_merge_entry_capacity: limits
+                    .pending_certified_merge_entry_capacity,
+                pending_queue_plan_admission_capacity: limits.pending_queue_plan_admission_capacity,
+                pending_control_sidecar_bytes: limits.pending_control_sidecar_bytes,
+                merge_signing_guard_record_capacity: limits.merge_signing_guard_record_capacity,
+                merge_signing_guard_record_bytes: limits.merge_signing_guard_record_bytes,
+                merge_signing_guard_total_bytes: limits.merge_signing_guard_total_bytes,
+                native_amx_signing_guard_record_capacity: limits
+                    .native_amx_signing_guard_record_capacity,
+                native_amx_signing_guard_record_bytes: limits.native_amx_signing_guard_record_bytes,
+                native_amx_signing_guard_anchor_bytes: limits.native_amx_signing_guard_anchor_bytes,
             },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
@@ -17746,7 +17683,7 @@ impl Sorafs {
         (
             self.storage.parse(emitter),
             self.discovery.parse(emitter),
-            self.repair.parse(),
+            self.repair.parse(emitter),
             self.gc.parse(),
             self.quota.parse(),
             self.alias_cache.parse(),
@@ -18580,6 +18517,9 @@ pub struct SorafsStorage {
     /// Durable native orderbook transaction worker policy.
     #[config(nested)]
     pub orderbook_worker: SorafsOrderbookWorkerConfig,
+    /// Durable native reserve/rent transaction worker policy.
+    #[config(nested)]
+    pub reserve_worker: SorafsReserveWorkerConfig,
     /// Temporary local admission policy; non-authoritative and not a compatibility branch.
     #[config(nested)]
     pub orderbook: SorafsOrderbookConfig,
@@ -18643,6 +18583,7 @@ impl Default for SorafsStorage {
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook_worker: SorafsOrderbookWorkerConfig::default(),
+            reserve_worker: SorafsReserveWorkerConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
@@ -18750,6 +18691,7 @@ impl SorafsStorage {
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
             orderbook_worker: self.orderbook_worker.parse(emitter),
+            reserve_worker: self.reserve_worker.parse(emitter),
             orderbook: self.orderbook.parse(),
             reputation_trust_policy_path: self.reputation_trust_policy_path,
             pricing_trust_policy_path: self.pricing_trust_policy_path,
@@ -19478,6 +19420,128 @@ impl SorafsOrderbookWorkerConfig {
     }
 }
 
+/// Operational policy for the durable native reserve/rent transaction worker.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsReserveWorkerConfig {
+    /// Enable generation of new supervised reserve/rent work.
+    ///
+    /// Durable transaction drain and finalized reconciliation cannot be
+    /// disabled by this generation control.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::ENABLED")]
+    pub enabled: bool,
+    /// Finalized-state scan cadence in milliseconds.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::SCAN_INTERVAL_MS")]
+    pub scan_interval_ms: NonZeroU64,
+    /// Maximum durable operations inspected in one fair scan.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::SCAN_BATCH_LIMIT")]
+    pub scan_batch_limit: NonZeroU32,
+    /// Maximum pending semantic operations retained durably.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::MAX_PENDING")]
+    pub max_pending: NonZeroU32,
+    /// Maximum finalized idempotency tombstones retained durably.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::MAX_COMPLETED")]
+    pub max_completed: NonZeroU32,
+    /// Maximum terminal dead letters retained durably.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::MAX_DEAD_LETTERS")]
+    pub max_dead_letters: NonZeroU32,
+    /// Maximum signing/submission attempts under one semantic identity.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::MAX_ATTEMPTS")]
+    pub max_attempts: NonZeroU32,
+    /// Maximum canonical durable checkpoint size.
+    #[config(default = "defaults::sorafs::storage::reserve_worker::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+impl Default for SorafsReserveWorkerConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::reserve_worker as worker;
+
+        Self {
+            enabled: worker::ENABLED,
+            scan_interval_ms: worker::SCAN_INTERVAL_MS,
+            scan_batch_limit: worker::SCAN_BATCH_LIMIT,
+            max_pending: worker::MAX_PENDING,
+            max_completed: worker::MAX_COMPLETED,
+            max_dead_letters: worker::MAX_DEAD_LETTERS,
+            max_attempts: worker::MAX_ATTEMPTS,
+            checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl SorafsReserveWorkerConfig {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsReserveWorker {
+        use defaults::sorafs::storage::reserve_worker as worker;
+
+        let scan_interval_ms = self.scan_interval_ms.get();
+        if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
+            .contains(&scan_interval_ms)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.reserve_worker.scan_interval_ms must be within {}..={}, got {scan_interval_ms}",
+                worker::SCAN_INTERVAL_MIN_MS,
+                worker::SCAN_INTERVAL_MAX_MS,
+            )));
+        }
+        let scan_batch_limit = self.scan_batch_limit.get();
+        if scan_batch_limit > worker::SCAN_BATCH_LIMIT_MAX {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.reserve_worker.scan_batch_limit must not exceed {}, got {scan_batch_limit}",
+                worker::SCAN_BATCH_LIMIT_MAX,
+            )));
+        }
+        for (field, value, maximum) in [
+            (
+                "max_pending",
+                self.max_pending.get(),
+                worker::MAX_PENDING_LIMIT,
+            ),
+            (
+                "max_completed",
+                self.max_completed.get(),
+                worker::MAX_COMPLETED_LIMIT,
+            ),
+            (
+                "max_dead_letters",
+                self.max_dead_letters.get(),
+                worker::MAX_DEAD_LETTERS_LIMIT,
+            ),
+            (
+                "max_attempts",
+                self.max_attempts.get(),
+                worker::MAX_ATTEMPTS_LIMIT,
+            ),
+        ] {
+            if value > maximum {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                    "sorafs.storage.reserve_worker.{field} must not exceed {maximum}, got {value}"
+                )));
+            }
+        }
+        if !(worker::CHECKPOINT_MIN_BYTES..=worker::CHECKPOINT_MAX_BYTES_LIMIT)
+            .contains(&self.checkpoint_max_bytes.0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.reserve_worker.checkpoint_max_bytes must be within {}..={}, got {}",
+                worker::CHECKPOINT_MIN_BYTES,
+                worker::CHECKPOINT_MAX_BYTES_LIMIT,
+                self.checkpoint_max_bytes.0,
+            )));
+        }
+
+        actual::SorafsReserveWorker {
+            enabled: self.enabled,
+            scan_interval: Duration::from_millis(scan_interval_ms),
+            scan_batch_limit,
+            max_pending: self.max_pending.get(),
+            max_completed: self.max_completed.get(),
+            max_dead_letters: self.max_dead_letters.get(),
+            max_attempts: self.max_attempts.get(),
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+        }
+    }
+}
+
 /// Temporary local orderbook policy retained only until local-authority removal.
 ///
 /// This policy is non-authoritative and does not define compatibility behavior.
@@ -20021,82 +20085,84 @@ impl SorafsPinRateLimit {
     }
 }
 
-/// User-level configuration for the repair scheduler.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+/// User-level native repair worker and transaction-forwarder configuration.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsRepair {
-    /// Enable the repair scheduler.
+    /// Enable native repair processing.
     #[config(default = "defaults::sorafs::repair::ENABLED")]
     pub enabled: bool,
-    /// Optional directory for durable repair state.
-    pub state_dir: Option<PathBuf>,
-    /// Claim TTL for repair tickets (seconds).
+    /// Lease duration requested by native repair claims (seconds).
     #[config(default = "defaults::sorafs::repair::CLAIM_TTL_SECS")]
     pub claim_ttl_secs: u64,
-    /// Heartbeat interval/TTL for active claims (seconds).
+    /// Renewal lead time for native repair claims (seconds).
     #[config(default = "defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS")]
     pub heartbeat_interval_secs: u64,
-    /// Maximum number of attempts before escalation.
+    /// Maximum transaction forwarding attempts before dead-lettering.
     #[config(default = "defaults::sorafs::repair::MAX_ATTEMPTS")]
     pub max_attempts: u32,
-    /// Concurrent repair workers per node.
+    /// Concurrent native repair executions per node.
     #[config(default = "defaults::sorafs::repair::WORKER_CONCURRENCY")]
     pub worker_concurrency: usize,
-    /// Initial retry backoff for failed repairs (seconds).
-    #[config(default = "defaults::sorafs::repair::BACKOFF_INITIAL_SECS")]
-    pub backoff_initial_secs: u64,
-    /// Maximum retry backoff for failed repairs (seconds).
-    #[config(default = "defaults::sorafs::repair::BACKOFF_MAX_SECS")]
-    pub backoff_max_secs: u64,
-    /// Default penalty used for scheduler-generated repair slash proposals.
-    #[config(default = "defaults::sorafs::repair::default_slash_penalty()")]
-    pub default_slash_penalty: XorQuantity,
-    /// Per-auditor signed report/slash request rate (tokens/sec). None disables limiting.
-    pub auditor_rate_per_sec: Option<u32>,
-    /// Per-auditor signed report/slash request burst capacity. None disables limiting.
-    pub auditor_burst: Option<u32>,
 }
 
 impl Default for SorafsRepair {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::repair::ENABLED,
-            state_dir: defaults::sorafs::repair::state_dir(),
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
             max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
-            backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
-            backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
-            default_slash_penalty: defaults::sorafs::repair::default_slash_penalty(),
-            auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC,
-            auditor_burst: defaults::sorafs::repair::AUDITOR_BURST,
         }
     }
 }
 
 impl SorafsRepair {
-    fn parse(self) -> actual::SorafsRepair {
-        if self.default_slash_penalty.is_zero() {
-            panic!("sorafs.repair.default_slash_penalty must be greater than zero");
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsRepair {
+        use iroha_data_model::sorafs::moderation_ledger::{
+            REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
+        };
+
+        let lease_duration_ms = self.claim_ttl_secs.checked_mul(1_000);
+        if !lease_duration_ms.is_some_and(|duration| {
+            (REPAIR_LEDGER_MIN_LEASE_MS_V1..=REPAIR_LEDGER_MAX_LEASE_MS_V1).contains(&duration)
+        }) {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.repair.claim_ttl_secs must resolve within \
+                     {REPAIR_LEDGER_MIN_LEASE_MS_V1}..={REPAIR_LEDGER_MAX_LEASE_MS_V1} \
+                     milliseconds without overflow"
+            )));
+        }
+        let heartbeat_ms = self.heartbeat_interval_secs.checked_mul(1_000);
+        if self.heartbeat_interval_secs == 0
+            || heartbeat_ms.is_none()
+            || self.heartbeat_interval_secs >= self.claim_ttl_secs
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.repair.heartbeat_interval_secs must be non-zero, convert to \
+                     milliseconds without overflow, and be strictly below claim_ttl_secs",
+            ));
+        }
+        if !(1..=defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT).contains(&self.max_attempts) {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.repair.max_attempts must be within 1..={}",
+                defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT
+            )));
+        }
+        if !(1..=defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT)
+            .contains(&self.worker_concurrency)
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                "sorafs.repair.worker_concurrency must be within 1..={}",
+                defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT
+            )));
         }
         actual::SorafsRepair {
             enabled: self.enabled,
-            state_dir: self.state_dir,
-            claim_ttl_secs: self.claim_ttl_secs.max(1),
-            heartbeat_interval_secs: self.heartbeat_interval_secs.max(1),
-            max_attempts: self.max_attempts.max(1),
-            worker_concurrency: self.worker_concurrency.max(1),
-            backoff_initial_secs: self.backoff_initial_secs.max(1),
-            backoff_max_secs: self.backoff_max_secs.max(self.backoff_initial_secs.max(1)),
-            default_slash_penalty: self.default_slash_penalty,
-            auditor_rate_per_sec: self
-                .auditor_rate_per_sec
-                .or(defaults::sorafs::repair::AUDITOR_RATE_PER_SEC)
-                .and_then(std::num::NonZeroU32::new),
-            auditor_burst: self
-                .auditor_burst
-                .or(defaults::sorafs::repair::AUDITOR_BURST)
-                .and_then(std::num::NonZeroU32::new),
+            claim_ttl_secs: self.claim_ttl_secs,
+            heartbeat_interval_secs: self.heartbeat_interval_secs,
+            max_attempts: self.max_attempts,
+            worker_concurrency: self.worker_concurrency,
         }
     }
 }
@@ -20118,9 +20184,6 @@ pub struct SorafsGc {
     /// Grace window for retention expiry (seconds).
     #[config(default = "defaults::sorafs::gc::RETENTION_GRACE_SECS")]
     pub retention_grace_secs: u64,
-    /// Attempt a GC sweep before rejecting new pins when storage is full.
-    #[config(default = "defaults::sorafs::gc::PRE_ADMISSION_SWEEP")]
-    pub pre_admission_sweep: bool,
 }
 
 impl Default for SorafsGc {
@@ -20131,7 +20194,6 @@ impl Default for SorafsGc {
             interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
             max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
             retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
-            pre_admission_sweep: defaults::sorafs::gc::PRE_ADMISSION_SWEEP,
         }
     }
 }
@@ -20144,77 +20206,82 @@ impl SorafsGc {
             interval_secs: self.interval_secs.max(1),
             max_deletions_per_run: self.max_deletions_per_run.max(1),
             retention_grace_secs: self.retention_grace_secs,
-            pre_admission_sweep: self.pre_admission_sweep,
         }
     }
 }
 
 #[cfg(test)]
 mod sorafs_repair_gc_tests {
+    use iroha_data_model::sorafs::moderation_ledger::REPAIR_LEDGER_MAX_LEASE_MS_V1;
+
     use super::*;
 
     #[test]
-    fn sorafs_repair_and_gc_parse_clamps_values() {
-        let repair = SorafsRepair {
+    fn sorafs_repair_parse_rejects_unsafe_values_without_clamping() {
+        let invalid = SorafsRepair {
             enabled: true,
-            state_dir: None,
             claim_ttl_secs: 0,
             heartbeat_interval_secs: 0,
             max_attempts: 0,
             worker_concurrency: 0,
-            backoff_initial_secs: 0,
-            backoff_max_secs: 0,
-            default_slash_penalty: "1".parse().expect("valid exact XOR quantity"),
-            auditor_rate_per_sec: Some(0),
-            auditor_burst: Some(0),
         };
-        let actual = repair.parse();
-        assert_eq!(actual.claim_ttl_secs, 1);
-        assert_eq!(actual.heartbeat_interval_secs, 1);
-        assert_eq!(actual.max_attempts, 1);
-        assert_eq!(actual.worker_concurrency, 1);
-        assert_eq!(actual.backoff_initial_secs, 1);
-        assert_eq!(actual.backoff_max_secs, 1);
-        assert_eq!(
-            actual.default_slash_penalty,
-            "1".parse::<XorQuantity>()
-                .expect("valid exact XOR quantity")
-        );
-        assert_eq!(actual.auditor_rate_per_sec, None);
-        assert_eq!(actual.auditor_burst, None);
+        let mut emitter = Emitter::new();
+        let actual = invalid.parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual.claim_ttl_secs, 0);
+        assert_eq!(actual.heartbeat_interval_secs, 0);
+        assert_eq!(actual.max_attempts, 0);
+        assert_eq!(actual.worker_concurrency, 0);
 
-        let default_repair = SorafsRepair::default().parse();
-        assert_eq!(
-            default_repair
-                .auditor_rate_per_sec
-                .map(std::num::NonZeroU32::get),
-            defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
-        );
-        assert_eq!(
-            default_repair.auditor_burst.map(std::num::NonZeroU32::get),
-            defaults::sorafs::repair::AUDITOR_BURST
-        );
+        for invalid in [
+            SorafsRepair {
+                claim_ttl_secs: u64::MAX,
+                ..SorafsRepair::default()
+            },
+            SorafsRepair {
+                claim_ttl_secs: REPAIR_LEDGER_MAX_LEASE_MS_V1 / 1_000 + 1,
+                ..SorafsRepair::default()
+            },
+            SorafsRepair {
+                heartbeat_interval_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
+                ..SorafsRepair::default()
+            },
+            SorafsRepair {
+                max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT + 1,
+                ..SorafsRepair::default()
+            },
+            SorafsRepair {
+                worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT + 1,
+                ..SorafsRepair::default()
+            },
+        ] {
+            let mut emitter = Emitter::new();
+            invalid.parse(&mut emitter);
+            assert!(emitter.into_result().is_err());
+        }
 
+        let mut emitter = Emitter::new();
+        let valid = SorafsRepair::default().parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(
+            valid.claim_ttl_secs,
+            defaults::sorafs::repair::CLAIM_TTL_SECS
+        );
+    }
+
+    #[test]
+    fn sorafs_gc_parse_clamps_legacy_zero_worker_values() {
         let gc = SorafsGc {
             enabled: true,
             state_dir: None,
             interval_secs: 0,
             max_deletions_per_run: 0,
             retention_grace_secs: 42,
-            pre_admission_sweep: false,
         };
         let actual_gc = gc.parse();
         assert_eq!(actual_gc.interval_secs, 1);
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);
-        assert!(!actual_gc.pre_admission_sweep);
-    }
-
-    #[test]
-    fn sorafs_repair_rejects_zero_penalty() {
-        let mut repair = SorafsRepair::default();
-        repair.default_slash_penalty = XorQuantity::zero();
-        assert!(std::panic::catch_unwind(|| repair.parse()).is_err());
     }
 
     #[test]
@@ -23839,6 +23906,149 @@ checkpoint_max_bytes = {}
             assert!(
                 actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
                 "accepted invalid orderbook worker field: {invalid_field}"
+            );
+        }
+    }
+
+    fn assert_reserve_workers_eq(
+        actual: actual::SorafsReserveWorker,
+        expected: actual::SorafsReserveWorker,
+    ) {
+        assert_eq!(actual.enabled, expected.enabled);
+        assert_eq!(actual.scan_interval, expected.scan_interval);
+        assert_eq!(actual.scan_batch_limit, expected.scan_batch_limit);
+        assert_eq!(actual.max_pending, expected.max_pending);
+        assert_eq!(actual.max_completed, expected.max_completed);
+        assert_eq!(actual.max_dead_letters, expected.max_dead_letters);
+        assert_eq!(actual.max_attempts, expected.max_attempts);
+        assert_eq!(
+            actual.checkpoint_max_bytes.0,
+            expected.checkpoint_max_bytes.0
+        );
+    }
+
+    #[test]
+    fn sorafs_reserve_worker_defaults_are_operational_only_and_bounded() {
+        use defaults::sorafs::storage::reserve_worker as worker_defaults;
+
+        let worker = load_root(base_table()).torii.sorafs_storage.reserve_worker;
+        assert_reserve_workers_eq(worker, actual::SorafsReserveWorker::default());
+        assert!(!worker.enabled);
+        assert_eq!(
+            worker.scan_interval,
+            Duration::from_millis(worker_defaults::SCAN_INTERVAL_MS.get())
+        );
+        assert!(worker.scan_batch_limit <= worker_defaults::SCAN_BATCH_LIMIT_MAX);
+        assert!(worker.max_pending <= worker_defaults::MAX_PENDING_LIMIT);
+        assert!(worker.max_completed <= worker_defaults::MAX_COMPLETED_LIMIT);
+        assert!(worker.max_dead_letters <= worker_defaults::MAX_DEAD_LETTERS_LIMIT);
+        assert!(worker.max_attempts <= worker_defaults::MAX_ATTEMPTS_LIMIT);
+        assert!(
+            (worker_defaults::CHECKPOINT_MIN_BYTES..=worker_defaults::CHECKPOINT_MAX_BYTES_LIMIT)
+                .contains(&worker.checkpoint_max_bytes.0)
+        );
+    }
+
+    #[test]
+    fn sorafs_reserve_worker_accepts_exact_resource_boundaries_without_storage_provider() {
+        use defaults::sorafs::storage::reserve_worker as worker_defaults;
+
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(&format!(
+            r#"
+[storage]
+enabled = false
+
+[storage.reserve_worker]
+enabled = true
+scan_interval_ms = {}
+scan_batch_limit = {}
+max_pending = {}
+max_completed = {}
+max_dead_letters = {}
+max_attempts = {}
+checkpoint_max_bytes = {}
+"#,
+            worker_defaults::SCAN_INTERVAL_MIN_MS,
+            worker_defaults::SCAN_BATCH_LIMIT_MAX,
+            worker_defaults::MAX_PENDING_LIMIT,
+            worker_defaults::MAX_COMPLETED_LIMIT,
+            worker_defaults::MAX_DEAD_LETTERS_LIMIT,
+            worker_defaults::MAX_ATTEMPTS_LIMIT,
+            worker_defaults::CHECKPOINT_MIN_BYTES,
+        ))
+        .expect("parse bounded reserve worker policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let storage = load_root(table).torii.sorafs_storage;
+        assert!(!storage.enabled);
+        assert_reserve_workers_eq(
+            storage.reserve_worker,
+            actual::SorafsReserveWorker {
+                enabled: true,
+                scan_interval: Duration::from_millis(worker_defaults::SCAN_INTERVAL_MIN_MS),
+                scan_batch_limit: worker_defaults::SCAN_BATCH_LIMIT_MAX,
+                max_pending: worker_defaults::MAX_PENDING_LIMIT,
+                max_completed: worker_defaults::MAX_COMPLETED_LIMIT,
+                max_dead_letters: worker_defaults::MAX_DEAD_LETTERS_LIMIT,
+                max_attempts: worker_defaults::MAX_ATTEMPTS_LIMIT,
+                checkpoint_max_bytes: Bytes(worker_defaults::CHECKPOINT_MIN_BYTES),
+            },
+        );
+    }
+
+    #[test]
+    fn sorafs_reserve_worker_rejects_zero_and_excessive_resource_bounds() {
+        use defaults::sorafs::storage::reserve_worker as worker_defaults;
+
+        let invalid_fields = [
+            "scan_interval_ms = 0".to_owned(),
+            format!(
+                "scan_interval_ms = {}",
+                worker_defaults::SCAN_INTERVAL_MIN_MS - 1
+            ),
+            format!(
+                "scan_interval_ms = {}",
+                worker_defaults::SCAN_INTERVAL_MAX_MS + 1
+            ),
+            "scan_batch_limit = 0".to_owned(),
+            format!(
+                "scan_batch_limit = {}",
+                worker_defaults::SCAN_BATCH_LIMIT_MAX + 1
+            ),
+            "max_pending = 0".to_owned(),
+            format!("max_pending = {}", worker_defaults::MAX_PENDING_LIMIT + 1),
+            "max_completed = 0".to_owned(),
+            format!(
+                "max_completed = {}",
+                worker_defaults::MAX_COMPLETED_LIMIT + 1
+            ),
+            "max_dead_letters = 0".to_owned(),
+            format!(
+                "max_dead_letters = {}",
+                worker_defaults::MAX_DEAD_LETTERS_LIMIT + 1
+            ),
+            "max_attempts = 0".to_owned(),
+            format!("max_attempts = {}", worker_defaults::MAX_ATTEMPTS_LIMIT + 1),
+            format!(
+                "checkpoint_max_bytes = {}",
+                worker_defaults::CHECKPOINT_MIN_BYTES - 1
+            ),
+            format!(
+                "checkpoint_max_bytes = {}",
+                worker_defaults::CHECKPOINT_MAX_BYTES_LIMIT + 1
+            ),
+        ];
+
+        for invalid_field in invalid_fields {
+            let mut table = base_table();
+            let sorafs: Table =
+                toml::from_str(&format!("[storage.reserve_worker]\n{invalid_field}\n"))
+                    .expect("parse invalid reserve worker fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "accepted invalid reserve worker field: {invalid_field}"
             );
         }
     }

@@ -1513,6 +1513,7 @@ mod tests {
                 coordinator_proposal_hash: Hash::new(b"native-amx-relay-test-proposal"),
                 legs: Vec::new(),
             });
+        envelope.settlement_commitment.tx_count = 2;
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");
 
@@ -1798,6 +1799,7 @@ mod tests {
             "fixture must keep the lane-local and global authority heights distinct"
         );
         settlement.native_amx_receipts.push(receipt);
+        settlement.tx_count = 2;
         envelope.settlement_commitment = settlement;
         envelope.settlement_hash =
             compute_settlement_hash(&envelope.settlement_commitment).expect("settlement hash");

@@ -1658,6 +1658,8 @@ pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Finalized block hash resolved from the same immutable state view.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
+    /// Signed creation timestamp of that exact finalized block, in Unix milliseconds.
+    pub finalized_at_unix_ms: u64,
     /// Active moderation policy, absent only before ledger initialization.
     pub policy: Option<ModerationLedgerPolicyRecord>,
     /// Constant-time ledger counters, absent only before initialization.

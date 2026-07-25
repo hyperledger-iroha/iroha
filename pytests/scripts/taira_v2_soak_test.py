@@ -51,8 +51,9 @@ PINNED_ENV = {
 }
 
 
-def _install_source_bound_fake_localnet_binaries() -> tuple[Path, str]:
-    program_target = PROGRAM_TARGET
+def _install_source_bound_fake_localnet_binaries(
+    program_target: Path = PROGRAM_TARGET,
+) -> tuple[Path, str]:
     attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
     if attestation.is_file():
         return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
@@ -130,13 +131,68 @@ def _stubbed_environment(
     inventory_mode: str = "one",
     run_mode: str = "one",
     evidence_check_status: int = 0,
+    program_target: Path = PROGRAM_TARGET,
 ) -> tuple[dict[str, str], Path]:
-    program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries()
+    program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries(
+        program_target
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    ps = bin_dir / "ps"
+    ps.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "-axo pid,etime,command") printf '%s\n' '  PID ELAPSED COMMAND' ;;
+  "-axo pid=,command=") ;;
+  *) exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    ps.chmod(0o755)
+    marker_failure_harness = tmp_path / "fail-marker-parent-fsync.py"
+    marker_failure_harness.write_text(
+        """import errno
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+publisher = Path(os.environ["TAIRA_EXPECTED_MARKER_PUBLISHER"])
+spec = importlib.util.spec_from_file_location("release_marker_publisher", publisher)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_fsync = module.os.fsync
+fsync_calls = 0
+
+
+def fail_completion_parent_fsync(descriptor: int) -> None:
+    global fsync_calls
+    fsync_calls += 1
+    if fsync_calls == 4:
+        raise OSError(errno.EIO, "mocked completion-parent fsync failure")
+    real_fsync(descriptor)
+
+
+module.os.fsync = fail_completion_parent_fsync
+raise SystemExit(module.main(sys.argv[1:]))
+""",
+        encoding="utf-8",
+    )
     python = bin_dir / "python3"
     python.write_text(
         f"""#!/bin/sh
+if [ "${{1-}}" = "-I" ] \
+  && [ "${{2-}}" = "-S" ] \
+  && [ "${{3-}}" = "$TAIRA_EXPECTED_MARKER_PUBLISHER" ]; then
+  if [ "${{TAIRA_FAIL_MARKER_PUBLISH:-0}}" = 1 ]; then
+    shift 3
+    exec "$TAIRA_REAL_PYTHON3" "$TAIRA_MARKER_FAILURE_HARNESS" "$@"
+  fi
+  exec "$TAIRA_REAL_PYTHON3" "$@"
+fi
 case "$1" in
   *compute_workspace_source_manifest.py) printf '%s\n' '{SOURCE_MANIFEST}' ;;
   *check_taira_v2_soak_evidence.py) exit {evidence_check_status} ;;
@@ -219,6 +275,29 @@ case " $* " in
           '' \\
           'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s'
         ;;
+      tamper-bundle)
+        mkdir -p "$(dirname "$IROHA_TAIRA_EVIDENCE_PATH")"
+        printf '%s\n' '{{}}' >"$IROHA_TAIRA_EVIDENCE_PATH"
+        printf '%s\\n' \\
+          'running 1 test' \\
+          'test {EXPECTED_TEST} ... ok' \\
+          '' \\
+          'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s'
+        chmod 0700 "$TAIRA_TAMPER_BINARY"
+        printf '%s\n' 'tampered after process admission' >"$TAIRA_TAMPER_BINARY"
+        chmod 0500 "$TAIRA_TAMPER_BINARY"
+        ;;
+      marker-temp-symlink)
+        mkdir -p "$(dirname "$IROHA_TAIRA_EVIDENCE_PATH")"
+        printf '%s\n' '{{}}' >"$IROHA_TAIRA_EVIDENCE_PATH"
+        ln -s "$TAIRA_ESCAPE_TARGET" \
+          "$(dirname "$IROHA_TAIRA_EVIDENCE_PATH")/.COMPLETED.tsv.publish.tmp"
+        printf '%s\\n' \\
+          'running 1 test' \\
+          'test {EXPECTED_TEST} ... ok' \\
+          '' \\
+          'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s'
+        ;;
       zero)
         printf '%s\\n' \\
           'running 0 tests' \\
@@ -244,6 +323,10 @@ esac
     env["IROHA_TEST_TARGET_DIR"] = str(program_target)
     env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"] = manifest_sha256
     env["TAIRA_REAL_PYTHON3"] = sys.executable
+    env["TAIRA_EXPECTED_MARKER_PUBLISHER"] = str(
+        REPO_ROOT / "scripts" / "publish_release_marker.py"
+    )
+    env["TAIRA_MARKER_FAILURE_HARNESS"] = str(marker_failure_harness)
     return env, capture
 
 
@@ -391,6 +474,88 @@ def test_launcher_rejects_zero_test_execution_output(tmp_path: Path) -> None:
     assert "running 0 tests" in result.stdout
     captured = capture.read_text(encoding="utf-8")
     assert captured.count("args=") == 2
+
+
+def test_launcher_rejects_bundle_tampering_before_completion(
+    tmp_path: Path,
+) -> None:
+    invocation_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    program_target = PROGRAM_TARGET.parent / f"invocation.T{invocation_suffix}"
+    env, _capture = _stubbed_environment(
+        tmp_path,
+        run_mode="tamper-bundle",
+        program_target=program_target,
+    )
+    binary = program_target / "release" / "iroha3d"
+    original = binary.read_bytes()
+    env["TAIRA_TAMPER_BINARY"] = str(binary)
+    completion_pointer = tmp_path / "taira-completion-path"
+    env["IROHA_TAIRA_COMPLETION_PATH_FILE"] = str(completion_pointer)
+    try:
+        result = _run_launcher(env)
+    finally:
+        binary.chmod(0o700)
+        binary.write_bytes(original)
+        binary.chmod(0o500)
+
+    assert result.returncode == 1
+    assert "binary bundle changed before Taira completion" in result.stderr
+    assert not completion_pointer.exists()
+
+
+def test_launcher_rejects_symlinked_marker_temp_without_completion(
+    tmp_path: Path,
+) -> None:
+    env, capture = _stubbed_environment(
+        tmp_path,
+        run_mode="marker-temp-symlink",
+    )
+    escape = tmp_path / "marker-temp-escape"
+    escape.write_text("must remain unchanged\n", encoding="utf-8")
+    env["TAIRA_ESCAPE_TARGET"] = str(escape)
+    completion_pointer = tmp_path / "taira-completion-path"
+    env["IROHA_TAIRA_COMPLETION_PATH_FILE"] = str(completion_pointer)
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "completion marker temporary already exists as symlink" in result.stderr
+    partial_values = {
+        Path(line.split("=", 1)[1])
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if line.startswith("IROHA_TAIRA_EVIDENCE_PATH=")
+    }
+    assert len(partial_values) == 1
+    invocation = partial_values.pop().parent
+    assert (invocation / ".COMPLETED.tsv.publish.tmp").is_symlink()
+    assert escape.read_text(encoding="utf-8") == "must remain unchanged\n"
+    assert not (invocation / "COMPLETED.tsv").exists()
+    assert not (invocation / "taira_v2_24h_soak.json").exists()
+    assert not completion_pointer.exists()
+
+
+def test_launcher_marker_durability_failure_is_not_terminal(
+    tmp_path: Path,
+) -> None:
+    env, capture = _stubbed_environment(tmp_path)
+    env["TAIRA_FAIL_MARKER_PUBLISH"] = "1"
+    completion_pointer = tmp_path / "taira-completion-path"
+    env["IROHA_TAIRA_COMPLETION_PATH_FILE"] = str(completion_pointer)
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "mocked completion-parent fsync failure" in result.stderr
+    partial_values = {
+        Path(line.split("=", 1)[1])
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if line.startswith("IROHA_TAIRA_EVIDENCE_PATH=")
+    }
+    assert len(partial_values) == 1
+    invocation = partial_values.pop().parent
+    assert not (invocation / "COMPLETED.tsv").exists()
+    assert not (invocation / "taira_v2_24h_soak.json").exists()
+    assert not completion_pointer.exists()
 
 
 def test_launcher_rejects_profile_override_arguments_before_cargo(

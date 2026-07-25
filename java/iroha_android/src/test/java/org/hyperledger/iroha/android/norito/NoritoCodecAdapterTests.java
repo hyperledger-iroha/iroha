@@ -33,6 +33,7 @@ import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -43,6 +44,7 @@ import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
+  private static final String SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> RAW_BYTE_VECTOR_ADAPTER = NoritoAdapters.rawByteVecAdapter();
   private static final TypeAdapter<List<RawMetadataEntry>> RAW_METADATA_ADAPTER =
@@ -59,6 +61,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void runAll() throws NoritoException {
     javaCodecRoundTripsPayload();
+    javaSignedTairaTransferRoundTripsAuthorityAndDestination();
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
     javaCodecEncodesNativeMultisigProposeRequest();
@@ -90,7 +93,7 @@ public final class NoritoCodecAdapterTests {
             .putMetadata("purpose", "unit-test")
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
@@ -104,6 +107,55 @@ public final class NoritoCodecAdapterTests {
     assert JsonValue.string("unit-test").equals(decoded.metadata().get("purpose"))
         : "Metadata must round-trip";
     assertBarePayload(encoded);
+  }
+
+  private static void javaSignedTairaTransferRoundTripsAuthorityAndDestination()
+      throws NoritoException {
+    final String authority = sampleAuthority((byte) 0x39);
+    final String destination = sampleAuthority((byte) 0x3A);
+    assert AccountAddress.detectI105Discriminant(authority)
+            == SccpV1.TAIRA_I105_DISCRIMINANT_V1
+        : "signed transfer authority must use Taira 369";
+    assert AccountAddress.detectI105Discriminant(destination)
+            == SccpV1.TAIRA_I105_DISCRIMINANT_V1
+        : "signed transfer destination must use Taira 369";
+
+    final InstructionBox transfer =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            SBD_ASSET_DEFINITION_ID + "#" + authority, "10", destination);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+            .setChainId("fc56984b-2be7-431d-840e-21514d1883f0")
+            .setAuthority(authority)
+            .setCreationTimeMs(1_735_369_000_000L)
+            .setExecutable(Executable.instructions(List.of(transfer)))
+            .build();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+    final SignedTransaction signed =
+        new SignedTransaction(
+            adapter.encodeTransaction(payload),
+            fill(0x44, 64),
+            TestEd25519Keys.publicKey(0x39),
+            adapter.schemaName());
+
+    final SignedTransaction decodedSigned =
+        SignedTransactionEncoder.decodeVersioned(SignedTransactionEncoder.encodeVersioned(signed));
+    final TransactionPayload decodedPayload =
+        adapter.decodeTransaction(decodedSigned.encodedPayload());
+    assert authority.equals(decodedPayload.authority())
+        : "signed transfer authority must preserve exact Taira I105";
+    final InstructionBox decodedInstruction = decodedPayload.executable().instructions().get(0);
+    assert decodedInstruction.payload() instanceof InstructionBox.WirePayload
+        : "signed transfer instruction must retain its wire payload";
+    final TransferWirePayloadEncoder.DecodedAssetTransfer decodedTransfer =
+        TransferWirePayloadEncoder.decodeAssetTransferPayload(
+            ((InstructionBox.WirePayload) decodedInstruction.payload()).payloadBytes(),
+            SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+    assert (SBD_ASSET_DEFINITION_ID + "#" + authority).equals(decodedTransfer.assetId())
+        : "signed transfer asset owner must preserve exact Taira I105";
+    assert destination.equals(decodedTransfer.destinationAccountId())
+        : "signed transfer destination must preserve exact Taira I105";
   }
 
   private static void javaCodecEncodesTypedFeePayment() throws NoritoException {
@@ -125,7 +177,7 @@ public final class NoritoCodecAdapterTests {
             .putMetadata("checked", JsonValue.bool(true))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -145,7 +197,7 @@ public final class NoritoCodecAdapterTests {
     try {
       i105 =
           AccountAddress.fromAccount(publicKey, "ed25519")
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+              .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
@@ -158,7 +210,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.ivm(new byte[] {0x01, 0x02, 0x03}))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -190,7 +242,7 @@ public final class NoritoCodecAdapterTests {
     try {
       i105 =
           AccountAddress.fromMultisigPolicy(policy)
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+              .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
     }
@@ -203,7 +255,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.ivm(new byte[] {0x04, 0x05, 0x06}))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -260,7 +312,7 @@ public final class NoritoCodecAdapterTests {
     try {
       multisigAccountId =
           AccountAddress.fromMultisigPolicy(policy)
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+              .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build native multisig account address", ex);
     }
@@ -288,7 +340,9 @@ public final class NoritoCodecAdapterTests {
             .setValidationFeeTransferEntryIndex(2L)
             .build();
 
-    final byte[] encoded = NoritoJavaCodecAdapter.encodeMultisigProposeRequest(request);
+    final byte[] encoded =
+        NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
+            request, SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     if (Boolean.getBoolean("iroha.android.emitMultisigProposeFixture")
         || "1".equals(System.getenv("IROHA_ANDROID_EMIT_MULTISIG_PROPOSE_FIXTURE"))) {
       System.out.println("[Fixture] native_multisig_propose_hex=" + bytesToHex(encoded));
@@ -389,7 +443,8 @@ public final class NoritoCodecAdapterTests {
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
                     .setValidationFeePolicyVersion(1L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -399,7 +454,8 @@ public final class NoritoCodecAdapterTests {
                     .addInstructionBytes(new byte[] {1})
                     .setValidationFeePolicyVersion(1L)
                     .setValidationFeePolicyHash("not-hex")
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -408,7 +464,8 @@ public final class NoritoCodecAdapterTests {
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
                     .setValidationFeeInstructionIndex(1L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -417,7 +474,8 @@ public final class NoritoCodecAdapterTests {
                     .setSignerAccountId(signerAccountId)
                     .addInstructionBytes(new byte[] {1})
                     .setValidationFeeTransferEntryIndex(2L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -428,7 +486,8 @@ public final class NoritoCodecAdapterTests {
                     .setValidationFeePolicyVersion(1L)
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .setValidationFeeTransferEntryIndex(2L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -439,7 +498,8 @@ public final class NoritoCodecAdapterTests {
                     .setValidationFeePolicyVersion(1L)
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .setValidationFeeInstructionIndex(-1L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
     expectNoritoFailure(
         () ->
             NoritoJavaCodecAdapter.encodeMultisigProposeRequest(
@@ -451,7 +511,8 @@ public final class NoritoCodecAdapterTests {
                     .setValidationFeePolicyHash("ab".repeat(32))
                     .setValidationFeeInstructionIndex(1L)
                     .setValidationFeeTransferEntryIndex(-2L)
-                    .build()));
+                    .build(),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1));
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
@@ -462,7 +523,7 @@ public final class NoritoCodecAdapterTests {
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
             .build();
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encodedPayload = adapter.encodeTransaction(payload);
     final byte[] signature = new byte[64];
     final byte[] publicKey = TestEd25519Keys.publicKey(0x55);
@@ -542,7 +603,7 @@ public final class NoritoCodecAdapterTests {
             .setCreationTimeMs(1_735_000_001_000L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final SignedTransaction signed =
         new SignedTransaction(
             adapter.encodeTransaction(payload),
@@ -570,7 +631,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final NoritoDecoder decoder = canonicalDecoder(encoded);
     final byte[] chainField = readField(decoder, "payload.chain_id");
@@ -599,7 +660,7 @@ public final class NoritoCodecAdapterTests {
                         InstructionBox.fromWirePayload("iroha.custom.b", wirePayloadB))))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -640,7 +701,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -668,7 +729,7 @@ public final class NoritoCodecAdapterTests {
             .setContractCall(invocation)
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -736,7 +797,7 @@ public final class NoritoCodecAdapterTests {
             .setBatch(items)
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
@@ -765,11 +826,13 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 10_000L))
+            .setChainId("fc56984b-2be7-431d-840e-21514d1883f0")
+            .setAuthority(sampleAuthority((byte) 0x0B))
             .setContractCall(
                 new ContractInvocation(
                     sampleContractAddress(), fill(0x61, 32), "run", arguments))
             .build();
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
     final byte[] needle = new byte[Long.BYTES + arguments.length];
     writeLittleEndianU64(needle, 0, arguments.length);
@@ -792,7 +855,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.ivm(ivmBytes))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final NoritoDecoder decoder = canonicalDecoder(encoded);
@@ -834,7 +897,7 @@ public final class NoritoCodecAdapterTests {
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] encoded = adapter.encodeTransaction(payload);
 
     final NoritoDecoder decoder = canonicalDecoder(encoded);
@@ -1208,7 +1271,7 @@ public final class NoritoCodecAdapterTests {
   private static String sampleAuthority(final byte fill) {
     try {
       return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill & 0xff), "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+          .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);
     }

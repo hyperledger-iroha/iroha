@@ -90,6 +90,60 @@ def _normalized_absolute(path: Path, label: str, *, must_exist: bool) -> Path:
     return path
 
 
+def _workspace_target(repo_root: Path, *, create: bool) -> Path:
+    """Resolve the one repository-authorized Cargo target root.
+
+    A sealed release uses ``repo_root/target`` as a symlink to its isolated
+    output volume. Development callers may use a real directory at the same
+    lexical path. All bundle/cache paths are constructed from the resolved
+    directory so no published manifest contains a symlinked component.
+    """
+
+    alias = repo_root / "target"
+    try:
+        alias_metadata = alias.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise PrebuiltBundleError("repository target authority is unavailable")
+        try:
+            alias.mkdir(mode=_BUILD_DIRECTORY_MODE)
+        except FileExistsError:
+            pass
+        try:
+            alias_metadata = alias.lstat()
+        except OSError as error:
+            raise PrebuiltBundleError(
+                "repository target authority could not be created"
+            ) from error
+    except OSError as error:
+        raise PrebuiltBundleError("repository target authority is unavailable") from error
+
+    if not (stat.S_ISDIR(alias_metadata.st_mode) or stat.S_ISLNK(alias_metadata.st_mode)):
+        raise PrebuiltBundleError(
+            "repository target authority must be a directory or one directory symlink"
+        )
+    try:
+        resolved = alias.resolve(strict=True)
+        resolved_metadata = resolved.lstat()
+    except (OSError, RuntimeError) as error:
+        raise PrebuiltBundleError(
+            "repository target authority does not resolve to a directory"
+        ) from error
+    if (
+        Path(os.path.abspath(resolved)) != resolved
+        or resolved.resolve(strict=True) != resolved
+        or stat.S_ISLNK(resolved_metadata.st_mode)
+        or not stat.S_ISDIR(resolved_metadata.st_mode)
+        or resolved_metadata.st_uid != os.geteuid()
+    ):
+        raise PrebuiltBundleError(
+            "repository target authority must resolve to one owner-owned real directory"
+        )
+    if not stat.S_ISLNK(alias_metadata.st_mode) and resolved != alias:
+        raise PrebuiltBundleError("repository target directory is not canonical")
+    return resolved
+
+
 def _require_digest(value: str, label: str) -> str:
     if _DIGEST_RE.fullmatch(value) is None:
         raise PrebuiltBundleError(f"{label} must be one lowercase SHA-256 digest")
@@ -251,9 +305,9 @@ def prepare_cache(
 
     repo_root = _normalized_absolute(repo_root, "repository root", must_exist=True)
     _require_digest(source_manifest_sha256, "source manifest")
+    workspace_target = _workspace_target(repo_root, create=True)
     expected_root = (
-        repo_root
-        / "target"
+        workspace_target
         / "sumeragi-v2-release"
         / source_manifest_sha256
         / "program-build-cache"
@@ -262,8 +316,8 @@ def prepare_cache(
     expected_message = expected_root / "message-control"
     if default_cache != expected_default or message_control_cache != expected_message:
         raise PrebuiltBundleError("release build caches escaped their fixed source root")
-    _ensure_directory_tree(repo_root, expected_default)
-    _ensure_directory_tree(repo_root, expected_message)
+    _ensure_directory_tree(workspace_target, expected_default)
+    _ensure_directory_tree(workspace_target, expected_message)
 
 
 def _read_tool_version(path: Path, label: str) -> bytes:
@@ -398,8 +452,9 @@ def create_bundle(
 
     repo_root = _normalized_absolute(repo_root, "repository root", must_exist=True)
     _require_digest(source_manifest_sha256, "source manifest")
+    workspace_target = _workspace_target(repo_root, create=False)
     expected_source_root = (
-        repo_root / "target" / "sumeragi-v2-release" / source_manifest_sha256
+        workspace_target / "sumeragi-v2-release" / source_manifest_sha256
     )
     expected_programs_root = expected_source_root / "programs"
     if programs_root != expected_programs_root:
@@ -407,7 +462,7 @@ def create_bundle(
     prepare_cache(
         repo_root, source_manifest_sha256, default_cache, message_control_cache
     )
-    _ensure_directory_tree(repo_root, programs_root)
+    _ensure_directory_tree(workspace_target, programs_root)
 
     cargo_version = _read_tool_version(cargo_version_file, "Cargo version")
     rustc_version = _read_tool_version(rustc_version_file, "rustc version")
@@ -572,39 +627,47 @@ def _validate_exact_bundle_tree(bundle: Path) -> None:
     while pending:
         directory = pending.pop()
         try:
-            entries = list(os.scandir(directory))
+            iterator = os.scandir(directory)
         except OSError as error:
             raise PrebuiltBundleError(
                 f"release invocation bundle tree is unavailable: {directory}"
             ) from error
-        for entry in entries:
-            path = Path(entry.path)
-            relative = path.relative_to(bundle)
-            if relative in observed or relative not in expected:
-                raise PrebuiltBundleError(
-                    f"release invocation bundle contains unexpected entry: {relative}"
-                )
-            observed.add(relative)
-            try:
-                metadata = entry.stat(follow_symlinks=False)
-            except OSError as error:
-                raise PrebuiltBundleError(
-                    f"release invocation bundle entry is unavailable: {relative}"
-                ) from error
-            if relative in expected_directories:
-                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        with iterator:
+            for entry in iterator:
+                if len(observed) >= len(expected):
                     raise PrebuiltBundleError(
-                        f"release invocation bundle directory is not real: {relative}"
+                        "release invocation bundle contains more entries than its "
+                        "closed inventory"
                     )
-                pending.append(path)
-            elif (
-                stat.S_ISLNK(metadata.st_mode)
-                or not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-            ):
-                raise PrebuiltBundleError(
-                    f"release invocation bundle file is not private: {relative}"
-                )
+                path = Path(entry.path)
+                relative = path.relative_to(bundle)
+                if relative in observed or relative not in expected:
+                    raise PrebuiltBundleError(
+                        f"release invocation bundle contains unexpected entry: {relative}"
+                    )
+                observed.add(relative)
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                except OSError as error:
+                    raise PrebuiltBundleError(
+                        f"release invocation bundle entry is unavailable: {relative}"
+                    ) from error
+                if relative in expected_directories:
+                    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(
+                        metadata.st_mode
+                    ):
+                        raise PrebuiltBundleError(
+                            f"release invocation bundle directory is not real: {relative}"
+                        )
+                    pending.append(path)
+                elif (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                ):
+                    raise PrebuiltBundleError(
+                        f"release invocation bundle file is not private: {relative}"
+                    )
     if observed != expected:
         missing = sorted(str(path) for path in expected - observed)
         raise PrebuiltBundleError(
@@ -624,9 +687,9 @@ def validate_bundle(
     _require_digest(source_manifest_sha256, "source manifest")
     _require_digest(manifest_sha256, "prebuilt manifest")
     bundle = _normalized_absolute(bundle, "release invocation bundle", must_exist=True)
+    workspace_target = _workspace_target(repo_root, create=False)
     expected_parent = (
-        repo_root
-        / "target"
+        workspace_target
         / "sumeragi-v2-release"
         / source_manifest_sha256
         / "programs"

@@ -57,7 +57,7 @@ public final class TransactionBuilderTests {
             .build();
 
     final FakeSigner signer = new FakeSigner();
-    final NoritoCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final NoritoCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final TransactionBuilder builder =
         new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
 
@@ -93,7 +93,7 @@ public final class TransactionBuilderTests {
 
     final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareProvider();
     final TransactionBuilder builder =
-        new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
+        new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), keyManager);
 
     final SignedTransaction signed =
         builder.encodeAndSign(
@@ -102,7 +102,7 @@ public final class TransactionBuilderTests {
             IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
 
     final TransactionPayload decoded =
-        new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+        new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload());
     assert Arrays.equals(payload.executable().ivmBytes(), decoded.executable().ivmBytes())
         : "Decoded transaction must match original instructions";
     assert decoded.chainId().equals(payload.chainId()) : "Chain must match";
@@ -126,6 +126,8 @@ public final class TransactionBuilderTests {
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setChainId("00000000")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2A))
             .setExecutable(
                 Executable.instructions(
                     List.of(
@@ -133,9 +135,9 @@ public final class TransactionBuilderTests {
                         InstructionBox.fromWirePayload("iroha.register.account", wirePayloadB))))
             .build();
     final TransactionBuilder builder =
-        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareProvider());
+        new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), IrohaKeyManager.withSoftwareProvider());
     final SignedTransaction signed = builder.encodeAndSign(payload, new FakeSigner());
-    final TransactionPayload decoded = new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+    final TransactionPayload decoded = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload());
     assert decoded.executable().isInstructions() : "Executable variant must remain instructions";
     assert decoded.executable().instructions().equals(payload.executable().instructions())
         : "Instruction list must round-trip";
@@ -172,10 +174,10 @@ public final class TransactionBuilderTests {
 
     final TransactionBuilder builder =
         new TransactionBuilder(
-            new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareProvider());
+            new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), IrohaKeyManager.withSoftwareProvider());
     final SignedTransaction signed = builder.encodeAndSign(payload, new FakeSigner());
     final TransactionPayload decoded =
-        new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+        new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload());
 
     assert decoded.executable().isBatch() : "Executable variant must remain Batch";
     assert batch.equals(decoded.executable().batchItems())

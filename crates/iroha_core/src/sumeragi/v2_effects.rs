@@ -219,6 +219,20 @@ pub(crate) enum PendingKuraApplyRecoveryStage {
     Completed,
 }
 
+/// Result of the latest bounded interrupted-tip recovery scheduler attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum PendingTipRecoveryAttemptResult {
+    /// The serialized reducer or retained effect suffix advanced.
+    Advanced,
+    /// No reducer transition was ready while asynchronous local work remained.
+    Waiting,
+    /// The exact durable application completion crossed the effect boundary.
+    Completed,
+    /// The runner exhausted its closed-ingress recovery deadline.
+    DeadlineExceeded,
+}
+
 fn canonical_typed_identity<T>(
     domain: u8,
     kind: u8,
@@ -1089,6 +1103,12 @@ pub(crate) struct EffectExecutorStatus {
     pub fail_closed: bool,
     /// First fatal diagnostic, retained until process restart.
     pub fatal_reason: Option<String>,
+    /// Exact interrupted-tip recovery stage, when startup owns that closed-ingress path.
+    pub pending_tip_recovery_stage: Option<PendingKuraApplyRecoveryStage>,
+    /// Number of serialized recovery scheduler attempts at this startup height.
+    pub pending_tip_recovery_attempts: u64,
+    /// Result of the latest serialized recovery scheduler attempt.
+    pub pending_tip_recovery_last_result: Option<PendingTipRecoveryAttemptResult>,
     /// Outstanding signing operations.
     pub pending_signatures: usize,
     /// Height-local locked-candidate acquisitions awaiting their current consumer.
@@ -2336,6 +2356,8 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
+    pending_tip_recovery_attempts: u64,
+    pending_tip_recovery_last_result: Option<PendingTipRecoveryAttemptResult>,
     decision_body_drained: bool,
     authenticated_genesis_body: Option<(wire::BlockSubject, Arc<[u8]>)>,
     retained_locked_body: Option<(wire::BlockSubject, Arc<[u8]>)>,
@@ -2870,6 +2892,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             protected_lock: None,
             protected_decision: None,
             pending_tip_recovery: None,
+            pending_tip_recovery_attempts: 0,
+            pending_tip_recovery_last_result: None,
             decision_body_drained: false,
             authenticated_genesis_body: None,
             retained_locked_body: None,
@@ -3683,15 +3707,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
+        self.pending_tip_recovery_attempts = self.pending_tip_recovery_attempts.saturating_add(1);
         if self.retained_effect_batch.is_some() {
             let count = self
                 .drain_retained_effect_batch(services)
                 .map_err(|error| self.close(error, services))?;
-            return Ok(if count == 0 {
+            let step = if count == 0 {
+                self.pending_tip_recovery_last_result =
+                    Some(PendingTipRecoveryAttemptResult::Waiting);
                 EffectExecutorStep::Idle
             } else {
+                self.pending_tip_recovery_last_result =
+                    Some(PendingTipRecoveryAttemptResult::Advanced);
                 EffectExecutorStep::Advanced { effects: count }
-            });
+            };
+            self.publish_status(services)
+                .map_err(|error| self.close(error, services))?;
+            return Ok(step);
         }
         let wal_step = self
             .output_guard
@@ -3715,6 +3747,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         wal_step.complete();
         match step {
             RuntimeStep::Idle => {
+                self.pending_tip_recovery_last_result =
+                    Some(PendingTipRecoveryAttemptResult::Waiting);
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
                 }
@@ -3722,9 +3756,31 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             RuntimeStep::Advanced(effects) => {
                 let count = self.consume_pending_tip_recovery_effects(effects, services)?;
+                self.pending_tip_recovery_last_result =
+                    Some(PendingTipRecoveryAttemptResult::Advanced);
+                self.publish_status(services)
+                    .map_err(|error| self.close(error, services))?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }
+    }
+
+    /// Publish the terminal scheduler observation immediately before the runner
+    /// latches restart-required for an exhausted recovery deadline.
+    pub(crate) fn record_pending_tip_recovery_deadline_exceeded<S: V2EffectServices>(
+        &mut self,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        self.pending_tip_recovery_last_result =
+            Some(PendingTipRecoveryAttemptResult::DeadlineExceeded);
+        self.publish_status(services)
+            .map_err(|error| self.close(error, services))
+    }
+
+    /// Number of serialized interrupted-tip recovery attempts made so far.
+    pub(crate) const fn pending_tip_recovery_attempts(&self) -> u64 {
+        self.pending_tip_recovery_attempts
     }
 
     /// Begin the asynchronous durable-store → deterministic-validation chain
@@ -4801,6 +4857,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.deferred_merge_work.remove(&completion.work_id);
         if let Some(evidence) = self.pending_tip_recovery.as_mut() {
             evidence.stage = PendingKuraApplyRecoveryStage::Completed;
+            self.pending_tip_recovery_last_result =
+                Some(PendingTipRecoveryAttemptResult::Completed);
         }
         self.finality_completion = Some(FinalityCompletion {
             receipt: completion.receipt,
@@ -4835,6 +4893,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned()
                 })
             }),
+            pending_tip_recovery_stage: self
+                .pending_tip_recovery
+                .as_ref()
+                .map(PendingKuraApplyRecoveryEvidence::stage),
+            pending_tip_recovery_attempts: self.pending_tip_recovery_attempts,
+            pending_tip_recovery_last_result: self.pending_tip_recovery_last_result,
             pending_signatures: self.pending_signatures.len(),
             // The production service overlays its height-local disk acquisition
             // ownership when this executor snapshot crosses that boundary.
@@ -10092,7 +10156,7 @@ mod tests {
     }
 
     fn tag(view: u64) -> EventTag {
-        EventTag::new(1, view, Generation::new(7))
+        EventTag::new(1, view, Generation::new(7 + view))
     }
 
     fn vote(fixture: &Fixture) -> wire::Vote {
@@ -20439,6 +20503,15 @@ mod tests {
                 EffectExecutorStep::Advanced { effects: 1 }
             ));
         }
+        assert_eq!(executor.pending_tip_recovery_attempts(), 4);
+        assert_eq!(
+            executor.status().pending_tip_recovery_stage,
+            Some(PendingKuraApplyRecoveryStage::ApplicationDispatched)
+        );
+        assert_eq!(
+            executor.status().pending_tip_recovery_last_result,
+            Some(PendingTipRecoveryAttemptResult::Advanced)
+        );
         assert_eq!(services.apply_tasks.len(), 1);
         assert!(services.fetch_tasks.is_empty());
         assert!(services.sign_tasks.is_empty());
@@ -20457,6 +20530,22 @@ mod tests {
                 EffectExecutorStep::Idle
             );
         }
+        assert_eq!(executor.pending_tip_recovery_attempts(), 7);
+        assert_eq!(
+            executor.status().pending_tip_recovery_last_result,
+            Some(PendingTipRecoveryAttemptResult::Waiting)
+        );
+        executor
+            .record_pending_tip_recovery_deadline_exceeded(&mut services)
+            .expect("publish terminal recovery deadline observation");
+        assert_eq!(
+            services
+                .statuses
+                .last()
+                .expect("deadline status")
+                .pending_tip_recovery_last_result,
+            Some(PendingTipRecoveryAttemptResult::DeadlineExceeded)
+        );
         executor
             .runtime
             .steps

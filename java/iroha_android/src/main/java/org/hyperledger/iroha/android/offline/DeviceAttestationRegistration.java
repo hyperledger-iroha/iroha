@@ -169,8 +169,10 @@ public final class DeviceAttestationRegistration {
   }
 
   /** Decode a canonical framed registration and reject any alternate representation. */
-  public static DeviceAttestationRegistration decodeCanonical(final byte[] archive) {
-    return OfflineDeviceAttestationCodec.decodeRegistrationCanonical(archive);
+  public static DeviceAttestationRegistration decodeCanonical(
+      final byte[] archive, final int chainDiscriminant) {
+    return OfflineDeviceAttestationCodec.decodeRegistrationCanonical(
+        archive, chainDiscriminant);
   }
 
   /** Encode the exact current registration as a framed Norito archive. */

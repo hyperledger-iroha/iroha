@@ -96,7 +96,7 @@ CARGO_VERSION_OUTPUT = b"cargo 1.93.1 (083ac5135 2025-12-15)\n"
 RUSTC_VERSION_OUTPUT = (
     b"rustc 1.93.1 (01f6ddf75 2026-02-11)\n"
     b"binary: rustc\n"
-    b"commit-hash: 01f6ddf75fixture\n"
+    b"commit-hash: 01f6ddf7501f6ddf7501f6ddf7501f6ddf7501f6\n"
     b"commit-date: 2026-02-11\n"
     b"host: x86_64-unknown-linux-gnu\n"
     b"release: 1.93.1\n"
@@ -294,27 +294,49 @@ def make_bootstrap_evidence(
         path.write_bytes(data)
         path.chmod(mode)
         synthetic_sources[label] = path
-    runner_tool_source = trust_dir / "runner-chmod"
-    runner_tool_source.write_bytes(b"#!/bin/sh\nexit 0\n")
-    runner_tool_source.chmod(0o500)
+    runner_tool_data = {
+        "chmod": b"#!/bin/sh\nexit 0\n",
+        "cargo": (
+            b"#!/bin/sh\n"
+            b"test \"$#\" = 1 && test \"$1\" = --version || exit 91\n"
+            b"printf '%s\\n' 'cargo 1.93.1 (083ac5135 2025-12-15)'\n"
+        ),
+        "rustc": (
+            b"#!/bin/sh\n"
+            b"test \"$#\" = 1 && test \"$1\" = -vV || exit 92\n"
+            b"cat <<'RUSTC_VERSION'\n"
+            + RUSTC_VERSION_OUTPUT
+            + b"RUSTC_VERSION\n"
+        ),
+    }
+    runner_tool_sources: dict[str, Path] = {}
+    for name, data in runner_tool_data.items():
+        source = trust_dir / f"runner-{name}"
+        source.write_bytes(data)
+        source.chmod(0o500)
+        runner_tool_sources[name] = source
     runner_tool_manifest = trust_dir / "runner-tool-manifest.json"
     runner_tool_manifest.write_bytes(
         canonical_json(
             {
                 "schema_version": 1,
                 "tools": {
-                    "chmod": {
-                        "path": str(runner_tool_source.resolve()),
-                        "sha256": sha256(runner_tool_source),
+                    name: {
+                        "path": str(source.resolve()),
+                        "sha256": sha256(source),
                     }
+                    for name, source in runner_tool_sources.items()
                 },
             }
         )
     )
     runner_tool_manifest.chmod(0o400)
     synthetic_sources["runner_tool_manifest"] = runner_tool_manifest
-    runner_tool_alias = evidence_dir / "runner-bin" / "chmod"
-    runner_tool_alias.symlink_to(runner_tool_source.resolve())
+    runner_tool_aliases: dict[str, Path] = {}
+    for name, source in runner_tool_sources.items():
+        alias = evidence_dir / "runner-bin" / name
+        alias.symlink_to(source.resolve())
+        runner_tool_aliases[name] = alias
     trusted_sources = {
         "allowed_signers": signature_allowed_signers,
         "bash": synthetic_sources["bash"],
@@ -688,14 +710,15 @@ def make_bootstrap_evidence(
             "size_bytes": runner.stat().st_size,
             "tool_directory": str(evidence_dir / "runner-bin"),
             "tools": {
-                "chmod": {
-                    "alias_name": "chmod",
-                    "alias_path": str(runner_tool_alias),
-                    "sha256": sha256(runner_tool_source),
-                    "size_bytes": runner_tool_source.stat().st_size,
+                name: {
+                    "alias_name": name,
+                    "alias_path": str(runner_tool_aliases[name]),
+                    "sha256": sha256(source),
+                    "size_bytes": source.stat().st_size,
                     "source_mode": "0500",
-                    "source_path": str(runner_tool_source.resolve()),
+                    "source_path": str(source.resolve()),
                 }
+                for name, source in runner_tool_sources.items()
             },
         },
         "trusted_execution_probes": {
@@ -735,6 +758,8 @@ def make_bootstrap_evidence(
         ],
         "bootstrap_identity_ssh_keygen": identity_paths["ssh_keygen"],
         "bootstrap_identity_revocation": identity_paths["ssh_revocation"],
+        "bootstrap_runner_cargo": runner_tool_sources["cargo"],
+        "bootstrap_runner_rustc": runner_tool_sources["rustc"],
     }
 
 
@@ -1012,9 +1037,9 @@ def make_prebuilt_binary_bundle(
     sealed_manifest: str,
     lock: str,
 ) -> dict[str, Path | str | list[Path]]:
+    workspace_target = (release_root / "target").resolve(strict=True)
     bundle = (
-        release_root
-        / "target"
+        workspace_target
         / "sumeragi-v2-release"
         / sealed_manifest
         / "programs"
@@ -1584,6 +1609,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_root = release_invocation_root / "source"
     release_root.mkdir()
     (release_root / "Cargo.lock").write_bytes(lock_bytes)
+    workspace_target = release_invocation_root / "workspace-target"
+    workspace_target.mkdir(mode=0o700)
+    workspace_target.chmod(0o700)
+    (release_root / "target").symlink_to(
+        workspace_target,
+        target_is_directory=True,
+    )
     release_output = release_invocation_root / "output"
     release_output.mkdir(mode=0o700)
     release_output.chmod(0o700)
@@ -1801,24 +1833,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "verus",
         "cargo_verus",
     ):
-        path = tool_dir / name
-        if name == "cargo":
-            path.write_bytes(
-                b"#!/bin/sh\n"
-                b"test \"$#\" = 1 && test \"$1\" = --version || exit 91\n"
-                b"printf '%s\\n' 'cargo 1.93.1 (083ac5135 2025-12-15)'\n"
-            )
-            path.chmod(0o500)
-        elif name == "rustc":
-            path.write_bytes(
-                b"#!/bin/sh\n"
-                b"test \"$#\" = 1 && test \"$1\" = -vV || exit 92\n"
-                b"cat <<'RUSTC_VERSION'\n"
-                + RUSTC_VERSION_OUTPUT
-                + b"RUSTC_VERSION\n"
-            )
-            path.chmod(0o500)
+        if name in {"cargo", "rustc"}:
+            bootstrap_key = f"bootstrap_runner_{name}"
+            bootstrap_tool = bootstrap[bootstrap_key]
+            assert isinstance(bootstrap_tool, Path)
+            path = bootstrap_tool
         else:
+            path = tool_dir / name
             path.write_text(f"fixture {name}\n", encoding="utf-8")
         tool_paths[name] = path
     prebuilt = make_prebuilt_binary_bundle(
@@ -2040,7 +2061,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     seed_source_bound_root = (
         release_root / "target" / "sumeragi-v2-release" / sealed_manifest
     )
-    seed_program_target = seed_source_bound_root / "programs"
+    seed_program_target = prebuilt["prebuilt_bundle"]
+    assert isinstance(seed_program_target, Path)
     runs_dir = seed_dir / "runs"
     localnets_dir = seed_dir / "localnets"
     localnet_manifests_dir = seed_dir / "localnet-manifests"
@@ -2121,6 +2143,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     f"CARGO_TARGET_DIR={seed_source_bound_root / 'test-suite'} "
                     f"IROHA_TEST_TARGET_DIR={seed_program_target} "
                     f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={sealed_manifest} "
+                    "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256="
+                    f"{prebuilt_manifest_sha256} "
                     "TEST_NETWORK_BIN_IROHAD="
                     f"{seed_program_target / 'release' / 'iroha3d'} "
                     "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
@@ -2530,6 +2554,44 @@ def mutate_bootstrap_marker(
     evidence["expected_bootstrap_completion_sha256"] = sha256(marker)
 
 
+def rebind_bootstrap_runner_tool(
+    evidence: dict[str, Path | str | list[Path]], name: str
+) -> None:
+    tool = evidence[f"bootstrap_runner_{name}"]
+    evidence_dir = evidence["bootstrap_evidence_dir"]
+    assert isinstance(tool, Path)
+    assert isinstance(evidence_dir, Path)
+    manifest_source = tool.parent / "runner-tool-manifest.json"
+    manifest_archive = evidence_dir / "runner-tool-manifest.json"
+    manifest_value = json.loads(manifest_source.read_text(encoding="utf-8"))
+    manifest_value["tools"][name]["sha256"] = sha256(tool)
+    manifest_source.chmod(0o600)
+    manifest_source.write_bytes(canonical_json(manifest_value))
+    manifest_source.chmod(0o400)
+    manifest_archive.chmod(0o600)
+    manifest_archive.write_bytes(manifest_source.read_bytes())
+    manifest_archive.chmod(0o400)
+
+    def mutate(value: dict[str, object]) -> None:
+        runner = value["runner"]
+        trusted_inputs = value["trusted_inputs"]
+        assert isinstance(runner, dict)
+        assert isinstance(trusted_inputs, dict)
+        tools = runner["tools"]
+        manifest_record = trusted_inputs["runner_tool_manifest"]
+        assert isinstance(tools, dict)
+        assert isinstance(manifest_record, dict)
+        tool_record = tools[name]
+        assert isinstance(tool_record, dict)
+        tool_record["sha256"] = sha256(tool)
+        tool_record["size_bytes"] = tool.stat().st_size
+        manifest_record["observed_sha256"] = sha256(manifest_source)
+        manifest_record["protected_sha256"] = sha256(manifest_source)
+        manifest_record["size_bytes"] = manifest_source.stat().st_size
+
+    mutate_bootstrap_marker(evidence, mutate)
+
+
 def mutate_attestation(
     evidence: dict[str, Path | str | list[Path]], mutator: object
 ) -> None:
@@ -2673,6 +2735,7 @@ def rebind_scaling_identity(
 
 def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = make_evidence(tmp_path)
     writer = fixture_writer(tmp_path)
@@ -2972,6 +3035,145 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         str(path.resolve()) for path in g12_seed_logs
     ]
 
+    module = load_writer_module()
+    candidate = evidence["candidate"]
+    sealed = evidence["sealed"]
+    assert isinstance(candidate, Path)
+    assert isinstance(sealed, Path)
+    candidate_contract = module._capture_path_contract(
+        candidate,
+        "fixture candidate identity",
+        expected_sha256=sha256(candidate),
+    )
+    sealed_contract = module._capture_path_contract(
+        sealed,
+        "fixture sealed identity",
+        expected_sha256=sha256(sealed),
+    )
+    contracts = module._snapshot_receipt_inputs(
+        receipt,
+        candidate_identity=candidate_contract,
+        sealed_identity=sealed_contract,
+    )
+    directory_paths = {
+        contract.path
+        for contract in contracts
+        if isinstance(contract, module.DirectoryContract)
+    }
+
+    family_specs = (
+        (
+            "corridor_completion",
+            (
+                "corridor_completion",
+                "corridor_summary",
+                "corridor_production_inventory",
+                "g_unit_focused_test_inventory",
+                "corridor_logs",
+            ),
+        ),
+        (
+            "formal_completion",
+            (
+                "formal_completion",
+                "formal_gate_log",
+                "formal_proof_coverage",
+                "formal_proof_evidence",
+                "formal_verus_evidence",
+                "formal_verus_log",
+                "formal_multilane_apalache_evidence",
+                "formal_cross_tool_evidence",
+                "formal_harness_lock",
+                "formal_toolchain",
+                "formal_tlaps_resource_jsonl",
+                "formal_tlaps_resource_summary",
+            ),
+        ),
+        (
+            "seed_matrix_completion",
+            (
+                "seed_matrix_completion",
+                "seed_matrix_summary",
+                "seed_matrix_run_logs",
+                "seed_matrix_localnet_manifest_index",
+                "seed_matrix_localnet_manifests",
+            ),
+        ),
+        ("chaos_completion", ("chaos_completion", "chaos_log")),
+        (
+            "taira_completion",
+            ("taira_completion", "taira_evidence", "taira_run_log"),
+        ),
+    )
+
+    def artifact_paths(value: object) -> list[Path]:
+        paths: list[Path] = []
+        if isinstance(value, dict):
+            if isinstance(value.get("path"), str) and isinstance(
+                value.get("sha256"), str
+            ):
+                paths.append(Path(value["path"]))
+            for child in value.values():
+                paths.extend(artifact_paths(child))
+        elif isinstance(value, list):
+            for child in value:
+                paths.extend(artifact_paths(child))
+        return paths
+
+    family_roots: set[Path] = set()
+    expected_family_directories: set[Path] = set()
+    for completion_key, member_keys in family_specs:
+        root = Path(receipt["evidence"][completion_key]["path"]).parent
+        family_roots.add(root)
+        expected_family_directories.add(root)
+        for member_key in member_keys:
+            for path in artifact_paths(receipt["evidence"][member_key]):
+                parent = path.parent
+                while True:
+                    expected_family_directories.add(parent)
+                    if parent == root:
+                        break
+                    parent = parent.parent
+    actual_family_directories = {
+        path
+        for path in directory_paths
+        if any(path == root or root in path.parents for root in family_roots)
+    }
+    assert actual_family_directories == expected_family_directories
+
+    corridor_root = Path(
+        receipt["evidence"]["corridor_completion"]["path"]
+    ).parent
+    corridor_metadata = corridor_root.stat()
+    real_fsync = module.os.fsync
+
+    def fail_corridor_root_fsync(descriptor: int) -> None:
+        metadata = os.fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) == (
+            corridor_metadata.st_dev,
+            corridor_metadata.st_ino,
+        ):
+            raise OSError("fixture corridor root fsync failure")
+        real_fsync(descriptor)
+
+    unpublished = output.with_name("UNPUBLISHED.json")
+    monkeypatch.setattr(module.os, "fsync", fail_corridor_root_fsync)
+    with pytest.raises(module.ReceiptError, match="fsync failed"):
+        module._fsync_receipt_inputs(contracts)
+    assert not unpublished.exists()
+
+    replacement_identity = candidate.with_name("candidate-replacement.json")
+    replacement_identity.write_bytes(candidate.read_bytes())
+    os.replace(replacement_identity, candidate)
+    with pytest.raises(
+        module.ReceiptError, match="changed after semantic validation"
+    ):
+        module._snapshot_receipt_inputs(
+            receipt,
+            candidate_identity=candidate_contract,
+            sealed_identity=sealed_contract,
+        )
+
 
 @pytest.mark.parametrize("mutation", ("unknown", "duplicate", "reordered"))
 def test_receipt_rejects_noncanonical_prebuilt_manifest_fields(
@@ -3056,6 +3258,19 @@ def test_receipt_rejects_prebuilt_binary_hash_substitution(
     binaries = evidence["prebuilt_binaries"]
     assert isinstance(manifest, Path)
     assert isinstance(binaries, list)
+    module = load_writer_module()
+    streamed = module._read_evidence_snapshot(
+        binaries[0],
+        "streamed prebuilt binary fixture",
+        maximum_bytes=2 * 1024 * 1024 * 1024,
+        expected_mode=0o500,
+        allowed_owners={os.geteuid()},
+        executable=True,
+        retain_bytes=False,
+    )
+    assert isinstance(streamed, module.PathContract)
+    assert not hasattr(streamed, "data")
+    assert streamed.sha256 == sha256(binaries[0])
     if mutation == "manifest_hash":
         fields = read_tsv_fields(manifest)
         fields["iroha_sha256"] = "0" * 64
@@ -3110,8 +3325,18 @@ def test_receipt_rejects_prebuilt_artifact_mode_drift(
     (
         (
             "irohad_size_bytes",
-            str(1024 * 1024 * 1024 + 1),
+            str(2 * 1024 * 1024 * 1024 + 1),
             "metadata is not exact and bounded",
+        ),
+        (
+            "source_manifest_sha256",
+            "0" * 64,
+            "not bound to the exact release identity",
+        ),
+        (
+            "cargo_lock_sha256",
+            "0" * 64,
+            "not bound to the exact release identity",
         ),
         (
             "cargo_version_sha256",
@@ -3126,7 +3351,7 @@ def test_receipt_rejects_prebuilt_artifact_mode_drift(
         (
             "host_triple",
             "aarch64-unknown-linux-gnu",
-            "not bound to the exact release identity",
+            "authenticated rustc version probe is not exact rustc -vV output",
         ),
     ),
 )
@@ -3150,6 +3375,67 @@ def test_receipt_rejects_prebuilt_bound_and_toolchain_forgery(
 
     assert result.returncode == 1
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "rustc_output",
+    (
+        RUSTC_VERSION_OUTPUT.replace(
+            b"commit-hash: 01f6ddf7501f6ddf7501f6ddf7501f6ddf7501f6\n",
+            b"commit-hash: ffffffffffffffffffffffffffffffffffffffff\n",
+        ),
+        RUSTC_VERSION_OUTPUT.replace(
+            b"commit-date: 2026-02-11\n",
+            b"commit-date: 2026-02-12\n",
+        ),
+        RUSTC_VERSION_OUTPUT.replace(
+            b"LLVM version: 21.1.0\n",
+            b"LLVM version: forged\n",
+        ),
+    ),
+)
+def test_receipt_rejects_self_consistent_forged_rustc_verbose_semantics(
+    tmp_path: Path, rustc_output: bytes
+) -> None:
+    evidence = make_evidence(tmp_path)
+    rustc = evidence["corridor_rustc_tool"]
+    corridor = evidence["corridor_completion"]
+    manifest = evidence["prebuilt_manifest"]
+    assert isinstance(rustc, Path)
+    assert isinstance(corridor, Path)
+    assert isinstance(manifest, Path)
+    rustc.chmod(0o700)
+    rustc.write_bytes(
+        b"#!/bin/sh\n"
+        b"test \"$#\" = 1 && test \"$1\" = -vV || exit 92\n"
+        b"cat <<'RUSTC_VERSION'\n"
+        + rustc_output
+        + b"RUSTC_VERSION\n"
+    )
+    rustc.chmod(0o500)
+    rebind_bootstrap_runner_tool(evidence, "rustc")
+    corridor_fields = read_tsv_fields(corridor)
+    corridor_fields["rustc_sha256"] = sha256(rustc)
+    write_tsv(corridor, corridor_fields)
+    manifest_fields = read_tsv_fields(manifest)
+    manifest_fields["rustc_version_sha256"] = hashlib.sha256(
+        rustc_output
+    ).hexdigest()
+    rewrite_prebuilt_manifest(
+        evidence,
+        "".join(
+            f"{name}\t{value}\n" for name, value in manifest_fields.items()
+        ).encode(),
+    )
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "authenticated rustc version probe is not exact rustc -vV output"
+        in result.stderr
+    )
 
 
 def test_receipt_rejects_unmanifested_prebuilt_bundle_file(tmp_path: Path) -> None:
@@ -3431,14 +3717,14 @@ def test_receipt_rejects_scaling_artifact_mutated_by_revalidator(
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
-    real_run = module.subprocess.run
+    real_replay = module._run_bounded_replay
 
     def mutate_after_validation(*args: object, **kwargs: object) -> object:
-        result = real_run(*args, **kwargs)
+        result = real_replay(*args, **kwargs)
         trial_log.write_text("mutated after validation\n", encoding="utf-8")
         return result
 
-    monkeypatch.setattr(module.subprocess, "run", mutate_after_validation)
+    monkeypatch.setattr(module, "_run_bounded_replay", mutate_after_validation)
     with pytest.raises(
         module.ReceiptError, match="changed during retained revalidation"
     ):
@@ -4310,7 +4596,9 @@ def test_receipt_rejects_tampered_signature_transcript(
     ["verify-failure", "metadata-change", "raw-commit-change", "top-level-change"],
 )
 def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
-    tmp_path: Path, failure: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
 ) -> None:
     evidence = make_evidence(tmp_path)
     writer = fixture_writer(tmp_path)
@@ -4343,6 +4631,100 @@ def test_receipt_replays_archived_git_and_rejects_runtime_divergence(
 
     assert result.returncode == 1
     assert "archived Git" in result.stderr or "signature replay" in result.stderr
+
+    if failure == "verify-failure":
+        module = load_writer_module()
+        environment = module._closed_replay_environment(tmp_path)
+        real_popen = module.subprocess.Popen
+        for swap_kind in ("file", "ancestor"):
+            swap_root = tmp_path / f"execution-swap-{swap_kind}"
+            trusted_directory = swap_root / "trusted"
+            trusted_directory.mkdir(parents=True)
+            trusted = trusted_directory / "tool"
+            trusted.write_text(
+                "#!/bin/sh\nprintf 'trusted\\n'\n", encoding="utf-8"
+            )
+            trusted.chmod(0o500)
+            contract = module._bounded_path_contract(
+                trusted,
+                "fixture trusted executable",
+                maximum_bytes=4096,
+                allowed_owners={os.geteuid()},
+                executable=True,
+            )
+            if swap_kind == "file":
+                malicious = trusted_directory / "malicious"
+                malicious.write_text(
+                    "#!/bin/sh\nprintf 'malicious\\n'\n", encoding="utf-8"
+                )
+                malicious.chmod(0o500)
+                saved = trusted_directory / "trusted.saved"
+
+                def swapping_popen(
+                    *args: object, **kwargs: object
+                ) -> subprocess.Popen[bytes]:
+                    trusted.rename(saved)
+                    malicious.rename(trusted)
+                    process = real_popen(*args, **kwargs)
+                    process.wait(timeout=5)
+                    trusted.rename(malicious)
+                    saved.rename(trusted)
+                    return process
+
+            else:
+                malicious_directory = swap_root / "malicious"
+                malicious_directory.mkdir()
+                malicious = malicious_directory / "tool"
+                malicious.write_text(
+                    "#!/bin/sh\nprintf 'malicious\\n'\n", encoding="utf-8"
+                )
+                malicious.chmod(0o500)
+                saved = swap_root / "trusted.saved"
+
+                def swapping_popen(
+                    *args: object, **kwargs: object
+                ) -> subprocess.Popen[bytes]:
+                    trusted_directory.rename(saved)
+                    malicious_directory.rename(trusted_directory)
+                    process = real_popen(*args, **kwargs)
+                    process.wait(timeout=5)
+                    trusted_directory.rename(malicious_directory)
+                    saved.rename(trusted_directory)
+                    return process
+
+            monkeypatch.setattr(module.subprocess, "Popen", swapping_popen)
+            with pytest.raises(
+                module.ReceiptError,
+                match="changed (?:while pinned|during process execution)",
+            ):
+                module._run_bounded_replay(
+                    trusted,
+                    [],
+                    cwd=tmp_path,
+                    environment=environment,
+                    name="fixture swapped executable",
+                    executable_contract=contract,
+                )
+            monkeypatch.setattr(module.subprocess, "Popen", real_popen)
+        interpreter = Path(sys.executable).resolve(strict=True)
+        with pytest.raises(module.ReceiptError, match="output exceeds"):
+            module._run_bounded_replay(
+                interpreter,
+                ["-I", "-S", "-c", "import os; os.write(1, b'x' * 4096)"],
+                cwd=tmp_path,
+                environment=environment,
+                name="fixture validator",
+                maximum_output_bytes=128,
+            )
+        monkeypatch.setattr(module, "_REPLAY_TIMEOUT_SECONDS", 0.05)
+        with pytest.raises(module.ReceiptError, match="exceeded its timeout"):
+            module._run_bounded_replay(
+                interpreter,
+                ["-I", "-S", "-c", "import time; time.sleep(2)"],
+                cwd=tmp_path,
+                environment=environment,
+                name="fixture validator",
+            )
 
 
 def test_receipt_rejects_fully_rebound_cross_policy_allowed_signers(
@@ -4469,7 +4851,10 @@ def test_receipt_rejects_cross_source_completion(
         ("corridor_required", "corridor production inventory digest mismatch"),
         ("corridor_g_unit", "corridor G-UNIT inventory digest mismatch"),
         ("corridor_log", "corridor log 0 digest mismatch"),
-        ("corridor_cargo_tool", "corridor cargo tool digest mismatch"),
+        (
+            "corridor_cargo_tool",
+            "bootstrap runner tool cargo integrity binding is wrong",
+        ),
         ("seed_summary", "summary digest mismatch"),
         ("seed_log", "seed run log 17 digest mismatch"),
         (
@@ -4492,7 +4877,10 @@ def test_receipt_rejects_artifact_changed_after_completion(
     writer = fixture_writer(tmp_path)
     artifact = evidence[artifact_name]
     assert isinstance(artifact, Path)
+    original_mode = stat.S_IMODE(artifact.stat().st_mode)
+    artifact.chmod(original_mode | stat.S_IWUSR)
     artifact.write_text("tampered after completion\n", encoding="utf-8")
+    artifact.chmod(original_mode)
     output = tmp_path / "RELEASE_COMPLETED.json"
 
     result = run_writer(evidence, output, writer)
@@ -4715,6 +5103,45 @@ def test_receipt_rejects_noncanonical_rust_tool_version(
 
     assert result.returncode == 1
     assert "rust-toolchain.toml" in result.stderr
+
+    tool = field.removesuffix("_version")
+    fixture_key = f"corridor_{tool}_tool"
+    for case_name, mutate_bytes in (
+        ("same-bytes-different-path", False),
+        ("exact-output-different-bytes", True),
+    ):
+        case_root = tmp_path / case_name
+        case_root.mkdir()
+        cross_bound = make_evidence(case_root)
+        cross_writer = fixture_writer(case_root)
+        source = cross_bound[fixture_key]
+        cross_completion = cross_bound["corridor_completion"]
+        assert isinstance(source, Path)
+        assert isinstance(cross_completion, Path)
+        alternate = case_root / f"alternate-{tool}"
+        alternate.write_bytes(source.read_bytes())
+        if mutate_bytes:
+            alternate.write_bytes(
+                alternate.read_bytes()
+                + b"# distinct executable with the same accepted output\n"
+            )
+        alternate.chmod(0o500)
+        cross_fields = read_tsv_fields(cross_completion)
+        cross_fields[f"{tool}_path"] = str(alternate.resolve())
+        cross_fields[f"{tool}_sha256"] = sha256(alternate)
+        write_tsv(cross_completion, cross_fields)
+
+        cross_result = run_writer(
+            cross_bound,
+            case_root / "receipt.json",
+            cross_writer,
+        )
+
+        assert cross_result.returncode == 1
+        assert (
+            f"corridor {tool} is not the authenticated bootstrap runner tool"
+            in cross_result.stderr
+        )
 
 
 def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> None:
@@ -5043,6 +5470,41 @@ def test_receipt_rejects_nested_or_unbound_seed_replay(
         line.split("\t", 1)
         for line in completion.read_text(encoding="utf-8").splitlines()
     )
+    completion_fields["summary_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "seed summary row 17 is not the exact release run" in result.stderr
+
+
+def test_receipt_rejects_seed_replay_prebuilt_manifest_drift(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    summary = evidence["seed_summary"]
+    completion = evidence["seed_completion"]
+    manifest = evidence["prebuilt_manifest"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    assert isinstance(manifest, Path)
+
+    lines = summary.read_text(encoding="utf-8").splitlines()
+    row = lines[18].split("\t")
+    expected = f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={sha256(manifest)}"
+    mutated, replacement_count = re.subn(
+        re.escape(expected),
+        f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={'0' * 64}",
+        row[10],
+        count=1,
+    )
+    assert replacement_count == 1
+    row[10] = mutated
+    lines[18] = "\t".join(row)
+    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    completion_fields = read_tsv_fields(completion)
     completion_fields["summary_sha256"] = sha256(summary)
     write_tsv(completion, completion_fields)
 
@@ -5485,14 +5947,33 @@ def test_terminal_publication_completes_short_writes(
     directory, output = private_output(tmp_path)
     data = b"terminal receipt with deliberately short writes\n"
     real_write = module.os.write
+    real_close = module.os.close
+    directory_metadata = directory.stat()
+    injected_close_failure = False
 
     def short_write(descriptor: int, pending: object) -> int:
         return real_write(descriptor, pending[:3])
 
+    def close_with_final_directory_failure(descriptor: int) -> None:
+        nonlocal injected_close_failure
+        metadata = os.fstat(descriptor)
+        fail = (
+            not injected_close_failure
+            and stat.S_ISDIR(metadata.st_mode)
+            and (metadata.st_dev, metadata.st_ino)
+            == (directory_metadata.st_dev, directory_metadata.st_ino)
+        )
+        real_close(descriptor)
+        if fail:
+            injected_close_failure = True
+            raise OSError("fixture close reported failure after durable publication")
+
     monkeypatch.setattr(module.os, "write", short_write)
+    monkeypatch.setattr(module.os, "close", close_with_final_directory_failure)
 
     module._publish_terminal_receipt(output, data, revalidate=lambda: None)
 
+    assert injected_close_failure
     assert output.read_bytes() == data
     assert output.stat().st_nlink == 1
     assert not list(directory.glob(f".{output.name}.stage.*"))
@@ -5687,33 +6168,79 @@ def test_evidence_durability_orders_files_before_bottom_up_directories(
 
 @pytest.mark.parametrize("mutation_revalidation", [1, 2])
 def test_terminal_publication_revalidation_failure_cleans_terminal_names(
-    tmp_path: Path, mutation_revalidation: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation_revalidation: int,
 ) -> None:
     module = load_writer_module()
     directory, output = private_output(tmp_path)
-    evidence = tmp_path / "evidence"
-    evidence.write_bytes(b"stable evidence\n")
-    snapshot = module._capture_path_contract(
-        evidence,
-        "fixture evidence",
-        expected_sha256=sha256(evidence),
-    )
+    evidence = tmp_path / "evidence.tsv"
+    evidence.write_bytes(b"schema_version\t1\nresult\tpassed\n")
+    receipt_data = b"terminal receipt\n"
+    if mutation_revalidation == 1:
+        replacement = tmp_path / "replacement.tsv"
+        replacement.write_bytes(b"schema_version\t1\nresult\tforged\n")
+        original_digest = sha256(evidence)
+        parse_snapshot = module._tsv_fields_from_snapshot
+
+        def replace_after_semantic_validation(
+            evidence_snapshot: object, name: str
+        ) -> dict[str, str]:
+            fields = parse_snapshot(evidence_snapshot, name)
+            os.replace(replacement, evidence)
+            return fields
+
+        monkeypatch.setattr(
+            module,
+            "_tsv_fields_from_snapshot",
+            replace_after_semantic_validation,
+        )
+        evidence_snapshot, fields = module._load_tsv(
+            evidence, "fixture completion"
+        )
+        artifact = module._artifact(evidence_snapshot)
+        assert fields == {"schema_version": "1", "result": "passed"}
+        assert artifact == {"path": str(evidence), "sha256": original_digest}
+        assert sha256(evidence) != artifact["sha256"]
+        snapshot = module._snapshot_contract(evidence_snapshot)
+        receipt_data = canonical_json({"evidence": artifact})
+    else:
+        snapshot = module._capture_path_contract(
+            evidence,
+            "fixture evidence",
+            expected_sha256=sha256(evidence),
+        )
     calls = 0
 
     def revalidate() -> None:
         nonlocal calls
         calls += 1
-        if calls == mutation_revalidation:
+        if mutation_revalidation == 2 and calls == mutation_revalidation:
             evidence.write_bytes(b"forged evidence\n")
         module._revalidate_receipt_inputs([snapshot])
 
     with pytest.raises(module.ReceiptError, match="aggregate evidence"):
         module._publish_terminal_receipt(
-            output, b"terminal receipt\n", revalidate=revalidate
+            output, receipt_data, revalidate=revalidate
         )
 
     assert not output.exists()
     assert not list(directory.glob(f".{output.name}.stage.*"))
+    if mutation_revalidation == 1:
+        cases = (
+            (b"schema_version\t1\r\n", 1024, "canonical LF-only text"),
+            (b"schema_version\t1", 1024, "canonical LF-only text"),
+            (b"schema_version\t" + b"1" * 32 + b"\n", 16, "size limit"),
+        )
+        for index, (data, maximum_bytes, expected) in enumerate(cases):
+            malformed = tmp_path / f"malformed-{index}.tsv"
+            malformed.write_bytes(data)
+            with pytest.raises(module.ReceiptError, match=expected):
+                module._load_tsv(
+                    malformed,
+                    f"malformed fixture {index}",
+                    maximum_bytes=maximum_bytes,
+                )
 
 
 @pytest.mark.parametrize("existing_kind", ["regular", "symlink", "hardlink"])

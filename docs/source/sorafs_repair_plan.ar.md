@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: f4ba6a0dfacc254ba7cedfa8beff4f2ad9c92bb28e6cba94be8b9f2ed7f9f5f1
-source_last_modified: "2026-07-25T00:49:01.941160+00:00"
+source_hash: 954750bd16d9c1d89f20fc6fb812e1fffb514f062799934379c8c680aebf061d
+source_last_modified: "2026-07-25T06:07:55.238382+00:00"
 translation_last_reviewed: null
 ---
 

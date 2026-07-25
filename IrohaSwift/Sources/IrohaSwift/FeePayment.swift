@@ -95,6 +95,11 @@ public struct FeeChargeLimit: Codable, Sendable, Equatable {
 }
 
 /// Exact immutable sponsor-program identifier.
+///
+/// The sponsor remains in the canonical I105 form supplied by the caller,
+/// including that literal's own chain discriminant. Norito carries the
+/// domainless account controller, so the discriminant is validated at the
+/// JSON/API boundary and is not rewritten into the controller payload.
 public struct FeeSponsorProgramId: Codable, Sendable, Equatable, Hashable, CustomStringConvertible {
     public let sponsor: String
     public let name: String
@@ -105,22 +110,8 @@ public struct FeeSponsorProgramId: Codable, Sendable, Equatable, Hashable, Custo
     }
 
     public init(sponsor: String, name: String) throws {
-        guard sponsor == sponsor.trimmingCharacters(in: .whitespacesAndNewlines),
-              !sponsor.isEmpty,
-              !sponsor.contains("@"),
-              !sponsor.contains("#"),
-              !sponsor.contains("$"),
-              let address = try? AccountAddress.parseEncodedSwiftOnly(sponsor),
-              let canonical = try? address.toI105(networkPrefix: AccountId.defaultNetworkPrefix),
-              canonical == sponsor else {
-            throw FeePaymentIntentError.invalidSponsorAccount(sponsor)
-        }
-        guard !name.isEmpty,
-              name == name.precomposedStringWithCanonicalMapping,
-              name.unicodeScalars.allSatisfy({ scalar in
-                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
-                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
-              }) else {
+        _ = try canonicalFeeSponsorAddress(sponsor)
+        guard isCanonicalFeeSponsorProgramName(name) else {
             throw FeePaymentIntentError.invalidProgramName(name)
         }
         self.sponsor = sponsor
@@ -755,17 +746,48 @@ private func encodeSponsor(
 }
 
 private func encodeProgramId(_ value: FeeSponsorProgramId, compact: Bool) throws -> Data {
+    let address = try canonicalFeeSponsorAddress(value.sponsor)
     if compact {
         var writer = CompactNoritoWriter()
-        let address = try AccountAddress.parseEncoded(value.sponsor, expectedPrefix: AccountId.defaultNetworkPrefix)
         writer.writeField(try address.compactNoritoAccountControllerPayload())
         writer.writeField(CompactNorito.encodeString(value.name))
         return writer.data
     }
     var writer = CanonicalNoritoWriter()
-    writer.writeField(try CanonicalNorito.encodeAccountId(value.sponsor))
+    writer.writeField(try address.noritoAccountControllerPayload())
     writer.writeField(CanonicalNorito.encodeString(value.name))
     return writer.data
+}
+
+private func canonicalFeeSponsorAddress(_ value: String) throws -> AccountAddress {
+    guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty,
+          !value.contains("@"),
+          !value.contains("#"),
+          !value.contains("$") else {
+        throw FeePaymentIntentError.invalidSponsorAccount(value)
+    }
+    do {
+        let prefix = try AccountAddress.inspectI105NetworkPrefix(value).chainDiscriminant
+        let address = try AccountAddress.parseEncodedSwiftOnly(value, expectedPrefix: prefix)
+        guard try address.toI105(networkPrefix: prefix) == value else {
+            throw FeePaymentIntentError.invalidSponsorAccount(value)
+        }
+        return address
+    } catch {
+        throw FeePaymentIntentError.invalidSponsorAccount(value)
+    }
+}
+
+/// Reject canonically-equivalent alternate UTF-8 spellings at every sponsor-program wire boundary.
+func isCanonicalFeeSponsorProgramName(_ value: String) -> Bool {
+    guard !value.isEmpty else { return false }
+    let normalized = value.precomposedStringWithCanonicalMapping
+    guard value.utf8.elementsEqual(normalized.utf8) else { return false }
+    return value.unicodeScalars.allSatisfy { scalar in
+        !CharacterSet.whitespacesAndNewlines.contains(scalar)
+            && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
+    }
 }
 
 private func encodeChargeLimits(_ values: [FeeChargeLimit], compact: Bool) throws -> Data {
@@ -891,14 +913,8 @@ private func validateCanonicalQuantity(_ value: String) throws {
 }
 
 private func validateCanonicalAccount(_ value: String) throws {
-    guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
-          !value.isEmpty,
-          !value.contains("@"),
-          !value.contains("#"),
-          !value.contains("$"),
-          let address = try? AccountAddress.parseEncodedSwiftOnly(value),
-          let canonical = try? address.toI105(networkPrefix: AccountId.defaultNetworkPrefix),
-          canonical == value else {
-        throw FeePaymentIntentError.invalidSponsorAccount(value)
-    }
+    // AccountId wire identity excludes the I105 display discriminant. Validate
+    // the literal against its own canonical discriminant instead of rewriting
+    // every accepted debit source through the SDK's default network.
+    _ = try canonicalFeeSponsorAddress(value)
 }

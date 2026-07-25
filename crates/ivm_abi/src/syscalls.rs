@@ -545,6 +545,18 @@ pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
 /// Ret: r10 = a fresh host-owned `&NoritoBytes` TLV with the identical payload.
 /// Null, malformed, disallowed, and non-bytes pointer types are rejected.
 pub const SYSCALL_NORMALIZE_NORITO_BYTES: u32 = 0x01_0028;
+/// Invoke a deployed ABI-v1 contract through the first production typed
+/// nested-call profile.
+///
+/// This profile is deliberately closed over the exact public schema
+/// `{amount_in: quantity, min_out: quantity} -> quantity`. The compiler owns
+/// the field names and return type; source can select only the dynamic contract
+/// address and a literal entrypoint.
+///
+/// Args: `r10 = &Blob(contract_address)`, `r11 = &Blob(entrypoint)`,
+/// `r12 = &Quantity(amount_in)`, `r13 = &Quantity(min_out)`.
+/// Ret: `r10 = &Quantity`.
+pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// Decode a complete schema-bound public argument record.
 ///
 /// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
@@ -821,6 +833,7 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
     SYSCALL_SYSVAR_CONTRACT_ADDRESS,
     SYSCALL_SYSVAR_ENTRYPOINT,
     SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+    SYSCALL_CALL_CONTRACT_QUANTITY2,
     SYSCALL_STATE_KEYS,
     SYSCALL_STATE_HAS,
     SYSCALL_STATE_LEN,
@@ -1001,6 +1014,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
         number,
         SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
             | SYSCALL_CALL_CONTRACT
+            | SYSCALL_CALL_CONTRACT_QUANTITY2
             | SYSCALL_CREATE_NFTS_FOR_ALL_USERS
             | SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
             | SYSCALL_COMMIT_OUTPUT
@@ -1356,6 +1370,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_NORMALIZE_NORITO_BYTES,
             SYSCALL_DECODE_ARGUMENT_RECORD,
+            SYSCALL_CALL_CONTRACT_QUANTITY2,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
@@ -1588,6 +1603,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_NORMALIZE_NORITO_BYTES => "NORMALIZE_NORITO_BYTES",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
+        SYSCALL_CALL_CONTRACT_QUANTITY2 => "CALL_CONTRACT_QUANTITY2",
         SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
         SYSCALL_INT_FROM_U64 => "INT_FROM_U64",
         SYSCALL_INT_TRY_TO_I64 => "INT_TRY_TO_I64",
@@ -3917,6 +3933,7 @@ mod tests {
                 SYSCALL_SYSVAR_CONTRACT_ADDRESS,
                 SYSCALL_SYSVAR_ENTRYPOINT,
                 SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                SYSCALL_CALL_CONTRACT_QUANTITY2,
                 SYSCALL_STATE_KEYS,
                 SYSCALL_STATE_HAS,
                 SYSCALL_STATE_LEN,
@@ -3981,6 +3998,10 @@ mod tests {
         );
         assert_eq!(
             syscall_access(SYSCALL_CALL_CONTRACT),
+            SyscallAccess::Dynamic
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CALL_CONTRACT_QUANTITY2),
             SyscallAccess::Dynamic
         );
         assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);

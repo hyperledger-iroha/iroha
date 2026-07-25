@@ -25726,17 +25726,29 @@ mod tests {
         let member_one_b64 = STANDARD.encode(b"canonical signed member one");
         let member_two_b64 = STANDARD.encode(b"canonical signed member two");
         let mut file = NamedTempFile::new().expect("screening result file");
+        let mut screening_result = Map::new();
+        screening_result.insert(
+            "idempotency_key_hex".to_owned(),
+            Value::String(uppercase_idempotency_key),
+        );
+        screening_result.insert(
+            "evidence_kind".to_owned(),
+            Value::String("committee_aggregate".to_owned()),
+        );
+        screening_result.insert(
+            "authority_b64".to_owned(),
+            Value::String(authority_b64.clone()),
+        );
+        screening_result.insert(
+            "committee_member_results_b64".to_owned(),
+            Value::Array(vec![
+                Value::String(member_one_b64.clone()),
+                Value::String(member_two_b64.clone()),
+            ]),
+        );
         file.write_all(
-            &norito::json::to_vec(&norito::json!({
-                "idempotency_key_hex": uppercase_idempotency_key,
-                "evidence_kind": "committee_aggregate",
-                "authority_b64": (authority_b64.clone()),
-                "committee_member_results_b64": [
-                    (member_one_b64.clone()),
-                    (member_two_b64.clone()),
-                ],
-            }))
-            .expect("serialize screening JSON"),
+            &norito::json::to_vec(&Value::Object(screening_result))
+                .expect("serialize screening JSON"),
         )
         .expect("write screening JSON");
         let args = ModerationScreeningSubmitArgs {

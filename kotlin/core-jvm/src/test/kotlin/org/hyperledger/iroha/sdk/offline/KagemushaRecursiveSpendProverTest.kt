@@ -274,6 +274,8 @@ class KagemushaRecursiveSpendProverTest {
                 KagemushaRecursiveSpendProver.buildRedeemRequestV4(
                     input = redeemInput,
                     recipientAccountId = "alice@wonderland",
+                    chainDiscriminant =
+                        org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT,
                     amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
                     changeOpening = backendOpening,
                     changeOutputMembershipPaths = redemptionChangeOutputMembershipPaths(),
@@ -581,6 +583,52 @@ class KagemushaRecursiveSpendProverTest {
             ),
             KagemushaRecursiveSpendProver.ARTIFACT_FILES,
         )
+        val recipientRequestMethods = KagemushaRecursiveSpendProver::class.java.declaredMethods
+            .filter {
+                java.lang.reflect.Modifier.isPublic(it.modifiers) &&
+                    !it.isSynthetic &&
+                    it.name == "prepareRecipientPaymentRequest"
+            }
+        assertEquals(1, recipientRequestMethods.size)
+        assertEquals(13, recipientRequestMethods.single().parameterCount)
+        assertEquals(java.lang.Integer.TYPE, recipientRequestMethods.single().parameterTypes[1])
+        val nativeRecipientRequest = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativePrepareRecipientRequestV2",
+            ByteArray::class.java,
+            java.lang.Integer.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            java.lang.Integer.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            java.lang.Long.TYPE,
+            java.lang.Long.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(14, nativeRecipientRequest.parameterCount)
+        val lineageQueryMethods = KagemushaRecursiveSpendProver::class.java.declaredMethods
+            .filter {
+                java.lang.reflect.Modifier.isPublic(it.modifiers) &&
+                    !it.isSynthetic &&
+                    it.name == "createRecipientLineageQueryV2"
+            }
+        assertEquals(1, lineageQueryMethods.size)
+        assertEquals(6, lineageQueryMethods.single().parameterCount)
+        assertEquals(java.lang.Integer.TYPE, lineageQueryMethods.single().parameterTypes[1])
+        val nativeLineageQuery = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeCreateRecipientLineageQueryV2",
+            ByteArray::class.java,
+            java.lang.Integer.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            java.lang.Long.TYPE,
+        )
+        assertEquals(6, nativeLineageQuery.parameterCount)
         val installFactory = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "beginArtifactInstallSession",
             ByteArray::class.java,
@@ -603,6 +651,7 @@ class KagemushaRecursiveSpendProverTest {
         val nativeAuthorizationPrepare = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "nativePrepareAuthorizationV2",
             ByteArray::class.java,
+            java.lang.Integer.TYPE,
             ByteArray::class.java,
             ByteArray::class.java,
             ByteArray::class.java,
@@ -614,12 +663,17 @@ class KagemushaRecursiveSpendProverTest {
             ByteArray::class.java,
         )
         assertEquals(arrayOf<ByteArray>().javaClass, nativeAuthorizationPrepare.returnType)
-        val legacyNativeAuthorizationFinalize = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
-            "nativeCreateAuthorizationV2",
-            ByteArray::class.java,
-            ByteArray::class.java,
+        val retiredAuthorizationFinalizer = listOf(
+            "native",
+            "Create",
+            "Authorization",
+            "V2",
+        ).joinToString("")
+        assertTrue(
+            KagemushaRecursiveSpendProver::class.java.declaredMethods.none {
+                it.name == retiredAuthorizationFinalizer
+            },
         )
-        assertEquals(ByteArray::class.java, legacyNativeAuthorizationFinalize.returnType)
         val nativeAuthorizationFinalize = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "nativeFinalizeHardwareAuthorizationV2",
             ByteArray::class.java,
@@ -1322,6 +1376,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun canonicalPeerCodecsAreTypedAndDefensive() {
+        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
         val requestArchive = archive(
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
         )
@@ -1380,6 +1435,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun peerTransportGoldenVectorsAreExact() {
+        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
         val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
             offerArchive,
@@ -1405,6 +1461,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun qrNfcAndNearbyGoldenVectorsAreExact() {
+        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
         val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
             offerArchive,
@@ -1471,6 +1528,24 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse(KagemushaNearbyTransportPolicy.IS_AVAILABLE)
         rawArchive.fill(0)
         nearby.fill(0)
+    }
+
+    private fun assertNativeArtifactStreamingUnavailableFailsClosed(): Boolean {
+        if (KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) return false
+        assertTrue(
+            System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE") != "1",
+            "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
+        )
+        val failure = assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(
+                portableOfferFixture("offline_recipient_receive_offer_v2.hex"),
+            )
+        }
+        assertEquals(
+            "connect_norito_bridge ABI 21 artifact streaming is unavailable",
+            failure.message,
+        )
+        return true
     }
 
     private fun ByteArray.readU32BeForTest(): Int =

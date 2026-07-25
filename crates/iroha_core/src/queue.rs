@@ -1031,6 +1031,9 @@ struct LaneQueueReservationStore {
     commit_barriers: Vec<LaneQueueReservationKeyV2>,
     release_barriers: Vec<LaneQueueReservationReleaseBarrierV3>,
     completed_releases: Vec<LaneQueueReservationReleaseCompletionV5>,
+    /// Durable reservation-owner identities whose transaction payload is not
+    /// currently materialized in `Queue::txs`.
+    missing_payload_hashes: HashSet<SignedTxHash>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1041,6 +1044,29 @@ enum PlanJournalDurability {
 }
 
 impl LaneQueueReservationStore {
+    fn durable_owned_hashes(&self) -> impl Iterator<Item = SignedTxHash> + '_ {
+        self.live_by_hash
+            .keys()
+            .copied()
+            .chain(
+                self.commit_barriers
+                    .iter()
+                    .map(|key| key.signed_transaction_hash),
+            )
+            .chain(self.release_barriers.iter().flat_map(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .map(|key| key.signed_transaction_hash)
+            }))
+            .chain(self.completed_releases.iter().flat_map(|completion| {
+                completion
+                    .ordered_records
+                    .iter()
+                    .map(|record| record.key.signed_transaction_hash)
+            }))
+    }
+
     fn live_hashes(&self) -> HashSet<SignedTxHash> {
         self.live_by_hash
             .keys()
@@ -1455,6 +1481,12 @@ pub struct Queue {
     txs: DashMap<SignedTxHash, Arc<CheckedTransaction<'static>>>,
     /// Cached count of transactions tracked by `txs`.
     active_count: AtomicUsize,
+    /// Durable reservation owners whose transaction payload has not yet been
+    /// restored into `txs`.
+    ///
+    /// Each owner consumes one configured transaction slot and the minimum
+    /// retained-byte charge until exact payload replay materializes it.
+    missing_reservation_payload_count: AtomicUsize,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
     /// Cached full routing plan per transaction hash.
@@ -1593,13 +1625,14 @@ const TX_RETAINED_OVERHEAD_BYTES: u64 = 128 * 1024;
 /// Snapshot of queue pressure used by Torii admission and status reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueuePressureSnapshot {
-    /// Number of transactions tracked by the queue (queued + in-flight).
+    /// Number of transactions tracked by the queue (queued, in-flight, or durably owned while
+    /// awaiting exact payload replay).
     pub tracked_tx_count: usize,
     /// Number of transactions still waiting in the queue.
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
-    /// Estimated retained bytes for all transactions tracked by the queue.
+    /// Estimated retained bytes for all transactions and payload-less durable owners.
     pub retained_bytes: u64,
     /// Configured maximum estimated retained bytes for the queue.
     pub max_retained_bytes: NonZeroU64,
@@ -2845,7 +2878,7 @@ impl Queue {
             self.plan_journal_disabled.store(true, Ordering::Release);
         }
         self.finalize_commit_barriers()?;
-        self.finalize_completed_releases()
+        self.finalize_completed_releases(None)
     }
 
     /// Install and replay the crash-safe lane queue reservation journal.
@@ -2872,12 +2905,33 @@ impl Queue {
                     "lane reservation journal file limit overflow",
                 ))
             })?;
+        let max_owned_by_retained_bytes = usize::try_from(
+            self.max_retained_bytes
+                .get()
+                .checked_div(TX_RETAINED_OVERHEAD_BYTES)
+                .unwrap_or(0),
+        )
+        .unwrap_or(usize::MAX)
+        .max(1);
         let limits = LaneQueueReservationJournalLimits::new(
             max_bytes_before_compact,
             max_frame_payload_bytes,
             max_file_bytes,
-            self.capacity.get(),
+            self.capacity.get().min(max_owned_by_retained_bytes),
         );
+        // Installation is startup-only. Exclude queue selection and take the reservation-store
+        // lock before opening the path: opening may create, repair, or truncate a journal, so a
+        // losing concurrent installer must fail before it can touch active storage.
+        let _queue_guard = self.push_remove_lock.lock();
+        if self.inflight_guards.load(Ordering::Acquire) != 0
+            || self.selection_attempts.load(Ordering::Acquire) != 0
+        {
+            return Err(LaneQueueReservationError::InflightSelection);
+        }
+        let mut store = self.lane_reservations.lock();
+        if store.journal.is_some() {
+            return Err(LaneQueueReservationError::JournalAlreadyInstalled);
+        }
         let (journal, replay) = LaneQueueReservationJournal::open_with_limits(path, limits)?;
         let mut restored = HashMap::with_capacity(replay.records().len());
         for record in replay.records() {
@@ -2920,18 +2974,48 @@ impl Queue {
             }
         }
 
-        let _queue_guard = self.push_remove_lock.lock();
-        if self.inflight_guards.load(Ordering::Acquire) != 0
-            || self.selection_attempts.load(Ordering::Acquire) != 0
-        {
-            return Err(LaneQueueReservationError::InflightSelection);
-        }
-        let mut store = self.lane_reservations.lock();
-        if store.journal.is_some() {
-            return Err(LaneQueueReservationError::JournalAlreadyInstalled);
-        }
         for record in restored.values() {
             self.validate_live_reservation_against_queue(record)?;
+        }
+        let missing_payload_hashes = restored
+            .keys()
+            .copied()
+            .chain(
+                commit_barriers
+                    .iter()
+                    .map(|key| key.signed_transaction_hash),
+            )
+            .chain(release_barriers.iter().flat_map(|barrier| {
+                barrier
+                    .ordered_keys
+                    .iter()
+                    .map(|key| key.signed_transaction_hash)
+            }))
+            .chain(completed_releases.iter().flat_map(|completion| {
+                completion
+                    .ordered_records
+                    .iter()
+                    .map(|record| record.key.signed_transaction_hash)
+            }))
+            .filter(|hash| !self.txs.contains_key(hash))
+            .collect::<HashSet<_>>();
+        let tracked_after_install = self
+            .materialized_active_len()
+            .saturating_add(missing_payload_hashes.len());
+        if tracked_after_install > self.capacity.get() {
+            return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                "replayed queue ownership would track {tracked_after_install} transactions, exceeding configured capacity {}",
+                self.capacity
+            )));
+        }
+        let retained_after_install = self.materialized_retained_bytes().saturating_add(
+            Self::retained_byte_cost_floor_for_transactions(missing_payload_hashes.len()),
+        );
+        if retained_after_install > self.max_retained_bytes.get() {
+            return Err(LaneQueueReservationError::InvalidIdentity(format!(
+                "replayed queue ownership would retain at least {retained_after_install} bytes, exceeding configured limit {}",
+                self.max_retained_bytes
+            )));
         }
         let awaiting_transaction_replay = restored
             .keys()
@@ -2971,6 +3055,9 @@ impl Queue {
                 ));
             }
         }
+        store.missing_payload_hashes = missing_payload_hashes;
+        self.missing_reservation_payload_count
+            .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
         store.journal = Some(journal);
         #[cfg(test)]
         if let Some(fault) = self.install_reconciliation_append_fault.lock().take() {
@@ -2979,17 +3066,30 @@ impl Queue {
                 .expect("reservation journal was just installed")
                 .inject_next_append_fault(fault);
         }
-        if let Err(error) = self
-            .finalize_commit_barriers_locked(&mut store)
-            .and_then(|()| self.finalize_completed_releases_locked(&mut store))
-        {
-            let publish_fault = self.lane_reservation_durability_faulted();
-            drop(store);
-            if publish_fault {
-                self.publish_latched_lane_reservation_durability_fault(None);
+        let publish_fault = match self.finalize_commit_barriers_locked(&mut store) {
+            Ok(publish_fault) => publish_fault,
+            Err(error) => {
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+                let publish_fault = self.lane_reservation_durability_faulted();
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
+        let publish_fault = match self.finalize_completed_releases_locked(&mut store) {
+            Ok(release_publish_fault) => publish_fault || release_publish_fault,
+            Err(error) => {
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+                let publish_fault = publish_fault || self.lane_reservation_durability_faulted();
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(error);
+            }
+        };
         let summary = LaneQueueReservationReplaySummary {
             restored: store.live_by_hash.len(),
             awaiting_transaction_replay,
@@ -2997,12 +3097,12 @@ impl Queue {
             release_barriers: store.release_barriers.len(),
             completed_releases: store.completed_releases.len(),
         };
-        let publish_fault = self.lane_reservation_durability_faulted();
         drop(store);
         if publish_fault {
             self.publish_latched_lane_reservation_durability_fault(None);
+        } else {
+            self.publish_backpressure_state(self.active_len(), None);
         }
-        self.publish_backpressure_state(self.active_len(), None);
         Ok(summary)
     }
 
@@ -4246,11 +4346,26 @@ impl Queue {
     /// non-ambiguous failure remains a warning rather than changing that operation's result.
     /// Ambiguous failures poison all transaction selection until startup recovery.
     fn compact_lane_reservations_locked(&self, store: &mut LaneQueueReservationStore) -> bool {
+        self.reconcile_missing_reservation_payloads_locked(store);
         let Err(error) = store.compact_if_needed() else {
             return false;
         };
         warn!(%error, "failed to compact lane queue reservation journal");
         self.latch_lane_reservation_durability_fault_locked(store, &error)
+    }
+
+    /// Rebuild the capacity owners whose exact transaction bytes are not in memory.
+    ///
+    /// The caller holds `push_remove_lock` and the reservation-store lock, so the durable
+    /// ownership union and `txs` membership cannot change between the set and counter updates.
+    fn reconcile_missing_reservation_payloads_locked(&self, store: &mut LaneQueueReservationStore) {
+        let missing_payload_hashes = store
+            .durable_owned_hashes()
+            .filter(|hash| !self.txs.contains_key(hash))
+            .collect();
+        store.missing_payload_hashes = missing_payload_hashes;
+        self.missing_reservation_payload_count
+            .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
     }
 
     /// Publish a reservation durability fault after every reservation-store guard is released.
@@ -4302,7 +4417,7 @@ impl Queue {
             .journal_mut()?
             .forget_release(completion.barrier.clone())
         {
-            self.latch_lane_reservation_durability_fault_locked(store, &error);
+            let _ = self.latch_lane_reservation_durability_fault_locked(store, &error);
             return Err(LaneQueueReservationError::Journal(error));
         }
         store.completed_releases.remove(index);
@@ -4312,7 +4427,7 @@ impl Queue {
     fn finalize_completed_releases_locked(
         &self,
         store: &mut LaneQueueReservationStore,
-    ) -> Result<(), LaneQueueReservationError> {
+    ) -> Result<bool, LaneQueueReservationError> {
         let barriers = store
             .completed_releases
             .iter()
@@ -4321,26 +4436,31 @@ impl Queue {
         for barrier in barriers {
             let _ = self.finalize_one_completed_release_locked(store, &barrier)?;
         }
-        self.compact_lane_reservations_locked(store);
-        Ok(())
+        Ok(self.compact_lane_reservations_locked(store))
     }
 
-    fn finalize_completed_releases(&self) -> Result<(), LaneQueueReservationError> {
+    fn finalize_completed_releases(
+        &self,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<(), LaneQueueReservationError> {
         let _queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
         let result = self.finalize_completed_releases_locked(&mut store);
-        let publish_fault = self.lane_reservation_durability_faulted();
+        let publish_fault = match &result {
+            Ok(publish_fault) => *publish_fault,
+            Err(_) => self.lane_reservation_durability_faulted(),
+        };
         drop(store);
         if publish_fault {
-            self.publish_latched_lane_reservation_durability_fault(None);
+            self.publish_latched_lane_reservation_durability_fault(telemetry);
         }
-        result
+        result.map(|_| ())
     }
 
     fn finalize_commit_barriers_locked(
         &self,
         store: &mut LaneQueueReservationStore,
-    ) -> Result<(), LaneQueueReservationError> {
+    ) -> Result<bool, LaneQueueReservationError> {
         let barriers = store.commit_barriers.clone();
         for key in barriers {
             let hash = key.signed_transaction_hash;
@@ -4373,27 +4493,29 @@ impl Queue {
                 self.remove_transaction_locked(&tx, &plan, None);
             }
             if let Err(error) = store.journal_mut()?.forget_commit(key) {
-                self.latch_lane_reservation_durability_fault_locked(store, &error);
+                let _ = self.latch_lane_reservation_durability_fault_locked(store, &error);
                 return Err(LaneQueueReservationError::Journal(error));
             }
             store
                 .commit_barriers
                 .retain(|committed_key| *committed_key != key);
         }
-        self.compact_lane_reservations_locked(store);
-        Ok(())
+        Ok(self.compact_lane_reservations_locked(store))
     }
 
     fn finalize_commit_barriers(&self) -> Result<(), LaneQueueReservationError> {
         let _queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
         let result = self.finalize_commit_barriers_locked(&mut store);
-        let publish_fault = self.lane_reservation_durability_faulted();
+        let publish_fault = match &result {
+            Ok(publish_fault) => *publish_fault,
+            Err(_) => self.lane_reservation_durability_faulted(),
+        };
         drop(store);
         if publish_fault {
             self.publish_latched_lane_reservation_durability_fault(None);
         }
-        result
+        result.map(|_| ())
     }
 
     /// Replay live pending queue-plan journal records against the current state.
@@ -4685,7 +4807,7 @@ impl Queue {
         })?;
 
         self.record_plan_journal_removes_durable(journal_removals)?;
-        self.finalize_completed_releases()
+        self.finalize_completed_releases(backpressure_telemetry)
             .map_err(std::io::Error::other)?;
 
         Ok(summary)
@@ -6013,6 +6135,7 @@ impl Queue {
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
                 active_count: AtomicUsize::new(0),
+                missing_reservation_payload_count: AtomicUsize::new(0),
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
@@ -8456,7 +8579,10 @@ impl Queue {
             let capacity = self.capacity.get();
             let base_retained_bytes = self.retained_bytes();
             let max_retained_bytes = self.max_retained_bytes.get();
+            let missing_payload_hashes =
+                self.lane_reservations.lock().missing_payload_hashes.clone();
             let mut accepted_count = 0usize;
+            let mut accepted_capacity_slots = 0usize;
             let mut accepted_retained_bytes = 0u64;
             let mut checked_user_increments = HashMap::<&AccountId, usize>::new();
 
@@ -8486,7 +8612,13 @@ impl Queue {
                     break;
                 }
 
-                if base_len.saturating_add(accepted_count) >= capacity {
+                let replaces_missing_payload = missing_payload_hashes.contains(&hash);
+                let capacity_slots = if replaces_missing_payload { 0 } else { 1 };
+                if base_len
+                    .saturating_add(accepted_capacity_slots)
+                    .saturating_add(capacity_slots)
+                    > capacity
+                {
                     debug!(
                         lane_id = %lane_id,
                         dataspace_id = %dataspace_id,
@@ -8500,7 +8632,11 @@ impl Queue {
                     break;
                 }
 
-                let retained_cost = Self::retained_byte_cost(admission.encoded_len);
+                let retained_cost = if replaces_missing_payload {
+                    u64::try_from(admission.encoded_len).unwrap_or(u64::MAX)
+                } else {
+                    Self::retained_byte_cost(admission.encoded_len)
+                };
                 if base_retained_bytes
                     .saturating_add(accepted_retained_bytes)
                     .saturating_add(retained_cost)
@@ -8543,11 +8679,13 @@ impl Queue {
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
+                accepted_capacity_slots = accepted_capacity_slots.saturating_add(capacity_slots);
                 accepted_retained_bytes = accepted_retained_bytes.saturating_add(retained_cost);
             }
             drop(checked_user_increments);
 
             let mut applied_user_increments = HashMap::<AccountId, usize>::new();
+            let mut materialized_missing_payload = false;
             for admission in prepared.into_iter().take(accepted_count) {
                 let PreparedQueueAdmission {
                     checked,
@@ -8762,6 +8900,7 @@ impl Queue {
                         },
                     );
                 }
+                materialized_missing_payload |= missing_payload_hashes.contains(&hash);
                 drop(tx_arc);
                 self.track_expiry_hash(hash);
                 if let Some(authority) = authority {
@@ -8797,8 +8936,12 @@ impl Queue {
                 });
             }
             self.apply_per_user_tx_count_increments(applied_user_increments);
+            if materialized_missing_payload {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+            }
         }
-        if let Err(error) = self.finalize_completed_releases() {
+        if let Err(error) = self.finalize_completed_releases(telemetry) {
             warn!(%error, "failed to finish a replayed lane reservation release");
         }
         #[cfg(feature = "telemetry")]
@@ -9346,6 +9489,11 @@ impl Queue {
                         });
                     }
                 };
+            let replaces_missing_payload = self
+                .lane_reservations
+                .lock()
+                .missing_payload_hashes
+                .contains(&hash);
             let txs_len = self.active_len();
             let entry = match self.txs.entry(hash) {
                 Entry::Occupied(_) => {
@@ -9357,7 +9505,9 @@ impl Queue {
                 Entry::Vacant(entry) => entry,
             };
 
-            if txs_len >= self.capacity.get() {
+            if txs_len.saturating_add(if replaces_missing_payload { 0 } else { 1 })
+                > self.capacity.get()
+            {
                 debug!(
                     lane_id = %lane_id,
                     dataspace_id = %dataspace_id,
@@ -9371,7 +9521,11 @@ impl Queue {
                 });
             }
 
-            let retained_cost = Self::retained_byte_cost(encoded_len);
+            let retained_cost = if replaces_missing_payload {
+                u64::try_from(encoded_len).unwrap_or(u64::MAX)
+            } else {
+                Self::retained_byte_cost(encoded_len)
+            };
             let retained_bytes = self.retained_bytes();
             let max_retained_bytes = self.max_retained_bytes.get();
             if retained_bytes.saturating_add(retained_cost) > max_retained_bytes {
@@ -9516,6 +9670,10 @@ impl Queue {
                     },
                 );
             }
+            if replaces_missing_payload {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+            }
             drop(tx_arc);
             self.track_expiry_hash(hash);
             #[cfg(feature = "telemetry")]
@@ -9641,6 +9799,10 @@ impl Queue {
             self.routing_decisions.clear();
             self.routing_plans.clear();
             self.durable_plan_claims.clear();
+            {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
+            }
             #[cfg(feature = "telemetry")]
             {
                 self.tx_teu.clear();
@@ -9930,7 +10092,7 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return false;
         }
-        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
+        if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
             return false;
         }
         if self.inflight_guards.load(Ordering::Relaxed) > 0 {
@@ -9941,11 +10103,11 @@ impl Queue {
         if self.transaction_selection_durability_faulted() {
             return false;
         }
-        if !self.tx_hashes.is_empty() || self.active_len() == 0 {
+        if !self.tx_hashes.is_empty() || self.materialized_active_len() == 0 {
             return false;
         }
 
-        let total = self.active_len();
+        let total = self.materialized_active_len();
         let live_reservations = self.lane_reservations.lock().live_hashes();
         // Rebuild only from the durable admission ordinals. Hash order is deterministic but is
         // not FIFO and would let an index-recovery boundary reorder already accepted work.
@@ -10051,8 +10213,18 @@ impl Queue {
         self.resync_hash_queue_if_needed_with_telemetry(backpressure_telemetry)
     }
 
-    /// Return the number of transactions tracked by the queue (queued + in-flight).
+    /// Return the number of transactions tracked by the queue.
+    ///
+    /// Durable reservation owners awaiting exact payload replay consume capacity alongside
+    /// materialized queued and in-flight transactions.
     pub fn active_len(&self) -> usize {
+        self.materialized_active_len().saturating_add(
+            self.missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+        )
+    }
+
+    fn materialized_active_len(&self) -> usize {
         self.active_count.load(Ordering::Relaxed)
     }
 
@@ -10065,8 +10237,17 @@ impl Queue {
         self.queued_count.load(Ordering::Relaxed)
     }
 
-    /// Return the queue's estimated retained transaction bytes.
+    /// Return the queue's estimated retained bytes, including payload-less reservation owners.
     pub fn retained_bytes(&self) -> u64 {
+        self.materialized_retained_bytes().saturating_add(
+            Self::retained_byte_cost_floor_for_transactions(
+                self.missing_reservation_payload_count
+                    .load(Ordering::Relaxed),
+            ),
+        )
+    }
+
+    fn materialized_retained_bytes(&self) -> u64 {
         self.retained_bytes.load(Ordering::Relaxed)
     }
 
@@ -11320,7 +11501,7 @@ impl Queue {
     ///
     /// Caller must hold `push_remove_lock` to exclude concurrent enqueue operations.
     fn compact_hash_queue_locked(&self) -> usize {
-        let mut retained = Vec::with_capacity(self.active_len());
+        let mut retained = Vec::with_capacity(self.materialized_active_len());
         let mut dropped = 0usize;
         let mut inserted_hashes = Vec::new();
         let live_reservations = self.lane_reservations.lock().live_hashes();
@@ -11839,6 +12020,10 @@ impl Queue {
                     self.record_teu_dequeue(&hash, telemetry);
                     removed_inner = removed_inner.saturating_add(1);
                 }
+            }
+            {
+                let mut store = self.lane_reservations.lock();
+                self.reconcile_missing_reservation_payloads_locked(&mut store);
             }
             journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
             // Keep removed markers until the consumer drains stale hashes or a push triggers
@@ -12584,7 +12769,7 @@ pub mod tests {
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
         fs,
-        num::{NonZeroU32, NonZeroUsize},
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
         path::PathBuf,
         sync::{
             Arc,
@@ -12916,11 +13101,6 @@ pub mod tests {
         created_height: u64,
         committed_height: u64,
     ) -> State {
-        let mut state = State::new(
-            world_with_test_domains(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
         let mut future_elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_owned(),
@@ -12928,6 +13108,23 @@ pub mod tests {
             visibility: LaneVisibility::Public,
             ..LaneConfig::default()
         };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        future_elastic.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                .expect("future-created autoscale lane catalog");
+        let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing_with_lane_config(&lane_config),
+            LiveQueryStore::start_test(),
+        );
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -12937,20 +13134,11 @@ pub mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = nonzero!(1_u32);
         nexus.autoscale.max_lanes = nonzero!(8_u32);
-        future_elastic
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        future_elastic.metadata.insert(
-            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-            created_height.to_string(),
-        );
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
-        nexus.lane_catalog =
-            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
-                .expect("future-created autoscale lane catalog");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = lane_config;
         *state.nexus.get_mut() = nexus;
+        state.reseed_static_lane_incarnations_for_tests();
+        state.install_active_lane_markers_for_tests();
         assert_eq!(
             crate::state::nexus_active_lane_dataspace_at_height(
                 LaneId::new(1),
@@ -21453,15 +21641,17 @@ pub mod tests {
 
     #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
-        const IVM_MAGIC: [u8; 4] = *b"IVM\0";
-        const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
-
-        let mut program = Vec::new();
-        program.extend_from_slice(&IVM_MAGIC);
-        program.extend_from_slice(&HEADER_SUFFIX);
-        program.extend_from_slice(&max_cycles.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        ProgramMetadata::parse(&program).expect("parse minimal IVM program");
         program
     }
 
@@ -21822,6 +22012,18 @@ pub mod tests {
         let close_height = 5;
         let lane_id = LaneId::new(1);
         let state = Arc::new(state_with_future_created_autoscale_lane(1, close_height));
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy.rules = vec![LaneRoutingRule {
+                lane: lane_id,
+                dataspace: Some(DataSpaceId::UNIVERSAL),
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("unregister::domain".to_owned()),
+                    description: Some("late drain lifecycle-fence fixture".to_owned()),
+                },
+            }];
+        }
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(queue_with_state_free_future_created_router(
             state.as_ref(),
@@ -23308,6 +23510,7 @@ pub mod tests {
         // Keep the state snapshot aligned with the queue so route activity checks
         // do not replace the explicit test router.
         *state.nexus.write() = nexus;
+        state.reseed_static_lane_incarnations_for_tests();
     }
 
     fn world_with_uaid_account(
@@ -24152,12 +24355,11 @@ pub mod tests {
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(42);
         install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
-        let mut nexus = state.nexus_snapshot();
-        nexus.routing_policy.default_lane = test_lane;
-        nexus.routing_policy.default_dataspace = test_dataspace;
-        state
-            .set_nexus(nexus)
-            .expect("apply routed TEU test Nexus state");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy.default_lane = test_lane;
+            nexus.routing_policy.default_dataspace = test_dataspace;
+        }
         let state = Arc::new(state);
         let router = Arc::new(StaticRouter {
             lane: test_lane,
@@ -27367,11 +27569,82 @@ pub mod tests {
             queue.install_lane_reservation_journal(&path, 1024 * 1024),
             Err(LaneQueueReservationError::InflightSelection)
         ));
+        assert!(
+            !path.exists(),
+            "a rejected startup installation must not create or repair its journal path"
+        );
         drop(attempt);
         queue
             .install_lane_reservation_journal(&path, 1024 * 1024)
             .expect("install after selection window closes");
         assert!(queue.lane_reservation_journal_installed());
+    }
+
+    #[test]
+    fn second_reservation_journal_installer_cannot_touch_its_losing_path() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let dir = tempdir().expect("tempdir");
+        let installed_path = dir.path().join("installed.norito");
+        let losing_path = dir.path().join("losing.norito");
+        queue
+            .install_lane_reservation_journal(&installed_path, 1024 * 1024)
+            .expect("install the one active reservation journal");
+
+        assert!(matches!(
+            queue.install_lane_reservation_journal(&losing_path, 1024 * 1024),
+            Err(LaneQueueReservationError::JournalAlreadyInstalled)
+        ));
+        assert!(
+            !losing_path.exists(),
+            "the losing installer must fail before opening, creating, repairing, or truncating storage"
+        );
+    }
+
+    #[test]
+    fn concurrent_reservation_journal_installers_publish_one_untouched_winner() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        let paths = [
+            dir.path().join("candidate-a.norito"),
+            dir.path().join("candidate-b.norito"),
+        ];
+        let start = Arc::new(Barrier::new(3));
+        let attempts = paths
+            .iter()
+            .cloned()
+            .map(|path| {
+                let queue = Arc::clone(&queue);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    let result = queue.install_lane_reservation_journal(&path, 1024 * 1024);
+                    (path, result)
+                })
+            })
+            .collect::<Vec<_>>();
+        start.wait();
+        let results = attempts
+            .into_iter()
+            .map(|attempt| attempt.join().expect("join concurrent installer"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            results.iter().filter(|(_, result)| result.is_ok()).count(),
+            1,
+            "exactly one concurrent installer must publish"
+        );
+        for (path, result) in results {
+            match result {
+                Ok(_) => assert!(path.exists(), "the winning journal must be durable"),
+                Err(LaneQueueReservationError::JournalAlreadyInstalled) => assert!(
+                    !path.exists(),
+                    "the losing installer must not touch its candidate path"
+                ),
+                Err(error) => panic!("unexpected concurrent installation error: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -27607,7 +27880,7 @@ pub mod tests {
                                 ReservationJournalAppendFault::SyncAfterFullWrite,
                             );
                     }
-                    queue.finalize_completed_releases()
+                    queue.finalize_completed_releases(None)
                 }
                 TerminalAppend::Prune => {
                     inject_ambiguous_append();
@@ -27910,6 +28183,168 @@ pub mod tests {
         );
         queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
         assert_eq!(global[0].as_ref().hash(), hash);
+    }
+
+    #[test]
+    fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-owner-capacity.norito");
+        let reservation_path = dir.path().join("lane-reservations-owner-capacity.norito");
+        let one_slot_config = || Config {
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+            ..config_factory()
+        };
+        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction_hash = transaction.hash();
+        let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
+        {
+            let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("enqueue journaled transaction");
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(
+                        &state,
+                        b"owner-capacity-owner",
+                        b"owner-capacity-proposal",
+                    ),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve before restart");
+        }
+
+        let queue = Arc::new(Queue::test(one_slot_config(), &time_source));
+        let replay = queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore the payload-less reservation owner");
+        assert_eq!(replay.restored, 1);
+        assert_eq!(replay.awaiting_transaction_replay, 1);
+        assert!(queue.txs.is_empty());
+        assert_eq!(queue.materialized_active_len(), 0);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+        let pressure = queue.pressure_snapshot();
+        assert_eq!(pressure.tracked_tx_count, 1);
+        assert!(pressure.saturated_by_count);
+
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install the payload journal");
+        let unrelated = accepted_tx_by_someone(&time_source);
+        assert_ne!(unrelated.hash(), transaction_hash);
+        let failure = queue
+            .push_with_lane_with_state(unrelated, &state)
+            .expect_err("unrelated work must not consume the restored owner's slot");
+        assert!(matches!(failure.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+
+        assert_eq!(
+            queue
+                .replay_plan_journal(&state)
+                .expect("the exact payload must replace its reserved capacity")
+                .replayed,
+            1
+        );
+        assert_eq!(queue.materialized_active_len(), 1);
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.retained_bytes(), retained_cost);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(
+            queue
+                .lane_reservations
+                .lock()
+                .missing_payload_hashes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let dir = tempdir().expect("tempdir");
+        let plan_path = dir.path().join("queue-plans-owner-bytes.norito");
+        let reservation_path = dir.path().join("lane-reservations-owner-bytes.norito");
+        let transaction = accepted_tx_by_someone(&time_source);
+        let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
+        let bounded_config = || Config {
+            capacity: nonzero!(2_usize),
+            capacity_per_user: nonzero!(2_usize),
+            max_retained_bytes: NonZeroU64::new(retained_cost)
+                .expect("transaction retained cost is non-zero"),
+            ..config_factory()
+        };
+        {
+            let queue = Arc::new(Queue::test(bounded_config(), &time_source));
+            queue
+                .install_plan_journal(&plan_path, 1024 * 1024, true)
+                .expect("install plan journal");
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("install reservation journal");
+            queue
+                .push_with_lane_with_state(transaction, &state)
+                .expect("enqueue transaction at the exact retained-byte limit");
+            queue
+                .reserve_transactions_for_lane(
+                    &state,
+                    lane_reservation_scope(&state, b"owner-bytes-owner", b"owner-bytes-proposal"),
+                    nonzero!(1_usize),
+                )
+                .expect("reserve before restart");
+        }
+
+        let queue = Arc::new(Queue::test(bounded_config(), &time_source));
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("restore the payload-less reservation owner");
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+        assert!(queue.pressure_snapshot().saturated_by_bytes);
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("install the payload journal");
+
+        let failure = queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect_err("unrelated work must not consume the restored owner's byte budget");
+        assert!(matches!(failure.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
+
+        assert_eq!(
+            queue
+                .replay_plan_journal(&state)
+                .expect("the exact payload must replace its reserved byte charge")
+                .replayed,
+            1
+        );
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), retained_cost);
+        assert_eq!(
+            queue
+                .missing_reservation_payload_count
+                .load(Ordering::Relaxed),
+            0
+        );
     }
 
     #[test]
@@ -28258,7 +28693,7 @@ pub mod tests {
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )
-        .expect("construct authenticated reservation-test State");
+        .expect("open reservation-test State without replacing authenticated Kura markers");
         state
             .prepare_configured_primary_geometry_anchor(&lane_catalog)
             .expect("anchor authenticated reservation-test primary");
@@ -28267,6 +28702,10 @@ pub mod tests {
             .expect("restore reservation-test startup cursor");
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.lane_catalog = (*lane_catalog).clone();
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = lane_geometry;

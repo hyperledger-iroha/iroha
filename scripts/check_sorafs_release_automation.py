@@ -358,6 +358,25 @@ JAVA_GOVERNANCE_VALIDATOR_TEST = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/"
     "SorafsReferenceValidatorsTests.java"
 )
+JAVA_GOVERNANCE_WORKFLOW_STEP_NAME = (
+    "name: Test mirrored Java Android Governance DAG reference validators"
+)
+JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS = (
+    "working-directory: java/iroha_android",
+    (
+        "ANDROID_HARNESS_MAINS: "
+        "org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests"
+    ),
+    "--no-daemon",
+    "--no-configuration-cache",
+    '--project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs"',
+    '-Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs"',
+    (
+        "-Dkotlin.daemon.runFilesPath="
+        '"$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs"'
+    ),
+    "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+)
 NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
     MOBILE_SDK_ARTIFACTS_WORKFLOW: (
         '- "scripts/check_sorafs_release_automation.py"',
@@ -367,12 +386,8 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         "name: Build host SoraFS reference native bridge",
         "run: cargo build --locked -p connect_norito_bridge",
         "IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug",
-        "name: Test mirrored Java Android Governance DAG reference validators",
-        (
-            "ANDROID_HARNESS_MAINS: "
-            "org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests"
-        ),
-        "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+        JAVA_GOVERNANCE_WORKFLOW_STEP_NAME,
+        *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
         NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
@@ -633,6 +648,24 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
             f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: native Governance DAG validation "
             "must be required exactly once in each release SDK job"
         )
+    java_workflow_section = _contract_section(
+        workflow,
+        JAVA_GOVERNANCE_WORKFLOW_STEP_NAME,
+        "name: Validate Android mobile SDK artifact",
+    )
+    if java_workflow_section is None:
+        errors.append(
+            f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: malformed mirrored Java Android "
+            "Governance DAG validation step"
+        )
+    else:
+        for marker in JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS:
+            if marker not in java_workflow_section:
+                errors.append(
+                    f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: mirrored Java Android "
+                    "Governance DAG validation step is missing "
+                    f"`{marker}`"
+                )
 
     swift = sources[SWIFT_GOVERNANCE_VALIDATOR_TEST]
     swift_section = _contract_section(

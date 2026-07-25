@@ -778,7 +778,7 @@ mod recursive_readiness_tests {
 
     #[test]
     fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitutions() {
-        let manifest_sha256 = [0x42; 32];
+        let manifest_sha256 = [0xab; 32];
         let parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq;
         let record = release_bound_record(parity, manifest_sha256);
         let exact = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(

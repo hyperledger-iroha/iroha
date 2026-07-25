@@ -35,21 +35,15 @@ use rustix::fs::{
 ))]
 use rustix::fs::{RenameFlags, renameat_with};
 
-#[cfg(test)]
 use super::{
-    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
-    NATIVE_AMX_EVIDENCE_FILE_SUFFIX, NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
-    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
-    SidecarIndexEntry,
-};
-use super::{
-    AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
-    AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE, AutonomousLaneBlockArtifact,
-    AutonomousLaneBlockLatestAttemptV1, BlockStore, BlockStoreCommitMarker, BoundProgressDirectory,
-    BoundProgressNamespace, BoundProgressPair, BoundProgressRecoveryFailure,
-    CERTIFIED_LANE_BLOCKS_DATA_FILE, CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME,
-    DATA_FILE_NAME, Error, HASHES_FILE_NAME, INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE,
-    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX, AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE,
+    AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, BlockStore,
+    BlockStoreCommitMarker, BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
+    BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
+    CERTIFIED_LANE_BLOCKS_INDEX_FILE, COUNT_FILE_NAME, DATA_FILE_NAME, Error, HASHES_FILE_NAME,
+    INDEX_FILE_NAME, Kura, LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME,
+    LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
@@ -57,11 +51,18 @@ use super::{
     LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
     LaneMergeApplicationFrontierV1, MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES,
     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES,
-    MAX_PENDING_CERTIFIED_MERGE_BYTES, MAX_PENDING_CERTIFIED_MERGE_ENTRIES,
     MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
     NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
-    STRICT_INIT_MAX_BLOCK_BYTES, create_dir_all_with_context, sync_dir,
+    STRICT_INIT_MAX_BLOCK_BYTES, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+    create_dir_all_with_context, sync_dir,
+};
+#[cfg(test)]
+use super::{
+    AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
+    NATIVE_AMX_EVIDENCE_FILE_SUFFIX, NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
+    OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
+    SidecarIndexEntry,
 };
 
 const JOURNAL_VERSION: u8 = 6;
@@ -4705,7 +4706,7 @@ impl Kura {
             entries.len(),
             self.roster_sidecar_retention().get(),
             self.native_amx_participant_evidence_retention().get(),
-            MAX_PENDING_CERTIFIED_MERGE_ENTRIES,
+            self.pending_control_sidecar_limits.certified_merge_entries,
         )
         .ok_or_else(|| {
             self.geometry_error(
@@ -9044,7 +9045,7 @@ impl Kura {
                     "autonomous attempt namespace byte count overflows",
                 )
             })?;
-            if related_bytes > MAX_PENDING_CERTIFIED_MERGE_BYTES as u64 {
+            if related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "autonomous attempt namespace exceeds the shared sidecar aggregate byte budget",
@@ -12985,12 +12986,12 @@ mod tests {
                 routes,
                 retention,
                 retention,
-                MAX_PENDING_CERTIFIED_MERGE_ENTRIES,
+                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get(),
             )
             .expect("valid route/configuration bound");
             let expected = routes
                 * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
-                    * (retention + MAX_PENDING_CERTIFIED_MERGE_ENTRIES)
+                    * (retention + V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get())
                     + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE * retention);
             assert_eq!(limit, expected);
             assert!(

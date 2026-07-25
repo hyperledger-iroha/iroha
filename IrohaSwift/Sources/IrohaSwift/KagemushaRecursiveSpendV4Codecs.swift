@@ -352,8 +352,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
 
     private static func accountID(_ value: String) throws -> Data {
         do {
-            return try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
-                .compactNoritoAccountControllerPayload()
+            return try KagemushaRecursiveSpend.canonicalAccountAddress(
+                value,
+                field: "redeemLocalRequestV4.recipient"
+            ).address.compactNoritoAccountControllerPayload()
         } catch {
             throw KagemushaRecursiveSpendError.invalidField("redeemLocalRequestV4.recipient")
         }

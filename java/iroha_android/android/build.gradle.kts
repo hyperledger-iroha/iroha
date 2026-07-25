@@ -132,7 +132,7 @@ android {
 dependencies {
     api(project(":core"))
     api("org.hyperledger.iroha.sdk:client-android:${irohaKotlinSdkVersion.get()}")
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.camera:camera-core:1.3.3")

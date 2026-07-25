@@ -6,13 +6,19 @@ on:
     paths:
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - "scripts/build_norito_xcframework.sh"
+      - "scripts/exec_with_file_lock.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/check_android_app_native_archive.py"
+      - "scripts/tests/check_android_app_native_archive_test.py"
+      - "scripts/norito_bridge_source_seal.py"
+      - "scripts/run_mobile_hermetic_command.py"
       - "scripts/check_kotlin_no_reflection.sh"
       - "scripts/build_kagemusha_candidate_android_native.sh"
       - "scripts/run_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
+      - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "scripts/package_mobile_sdk_artifacts.sh"
       - "scripts/check_sorafs_release_automation.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -59,7 +65,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Shell syntax
-        run: bash -n ci/check_kagemusha_candidate_android_lab.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+        run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
+      - name: Python syntax
+        run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/exec_with_file_lock.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+      - name: Android app native archive authenticator fixtures
+        run: python3 -I scripts/tests/check_android_app_native_archive_test.py
       - name: Kotlin production reflection guard
         run: scripts/check_kotlin_no_reflection.sh
       - name: Candidate Android lab isolation contract
@@ -75,6 +85,9 @@ jobs:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
@@ -92,8 +105,25 @@ jobs:
           fi
           version="${version//\//-}"
           echo "MOBILE_SDK_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Prepare external Apple build and artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-mobile-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-mobile-apple-build"
+          package_dir="$RUNNER_TEMP/iroha-mobile-sdk-package"
+          swift_scratch_dir="$RUNNER_TEMP/iroha-mobile-swift-build"
+          mkdir -p "$artifact_dir" "$build_dir" "$package_dir" "$swift_scratch_dir"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$swift_scratch_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets
-        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          cargo fetch --locked
+      - name: Make reviewed Iroha source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Build NoritoBridge XCFramework
         run: |
           build_args=()
@@ -103,21 +133,24 @@ jobs:
           NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 \
             scripts/build_norito_xcframework.sh "${build_args[@]}"
           if [[ "$PRIVACY_PRODUCTION_ENABLED" == "true" ]]; then
-            test -f dist/NoritoBridge.xcframework/.privacy-production-enabled
+            test -f "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
           else
-            test ! -e dist/NoritoBridge.xcframework/.privacy-production-enabled
+            test ! -e "$MOBILE_SDK_APPLE_ARTIFACT_DIR/NoritoBridge.xcframework/.privacy-production-enabled"
           fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
       - name: Test Swift SDK
         working-directory: IrohaSwift
-        run: swift test
+        run: >-
+          swift test
+          --disable-automatic-resolution
+          --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-apple-${{ env.MOBILE_SDK_VERSION }}
-          path: dist/mobile-sdk/*
+          path: ${{ runner.temp }}/iroha-mobile-sdk-package/*
           if-no-files-found: error
           retention-days: 14
 
@@ -134,6 +167,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
@@ -172,25 +208,57 @@ jobs:
       - name: Install Android Rust targets and cargo-ndk
         run: |
           rustup target add aarch64-linux-android x86_64-linux-android
-          cargo install cargo-ndk --locked
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo fetch --locked
+      - name: Prepare external Android build and artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-mobile-android-artifacts"
+          gradle_home="$artifact_dir/gradle-user-home"
+          project_cache="$artifact_dir/project-cache"
+          gradle_tmp="$artifact_dir/tmp"
+          java_sorafs_tmp="$gradle_tmp/java-sorafs"
+          maven_repo="$artifact_dir/maven"
+          package_dir="$RUNNER_TEMP/iroha-mobile-sdk-package"
+          mkdir -p "$artifact_dir" "$gradle_home" "$project_cache" "$gradle_tmp" "$java_sorafs_tmp" "$maven_repo" "$package_dir"
+          echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_ANDROID_MAVEN_REPO_DIR=$maven_repo" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR=$project_cache" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_ANDROID_GRADLE_TMP_DIR=$gradle_tmp" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Compile candidate Android lab main and instrumentation sources only
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build host SoraFS reference native bridge
         run: cargo build --locked -p connect_norito_bridge
+      - name: Require fresh ABI-21 JNI bridge in complete Kotlin and Java suites
+        run: >-
+          NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
+          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
+          bash ci/check_kagemusha_jvm_native_bridge.sh
+      - name: Make reviewed Iroha source read-only
+        run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Build Android native bridge libraries
         working-directory: kotlin
         run: >-
-          ./gradlew :client-android:buildNativeLibs
+          ./gradlew
+          --no-daemon
+          --no-configuration-cache
+          --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR"
+          -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR"
+          -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon"
+          :client-android:buildNativeLibs
           -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED"
       - name: Test, lint, publish, and build Android SDK artifacts
         working-directory: kotlin
         run: |
-          rm -rf ../dist/mobile-sdk-maven
-          ./gradlew \
+          ./gradlew --no-daemon \
+            --no-configuration-cache \
+            --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR" \
+            -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR" \
+            -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon" \
             -PprivacyProductionEnabled="$PRIVACY_PRODUCTION_ENABLED" \
             -PirohaSdkVersion="$MOBILE_SDK_MAVEN_VERSION" \
-            -PirohaSdkRepoDir="$PWD/../dist/mobile-sdk-maven" \
-            :core-jvm:test \
+            -PirohaSdkRepoDir="$MOBILE_SDK_ANDROID_MAVEN_REPO_DIR" \
             :client-android:testDebugUnitTest \
             :client-android:lintRelease \
             :offline-wallet-android:testDebugUnitTest \
@@ -206,7 +274,13 @@ jobs:
         env:
           ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests
         run: >-
-          ./gradlew :core:test
+          ./gradlew
+          --no-daemon
+          --no-configuration-cache
+          --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs"
+          -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs"
+          -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs"
+          :core:test
           --tests org.hyperledger.iroha.android.GradleHarnessTests
           --console=plain
       - name: Validate Android mobile SDK artifact
@@ -216,7 +290,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: mobile-sdk-android-${{ env.MOBILE_SDK_VERSION }}
-          path: dist/mobile-sdk/*
+          path: ${{ runner.temp }}/iroha-mobile-sdk-package/*
           if-no-files-found: error
           retention-days: 14
 

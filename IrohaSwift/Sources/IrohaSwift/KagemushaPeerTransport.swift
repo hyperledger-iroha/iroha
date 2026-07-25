@@ -109,7 +109,8 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 
     public static func decode(
         archive: Data,
-        kind: KagemushaPeerPayloadKind
+        kind: KagemushaPeerPayloadKind,
+        chainDiscriminant: UInt16
     ) throws -> Self {
         guard !archive.isEmpty else {
             throw KagemushaPeerTransportError.emptyPayload
@@ -124,7 +125,10 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
             switch kind {
             case .receiveRequest:
                 return .receiveRequest(
-                    try KagemushaRecipientReceiveOfferV2(noritoArchive: archive)
+                    try KagemushaRecipientReceiveOfferV2(
+                        noritoArchive: archive,
+                        chainDiscriminant: chainDiscriminant
+                    )
                 )
             case .payment:
                 return .payment(try KagemushaRecursiveSpendPeerPaymentV4(noritoArchive: archive))
@@ -216,6 +220,7 @@ public enum KagemushaPeerTextCodec {
     /// Strictly decodes already-normalized text. No whitespace is ignored.
     public static func decode(
         _ value: String,
+        chainDiscriminant: UInt16,
         expectedKind: KagemushaPeerPayloadKind? = nil
     ) throws -> KagemushaPeerPayload {
         let byteCount = value.utf8.count
@@ -247,13 +252,18 @@ public enum KagemushaPeerTextCodec {
                 maximum: KagemushaPeerTransportContract.maximumTextArchiveBytes
             )
         }
-        return try KagemushaPeerPayload.decode(archive: archive, kind: kind)
+        return try KagemushaPeerPayload.decode(
+            archive: archive,
+            kind: kind,
+            chainDiscriminant: chainDiscriminant
+        )
     }
 
     /// Decodes user-presented scanner text after removing only ASCII SP, TAB,
     /// CR, and LF from the two boundaries. Embedded characters remain invalid.
     public static func decodeUserPresented(
         _ value: String,
+        chainDiscriminant: UInt16,
         expectedKind: KagemushaPeerPayloadKind? = nil
     ) throws -> KagemushaPeerPayload {
         // Bound the scanner-owned string before boundary normalization.  In
@@ -268,6 +278,7 @@ public enum KagemushaPeerTextCodec {
         }
         return try decode(
             canonicalizeUserPresented(value),
+            chainDiscriminant: chainDiscriminant,
             expectedKind: expectedKind
         )
     }

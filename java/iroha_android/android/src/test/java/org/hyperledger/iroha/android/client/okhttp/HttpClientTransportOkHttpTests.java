@@ -63,7 +63,9 @@ public final class HttpClientTransportOkHttpTests {
               .setNonce(1)
               .setMetadata(java.util.Map.of("note", "okhttp"))
               .build();
-      final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+      final NoritoJavaCodecAdapter codec =
+          new NoritoJavaCodecAdapter(
+              org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
       final byte[] encodedPayload;
       try {
         encodedPayload = codec.encodeTransaction(payload);

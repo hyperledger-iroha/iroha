@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-24
+Last updated: 2026-07-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -53,21 +53,21 @@ production aggregate remains blocked with zero recognized lane summaries and
 no trusted foundational envelope. Promotion requires one reviewed production
 deployment, all 17 fresh lane summaries, the ordered nine-prerequisite signed
 envelope, deterministic aggregate replay, and retained rollback capability.
-SF-8b repair is also an active implementation blocker, not an evidence-only
-lane. PDP, PoR, and PoTR production failure handoff now uses the exact-chain
-durable native transaction forwarder, and storage work is gated by the
-finalized native task cursor, revision, lease owner, generation, and expiry.
-Active local-authority debt remains release-blocking in all four ledger-backed
-domains. The `sorafs_node` local orderbook and reserve runtimes, the public
-`RepairManager` plus its checkpoint/event projections, and the process-local
+PDP, PoR, and PoTR production failure handoff uses the exact-chain durable
+native transaction forwarder, and storage work is gated by the finalized
+native task cursor, revision, lease owner, generation, and expiry. The
+competing `sorafs_node` repair manager, checkpoint, event projection, and
+process-local terminal authority have been deleted; repair GC and
+reconciliation now consume one complete finalized native projection. Source
+validation and four-peer exactly-once evidence remain release-blocking for the
+repair lane.
+
+Active local-authority debt remains in the other three ledger-backed domains.
+The `sorafs_node` local orderbook and reserve runtimes and the process-local
 moderation ballot/scheduler state must be removed from production paths in
 favor of signed native transactions and rebuildable finalized-chain
-projections. Repair GC and reconciliation still consume the local manager
-today; the repair lane cannot close until those consumers are cut over and
-four-peer evidence shows one terminal outcome across restarts and duplicate
-submissions. The orderbook, reserve/rent, and moderation lanes remain open
-until their corresponding authority removals and distributed recovery proofs
-are complete.
+projections. The orderbook, reserve/rent, and moderation lanes remain open
+until those authority removals and distributed recovery proofs are complete.
 Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
@@ -7505,12 +7505,13 @@ excluded from the first release.
   reviewed lifecycle-status and handoff-target inventories, and latency threshold
   facts before writing. Native repair task identity, leases, terminal outcomes,
   slash/appeal state, signed-transaction ingress, and finalized committed-event
-  queries are implemented. SF-8b still requires removal of the residual public
-  `RepairManager`/filesystem checkpoint and GC/reconciliation dependencies,
-  plus proof that storage execution is gated by the exact finalized live lease
-  with one cross-peer terminal outcome. Live PoR/PoTR failure, repair,
-  escalation, governance handoff, deployed-auditor-roster, and coordinator
-  evidence follows that removal. The
+  queries are implemented. The residual public repair manager, filesystem
+  checkpoint, and competing GC/reconciliation dependency are deleted, and
+  storage execution now fails closed unless it holds the exact finalized live
+  lease. SF-8b still requires source validation and proof of one cross-peer
+  terminal outcome. Live PoR/PoTR failure, repair, escalation, governance
+  handoff, deployed-auditor-roster, and coordinator evidence remains external.
+  The
   rollout-gate static contract now pins live operator-evidence capture,
   deployed auditor-roster, SF-9 coordinator runbook, production failure-capture,
   production handoff, and repair promotion routes or subcommands as unshipped
@@ -23564,6 +23565,11 @@ signed ancestor-linked solid-block header proof,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
+  The typed two-quantity nested contract-call path remains bound to the
+  ungated ABI-v1 `CALL_CONTRACT_QUANTITY2` syscall at `0x010029`; removing,
+  renumbering, or changing that operation must repeat the same complete
+  artifact and documentation refresh. Its current canonical ABI-v1 hash is
+  `2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1`.
 - Finish release validation for the bounded-List, exact-decimal/quantity,
   native-JSON, and typed core-query-page corridor. The implementation, source
   migration, canonical header refresh, mapped goldens, compiler manifests, and

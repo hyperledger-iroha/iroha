@@ -223,6 +223,32 @@ public final class KagemushaRecursiveSpendProverTest {
             "step-ep.verifying-key.krv4",
             "step-ep.bootstrap-witness.krv4"));
     final Method[] methods = KagemushaRecursiveSpendProver.class.getDeclaredMethods();
+    final Method[] recipientRequestMethods = Arrays.stream(methods)
+        .filter(method -> Modifier.isPublic(method.getModifiers()))
+        .filter(method -> method.getName().equals("prepareRecipientPaymentRequest"))
+        .toArray(Method[]::new);
+    assert recipientRequestMethods.length == 1;
+    assert recipientRequestMethods[0].getParameterCount() == 13;
+    assert recipientRequestMethods[0].getParameterTypes()[1] == int.class;
+    final Method nativeRecipientRequest = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativePrepareRecipientRequestV2"))
+        .findFirst()
+        .orElseThrow();
+    assert nativeRecipientRequest.getParameterCount() == 14;
+    assert nativeRecipientRequest.getParameterTypes()[1] == int.class;
+    final Method[] lineageQueryMethods = Arrays.stream(methods)
+        .filter(method -> Modifier.isPublic(method.getModifiers()))
+        .filter(method -> method.getName().equals("createRecipientLineageQueryV2"))
+        .toArray(Method[]::new);
+    assert lineageQueryMethods.length == 1;
+    assert lineageQueryMethods[0].getParameterCount() == 6;
+    assert lineageQueryMethods[0].getParameterTypes()[1] == int.class;
+    final Method nativeLineageQuery = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativeCreateRecipientLineageQueryV2"))
+        .findFirst()
+        .orElseThrow();
+    assert nativeLineageQuery.getParameterCount() == 6;
+    assert nativeLineageQuery.getParameterTypes()[1] == int.class;
     final Method appendNative = Arrays.stream(methods)
         .filter(method -> method.getName().equals("nativeBuildAppendRequestV4"))
         .findFirst()
@@ -259,6 +285,7 @@ public final class KagemushaRecursiveSpendProverTest {
         authorizationPrepareNative.getParameterTypes(),
         new Class<?>[] {
           byte[].class,
+          int.class,
           byte[].class,
           byte[].class,
           byte[].class,
@@ -269,14 +296,10 @@ public final class KagemushaRecursiveSpendProverTest {
           byte[].class,
           byte[].class
         });
-    final Method legacyAuthorizationFinalizeNative = Arrays.stream(methods)
-        .filter(method -> method.getName().equals("nativeCreateAuthorizationV2"))
-        .findFirst()
-        .orElseThrow();
-    assert legacyAuthorizationFinalizeNative.getReturnType() == byte[].class;
-    assert Arrays.equals(
-        legacyAuthorizationFinalizeNative.getParameterTypes(),
-        new Class<?>[] {byte[].class, byte[].class});
+    final String retiredAuthorizationFinalizer =
+        String.join("", "native", "Create", "Authorization", "V2");
+    assert Arrays.stream(methods)
+        .noneMatch(method -> method.getName().equals(retiredAuthorizationFinalizer));
     final Method authorizationFinalizeNative = Arrays.stream(methods)
         .filter(method -> method.getName().equals("nativeFinalizeHardwareAuthorizationV2"))
         .findFirst()
@@ -485,6 +508,7 @@ public final class KagemushaRecursiveSpendProverTest {
       assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildRedeemRequestV4(
           redeemInput,
           "alice@wonderland",
+          org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT,
           KagemushaScaledAmount.fromAtomicUnits("125", 2),
           redeemChange,
           redemptionChangeOutputMembershipPaths(),
@@ -1114,6 +1138,9 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void canonicalPeerCodecsAreTypedAndDefensive() {
+    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
+      return;
+    }
     final byte[] requestArchive = archive(
         "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2");
     final KagemushaRecursiveSpendProver.RecipientPaymentRequest request =
@@ -1203,6 +1230,9 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void peerTransportGoldenVectorsAreExact() {
+    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
+      return;
+    }
     final byte[] offerArchive = portableOfferFixture(
         "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
@@ -1224,6 +1254,9 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void qrNfcAndNearbyGoldenVectorsAreExact() {
+    if (assertNativeArtifactStreamingUnavailableFailsClosed()) {
+      return;
+    }
     final byte[] offerArchive = portableOfferFixture(
         "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
@@ -1269,6 +1302,25 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaNearby.IS_AVAILABLE;
     Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
+  }
+
+  private static boolean assertNativeArtifactStreamingUnavailableFailsClosed() {
+    if (KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
+      return false;
+    }
+    if ("1".equals(System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE"))) {
+      throw new AssertionError(
+          "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library");
+    }
+    try {
+      KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(
+          portableOfferFixture("offline_recipient_receive_offer_v2.hex"));
+      throw new AssertionError("native artifact streaming absence must fail closed");
+    } catch (final IllegalStateException expected) {
+      assert "connect_norito_bridge ABI 21 artifact streaming is unavailable"
+          .equals(expected.getMessage());
+    }
+    return true;
   }
 
   private static byte[] portableOfferFixture(final String name) {

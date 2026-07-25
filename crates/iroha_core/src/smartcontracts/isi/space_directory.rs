@@ -458,6 +458,33 @@ mod tests {
             .insert(authority.clone(), permissions);
     }
 
+    fn seed_account_alias_lease(
+        transaction: &mut StateTransaction<'_, '_>,
+        alias: &iroha_data_model::account::rekey::AccountAlias,
+        owner: &AccountId,
+    ) {
+        let selector =
+            crate::sns::selector_for_account_alias(alias, &transaction.nexus.dataspace_catalog)
+                .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     #[test]
     fn permissions_allow_manifest_rejects_unscoped_null_payload() {
         let mut permissions = Permissions::new();
@@ -587,9 +614,25 @@ mod tests {
         .execute(&hbl_registrar, &mut tx)
         .expect_err("a stale reverse-only alias index must not authorize an HBL manifest");
         tx.world
-            .insert_account_alias_binding(hbl_alias, hbl_customer);
+            .insert_account_alias_binding(hbl_alias.clone(), hbl_customer.clone());
         tx.world
-            .insert_account_alias_binding(ubl_alias, ubl_customer);
+            .insert_account_alias_binding(ubl_alias.clone(), ubl_customer.clone());
+        tx.world.account_rekey_records.insert(
+            hbl_alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                hbl_alias.clone(),
+                hbl_customer.clone(),
+            ),
+        );
+        tx.world.account_rekey_records.insert(
+            ubl_alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                ubl_alias.clone(),
+                ubl_customer.clone(),
+            ),
+        );
+        seed_account_alias_lease(&mut tx, &hbl_alias, &hbl_customer);
+        seed_account_alias_lease(&mut tx, &ubl_alias, &ubl_customer);
 
         PublishSpaceDirectoryManifest {
             manifest: sample_manifest(ubl_uaid, dataspace, 1),

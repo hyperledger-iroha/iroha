@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "IrohaSwap",
-  "code_hash": "hash:A4F066D92DCCF44ED3527402318F1828A654B5CEF430E41EDA00C5D3B57514FD#E1EE",
-  "abi_hash": "hash:1DAAC4A4C98904194FB294638D2D62C9B35C658B31D319F0E92B10D0CE9B7883#942E",
+  "code_hash": "hash:3515B7109ECA0CFF70E5566717D90D993C429D886409AFAA618B3A4E8F337373#F0F9",
+  "abi_hash": "hash:2A6E921AC81CE3ECC6797C5DA227EB5F4FF57D521201863EF8590F1713EF52A1#37C1",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -9,24 +9,12 @@
       "account:*",
       "asset:*",
       "asset_def:*",
-      "state:LpSupply",
-      "state:PoolAccount",
-      "state:PoolAssetA",
-      "state:PoolAssetB",
-      "state:PoolLpAsset",
-      "state:ReserveA",
-      "state:ReserveB"
+      "state:*"
     ],
     "write_keys": [
       "asset:*",
       "asset_def:*",
-      "state:LpSupply",
-      "state:PoolAccount",
-      "state:PoolAssetA",
-      "state:PoolAssetB",
-      "state:PoolLpAsset",
-      "state:ReserveA",
-      "state:ReserveB"
+      "state:*"
     ],
     "dynamic_reads": [],
     "dynamic_writes": []
@@ -138,19 +126,15 @@
       "return_schema": null,
       "permission": "Admin",
       "read_keys": [
-        "state:PoolAssetA"
+        "state:*"
       ],
       "write_keys": [
-        "state:PoolAssetA",
-        "state:PoolAssetB",
-        "state:PoolAccount",
-        "state:PoolLpAsset",
-        "state:ReserveA",
-        "state:ReserveB",
-        "state:LpSupply"
+        "state:*"
       ],
-      "access_hints_complete": true,
-      "access_hints_skipped": [],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
       "triggers": []
     },
     {
@@ -241,26 +225,20 @@
       "return_schema": null,
       "permission": "Admin",
       "read_keys": [
-        "state:PoolAssetA",
-        "state:PoolAssetB",
-        "state:PoolAccount",
-        "state:PoolLpAsset",
-        "state:ReserveA",
-        "state:ReserveB",
-        "state:LpSupply",
+        "state:*",
         "asset:*",
         "asset_def:*",
         "account:*"
       ],
       "write_keys": [
-        "state:ReserveA",
-        "state:ReserveB",
-        "state:LpSupply",
+        "state:*",
         "asset:*",
         "asset_def:*"
       ],
-      "access_hints_complete": true,
-      "access_hints_skipped": [],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
       "triggers": []
     },
     {
@@ -333,26 +311,20 @@
       "return_schema": null,
       "permission": "Admin",
       "read_keys": [
-        "state:PoolAssetA",
-        "state:PoolAssetB",
-        "state:PoolAccount",
-        "state:PoolLpAsset",
-        "state:ReserveA",
-        "state:ReserveB",
-        "state:LpSupply",
+        "state:*",
         "asset:*",
         "asset_def:*",
         "account:*"
       ],
       "write_keys": [
-        "state:ReserveA",
-        "state:ReserveB",
-        "state:LpSupply",
+        "state:*",
         "asset:*",
         "asset_def:*"
       ],
-      "access_hints_complete": true,
-      "access_hints_skipped": [],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
       "triggers": []
     },
     {
@@ -471,24 +443,20 @@
       },
       "permission": "Admin",
       "read_keys": [
-        "state:PoolAssetA",
-        "state:PoolAssetB",
-        "state:PoolAccount",
-        "state:ReserveA",
-        "state:ReserveB",
+        "state:*",
         "asset:*",
         "asset_def:*",
-        "account:*",
-        "state:PoolLpAsset"
+        "account:*"
       ],
       "write_keys": [
-        "state:ReserveA",
-        "state:ReserveB",
+        "state:*",
         "asset:*",
         "asset_def:*"
       ],
-      "access_hints_complete": true,
-      "access_hints_skipped": [],
+      "access_hints_complete": false,
+      "access_hints_skipped": [
+        "dynamic state path is not compiler-resolved"
+      ],
       "triggers": []
     }
   ],

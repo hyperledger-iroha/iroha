@@ -10,15 +10,18 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
+    hash::{DefaultHasher, Hash as StdHash, Hasher},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, LazyLock, Mutex, MutexGuard, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
@@ -60,6 +63,9 @@ const MAX_STORAGE_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const ATOMIC_PUBLICATION_LOCK_SHARDS: usize = 64;
+static ATOMIC_PUBLICATION_LOCKS: LazyLock<[Mutex<()>; ATOMIC_PUBLICATION_LOCK_SHARDS]> =
+    LazyLock::new(|| std::array::from_fn(|_| Mutex::new(())));
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -162,7 +168,7 @@ pub enum StorageError {
         /// Stable invariant rejected before persistence.
         reason: String,
     },
-    /// An atomic replacement reached rename but its parent directory could not be synced.
+    /// An atomic replacement reached rename but post-commit verification or sync failed.
     #[error("storage durability is uncertain for {path}: {reason}")]
     DurabilityUncertain {
         /// Replaced artifact whose directory entry could not be confirmed durable.
@@ -3450,6 +3456,125 @@ impl StorageBackend {
             .cloned()
     }
 
+    /// Run work while holding the manifest lifecycle read lease.
+    ///
+    /// The state read lock is retained until the lifecycle lease has been
+    /// acquired, so eviction cannot remove the manifest between lookup and
+    /// lease acquisition. The lifecycle lease remains held for the complete
+    /// callback and blocks eviction while repair validates or reads chunk
+    /// paths.
+    pub(crate) fn with_manifest_io<T>(
+        &self,
+        manifest_id: &str,
+        work: impl FnOnce(&StoredManifest) -> T,
+    ) -> Result<T, StorageError> {
+        self.ensure_durability_healthy()?;
+        let state = self.state.read().expect("storage state poisoned");
+        let manifest =
+            state
+                .manifests
+                .get(manifest_id)
+                .ok_or_else(|| StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                })?;
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let io_guard = io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        let manifest = manifest.try_clone_runtime()?;
+        drop(state);
+        let result = work(&manifest);
+        drop(io_guard);
+        Ok(result)
+    }
+
+    /// Run work for the digest-selected manifest under its lifecycle read lease.
+    ///
+    /// `Ok(None)` is exact proof that the digest was absent while holding the
+    /// storage state read lock. Once present, the manifest cannot be evicted
+    /// until the callback returns.
+    pub(crate) fn with_manifest_io_by_digest<T>(
+        &self,
+        digest: &[u8; 32],
+        work: impl FnOnce(&StoredManifest) -> T,
+    ) -> Result<Option<T>, StorageError> {
+        self.ensure_durability_healthy()?;
+        let state = self.state.read().expect("storage state poisoned");
+        let Some(manifest) = state
+            .manifests
+            .values()
+            .find(|manifest| manifest.manifest_digest == *digest)
+        else {
+            return Ok(None);
+        };
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let io_guard = io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        let manifest = manifest.try_clone_runtime()?;
+        drop(state);
+        let result = work(&manifest);
+        drop(io_guard);
+        Ok(Some(result))
+    }
+
+    /// Atomically replace one chunk during lifecycle-leased repair.
+    ///
+    /// Callers must hold the owning manifest's lifecycle lease for the complete
+    /// repair operation. A failure after rename poisons storage durability and
+    /// is returned instead of being converted into a successful terminal
+    /// repair outcome.
+    pub(crate) fn replace_chunk_for_repair(
+        &self,
+        manifest: &StoredManifest,
+        chunk: &ChunkFileRecord,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
+        self.replace_chunk_for_repair_with_directory_sync(
+            manifest,
+            chunk,
+            bytes,
+            AtomicParentDirectory::sync,
+        )
+    }
+
+    fn replace_chunk_for_repair_with_directory_sync<F>(
+        &self,
+        manifest: &StoredManifest,
+        chunk: &ChunkFileRecord,
+        bytes: &[u8],
+        sync_parent: F,
+    ) -> Result<(), StorageError>
+    where
+        F: FnOnce(&AtomicParentDirectory) -> io::Result<()>,
+    {
+        self.ensure_durability_healthy()?;
+        let chunk_index = manifest
+            .chunk_files
+            .iter()
+            .position(|candidate| candidate == chunk)
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    manifest.manifest_path(),
+                    "repair chunk is not bound to the lifecycle-leased manifest",
+                )
+            })?;
+        if bytes.len() != chunk.length as usize || blake3::hash(bytes).as_bytes() != &chunk.digest {
+            return Err(StorageError::ChunkDigestMismatch { chunk_index });
+        }
+        match write_atomic_with_directory_sync(&chunk.path, bytes, sync_parent) {
+            Ok(()) => {}
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => {
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            Err(AtomicWriteError::BeforeCommit(error)) => return Err(StorageError::Io(error)),
+        }
+        self.ensure_durability_healthy()
+    }
+
     fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
     where
         F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
@@ -4371,7 +4496,9 @@ fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
 enum AtomicWriteError {
     #[error("atomic replacement failed before commit: {0}")]
     BeforeCommit(#[source] io::Error),
-    #[error("atomic replacement of {path} was renamed but directory sync failed: {source}")]
+    #[error(
+        "atomic replacement of {path} was renamed but post-commit verification or directory sync failed: {source}"
+    )]
     DurabilityUncertain {
         path: PathBuf,
         #[source]
@@ -4386,7 +4513,7 @@ impl AtomicWriteError {
             Self::DurabilityUncertain { path, source } => io::Error::new(
                 source.kind(),
                 format!(
-                    "atomic replacement of {} was renamed but directory sync failed: {source}",
+                    "atomic replacement of {} was renamed but post-commit verification or directory sync failed: {source}",
                     path.display()
                 ),
             ),
@@ -4409,7 +4536,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 fn write_atomic_classified(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
-    write_atomic_with_directory_sync(path, data, sync_directory)
+    write_atomic_with_directory_sync(path, data, AtomicParentDirectory::sync)
 }
 
 fn write_atomic_with_directory_sync<F>(
@@ -4418,7 +4545,7 @@ fn write_atomic_with_directory_sync<F>(
     sync_parent: F,
 ) -> Result<(), AtomicWriteError>
 where
-    F: FnOnce(&Path) -> io::Result<()>,
+    F: FnOnce(&AtomicParentDirectory) -> io::Result<()>,
 {
     let parent = path.parent().ok_or_else(|| {
         AtomicWriteError::BeforeCommit(io::Error::other("missing parent directory"))
@@ -4434,27 +4561,402 @@ where
         ))
     })?;
     validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
+    let parent_directory =
+        AtomicParentDirectory::open(parent).map_err(AtomicWriteError::BeforeCommit)?;
     let tmp = atomic_temp_path(path);
+    let mut cleanup_identity = None;
 
     let write_result = (|| -> Result<(), AtomicWriteError> {
         let mut file = open_atomic_temp_file(&tmp).map_err(AtomicWriteError::BeforeCommit)?;
+        cleanup_identity = Some(file.metadata().map_err(AtomicWriteError::BeforeCommit)?);
         file.write_all(data)
             .map_err(AtomicWriteError::BeforeCommit)?;
         file.sync_all().map_err(AtomicWriteError::BeforeCommit)?;
-        drop(file);
+        let synced_metadata = file.metadata().map_err(AtomicWriteError::BeforeCommit)?;
+        validate_atomic_open_file_identity(
+            &tmp,
+            &file,
+            &synced_metadata,
+            data.len(),
+            "atomic temporary",
+        )
+        .map_err(AtomicWriteError::BeforeCommit)?;
+        let _publication_guard = parent_directory
+            .lock_publication(path)
+            .map_err(AtomicWriteError::BeforeCommit)?;
+        parent_directory
+            .verify_path_identity()
+            .map_err(AtomicWriteError::BeforeCommit)?;
         validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
-        fs::rename(&tmp, path).map_err(AtomicWriteError::BeforeCommit)?;
-        sync_parent(parent).map_err(|source| AtomicWriteError::DurabilityUncertain {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        validate_atomic_open_file_identity(
+            &tmp,
+            &file,
+            &synced_metadata,
+            data.len(),
+            "atomic temporary",
+        )
+        .map_err(AtomicWriteError::BeforeCommit)?;
+        parent_directory
+            .rename_entry(&tmp, path)
+            .map_err(AtomicWriteError::BeforeCommit)?;
+
+        let mut post_commit_error = None;
+        retain_first_io_error(
+            &mut post_commit_error,
+            parent_directory.verify_path_identity(),
+        );
+        let published_metadata =
+            match validate_atomic_published_file_identity(path, &file, data.len()) {
+                Ok(metadata) => Some(metadata),
+                Err(error) => {
+                    if post_commit_error.is_none() {
+                        post_commit_error = Some(error);
+                    }
+                    None
+                }
+            };
+        retain_first_io_error(&mut post_commit_error, sync_parent(&parent_directory));
+        retain_first_io_error(
+            &mut post_commit_error,
+            parent_directory.verify_path_identity(),
+        );
+        let final_identity = match published_metadata.as_ref() {
+            Some(stable) => validate_atomic_open_file_identity(
+                path,
+                &file,
+                stable,
+                data.len(),
+                "published atomic replacement",
+            ),
+            None => validate_atomic_published_file_identity(path, &file, data.len()).map(drop),
+        };
+        retain_first_io_error(&mut post_commit_error, final_identity);
+        if let Some(source) = post_commit_error {
+            return Err(AtomicWriteError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
         Ok(())
     })();
 
     if write_result.is_err() {
-        let _ = fs::remove_file(&tmp);
+        if let Some(identity) = cleanup_identity.as_ref() {
+            remove_atomic_temp_if_owned(&tmp, identity);
+        }
     }
     write_result
+}
+
+fn retain_first_io_error(first: &mut Option<io::Error>, result: io::Result<()>) {
+    if let Err(error) = result
+        && first.is_none()
+    {
+        *first = Some(error);
+    }
+}
+
+struct AtomicParentDirectory {
+    path: PathBuf,
+    identity: fs::Metadata,
+    #[cfg(unix)]
+    handle: File,
+    #[cfg(unix)]
+    anchor: PathBuf,
+}
+
+impl AtomicParentDirectory {
+    fn open(path: &Path) -> io::Result<Self> {
+        validate_atomic_parent_ancestry(path)?;
+        #[cfg(unix)]
+        {
+            let expected = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &expected)?;
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            set_atomic_parent_open_flags(&mut options);
+            let handle = options.open(path).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to open atomic output parent `{}`: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            let identity = handle.metadata()?;
+            let linked = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &identity)?;
+            validate_atomic_parent_metadata(path, &linked)?;
+            if !metadata_identifies_same_file(&expected, &identity)
+                || !metadata_identifies_same_file(&expected, &linked)
+            {
+                return Err(io::Error::other(format!(
+                    "atomic output parent `{}` changed while opening",
+                    path.display()
+                )));
+            }
+            let anchor = atomic_parent_anchor(&handle, &identity)?;
+            validate_atomic_parent_anchor(&anchor, &identity)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                identity,
+                handle,
+                anchor,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let identity = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &identity)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                identity,
+            })
+        }
+    }
+
+    fn verify_path_identity(&self) -> io::Result<()> {
+        validate_atomic_parent_ancestry(&self.path)?;
+        let linked = fs::symlink_metadata(&self.path)?;
+        validate_atomic_parent_metadata(&self.path, &linked)?;
+        if !metadata_identifies_same_file(&self.identity, &linked) {
+            return Err(io::Error::other(format!(
+                "atomic output parent `{}` changed during replacement",
+                self.path.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            let opened = self.handle.metadata()?;
+            validate_atomic_parent_metadata(&self.path, &opened)?;
+            if !metadata_identifies_same_file(&self.identity, &opened) {
+                return Err(io::Error::other(format!(
+                    "atomic output parent handle `{}` changed during replacement",
+                    self.path.display()
+                )));
+            }
+            validate_atomic_parent_anchor(&self.anchor, &self.identity)?;
+        }
+        Ok(())
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.handle.sync_all()
+        }
+        #[cfg(not(unix))]
+        {
+            sync_directory(&self.path)
+        }
+    }
+
+    fn lock_publication(&self, output: &Path) -> io::Result<MutexGuard<'static, ()>> {
+        if output.parent() != Some(self.path.as_path()) {
+            return Err(io::Error::other(
+                "atomic publication target must belong to the pinned output parent",
+            ));
+        }
+        let mut hasher = DefaultHasher::new();
+        #[cfg(unix)]
+        {
+            self.identity.dev().hash(&mut hasher);
+            self.identity.ino().hash(&mut hasher);
+        }
+        #[cfg(not(unix))]
+        self.path.hash(&mut hasher);
+        output
+            .file_name()
+            .ok_or_else(|| io::Error::other("atomic publication target has no file name"))?
+            .hash(&mut hasher);
+        let shard = usize::try_from(hasher.finish())
+            .unwrap_or(usize::MAX)
+            .wrapping_rem(ATOMIC_PUBLICATION_LOCK_SHARDS);
+        ATOMIC_PUBLICATION_LOCKS[shard]
+            .lock()
+            .map_err(|_| io::Error::other("atomic publication lock is poisoned"))
+    }
+
+    fn rename_entry(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if from.parent() != Some(self.path.as_path()) || to.parent() != Some(self.path.as_path()) {
+            return Err(io::Error::other(
+                "atomic rename entries must share the pinned output parent",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let from_name = atomic_entry_name(from)?;
+            let to_name = atomic_entry_name(to)?;
+            validate_atomic_parent_anchor(&self.anchor, &self.identity)?;
+            fs::rename(self.anchor.join(from_name), self.anchor.join(to_name))
+        }
+        #[cfg(not(unix))]
+        {
+            fs::rename(from, to)
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn atomic_parent_anchor(handle: &File, _identity: &fs::Metadata) -> io::Result<PathBuf> {
+    // `/proc/self/fd` follows the live descriptor rather than the mutable path
+    // used to open it. Production Linux deployments therefore fail closed at
+    // startup when procfs is unavailable instead of falling back to a racy
+    // path-based replacement.
+    Ok(Path::new("/proc/self/fd").join(handle.as_raw_fd().to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_parent_anchor(_handle: &File, identity: &fs::Metadata) -> io::Result<PathBuf> {
+    // macOS exposes a volume/file-id namespace whose directory identity
+    // survives renames while the opened handle keeps the inode alive.
+    Ok(Path::new("/.vol")
+        .join(identity.dev().to_string())
+        .join(identity.ino().to_string()))
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
+))]
+fn atomic_parent_anchor(_handle: &File, _identity: &fs::Metadata) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic storage replacement requires a stable directory anchor on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn validate_atomic_parent_anchor(anchor: &Path, identity: &fs::Metadata) -> io::Result<()> {
+    let anchored = fs::metadata(anchor).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to resolve pinned atomic output parent `{}`: {error}",
+                anchor.display()
+            ),
+        )
+    })?;
+    validate_atomic_parent_metadata(anchor, &anchored)?;
+    if !metadata_identifies_same_file(identity, &anchored) {
+        return Err(io::Error::other(format!(
+            "pinned atomic output parent anchor `{}` changed identity",
+            anchor.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_atomic_parent_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::other(format!(
+            "atomic output parent `{}` must be a real directory",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn atomic_entry_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
+    path.file_name()
+        .ok_or_else(|| io::Error::other("atomic rename entry has no file name"))
+}
+
+fn validate_atomic_open_file_identity(
+    path: &Path,
+    file: &File,
+    stable: &fs::Metadata,
+    expected_len: usize,
+    label: &str,
+) -> io::Result<()> {
+    let opened = file.metadata()?;
+    let linked = fs::symlink_metadata(path)?;
+    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+        return Err(io::Error::other(format!(
+            "{label} `{}` must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let expected_len = u64::try_from(expected_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "atomic payload is too large"))?;
+    if opened.len() != expected_len || linked.len() != expected_len {
+        return Err(io::Error::other(format!(
+            "{label} `{}` changed length before commit",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if opened.nlink() != 1 || linked.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "{label} `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    if !metadata_stable_during_read(stable, &opened)
+        || !metadata_stable_during_read(&opened, &linked)
+    {
+        return Err(io::Error::other(format!(
+            "{label} `{}` changed identity or metadata before commit",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_atomic_published_file_identity(
+    path: &Path,
+    file: &File,
+    expected_len: usize,
+) -> io::Result<fs::Metadata> {
+    let opened = file.metadata()?;
+    let linked = fs::symlink_metadata(path)?;
+    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let expected_len = u64::try_from(expected_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "atomic payload is too large"))?;
+    if opened.len() != expected_len || linked.len() != expected_len {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` changed length after commit",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if opened.nlink() != 1 || linked.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    if !metadata_identifies_same_file(&opened, &linked) {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` does not match the committed inode",
+            path.display()
+        )));
+    }
+    Ok(opened)
+}
+
+fn remove_atomic_temp_if_owned(path: &Path, identity: &fs::Metadata) {
+    let Ok(linked) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if linked.file_type().is_symlink()
+        || !linked.is_file()
+        || !metadata_identifies_same_file(identity, &linked)
+    {
+        return;
+    }
+    #[cfg(unix)]
+    if linked.nlink() != 1 {
+        return;
+    }
+    let _ = fs::remove_file(path);
 }
 
 fn atomic_temp_path(path: &Path) -> PathBuf {
@@ -4517,35 +5019,40 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
     }
 
     if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
+        validate_atomic_parent_ancestry(parent)?;
+    }
+    Ok(())
+}
+
+fn validate_atomic_parent_ancestry(parent: &Path) -> io::Result<()> {
+    for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(io::Error::other(format!(
+                        "output parent `{}` must not be a symlink",
+                        ancestor.display()
+                    )));
+                }
+                if !metadata.is_dir() {
+                    return Err(io::Error::other(format!(
+                        "output parent `{}` must be a directory",
+                        ancestor.display()
+                    )));
+                }
             }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        )));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        )));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "failed to inspect output parent `{}`: {err}",
-                            ancestor.display()
-                        ),
-                    ));
-                }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to inspect output parent `{}`: {err}",
+                        ancestor.display()
+                    ),
+                ));
             }
         }
     }
@@ -4555,6 +5062,11 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(unix)]
+fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
 }
 
 #[cfg(not(unix))]
@@ -4569,7 +5081,6 @@ fn platform_no_follow_flag() -> i32 {
     unix,
     not(any(target_os = "linux", target_os = "android")),
     any(
-        target_os = "macos",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "openbsd",
@@ -4579,6 +5090,13 @@ fn platform_no_follow_flag() -> i32 {
 ))]
 fn platform_no_follow_flag() -> i32 {
     0x100
+}
+
+#[cfg(target_os = "macos")]
+fn platform_no_follow_flag() -> i32 {
+    // Unlike O_NOFOLLOW, O_NOFOLLOW_ANY rejects a symlink in every path
+    // component during the open syscall and closes the validation/open race.
+    0x2000_0000
 }
 
 #[cfg(all(
@@ -4595,6 +5113,24 @@ fn platform_no_follow_flag() -> i32 {
     ))
 ))]
 fn platform_no_follow_flag() -> i32 {
+    0
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_directory_only_flag() -> i32 {
+    0o200000
+}
+
+#[cfg(target_os = "macos")]
+fn platform_directory_only_flag() -> i32 {
+    0x0010_0000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
+))]
+fn platform_directory_only_flag() -> i32 {
     0
 }
 
@@ -4789,6 +5325,15 @@ fn read_verified_chunk(
         return Err(ChunkStoreError::DigestMismatch { chunk_index });
     }
     Ok(bytes)
+}
+
+/// Read one complete chunk through the same no-follow, single-link, stable
+/// inode/metadata, exact-length, and digest checks used by normal payload and
+/// PDP witness reads.
+pub(crate) fn read_verified_chunk_file(
+    record: &ChunkFileRecord,
+) -> Result<Vec<u8>, ChunkStoreError> {
+    read_verified_chunk(record, 0)
 }
 
 #[cfg(test)]
@@ -7528,6 +8073,124 @@ mod tests {
         assert!(leftovers.is_empty(), "temporary file must not remain");
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn pinned_atomic_parent_rename_cannot_be_redirected_by_path_swap() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let parent = root.join("live");
+        let moved_parent = root.join("moved");
+        let redirect = root.join("redirect");
+        fs::create_dir(&parent).expect("create live parent");
+        fs::create_dir(&redirect).expect("create redirect parent");
+        let temporary = parent.join("index.tmp");
+        let destination = parent.join("index");
+        fs::write(&temporary, b"pinned").expect("write pinned temporary");
+        let pinned = AtomicParentDirectory::open(&parent).expect("pin live parent");
+
+        fs::rename(&parent, &moved_parent).expect("move pinned parent");
+        std::os::unix::fs::symlink(&redirect, &parent).expect("redirect live parent path");
+        assert!(
+            pinned.verify_path_identity().is_err(),
+            "path identity change must be detected"
+        );
+        pinned
+            .rename_entry(&temporary, &destination)
+            .expect("descriptor-relative rename remains inside pinned directory");
+
+        assert_eq!(
+            fs::read(moved_parent.join("index")).expect("read pinned destination"),
+            b"pinned"
+        );
+        assert!(
+            !redirect.join("index").exists(),
+            "swapped path must not receive the committed entry"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn post_rename_parent_path_swap_is_durability_uncertain_not_precommit() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let parent = root.join("live");
+        let moved_parent = root.join("moved");
+        let redirect = root.join("redirect");
+        fs::create_dir(&parent).expect("create live parent");
+        fs::create_dir(&redirect).expect("create redirect parent");
+        let target = parent.join("index");
+        fs::write(&target, b"old").expect("seed target");
+
+        let error = write_atomic_with_directory_sync(&target, b"new", |pinned| {
+            fs::rename(&parent, &moved_parent)?;
+            std::os::unix::fs::symlink(&redirect, &parent)?;
+            pinned.sync()
+        })
+        .expect_err("post-rename parent identity loss must be uncertain");
+
+        assert!(matches!(
+            error,
+            AtomicWriteError::DurabilityUncertain { .. }
+        ));
+        assert_eq!(
+            fs::read(moved_parent.join("index")).expect("read committed replacement"),
+            b"new"
+        );
+        assert!(
+            !redirect.join("index").exists(),
+            "swapped parent must not receive the replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_temp_commit_validation_rejects_path_replacement_and_hardlinks() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let temporary = root.join("index.tmp");
+        let displaced = root.join("index.displaced");
+        let mut file = open_atomic_temp_file(&temporary).expect("open atomic temporary");
+        file.write_all(b"stable").expect("write temporary");
+        file.sync_all().expect("sync temporary");
+        let stable = file.metadata().expect("capture stable temporary identity");
+        validate_atomic_open_file_identity(
+            &temporary,
+            &file,
+            &stable,
+            b"stable".len(),
+            "atomic temporary",
+        )
+        .expect("stable temporary is accepted");
+
+        fs::hard_link(&temporary, root.join("index.alias")).expect("hard-link temporary");
+        assert!(
+            validate_atomic_open_file_identity(
+                &temporary,
+                &file,
+                &stable,
+                b"stable".len(),
+                "atomic temporary",
+            )
+            .is_err(),
+            "a second hard link must invalidate the temporary"
+        );
+        fs::remove_file(root.join("index.alias")).expect("remove hard-link alias");
+
+        fs::rename(&temporary, &displaced).expect("displace opened temporary");
+        fs::write(&temporary, b"stable").expect("replace temporary path with same-size inode");
+        assert!(
+            validate_atomic_open_file_identity(
+                &temporary,
+                &file,
+                &stable,
+                b"stable".len(),
+                "atomic temporary",
+            )
+            .is_err(),
+            "same-size path replacement must not retain trusted identity"
+        );
+    }
+
     #[test]
     fn uncertain_commit_fail_stops_subsequent_storage_operations() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7549,6 +8212,34 @@ mod tests {
         let mut reader = &payload[..];
         assert!(matches!(
             backend.ingest_manifest(&manifest, &plan, &mut reader),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
+    }
+
+    #[test]
+    fn repair_replacement_fail_stops_after_post_rename_sync_failure() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"repair replacement durability payload";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD5);
+
+        let replacement = backend
+            .with_manifest_io(&manifest_id, |manifest| {
+                let chunk = manifest.chunk(0).expect("repair chunk").clone();
+                backend.replace_chunk_for_repair_with_directory_sync(
+                    manifest,
+                    &chunk,
+                    payload,
+                    |_| Err(io::Error::other("injected repair directory sync failure")),
+                )
+            })
+            .expect("acquire repair lifecycle lease");
+
+        assert!(matches!(
+            replacement,
+            Err(StorageError::DurabilityUncertain { .. })
+        ));
+        assert!(matches!(
+            backend.ensure_durability_healthy(),
             Err(StorageError::DurabilityPoisoned { .. })
         ));
     }

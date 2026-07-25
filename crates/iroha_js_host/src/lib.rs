@@ -94,6 +94,7 @@ use iroha_data_model::{
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
+    governance::types::{ProposalKind, ValidationFeePolicyProposal},
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
         Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
@@ -103,8 +104,8 @@ use iroha_data_model::{
         Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
-            VotingMode,
+            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
+            ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -166,6 +167,7 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action, Repeats},
     },
+    validation_fee::ValidationFeePolicyV1,
     zk::{ZkAcePublicInputsV1, ZkAceWitnessV1},
 };
 use iroha_primitives::{
@@ -286,7 +288,18 @@ fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u
     if bytes.iter().all(|byte| *byte == 0) {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{label} must be a non-zero 32-byte Iroha hash"),
+            format!("{label} must be a non-zero 32-byte digest"),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validation_fee_iroha_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
+    let bytes = validation_fee_fixed_hash(value, label)?;
+    if bytes[31] & 1 == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must carry the canonical Iroha hash marker"),
         ));
     }
     Ok(bytes)
@@ -306,7 +319,7 @@ pub fn validation_fee_current_policy_proof_request_v1(
         ));
     }
     let _ =
-        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+        validation_fee_iroha_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
     let request = iroha::client::ValidationFeeCurrentPolicyProofRequestV1 {
         version: iroha::client::VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
         trusted_checkpoint_height,
@@ -355,9 +368,9 @@ pub fn validation_fee_verify_current_policy_proof_v1(
             format!("chainId is invalid: {error}"),
         )
     })?;
-    let bound_genesis_hash = validation_fee_fixed_hash(&bound_genesis_hash, "boundGenesisHash")?;
+    let bound_genesis_hash = validation_fee_iroha_hash(&bound_genesis_hash, "boundGenesisHash")?;
     let policy_chain_genesis_hash =
-        validation_fee_fixed_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
+        validation_fee_iroha_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
     let trusted_checkpoint_height = trusted_checkpoint_height.0;
     if trusted_checkpoint_height == 0 {
         return Err(napi::Error::new(
@@ -366,7 +379,7 @@ pub fn validation_fee_verify_current_policy_proof_v1(
         ));
     }
     let trusted_checkpoint_context_id =
-        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+        validation_fee_iroha_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
     let proof: iroha::client::ValidationFeeCurrentPolicyProofV1 =
         decode_from_bytes(proof_norito.as_ref()).map_err(|error| {
             napi::Error::new(
@@ -1979,6 +1992,27 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
     }
 }
 
+/// Compute the canonical native fingerprint for one validation-fee policy proposal.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn validation_fee_policy_proposal_fingerprint_v1(
+    policy_json: String,
+    payout_lifecycle_proposal_id: Option<Uint8Array>,
+) -> napi::Result<Buffer> {
+    let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
+    let policy = validation_fee_policy_from_json_value(policy_value)?;
+    let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
+        .map(|value| validation_fee_fixed_hash(&value, "payout lifecycle proposal id"))
+        .transpose()?;
+    validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
+    let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        policy,
+        payout_lifecycle_proposal_id,
+    })
+    .fingerprint();
+    Ok(Buffer::from(fingerprint.to_vec()))
+}
+
 /// Relay envelope fixture used in Nexus cross-lane verification tests.
 #[napi(object)]
 pub struct JsLaneRelaySample {
@@ -2251,6 +2285,9 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
     if let Ok(instruction) = decode_from_bytes::<InstructionBox>(bytes) {
         return Ok(instruction);
+    }
+    if let Ok(instruction) = decode_from_bytes::<ProposeValidationFeePolicy>(bytes) {
+        return Ok(instruction.into());
     }
     let view = norito_core::from_bytes_view(bytes)?;
     let payload = view.as_bytes();
@@ -6289,22 +6326,13 @@ fn validate_sorafs_reference_governance_cid<'a>(
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "order" | "order-request" | "request" | "orderbook-order-request" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
-        }
-        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
-        }
-        "trade" | "trade-event" | "orderbook-trade-event" => {
-            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
-        }
-        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
+    match kind {
+        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
+        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
+        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
+        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
+        "runtime-snapshot" => Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot),
         _ => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook payload kind `{kind}`"),
@@ -6313,8 +6341,7 @@ fn parse_sorafs_orderbook_payload_kind(
 }
 
 fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
-    let normalized = side.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match side {
         "bid" => Ok(OrderSideV1::Bid),
         "ask" => Ok(OrderSideV1::Ask),
         _ => Err(napi::Error::new(
@@ -6325,8 +6352,7 @@ fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
 }
 
 fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
-    let normalized = tier.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match tier {
         "hot" => Ok(OrderTierV1::Hot),
         "warm" => Ok(OrderTierV1::Warm),
         "archive" => Ok(OrderTierV1::Archive),
@@ -6338,9 +6364,8 @@ fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
 }
 
 fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
-    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+    match reason {
+        "owner-requested" => Ok(OrderCancelReasonV1::OwnerRequested),
         "expired" => Ok(OrderCancelReasonV1::Expired),
         "governance" => Ok(OrderCancelReasonV1::Governance),
         "replaced" => Ok(OrderCancelReasonV1::Replaced),
@@ -6437,6 +6462,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     quantity_gib: String,
     remaining_gib: Option<String>,
     owner_account: Uint8Array,
+    provider_id: Uint8Array,
     expiry_unix: String,
     nonce: String,
     maker_fee_bps: u32,
@@ -6464,8 +6490,21 @@ pub fn sorafs_build_signed_orderbook_order_request(
             ),
         ));
     }
+    let side = parse_sorafs_orderbook_side(&side)?;
+    let provider_id = if provider_id.is_empty() {
+        None
+    } else {
+        let provider_id = parse_sorafs_fixed32(&provider_id, "provider_id")?;
+        if provider_id == [0; 32] {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "provider_id must not be all zero",
+            ));
+        }
+        Some(provider_id)
+    };
     let fields = OrderbookOrderRequestFieldsV1 {
-        side: parse_sorafs_orderbook_side(&side)?,
+        side,
         tier: parse_sorafs_orderbook_tier(&tier)?,
         price_per_gib: parse_sorafs_xor_quantity(&price_per_gib, "price_per_gib")?,
         quantity_gib,
@@ -6474,6 +6513,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
             None => quantity_gib,
         },
         owner_account,
+        provider_id,
         expiry_unix: parse_sorafs_decimal_u64(&expiry_unix, "expiry_unix")?,
         nonce,
         maker_fee_bps: parse_sorafs_fee_bps(maker_fee_bps, "maker_fee_bps")?,
@@ -6586,11 +6626,10 @@ enum SorafsPdpPayloadKind {
 }
 
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKind> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
-        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
-        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+    match kind {
+        "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" => Ok(SorafsPdpPayloadKind::Proof),
         _ => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS PDP payload kind `{kind}`"),
@@ -6767,20 +6806,25 @@ mod sorafs_orderbook_validation_tests {
     use super::*;
 
     #[test]
-    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert_eq!(
-            parse_sorafs_orderbook_payload_kind("order").unwrap(),
+            parse_sorafs_orderbook_payload_kind("order-request").unwrap(),
             OrderbookValidationPayloadKindV1::OrderRequest
         );
         assert_eq!(
-            parse_sorafs_orderbook_payload_kind("settlement_channel").unwrap(),
+            parse_sorafs_orderbook_payload_kind("settlement-channel").unwrap(),
             OrderbookValidationPayloadKindV1::SettlementChannel
         );
         assert_eq!(
             parse_sorafs_orderbook_payload_kind("runtime-snapshot").unwrap(),
             OrderbookValidationPayloadKindV1::RuntimeSnapshot
         );
-        assert!(parse_sorafs_orderbook_payload_kind("unknown").is_err());
+        for retired in ["order", "order_request", " ORDER-REQUEST", "request"] {
+            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
+        }
+        assert!(parse_sorafs_orderbook_side("Bid").is_err());
+        assert!(parse_sorafs_orderbook_tier(" hot").is_err());
+        assert!(parse_sorafs_orderbook_cancel_reason("owner_requested").is_err());
     }
 
     #[test]
@@ -6798,20 +6842,22 @@ mod sorafs_orderbook_validation_tests {
     }
 
     #[test]
-    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
             parse_sorafs_pdp_payload_kind("commitment").unwrap(),
             SorafsPdpPayloadKind::Commitment
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp_challenge").unwrap(),
+            parse_sorafs_pdp_payload_kind("challenge").unwrap(),
             SorafsPdpPayloadKind::Challenge
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp-proof").unwrap(),
+            parse_sorafs_pdp_payload_kind("proof").unwrap(),
             SorafsPdpPayloadKind::Proof
         );
-        assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+        for retired in ["pdp-commitment", "pdp_challenge", " PROOF", "Proof"] {
+            assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
+        }
     }
 
     #[test]
@@ -7562,6 +7608,214 @@ fn voting_mode_to_json(mode: VotingMode) -> &'static str {
     }
 }
 
+fn require_exact_json_fields(
+    fields: &json::Map,
+    expected: &[&str],
+    context: &str,
+) -> napi::Result<()> {
+    let missing = expected
+        .iter()
+        .copied()
+        .filter(|key| !fields.contains_key(*key))
+        .collect::<Vec<_>>();
+    let unexpected = fields
+        .keys()
+        .filter(|key| !expected.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(napi::Error::new(
+        napi::Status::InvalidArg,
+        format!(
+            "{context} must contain exactly [{}]; missing [{}], unexpected [{}]",
+            expected.join(", "),
+            missing.join(", "),
+            unexpected.join(", ")
+        ),
+    ))
+}
+
+fn validation_fee_policy_from_json_value(
+    value: json::Value,
+) -> napi::Result<ValidationFeePolicyV1> {
+    const POLICY_FIELDS: &[&str] = &[
+        "schema_version",
+        "chain_id",
+        "genesis_hash",
+        "policy_version",
+        "previous_policy_hash",
+        "ds_asset_id",
+        "ds_scale",
+        "fee",
+        "treasury_account_id",
+        "charging_mode",
+        "effective_from_height",
+        "expires_after_height",
+        "exemption_classes",
+        "treasury_payout_binding",
+    ];
+    const PAYOUT_BINDING_FIELDS: &[&str] = &[
+        "contract_address",
+        "code_hash",
+        "entrypoint",
+        "treasury_account_id",
+        "sbd_asset_id",
+        "xor_asset_id",
+        "pool_vault_account_id",
+        "batch_sbd",
+        "min_xor_out",
+        "max_xor_out",
+        "recipients",
+    ];
+    const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
+
+    let json::Value::Object(fields) = &value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "validation-fee policy must be an object",
+        ));
+    };
+    require_exact_json_fields(fields, POLICY_FIELDS, "validation-fee policy")?;
+    if let Some(binding) = fields.get("treasury_payout_binding")
+        && !binding.is_null()
+    {
+        let json::Value::Object(binding_fields) = binding else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "validation-fee policy.treasury_payout_binding must be an object or null",
+            ));
+        };
+        require_exact_json_fields(
+            binding_fields,
+            PAYOUT_BINDING_FIELDS,
+            "validation-fee policy.treasury_payout_binding",
+        )?;
+        let Some(json::Value::Array(recipients)) = binding_fields.get("recipients") else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "validation-fee policy.treasury_payout_binding.recipients must be an array",
+            ));
+        };
+        for (index, recipient) in recipients.iter().enumerate() {
+            let json::Value::Object(recipient_fields) = recipient else {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "validation-fee policy.treasury_payout_binding.recipients[{index}] must be an object"
+                    ),
+                ));
+            };
+            require_exact_json_fields(
+                recipient_fields,
+                RECIPIENT_FIELDS,
+                &format!("validation-fee policy.treasury_payout_binding.recipients[{index}]"),
+            )?;
+        }
+    }
+    json::from_value(value).map_err(norito_to_napi)
+}
+
+fn validate_validation_fee_policy_proposal(
+    policy: &ValidationFeePolicyV1,
+    payout_lifecycle_proposal_id: Option<&[u8; 32]>,
+) -> napi::Result<()> {
+    if let Some(reason) = policy.policy_invariant_error() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid validation-fee policy: {reason}"),
+        ));
+    }
+    match (
+        policy.treasury_payout_binding.as_ref(),
+        payout_lifecycle_proposal_id,
+    ) {
+        (None, None) => Ok(()),
+        (Some(_), Some(id)) if *id != [0; 32] => Ok(()),
+        (Some(_), _) => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "payout-enabled validation-fee policy requires a non-zero lifecycle proposal id",
+        )),
+        (None, Some(_)) => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "validation-fee policy without a payout binding cannot select a lifecycle proposal",
+        )),
+    }
+}
+
+fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    const INSTRUCTION_FIELDS: &[&str] = &[
+        "policy",
+        "payout_lifecycle_proposal_id",
+        "referendum_window",
+        "mode",
+    ];
+    let json::Value::Object(mut fields) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "ProposeValidationFeePolicy must be an object",
+        ));
+    };
+    require_exact_json_fields(&fields, INSTRUCTION_FIELDS, "ProposeValidationFeePolicy")?;
+    let policy = validation_fee_policy_from_json_value(required_value(
+        &mut fields,
+        "policy",
+        "ProposeValidationFeePolicy",
+    )?)?;
+    let payout_lifecycle_proposal_id = match required_value(
+        &mut fields,
+        "payout_lifecycle_proposal_id",
+        "ProposeValidationFeePolicy",
+    )? {
+        json::Value::Null => None,
+        value => Some(json::from_value::<[u8; 32]>(value).map_err(norito_to_napi)?),
+    };
+    let referendum_window = match required_value(
+        &mut fields,
+        "referendum_window",
+        "ProposeValidationFeePolicy",
+    )? {
+        json::Value::Null => None,
+        json::Value::Object(window) => {
+            require_exact_json_fields(
+                &window,
+                &["lower", "upper"],
+                "ProposeValidationFeePolicy.referendum_window",
+            )?;
+            Some(json::from_value(json::Value::Object(window)).map_err(norito_to_napi)?)
+        }
+        other => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "ProposeValidationFeePolicy.referendum_window must be an object or null (found {other:?})"
+                ),
+            ));
+        }
+    };
+    let mode = match required_value(&mut fields, "mode", "ProposeValidationFeePolicy")? {
+        json::Value::String(mode) if mode == "Plain" => Some(VotingMode::Plain),
+        json::Value::Null => None,
+        other => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "ProposeValidationFeePolicy.mode must be exactly \"Plain\" or null (found {other:?})"
+                ),
+            ));
+        }
+    };
+    validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
+    Ok(ProposeValidationFeePolicy {
+        policy,
+        payout_lifecycle_proposal_id,
+        referendum_window,
+        mode,
+    }
+    .into())
+}
+
 fn instruction_from_json(payload: &str) -> napi::Result<InstructionBox> {
     let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
     value_to_instruction(value)
@@ -7852,7 +8106,9 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     let requires_explicit_parser = matches!(
         &value,
         json::Value::Object(map)
-            if map.contains_key("Register") || map.contains_key("Settlement")
+            if map.contains_key("Register")
+                || map.contains_key("Settlement")
+                || map.contains_key("ProposeValidationFeePolicy")
     );
     if !requires_explicit_parser {
         if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
@@ -7861,6 +8117,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(proposal_value) = map.remove("ProposeValidationFeePolicy") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "ProposeValidationFeePolicy instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return validation_fee_policy_instruction_from_json(proposal_value);
+            }
             if let Some(settlement_value) = map.remove("Settlement") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -10057,6 +10325,37 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             norito_json!({
                 "proposal": submit.proposal,
             }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(propose) = instruction_ref
+        .as_any()
+        .downcast_ref::<ProposeValidationFeePolicy>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "policy".to_owned(),
+            json::to_value(&propose.policy).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "payout_lifecycle_proposal_id".to_owned(),
+            json::to_value(&propose.payout_lifecycle_proposal_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "referendum_window".to_owned(),
+            json::to_value(&propose.referendum_window).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "mode".to_owned(),
+            propose.mode.map_or(json::Value::Null, |mode| {
+                json::Value::String(voting_mode_to_json(mode).to_owned())
+            }),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "ProposeValidationFeePolicy".to_owned(),
+            json::Value::Object(inner),
         );
         return Ok(json::Value::Object(outer));
     }
@@ -15250,14 +15549,20 @@ pub fn build_precommit_trigger_action(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn validation_fee_hash_accepts_nonzero_even_ending_bytes() {
+    fn validation_fee_hash_roles_distinguish_raw_digests_from_iroha_hashes() {
         let hash = Uint8Array::from(vec![0x02; 32]);
         assert_eq!(
             validation_fee_fixed_hash(&hash, "checkpoint")
-                .expect("Iroha hashes have no parity validity bit"),
+                .expect("non-zero even-ending raw digest is valid"),
             [0x02; 32]
         );
         assert!(validation_fee_fixed_hash(&Uint8Array::from(vec![0; 32]), "checkpoint").is_err());
+        assert!(validation_fee_iroha_hash(&hash, "checkpoint").is_err());
+        assert_eq!(
+            validation_fee_iroha_hash(&Uint8Array::from(vec![0x03; 32]), "checkpoint")
+                .expect("marked Iroha hash"),
+            [0x03; 32],
+        );
     }
 
     fn replication_order_with_timestamps(issued_at: u64, deadline_at: u64) -> ReplicationOrderV1 {
@@ -15856,8 +16161,8 @@ mod tests {
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
                 AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
-                VotingMode,
+                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
+                ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -15887,6 +16192,14 @@ mod tests {
             TransactionSubmissionReceiptPayload,
         },
         trigger::TriggerId,
+        validation_fee::{
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
+            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
+            initial_validation_fee_amount, validation_fee_payout_batch_sbd,
+            validation_fee_payout_max_xor, validation_fee_payout_min_xor,
+            validation_fee_payout_recipient_share,
+        },
     };
     use norito::{
         NoritoDeserialize,
@@ -22325,6 +22638,267 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize governance instruction");
         assert_eq!(reconstructed, instruction);
+    }
+
+    fn validation_fee_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("validation-fee fixture keypair");
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
+            name.parse().expect("validation-fee fixture asset name"),
+        )
+    }
+
+    fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("validation-fee payout contract address");
+        ValidationFeeTreasuryPayoutBindingV1 {
+            treasury_account_id: contract_address.subject_id(),
+            contract_address,
+            code_hash: [0x34; 32],
+            entrypoint: "autonomous_validation_fee_tick"
+                .parse()
+                .expect("validation-fee payout entrypoint"),
+            sbd_asset_id: validation_fee_asset("cbsi", "sbd"),
+            xor_asset_id: validation_fee_asset("xor", "xor"),
+            pool_vault_account_id: validation_fee_account(2),
+            batch_sbd: validation_fee_payout_batch_sbd(),
+            min_xor_out: validation_fee_payout_min_xor(),
+            max_xor_out: validation_fee_payout_max_xor(),
+            recipients: (3..=6)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: validation_fee_account(seed),
+                    share: validation_fee_payout_recipient_share(),
+                })
+                .collect(),
+        }
+    }
+
+    fn validation_fee_policy_fixture(
+        payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
+    ) -> ValidationFeePolicyV1 {
+        let treasury_account_id = payout_binding.as_ref().map_or_else(
+            || validation_fee_account(1),
+            |binding| binding.treasury_account_id.clone(),
+        );
+        ValidationFeePolicyV1 {
+            schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            chain_id: ChainId::from("validation-fee-js-test"),
+            genesis_hash: [0x12; 32],
+            policy_version: 1,
+            previous_policy_hash: None,
+            ds_asset_id: validation_fee_asset("cbsi", "sbd"),
+            ds_scale: VALIDATION_FEE_DS_SCALE,
+            fee: initial_validation_fee_amount(),
+            treasury_account_id,
+            charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
+            effective_from_height: 121_100,
+            expires_after_height: None,
+            exemption_classes: payout_binding
+                .as_ref()
+                .map(|_| vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()])
+                .unwrap_or_default(),
+            treasury_payout_binding: payout_binding,
+        }
+    }
+
+    fn assert_validation_fee_policy_instruction_roundtrip(
+        policy: ValidationFeePolicyV1,
+        payout_lifecycle_proposal_id: Option<[u8; 32]>,
+    ) {
+        const WIRE_ID: &str = "iroha_data_model::isi::governance::ProposeValidationFeePolicy";
+        let instruction: InstructionBox = ProposeValidationFeePolicy {
+            policy,
+            payout_lifecycle_proposal_id,
+            referendum_window: Some(AtWindow {
+                lower: 100,
+                upper: 140,
+            }),
+            mode: Some(VotingMode::Plain),
+        }
+        .into();
+        let original_dyn_bytes = InstructionTrait::dyn_encode(&*instruction);
+        assert_eq!(InstructionTrait::id(&*instruction), WIRE_ID);
+
+        let framed = iroha_data_model::isi::frame_instruction_payload(
+            WIRE_ID,
+            original_dyn_bytes.as_slice(),
+        )
+        .expect("frame validation-fee instruction");
+        let decoded =
+            decode_instruction_aligned(&framed).expect("decode framed validation-fee instruction");
+        assert_eq!(InstructionTrait::id(&*decoded), WIRE_ID);
+        assert_eq!(
+            InstructionTrait::dyn_encode(&*decoded),
+            original_dyn_bytes,
+            "typed frame decode must preserve exact native instruction bytes"
+        );
+
+        let json_value =
+            instruction_to_json_value(&decoded).expect("render validation-fee instruction JSON");
+        let json_payload = json::to_json(&json_value).expect("encode validation-fee JSON");
+        let reconstructed =
+            value_to_instruction(json_value).expect("rebuild validation-fee instruction");
+        assert_eq!(InstructionTrait::id(&*reconstructed), WIRE_ID);
+        assert_eq!(
+            InstructionTrait::dyn_encode(&*reconstructed),
+            original_dyn_bytes,
+            "decoded JSON must rebuild the exact native instruction bytes"
+        );
+
+        let draft = build_transaction_payload_from_instructions_json(
+            ChainId::from("validation-fee-js-test"),
+            validation_fee_account(7),
+            vec![json_payload],
+            authority_fee_payment_json(),
+            None,
+            Some(1_700_000_000_000),
+            Some(60_000),
+            Some(9),
+        )
+        .expect("build validation-fee transaction payload");
+        let payload: TransactionPayload =
+            json::from_json(&draft.payload_json).expect("decode validation-fee draft payload");
+        let Executable::Instructions(batch) = &payload.instructions else {
+            panic!("validation-fee draft must contain an instruction batch")
+        };
+        let rebuilt = batch
+            .iter()
+            .next()
+            .expect("validation-fee draft instruction");
+        assert_eq!(InstructionTrait::id(&**rebuilt), WIRE_ID);
+        assert_eq!(
+            InstructionTrait::dyn_encode(&**rebuilt),
+            original_dyn_bytes,
+            "buildTransactionPayload path must preserve exact native instruction bytes"
+        );
+    }
+
+    #[test]
+    fn validation_fee_policy_instruction_roundtrips_without_payout() {
+        assert_validation_fee_policy_instruction_roundtrip(
+            validation_fee_policy_fixture(None),
+            None,
+        );
+    }
+
+    #[test]
+    fn validation_fee_policy_instruction_roundtrips_with_payout_and_even_hashes() {
+        assert_validation_fee_policy_instruction_roundtrip(
+            validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
+            Some([0x56; 32]),
+        );
+    }
+
+    #[test]
+    fn validation_fee_policy_instruction_json_rejects_unknown_and_legacy_fields() {
+        let instruction: InstructionBox = ProposeValidationFeePolicy {
+            policy: validation_fee_policy_fixture(None),
+            payout_lifecycle_proposal_id: None,
+            referendum_window: Some(AtWindow {
+                lower: 100,
+                upper: 140,
+            }),
+            mode: Some(VotingMode::Plain),
+        }
+        .into();
+        let mut value =
+            instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
+        value
+            .get_mut("ProposeValidationFeePolicy")
+            .and_then(json::Value::as_object_mut)
+            .expect("validation-fee instruction fields")
+            .insert("window".to_owned(), json::Value::Null);
+        let error = value_to_instruction(value).expect_err("legacy window alias must be rejected");
+        assert!(error.reason.contains("must contain exactly"));
+
+        let mut value =
+            instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
+        let policy = value
+            .get_mut("ProposeValidationFeePolicy")
+            .and_then(|value| value.get_mut("policy"))
+            .and_then(json::Value::as_object_mut)
+            .expect("validation-fee policy fields");
+        policy.remove("chain_id");
+        policy.insert(
+            "network_id".to_owned(),
+            json::Value::String("legacy".to_owned()),
+        );
+        let error =
+            value_to_instruction(value).expect_err("legacy network_id alias must be rejected");
+        assert!(error.reason.contains("must contain exactly"));
+    }
+
+    #[test]
+    fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
+        for (policy, payout_lifecycle_proposal_id) in [
+            (validation_fee_policy_fixture(None), None),
+            (
+                validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture())),
+                Some([0x56; 32]),
+            ),
+        ] {
+            let expected = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                policy: policy.clone(),
+                payout_lifecycle_proposal_id,
+            })
+            .fingerprint();
+            let policy_json = json::to_json(&policy).expect("validation-fee policy JSON");
+            let actual = validation_fee_policy_proposal_fingerprint_v1(
+                policy_json,
+                payout_lifecycle_proposal_id.map(|id| Uint8Array::from(id.to_vec())),
+            )
+            .expect("validation-fee policy fingerprint");
+            assert_eq!(actual.as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn validation_fee_policy_proposal_fingerprint_rejects_unknown_policy_fields() {
+        let policy = validation_fee_policy_fixture(None);
+        let mut value = json::to_value(&policy).expect("validation-fee policy JSON");
+        value
+            .as_object_mut()
+            .expect("validation-fee policy fields")
+            .insert(
+                "fee_asset_id".to_owned(),
+                json::Value::String("legacy".to_owned()),
+            );
+        let result = validation_fee_policy_proposal_fingerprint_v1(
+            json::to_json(&value).expect("legacy validation-fee policy JSON"),
+            None,
+        );
+        let error = match result {
+            Ok(_) => panic!("legacy policy alias must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.reason.contains("must contain exactly"));
+    }
+
+    #[test]
+    fn validation_fee_policy_proposal_fingerprint_rejects_wrong_contract_subject() {
+        let mut policy =
+            validation_fee_policy_fixture(Some(validation_fee_payout_binding_fixture()));
+        policy.treasury_account_id = validation_fee_account(9);
+        let result = validation_fee_policy_proposal_fingerprint_v1(
+            json::to_json(&policy).expect("mismatched validation-fee policy JSON"),
+            Some(Uint8Array::from(vec![0x56; 32])),
+        );
+        let error = match result {
+            Ok(_) => panic!("mismatched payout contract subject must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .reason
+                .contains("contract subject must equal the policy treasury")
+        );
     }
 
     #[test]

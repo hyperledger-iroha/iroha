@@ -69,7 +69,16 @@ test("canonical request signing: headers include a verifiable signature", () => 
     timestampMs,
     nonce: `${nonce}-i105`,
   });
-  assert.equal(i105Headers["X-Iroha-Account"], accountId);
+  assert.notEqual(i105Headers["X-Iroha-Account"], accountId);
+  assert.equal(
+    Buffer.from(i105Headers["X-Iroha-Account"], "latin1").toString("utf8"),
+    accountId,
+  );
+  assert.ok(
+    Array.from(i105Headers["X-Iroha-Account"]).every(
+      (character) => character.codePointAt(0) <= 0xff,
+    ),
+  );
 });
 
 test("canonical request signing: rejects padded auth fields", async () => {

@@ -93,9 +93,9 @@ use crate::{
     lane_drain::LaneDrainSigningGuard,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
-        CertifiedMergeSidecarMessage, ChunkIngestOutcome, MergeSidecarError, MergeSidecarPost,
-        MergeSidecarTransport, MergeSigningContextV1, MergeSigningGuard,
-        certified_merge_reference_digest, certified_merge_sidecar_holders,
+        CertifiedMergeSidecarMessage, ChunkIngestOutcome, MergeSidecarError, MergeSidecarLimits,
+        MergeSidecarPost, MergeSidecarTransport, MergeSigningContextV1, MergeSigningGuard,
+        MergeSigningGuardLimits, certified_merge_reference_digest, certified_merge_sidecar_holders,
         decode_certified_merge_sidecar,
     },
     native_amx::{
@@ -580,6 +580,8 @@ pub(crate) struct V2LaneWorkLimits {
     historical_recovery_retry_tier_attempts: NonZeroU32,
     historical_recovery_max_retry_tier: NonZeroU32,
     sidecar_service_burst: NonZeroUsize,
+    merge_sidecar_limits: MergeSidecarLimits,
+    merge_signing_guard_limits: MergeSigningGuardLimits,
     native_amx_signing_guard_limits: NativeAmxSigningGuardLimits,
 }
 
@@ -603,6 +605,8 @@ impl V2LaneWorkLimits {
         historical_recovery_retry_tier_attempts: NonZeroU32,
         historical_recovery_max_retry_tier: NonZeroU32,
         sidecar_service_burst: NonZeroUsize,
+        merge_sidecar_limits: MergeSidecarLimits,
+        merge_signing_guard_limits: MergeSigningGuardLimits,
         native_amx_signing_guard_limits: NativeAmxSigningGuardLimits,
     ) -> Self {
         Self {
@@ -623,6 +627,8 @@ impl V2LaneWorkLimits {
             historical_recovery_retry_tier_attempts,
             historical_recovery_max_retry_tier,
             sidecar_service_burst,
+            merge_sidecar_limits,
+            merge_signing_guard_limits,
             native_amx_signing_guard_limits,
         }
     }
@@ -1442,9 +1448,8 @@ impl HistoricalRecoveryWait {
     /// Deterministic bounded retry delay for the serialized runner.
     pub(crate) fn retry_delay(self, floor: Duration, ceiling: Duration) -> Duration {
         let ceiling = ceiling.max(floor);
-        let tier = (self.consecutive_attempts.saturating_sub(1)
-            / self.retry_tier_attempts.get())
-        .min(self.max_retry_tier.get());
+        let tier = (self.consecutive_attempts.saturating_sub(1) / self.retry_tier_attempts.get())
+            .min(self.max_retry_tier.get());
         floor.saturating_mul(1_u32 << tier).min(ceiling)
     }
 }
@@ -1851,6 +1856,7 @@ impl V2LaneWorkAdapter {
             &kura.store_root(),
             committed_merge_epoch,
             state_height,
+            limits.merge_signing_guard_limits,
         )
         .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
         let native_signing_guard = if voting_enabled
@@ -1950,8 +1956,9 @@ impl V2LaneWorkAdapter {
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
             merge_signing_guard,
-            merge_sidecars: MergeSidecarTransport::with_reply_source_capacity(
+            merge_sidecars: MergeSidecarTransport::with_limits(
                 limits.reply_source_capacity.get(),
+                limits.merge_sidecar_limits,
             )
             .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?,
             authenticated_merge_qcs: BTreeSet::new(),
@@ -2269,9 +2276,9 @@ impl V2LaneWorkAdapter {
         if now < self.next_autonomous_producer_tick {
             return Ok(());
         }
-        self.next_autonomous_producer_tick =
-            now.checked_add(self.limits.autonomous_producer_recheck)
-                .unwrap_or(now);
+        self.next_autonomous_producer_tick = now
+            .checked_add(self.limits.autonomous_producer_recheck)
+            .unwrap_or(now);
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -2330,8 +2337,7 @@ impl V2LaneWorkAdapter {
             .checked_sub(self.limits.autonomous_carrier_headroom_bytes.get())
             .ok_or_else(|| {
                 V2LaneWorkError::InvalidContext(
-                    "autonomous carrier headroom exhausts the configured payload budget"
-                        .to_owned(),
+                    "autonomous carrier headroom exhausts the configured payload budget".to_owned(),
                 )
             })?;
         let block_gas_limit = {
@@ -2941,6 +2947,29 @@ impl V2LaneWorkAdapter {
         let Some((_, _, Some(decided))) = self.retained_merge_carrier_state else {
             return false;
         };
+        if proposal.descriptor.proposal_height != self.context.height {
+            return false;
+        }
+        if let Some(hint) = proposal.payload_block_hint
+            && proposal.proposal_hash == proposal.computed_proposal_hash()
+            && hint.proposal_height == self.context.height
+            && hint.proposal_block_hash == decided.block_hash
+            && self.globally_locked_body.is_some_and(|locked| {
+                locked.subject == decided
+                    && locked.round.height == self.context.height
+                    && locked.round.view == hint.proposal_view
+            })
+            && self
+                .locally_bound_lane_proposals
+                .get(&proposal.proposal_hash)
+                == Some(&hint)
+        {
+            // The exact body was validated and bound before Decision, but its
+            // canonical Kura publication follows global application. Keep
+            // this in-memory witness so a late certificate can finish during
+            // that bounded pre-publication interval.
+            return true;
+        }
         let Some(height) = usize::try_from(self.context.height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -2958,8 +2987,7 @@ impl V2LaneWorkAdapter {
             block_hash: block.hash(),
             payload_hash: canonical_payload_hash,
         };
-        proposal.descriptor.proposal_height == self.context.height
-            && canonical_subject == decided
+        canonical_subject == decided
             && block.execution_context().is_some_and(|bundle| {
                 bundle.lane_payload_ownerships.iter().any(|ownership| {
                     proposal_from_ownership(ownership, decided.block_hash).as_ref()
@@ -7390,7 +7418,23 @@ impl V2LaneWorkAdapter {
         // is installed, the decision branch above keeps starting bounded
         // rounds only for the exact decided-lane ownerships until their
         // certificates and application receipts cross the durable boundary.
+        let committed_proposals = self
+            .committed_lane_outputs
+            .iter()
+            .map(|output| output.session.proposal.proposal_hash)
+            .collect::<BTreeSet<_>>();
+        let commit_handoff_is_queued = self.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneBlockQc(qc),
+                    ..
+                } if qc.body.phase == CertPhase::Commit
+                    && committed_proposals.contains(&qc.body.proposal_hash)
+            )
+        });
         if !self.committed_lane_outputs.is_empty()
+            && !commit_handoff_is_queued
             && self
                 .committed_lane_outputs
                 .iter()
@@ -7684,13 +7728,11 @@ impl V2LaneWorkAdapter {
             .map_err(|_| V2LaneWorkError::RestartRequired)?;
         if acknowledged {
             self.remove_acknowledged_sidecar_retry_effect(admission);
-            let posts = self
-                .merge_sidecars
-                .drain_outbound_chunks(
-                    self.sidecar_effect_slots()
-                        .min(self.limits.sidecar_service_burst.get()),
-                    now,
-                );
+            let posts = self.merge_sidecars.drain_outbound_chunks(
+                self.sidecar_effect_slots()
+                    .min(self.limits.sidecar_service_burst.get()),
+                now,
+            );
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
             }
@@ -7816,13 +7858,11 @@ impl V2LaneWorkAdapter {
             }
         };
         if !materialize {
-            let posts = self
-                .merge_sidecars
-                .drain_outbound_chunks(
-                    self.sidecar_effect_slots()
-                        .min(self.limits.sidecar_service_burst.get()),
-                    now,
-                );
+            let posts = self.merge_sidecars.drain_outbound_chunks(
+                self.sidecar_effect_slots()
+                    .min(self.limits.sidecar_service_burst.get()),
+                now,
+            );
             let inserted = !posts.is_empty();
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
@@ -7870,13 +7910,11 @@ impl V2LaneWorkAdapter {
             iroha_logger::debug!(%sender, ?error, "v2 merge-sidecar response budget rejected request");
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let posts = self
-            .merge_sidecars
-            .drain_outbound_chunks(
-                self.sidecar_effect_slots()
-                    .min(self.limits.sidecar_service_burst.get()),
-                now,
-            );
+        let posts = self.merge_sidecars.drain_outbound_chunks(
+            self.sidecar_effect_slots()
+                .min(self.limits.sidecar_service_burst.get()),
+            now,
+        );
         let inserted = !posts.is_empty();
         for post in posts {
             self.push_merge_sidecar_post_or_restart(post)?;
@@ -10790,7 +10828,7 @@ impl V2LaneWorkAdapter {
         for (certificate_hash, certificate_bytes) in self
             .kura
             .pending_queue_plan_admission_certificates_bounded(
-                crate::kura::MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES,
+                self.kura.pending_queue_plan_admission_capacity(),
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
         {
@@ -12274,6 +12312,8 @@ pub(super) mod tests {
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
                 iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
                 iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+                MergeSidecarLimits::defaults(),
+                MergeSigningGuardLimits::defaults(),
                 NativeAmxSigningGuardLimits::new(
                     iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
                     iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
@@ -12601,6 +12641,8 @@ pub(super) mod tests {
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
             iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            MergeSidecarLimits::defaults(),
+            MergeSigningGuardLimits::defaults(),
             NativeAmxSigningGuardLimits::new(
                 record_capacity,
                 iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
@@ -12612,9 +12654,8 @@ pub(super) mod tests {
 
     #[test]
     fn native_amx_signing_guard_capacity_preserves_explicit_runtime_bound() {
-        let capacity =
-            native_amx_signing_guard_capacity(limits_with_native_capacity(128))
-                .expect("explicit capacity");
+        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(128))
+            .expect("explicit capacity");
         assert_eq!(capacity.get(), 128);
     }
 
@@ -12858,7 +12899,7 @@ pub(super) mod tests {
         let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(
             MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
         ))
-            .expect("exact protocol boundary");
+        .expect("exact protocol boundary");
         assert_eq!(capacity.get(), MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD);
     }
 
@@ -12895,7 +12936,7 @@ pub(super) mod tests {
     fn native_amx_adapter_opens_with_bounded_production_like_limits() {
         assert!(sumeragi_v2_validator_storage_supported());
 
-        let limits = limits_with_native_capacity(4_096, 512);
+        let limits = limits_with_native_capacity(4_096);
         let (adapter, _) = fixture_at_height_inner_with_limits(
             wire::ConsensusMode::Permissioned,
             9,
@@ -14867,20 +14908,15 @@ pub(super) mod tests {
                 .persist_committed_lane_block_session(&pending, &pops)
                 .expect_err("failed ancestor barrier must leave only readable certificate bytes");
             adapter.pending_committed_lanes.push_back(pending.clone());
-            adapter
-                .kura
-                .fail_progress_sidecar_ancestor_sync_attempts_for_tests(0, 2);
-            let error = adapter
-                .persist_anchored_sessions()
-                .expect_err("shortcut and exact retry must both honor the failed ancestor barrier");
-            assert!(
-                error.to_string().contains("durable"),
-                "unexpected durability rejection: {error}"
-            );
             assert_eq!(
-                adapter.pending_committed_lanes.front(),
-                Some(&pending),
-                "durability failure must retain the pending reconstruction source"
+                adapter
+                    .persist_anchored_sessions()
+                    .expect("the exact retry must repair every failed ancestor barrier"),
+                1
+            );
+            assert!(
+                adapter.pending_committed_lanes.is_empty(),
+                "a durability-attested retry may retire its volatile reconstruction source"
             );
         }
 
@@ -16045,10 +16081,12 @@ pub(super) mod tests {
             )])
             .with_lane_payload_ownerships(plan.ownerships.clone()),
         ));
-        let block = builder.build_with_signature(
-            u64::try_from(leader_index).expect("leader index fits u64"),
-            keys[leader_index].private_key(),
-        );
+        let block = builder
+            .build_with_signature(
+                u64::try_from(leader_index).expect("leader index fits u64"),
+                keys[leader_index].private_key(),
+            )
+            .canonical_resultless_proposal();
         let proposal = proposal_from_ownership(&plan.ownerships[0], block.hash())
             .expect("planned ownership reconstructs a proposal");
         assert_eq!(proposal.proposal_hash, plan.proposals[0].proposal_hash);
@@ -18509,7 +18547,15 @@ pub(super) mod tests {
                 HistoricalRecoveryRetry::AuthenticatedBlockSync,
             ),
         ];
-        let mut all_reasons = HistoricalRecoveryDiagnostics::new(reasons.len());
+        let diagnostics = |capacity| {
+            HistoricalRecoveryDiagnostics::new(
+                capacity,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            )
+        };
+        let mut all_reasons = diagnostics(reasons.len());
         for (index, (reason, stage, retry)) in reasons.into_iter().enumerate() {
             let observation = all_reasons.observe(identity(index as u8 + 1), reason);
             assert_eq!(observation.reason(), reason);
@@ -18530,7 +18576,7 @@ pub(super) mod tests {
             "bounded typed observations must remain compact"
         );
 
-        let mut bounded = HistoricalRecoveryDiagnostics::new(2);
+        let mut bounded = diagnostics(2);
         let first = identity(1);
         let second = identity(2);
         let third = identity(3);
@@ -18563,9 +18609,13 @@ pub(super) mod tests {
                 .any(|observation| observation.identity() == third)
         );
 
-        let mut stuck = HistoricalRecoveryDiagnostics::new(1);
+        let mut stuck = diagnostics(1);
         let mut stuck_reports = 0;
-        for _ in 0..HISTORICAL_RECOVERY_STUCK_ATTEMPTS.saturating_mul(2) {
+        for _ in 0
+            ..iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS
+                .get()
+                .saturating_mul(2)
+        {
             let observation =
                 stuck.observe(first, HistoricalRecoveryWaitReason::CanonicalBlockPending);
             if observation.became_stuck {
@@ -18892,6 +18942,8 @@ pub(super) mod tests {
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
             iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
             iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            MergeSidecarLimits::defaults(),
+            MergeSigningGuardLimits::defaults(),
             NativeAmxSigningGuardLimits::new(
                 iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
                 iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
@@ -22692,8 +22744,7 @@ pub(super) mod tests {
         );
 
         adapter.limits.merge_share_frame_capacity =
-            NonZeroUsize::new(MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES)
-                .expect("non-zero undersized frame cap");
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES;
         let oversize = signed_merge_share_for_test(&adapter, &keys, &candidate, leader);
         assert_eq!(
             adapter

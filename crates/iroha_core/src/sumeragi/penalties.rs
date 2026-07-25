@@ -972,10 +972,10 @@ mod tests {
         validator
     }
 
-    fn install_zero_delay_npos(state: &State) {
+    fn install_one_block_delay_npos(state: &State) {
         let mut parameters = state.world.parameters.block();
         let npos = SumeragiNposParameters {
-            slashing_delay_blocks: 0,
+            slashing_delay_blocks: 1,
             ..SumeragiNposParameters::default()
         };
         parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn missing_artifact_fails_closed_without_mutable_topology_fallback() {
         let state = fresh_state();
-        install_zero_delay_npos(&state);
+        install_one_block_delay_npos(&state);
         set_commit_topology(&state, roster());
         let evidence = double_prepare_evidence(1, 1, 0, 0);
 
@@ -1178,14 +1178,9 @@ mod tests {
         let state = fresh_state();
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
-        let artifact_path = state
+        state
             .kura()
-            .sumeragi_v2_storage_root()
-            .parent()
-            .expect("v2 storage root has block-directory parent")
-            .join("v2_finality")
-            .join("00000000000000000001.norito");
-        std::fs::write(&artifact_path, b"not a Norito finality artifact")
+            .overwrite_v2_finality_bytes_for_tests(1, b"not a Norito finality artifact")
             .expect("corrupt test artifact");
 
         let error = height_context_for_evidence(&state, &double_prepare_evidence(0, 1, 0, 0), 1)
@@ -1259,7 +1254,7 @@ mod tests {
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
         let state = fresh_state();
-        install_zero_delay_npos(&state);
+        install_one_block_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         set_commit_topology(
@@ -1299,7 +1294,7 @@ mod tests {
     #[test]
     fn epoch_mismatch_stays_pending_without_marking_or_slashing() {
         let state = fresh_state();
-        install_zero_delay_npos(&state);
+        install_one_block_delay_npos(&state);
         let frozen_roster = roster();
         install_height_one_artifact(&state, &frozen_roster);
         add_validator_record(&state, &frozen_roster[0]);

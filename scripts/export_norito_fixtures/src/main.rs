@@ -51,7 +51,7 @@ const DEFAULT_FIXTURES_PATH: &str =
     "java/iroha_android/src/test/resources/transaction_payloads.json";
 const DEFAULT_OUT_DIR: &str = "java/iroha_android/src/test/resources";
 const DEFAULT_MANIFEST_NAME: &str = "transaction_fixtures.manifest.json";
-const DEFAULT_CHAIN_DISCRIMINANT: u16 = 42;
+const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
 
 #[derive(Parser)]
@@ -1229,6 +1229,11 @@ fn payload_json_uses_instruction_list(payload: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_fixture_network_is_public_taira() {
+        assert_eq!(DEFAULT_CHAIN_DISCRIMINANT, 369);
+    }
 
     #[test]
     fn value_to_string_handles_primitives() {

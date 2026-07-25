@@ -40,6 +40,9 @@ pub mod pop_registry;
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
 pub mod proof_ledger;
 
+/// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
+pub mod reputation;
+
 /// Storage deal contracts, micropayment tickets, and settlement ledgers.
 pub mod deal;
 
@@ -208,6 +211,27 @@ pub mod prelude {
             ProofOutcomeFinalizedEventV1, ProofOutcomeFinalizedRecordV1, ProofOutcomeKindV1,
             ProofOutcomeProjectionV1, ProofOutcomeRecordV1, ProofOutcomeSignerPolicyRecordV1,
             ProofOutcomeSignerPolicyV1,
+        },
+        reputation::{
+            REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
+            REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1,
+            REPUTATION_JOURNAL_ENTRY_VERSION_V1, REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1,
+            REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1, REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1,
+            REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1,
+            REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1, PorTerminalExcludedKindV1,
+            PorTerminalFailureKindV1, PorTerminalOutcomeV1, PorTerminalStatusV1,
+            ProviderDisputeEventV1, ProviderDisputeKindV1, ProviderDisputeStatusV1,
+            ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
+            ReputationJournalEventIdV1, ReputationJournalFinalizedCursorV1,
+            ReputationJournalFinalizedEventCursorV1, ReputationJournalFinalizedEventPageV1,
+            ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
+            ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
+            ReputationJournalValidationError, StreamTokenExcludedKindV1,
+            StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+            StreamTokenViolationKindV1,
         },
         reserve::{
             ClassRentRate, ReserveDuration, ReserveLedgerProjection, ReserveLifecycleProjection,

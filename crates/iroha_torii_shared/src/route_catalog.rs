@@ -2708,6 +2708,12 @@ pub mod runtime_governance {
         "governance.proposal.sccp_route_governance",
         "/v1/gov/proposals/sccp-route-governance",
     );
+    /// Read strict public governance readiness and policy capabilities.
+    pub const GOV_CAPABILITIES: RouteDescriptor =
+        public_get("governance.capabilities.read", "/v1/gov/capabilities");
+    /// Draft the exact configured citizenship registration instruction.
+    pub const GOV_CITIZEN_DRAFT: RouteDescriptor =
+        app_post("governance.citizen.draft", "/v1/gov/citizens/draft");
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
@@ -2861,6 +2867,8 @@ pub mod runtime_governance {
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,
         GOV_PROPOSE_SCCP,
+        GOV_CAPABILITIES,
+        GOV_CITIZEN_DRAFT,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
@@ -4116,6 +4124,10 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_BALLOTS_GET => app_get("contracts.sorafs_moderation_ballots_get", "/v1/sorafs/moderation/ballots");
         SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET => app_get("contracts.sorafs_moderation_ballots_by_case_id_by_round_id_get", "/v1/sorafs/moderation/ballots/{case_id}/{round_id}");
         SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET => app_get("contracts.sorafs_moderation_ballots_by_case_id_by_round_id_no_show_plan_get", "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan");
+        SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST => app_post("contracts.sorafs_moderation_ballots_eligibility_post", "/v1/sorafs/moderation/ballots/eligibility");
+        SORAFS_MODERATION_BALLOTS_SORTITION_POST => app_post("contracts.sorafs_moderation_ballots_sortition_post", "/v1/sorafs/moderation/ballots/sortition");
+        SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST => app_post("contracts.sorafs_moderation_ballots_assignments_accept_post", "/v1/sorafs/moderation/ballots/assignments/accept");
+        SORAFS_MODERATION_BALLOTS_ACTIVATE_POST => app_post("contracts.sorafs_moderation_ballots_activate_post", "/v1/sorafs/moderation/ballots/activate");
         SORAFS_MODERATION_BALLOTS_COMMITS_POST => app_post("contracts.sorafs_moderation_ballots_commits_post", "/v1/sorafs/moderation/ballots/commits");
         SORAFS_MODERATION_BALLOTS_CHALLENGES_POST => app_post("contracts.sorafs_moderation_ballots_challenges_post", "/v1/sorafs/moderation/ballots/challenges");
         SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST => app_post("contracts.sorafs_moderation_ballots_challenges_resolve_post", "/v1/sorafs/moderation/ballots/challenges/resolve");
@@ -4131,7 +4143,6 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_review_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_release_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_appeal_handoff_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff");
-        SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_BALLOT_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_appeal_ballot_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_operator_panel_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
@@ -4454,6 +4465,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::MINISTRY_AGENDA_GET,
     runtime_governance::GOV_PROPOSE_DEPLOY,
     runtime_governance::GOV_PROPOSE_SCCP,
+    runtime_governance::GOV_CAPABILITIES,
+    runtime_governance::GOV_CITIZEN_DRAFT,
     runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
     runtime_governance::VALIDATION_FEE_PROPOSALS,
     runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
@@ -4855,6 +4868,10 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_SORTITION_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ACTIVATE_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_COMMITS_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST,
@@ -4870,7 +4887,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
-    contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_BALLOT_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,

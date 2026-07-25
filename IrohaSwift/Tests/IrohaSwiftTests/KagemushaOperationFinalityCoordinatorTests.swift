@@ -1388,6 +1388,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         let resolution = try await KagemushaOperationFinalityCoordinator.resolve(
             operation: operation,
             transport: transport,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
             initialState: FinalityJournal(),
             continuity: .unaccepted,
             configuration: try .init(
@@ -1668,6 +1669,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         try await KagemushaOperationFinalityCoordinator.resolve(
             operation: operation,
             transport: transport,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
             initialState: FinalityJournal(),
             continuity: .unaccepted,
             configuration: try configuration ?? .init(
@@ -1739,8 +1741,12 @@ private actor TypedFinalityTransport: KagemushaOperationFinalityTransport {
     }
 
     func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1 else {
+            throw FinalityHarnessError.unexpectedSubmission
+        }
         requestedOperationIds.append(operationId)
         if requestedOperationIds.count == 1 {
             throw ToriiClientError.httpStatus(
@@ -1777,9 +1783,11 @@ private struct AppliedOnlyFinalityTransport:
     let status: KagemushaOperationStatus
 
     func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        guard status.operationId == operationId else {
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
+              status.operationId == operationId else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return status
@@ -1797,9 +1805,14 @@ private struct DeadlineIgnoringFinalityTransport:
     Sendable
 {
     func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        try await withCheckedThrowingContinuation { continuation in
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1 else {
+            throw FinalityHarnessError.unexpectedSubmission
+        }
+        return try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<KagemushaOperationStatus, Error>) in
             Task.detached {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 continuation.resume(
@@ -1838,9 +1851,11 @@ private actor LeaseFinalityTransport: KagemushaOperationFinalityTransport {
     }
 
     func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
-        guard operationId == expectedOperation.operationId else {
+        guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
+              operationId == expectedOperation.operationId else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         statusCount += 1

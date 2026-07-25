@@ -92,7 +92,13 @@ class RegisterOfflineDeviceAttestation(
     companion object {
         /** Decode and validate one current instruction archive. */
         @JvmStatic
-        fun decodeInstructionPayloadCanonical(archive: ByteArray): DeviceAttestationRegistration =
-            OfflineDeviceAttestationCodec.decodeInstructionPayloadCanonical(archive)
+        fun decodeInstructionPayloadCanonical(
+            archive: ByteArray,
+            chainDiscriminant: Int,
+        ): DeviceAttestationRegistration =
+            OfflineDeviceAttestationCodec.decodeInstructionPayloadCanonical(
+                archive,
+                chainDiscriminant,
+            )
     }
 }

@@ -28,11 +28,11 @@ fn exact_current_compiler_artifact_is_admitted() {
     assert_eq!(verified.contract_interface.entrypoints.len(), 2);
     assert_eq!(
         hex::encode(verified.code_hash.as_ref()),
-        "52c7f6b69c678e3d6b1f3bad87e7a5b4b849284d18f406e2193e24dfd4645345"
+        "2b203fbbe616f71ee7e5cf43d9729772d590fe1f4abdf06a7165ee9b21bfc855"
     );
     assert_eq!(
         hex::encode(verified.abi_hash.as_ref()),
-        "98679112b5a065a4dc962c5cfe128d0c545ed948f915ea8804767d369e4ef64f"
+        "2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1"
     );
     let json = verify_contract_artifact_json(&artifact);
     assert!(json.starts_with("{\"ok\":true,"), "{json}");

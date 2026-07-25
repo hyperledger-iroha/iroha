@@ -641,6 +641,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun prepareRequestAuthorization(
             authority: String,
+            chainDiscriminant: Int,
             deviceId: String,
             assetDefinitionId: String,
             operationId: ByteArray,
@@ -654,6 +655,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             requireArtifactBridge()
             val fields = nativePrepareAuthorizationV2(
                 utf8(authority, "authority"),
+                requireChainDiscriminant(chainDiscriminant),
                 utf8(deviceId, "deviceId"),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 requireDigest(operationId, "operationId"),
@@ -752,6 +754,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun prepareTopUp(
             chainId: String,
+            chainDiscriminant: Int,
             assetDefinitionId: String,
             payerAccountId: String,
             amount: KagemushaScaledAmount,
@@ -777,6 +780,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 try {
                     val nativeFields = nativePrepareTopUpV4(
                         utf8(chainId, "chainId"),
+                        requireChainDiscriminant(chainDiscriminant),
                         utf8(assetDefinitionId, "assetDefinitionId"),
                         utf8(payerAccountId, "payerAccountId"),
                         utf8(amount.atomicUnits, "atomicUnits"),
@@ -837,6 +841,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun prepareRecipientPaymentRequest(
             chainId: String,
+            chainDiscriminant: Int,
             assetDefinitionId: String,
             amount: KagemushaScaledAmount,
             recipientAccountId: String,
@@ -863,6 +868,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 try {
                     val nativeFields = nativePrepareRecipientRequestV2(
                         utf8(chainId, "chainId"),
+                        requireChainDiscriminant(chainDiscriminant),
                         utf8(assetDefinitionId, "assetDefinitionId"),
                         utf8(amount.atomicUnits, "atomicUnits"),
                         amount.scale,
@@ -1126,6 +1132,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun createRecipientLineageQueryV2(
             chainId: String,
+            chainDiscriminant: Int,
             recipientAccountId: String,
             receiverDeviceId: String,
             assetDefinitionId: String,
@@ -1136,6 +1143,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             return RecipientLineageQueryV2(
                 nativeCreateRecipientLineageQueryV2(
                     utf8(chainId, "chainId"),
+                    requireChainDiscriminant(chainDiscriminant),
                     utf8(recipientAccountId, "recipientAccountId"),
                     utf8(receiverDeviceId, "receiverDeviceId"),
                     utf8(assetDefinitionId, "assetDefinitionId"),
@@ -1651,6 +1659,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun buildRedeemRequestV4(
             input: SpendableBranchV4,
             recipientAccountId: String,
+            chainDiscriminant: Int,
             amount: KagemushaScaledAmount,
             changeOpening: NoteOpening?,
             changeOutputMembershipPaths: OutputMembershipPaths?,
@@ -1699,6 +1708,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     checkNotNull(openingArchive),
                     checkNotNull(witnessArchive),
                     checkNotNull(recipient),
+                    requireChainDiscriminant(chainDiscriminant),
                     checkNotNull(atomicUnits),
                     amount.scale,
                     checkNotNull(change),
@@ -1967,6 +1977,11 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "$field must be canonical non-empty text"
             }
             return value.toByteArray(Charsets.UTF_8)
+        }
+
+        private fun requireChainDiscriminant(value: Int): Int {
+            require(value in 0..0xffff) { "chainDiscriminant must fit in u16" }
+            return value
         }
 
         private fun requiredBytes(value: ByteArray?, field: String): ByteArray {
@@ -2376,6 +2391,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         private external fun nativePrepareRecipientRequestV2(
             chainId: ByteArray,
+            chainDiscriminant: Int,
             asset: ByteArray,
             atomicUnits: ByteArray,
             scale: Int,
@@ -2392,7 +2408,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
-        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(chainId: ByteArray, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
+        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(chainId: ByteArray, chainDiscriminant: Int, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV2(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeCreateRecipientReceiveOfferV2(request: ByteArray, lineage: ByteArray, publisherCheckpointEnvelope: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientReceiveOfferV2(offer: ByteArray): Array<ByteArray>
@@ -2410,7 +2426,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeProjectSplitResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildVerifyRequestV4(bundle: ByteArray, recipientRequest: ByteArray, topUpProvenance: ByteArray, maximumHops: Int, blockHeight: Long, verifiedAtMilliseconds: Long): ByteArray
         @JvmStatic private external fun nativeProjectVerifyResultV4(result: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeBuildRedeemRequestV4(bundle: ByteArray, topUpProvenance: ByteArray, opening: ByteArray, membershipWitness: ByteArray, recipient: ByteArray, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, changeOutputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
+        @JvmStatic private external fun nativeBuildRedeemRequestV4(bundle: ByteArray, topUpProvenance: ByteArray, opening: ByteArray, membershipWitness: ByteArray, recipient: ByteArray, chainDiscriminant: Int, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, changeOutputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectRedeemBuildResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareAcknowledgementV2(request: ByteArray, payment: ByteArray, acceptedAtMilliseconds: Long): Array<ByteArray>
         @JvmStatic private external fun nativeCreateAcknowledgementV2(payload: ByteArray, signature: ByteArray, request: ByteArray, payment: ByteArray): ByteArray
@@ -2418,13 +2434,12 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeProjectReadinessV4(readiness: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectAuthenticatedArtifactSetV4(artifactSet: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectActiveVerifierV2(verifier: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativePrepareAuthorizationV2(authority: ByteArray, deviceId: ByteArray, assetDefinitionId: ByteArray, operationId: ByteArray, issuedAtMilliseconds: Long, expiresAtMilliseconds: Long, nonce: ByteArray, payloadDigest: ByteArray, registrationHash: ByteArray, hardwareAssertionPlatform: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeCreateAuthorizationV2(template: ByteArray, signature: ByteArray): ByteArray
+        @JvmStatic private external fun nativePrepareAuthorizationV2(authority: ByteArray, chainDiscriminant: Int, deviceId: ByteArray, assetDefinitionId: ByteArray, operationId: ByteArray, issuedAtMilliseconds: Long, expiresAtMilliseconds: Long, nonce: ByteArray, payloadDigest: ByteArray, registrationHash: ByteArray, hardwareAssertionPlatform: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeHardwareAuthorizationV2(preparation: ByteArray, authenticatorData: ByteArray, signatureDer: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeIosAppAttestAuthorizationV2(preparation: ByteArray, assertionObject: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeTopUpV4(unsigned: ByteArray, authorization: ByteArray): ByteArray
         @JvmStatic private external fun nativeFinalizeRedeemV4(buildResult: ByteArray, authorization: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativePrepareTopUpV4(chainId: ByteArray, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
+        @JvmStatic private external fun nativePrepareTopUpV4(chainId: ByteArray, chainDiscriminant: Int, assetDefinition: ByteArray, payer: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, spendKey: ByteArray, rho: ByteArray, diversifier: ByteArray, leafIndex: Int, flattenedSiblings: ByteArray, directions: ByteArray, root: ByteArray, shieldVerifierCommitment: ByteArray, artifactBinding: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectOperationStatusV4(status: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBranchClaimsConflictV2(left: ByteArray, right: ByteArray): Boolean
         @JvmStatic private external fun nativePrepareRedemptionChangeV4(bundle: ByteArray, inputOpening: ByteArray, atomicUnits: ByteArray, scale: Int, operationId: ByteArray, entropy: ByteArray): Array<ByteArray>

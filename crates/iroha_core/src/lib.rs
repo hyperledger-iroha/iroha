@@ -1010,28 +1010,19 @@ mod tests {
     }
 
     fn raw_sumeragi_topic_for_synthetic_tag(tag: u32) -> Result<NetworkTopic, ncore::Error> {
-        let mut framed = ncore::to_bytes(&BlockMessage::VrfCommit(
-            crate::sumeragi::consensus::VrfCommit {
+        let (mut payload, flags) = norito::codec::encode_with_header_flags(
+            &BlockMessage::VrfCommit(crate::sumeragi::consensus::VrfCommit {
                 epoch: 1,
                 commitment: [0xA5; 32],
                 signer: 0,
                 bls_sig: vec![0x5A],
-            },
-        ))?;
-        let payload_offset = {
-            let view = ncore::from_bytes_view(&framed)?;
-            framed
-                .len()
-                .checked_sub(view.as_bytes().len())
-                .ok_or(ncore::Error::LengthMismatch)?
-        };
-        let tag_end = payload_offset
-            .checked_add(core::mem::size_of::<u32>())
-            .ok_or(ncore::Error::LengthMismatch)?;
-        framed
-            .get_mut(payload_offset..tag_end)
+            }),
+        );
+        payload
+            .get_mut(..core::mem::size_of::<u32>())
             .ok_or(ncore::Error::LengthMismatch)?
             .copy_from_slice(&tag.to_le_bytes());
+        let framed = ncore::frame_bare_with_header_flags::<BlockMessage>(&payload, flags)?;
         super::inbound_sumeragi_topic(&framed)
     }
 
@@ -1271,10 +1262,12 @@ mod tests {
             assert_eq!(version, 3_u16.to_le_bytes());
             let (tag, remaining) = super::inbound_enum_parts(payload).expect("payload enum tag");
             assert_eq!(tag, 0);
-            assert_eq!(
-                super::inbound_enum_field(remaining, flags).expect("payload enum field"),
-                [7]
-            );
+            let field = if flags & ncore::header_flags::PACKED_STRUCT == 0 {
+                super::inbound_enum_field(remaining, flags).expect("length-prefixed enum field")
+            } else {
+                remaining
+            };
+            assert_eq!(field, [7]);
         }
     }
 

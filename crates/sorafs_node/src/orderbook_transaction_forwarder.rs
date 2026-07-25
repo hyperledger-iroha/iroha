@@ -2,7 +2,7 @@
 //!
 //! The forwarder persists validated matching, maintenance, and settlement
 //! operations without mutating a process-local orderbook. An isolated signer
-//! receives the exact governed authority and native instruction, while a
+//! receives the exact configured transaction authority and native instruction, while a
 //! separate submitter receives exact canonical signed transaction bytes only
 //! after those bytes are durable. Finalized-ledger reconcilers retain sole
 //! responsibility for deciding whether an operation committed, remained
@@ -213,10 +213,159 @@ pub struct OrderbookTransactionSigningRequestV1 {
     pub operation_id: [u8; 32],
     /// Exact active chain identity.
     pub chain_id: ChainId,
-    /// Exact governed transaction authority.
+    /// Exact matcher authority or explicitly configured receipt relayer.
     pub authority: AccountId,
     /// Exact validated native operation.
     pub operation: OrderbookOperationV1,
+}
+
+/// Fail-closed result for a retained operation against current finalized policy/book state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderbookFinalizedContextValidationV1 {
+    /// Retained policy, authority, and revision still match finalized state.
+    Ready,
+    /// Finalized state validly rotated or consumed the retained precondition.
+    Conflict,
+    /// Pending and retained checkpoint snapshots do not describe one operation.
+    InvalidDurableState,
+    /// The supplied finalized policy record is malformed or internally inconsistent.
+    InvalidFinalizedContext,
+}
+
+/// Validate the payload-free pending snapshot exported by the durable forwarder.
+///
+/// This owns delivery-state and exact signed-byte digest validation so workers
+/// do not reproduce the forwarder's checkpoint invariants.
+pub fn validate_orderbook_pending_delivery_v1(
+    delivery: &OrderbookTransactionPendingV1,
+) -> Result<(), OrderbookTransactionForwarderError> {
+    if delivery.sequence == 0
+        || delivery.operation_id == [0; 32]
+        || delivery.semantic_digest == [0; 32]
+        || delivery.policy_digest == [0; 32]
+        || delivery.chain_id.as_str().is_empty()
+        || delivery.chain_id.as_str().len() > ORDERBOOK_TRANSACTION_MAX_CHAIN_ID_BYTES_V1
+        || delivery.baseline_finalized_height == 0
+        || delivery.baseline_finalized_block_hash == [0; 32]
+    {
+        return Err(OrderbookTransactionForwarderError::InvalidCheckpoint);
+    }
+    let signed_material_is_complete =
+        delivery
+            .signed_transaction_bytes
+            .as_ref()
+            .is_some_and(|bytes| {
+                !bytes.is_empty()
+                    && bytes.len() <= ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1
+                    && delivery.transaction_digest == Some(transaction_digest(bytes))
+            });
+    let signed_material_is_absent =
+        delivery.signed_transaction_bytes.is_none() && delivery.transaction_digest.is_none();
+    let valid_state = match delivery.state {
+        OrderbookTransactionDeliveryStateV1::Ready => signed_material_is_absent,
+        OrderbookTransactionDeliveryStateV1::Signing => {
+            signed_material_is_absent && delivery.attempts != 0
+        }
+        OrderbookTransactionDeliveryStateV1::Signed
+        | OrderbookTransactionDeliveryStateV1::Ambiguous
+        | OrderbookTransactionDeliveryStateV1::Submitted => {
+            signed_material_is_complete && delivery.attempts != 0
+        }
+    };
+    let valid_revision_shape = match delivery.kind {
+        OrderbookTransactionKindV1::Match | OrderbookTransactionKindV1::Maintain => {
+            delivery.expected_book_revision.is_some()
+        }
+        OrderbookTransactionKindV1::SettlementReceipt => delivery.expected_book_revision.is_none(),
+    };
+    if !valid_state || !valid_revision_shape {
+        return Err(OrderbookTransactionForwarderError::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+/// Validate that exported pending and signing snapshots retain one canonical operation.
+///
+/// Stable identity digests and operation identifiers are recomputed with the
+/// forwarder's private canonical domains and helpers. This is the sole public
+/// validation boundary; Torii must not duplicate those algorithms.
+pub fn validate_orderbook_reconciliation_material_v1(
+    delivery: &OrderbookTransactionPendingV1,
+    retained: &OrderbookTransactionSigningRequestV1,
+) -> Result<(), OrderbookTransactionForwarderError> {
+    validate_orderbook_pending_delivery_v1(delivery)?;
+    if retained.operation_id != delivery.operation_id
+        || retained.chain_id != delivery.chain_id
+        || retained.authority != delivery.authority
+        || retained.operation.kind() != delivery.kind
+        || retained.operation.policy_digest() != delivery.policy_digest
+        || retained.operation.expected_book_revision() != delivery.expected_book_revision
+    {
+        return Err(OrderbookTransactionForwarderError::InvalidCheckpoint);
+    }
+    validate_reconciliation_operation_shape(&retained.operation)?;
+    let (identity_scope, identity_digest) = operation_identity(&retained.operation)
+        .map_err(|_| OrderbookTransactionForwarderError::InvalidCheckpoint)?;
+    let semantic_digest =
+        semantic_digest(&retained.chain_id, &retained.authority, &retained.operation)
+            .map_err(|_| OrderbookTransactionForwarderError::InvalidCheckpoint)?;
+    if identity_digest == [0; 32]
+        || semantic_digest != delivery.semantic_digest
+        || operation_id_from_parts(identity_scope, identity_digest, semantic_digest)
+            != delivery.operation_id
+    {
+        return Err(OrderbookTransactionForwarderError::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+/// Validate retained material against one coherent finalized policy/book snapshot.
+///
+/// Governed matcher authority selection and revision CAS remain private
+/// implementation details of this forwarder. Provider-signed settlement
+/// receipts are relayable, so their outer transaction authority is retained
+/// for audit/idempotency but is not compared with the custody release
+/// authority.
+#[must_use]
+pub fn validate_orderbook_finalized_context_v1(
+    delivery: &OrderbookTransactionPendingV1,
+    retained: &OrderbookTransactionSigningRequestV1,
+    policy_record: &OrderbookAdmissionPolicyRecord,
+    authoritative_book_revision: u64,
+) -> OrderbookFinalizedContextValidationV1 {
+    if validate_orderbook_reconciliation_material_v1(delivery, retained).is_err() {
+        return OrderbookFinalizedContextValidationV1::InvalidDurableState;
+    }
+    if policy_record.activated_at_unix == 0
+        || policy_record.policy_digest == [0; 32]
+        || policy_record.policy.validate().is_err()
+        || !policy_record
+            .policy
+            .digest()
+            .is_ok_and(|digest| digest == policy_record.policy_digest)
+    {
+        return OrderbookFinalizedContextValidationV1::InvalidFinalizedContext;
+    }
+    if policy_record.policy_digest != delivery.policy_digest {
+        return OrderbookFinalizedContextValidationV1::Conflict;
+    }
+    match validate_operation(
+        &retained.operation,
+        &retained.authority,
+        &policy_record.policy,
+        authoritative_book_revision,
+    ) {
+        Ok(()) => OrderbookFinalizedContextValidationV1::Ready,
+        Err(
+            OrderbookTransactionForwarderError::PolicyDigestMismatch
+            | OrderbookTransactionForwarderError::GovernedAuthorityMismatch
+            | OrderbookTransactionForwarderError::BookRevisionMismatch,
+        ) => OrderbookFinalizedContextValidationV1::Conflict,
+        Err(OrderbookTransactionForwarderError::InvalidGovernanceContext) => {
+            OrderbookFinalizedContextValidationV1::InvalidFinalizedContext
+        }
+        Err(_) => OrderbookFinalizedContextValidationV1::InvalidDurableState,
+    }
 }
 
 /// Durable enqueue result.
@@ -282,7 +431,7 @@ pub struct OrderbookTransactionPendingV1 {
     pub kind: OrderbookTransactionKindV1,
     /// Exact active chain identity.
     pub chain_id: ChainId,
-    /// Exact governed authority.
+    /// Exact matcher authority or explicitly configured receipt relayer.
     pub authority: AccountId,
     /// Active policy digest bound by the operation.
     pub policy_digest: [u8; 32],
@@ -579,16 +728,20 @@ impl OrderbookTransactionForwarder {
         Ok(forwarder)
     }
 
-    /// Validate and durably accept one unsigned native orderbook operation.
+    /// Validate and durably accept one unsigned matcher/maintenance operation.
     ///
-    /// The governed matcher or settlement authority is derived from the active
-    /// policy, never supplied by an untrusted caller.
+    /// Settlement receipts require [`Self::enqueue_unsigned_operation_with_authority`]
+    /// so an explicitly configured relayer is never silently replaced with the
+    /// governed custody authority.
     pub fn enqueue_unsigned_operation(
         &self,
         operation: OrderbookOperationV1,
         context: &OrderbookTransactionContextV1,
     ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
         context.validate()?;
+        if operation.kind() == OrderbookTransactionKindV1::SettlementReceipt {
+            return Err(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired);
+        }
         let prepared = PreparedOrderbookOperation::from_unsigned(
             operation,
             context,
@@ -597,11 +750,36 @@ impl OrderbookTransactionForwarder {
         self.enqueue_prepared(prepared, None, context.finalized_cursor)
     }
 
+    /// Validate and durably accept one unsigned operation for an explicit signer.
+    ///
+    /// Match and maintenance still require the active governed matcher.
+    /// Settlement receipts accept any explicitly configured relayer account;
+    /// the canonical provider signature remains the delivery authorization and
+    /// ledger execution uses the channel's immutable custody authority.
+    pub fn enqueue_unsigned_operation_with_authority(
+        &self,
+        authority: AccountId,
+        operation: OrderbookOperationV1,
+        context: &OrderbookTransactionContextV1,
+    ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
+        context.validate()?;
+        let prepared = PreparedOrderbookOperation::new_bounded(
+            context.chain_id.clone(),
+            authority,
+            context.policy_record.policy.clone(),
+            operation,
+            context.book_revision,
+            self.policy.max_transaction_bytes,
+        )?;
+        self.enqueue_prepared(prepared, None, context.finalized_cursor)
+    }
+
     /// Validate and durably accept one exact canonical signed transaction.
     ///
-    /// The signature authority must be the exact matcher or settlement account
-    /// in `context`; possession of a broader permission cannot substitute. The
-    /// signed transaction must also bind the exact active chain retained in the
+    /// Match and maintenance signatures must use the exact governed matcher.
+    /// A settlement receipt may be wrapped by any valid transaction signer
+    /// because the canonical receipt carries the provider authorization. Every
+    /// signed transaction must bind the exact active chain retained in the
     /// finalized context.
     pub fn enqueue_signed_transaction(
         &self,
@@ -1168,7 +1346,12 @@ impl PreparedOrderbookOperation {
         context: &OrderbookTransactionContextV1,
         max_transaction_bytes: usize,
     ) -> Result<Self, OrderbookTransactionForwarderError> {
-        let authority = governed_authority(&context.policy_record.policy, operation.kind()).clone();
+        let authority = required_governed_authority(
+            &context.policy_record.policy,
+            operation.kind(),
+        )
+        .ok_or(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)?
+        .clone();
         Self::new_bounded(
             context.chain_id.clone(),
             authority,
@@ -1311,15 +1494,15 @@ impl PreparedOrderbookOperation {
     }
 }
 
-fn governed_authority(
+fn required_governed_authority(
     policy: &OrderbookAdmissionPolicyV1,
     kind: OrderbookTransactionKindV1,
-) -> &AccountId {
+) -> Option<&AccountId> {
     match kind {
         OrderbookTransactionKindV1::Match | OrderbookTransactionKindV1::Maintain => {
-            &policy.matcher_authority
+            Some(&policy.matcher_authority)
         }
-        OrderbookTransactionKindV1::SettlementReceipt => &policy.settlement_authority,
+        OrderbookTransactionKindV1::SettlementReceipt => None,
     }
 }
 
@@ -1338,7 +1521,9 @@ fn validate_operation(
     if operation.policy_digest() != policy_digest {
         return Err(OrderbookTransactionForwarderError::PolicyDigestMismatch);
     }
-    if authority != governed_authority(governed_policy, operation.kind()) {
+    if required_governed_authority(governed_policy, operation.kind())
+        .is_some_and(|required| authority != required)
+    {
         return Err(OrderbookTransactionForwarderError::GovernedAuthorityMismatch);
     }
     match operation {
@@ -1359,6 +1544,47 @@ fn validate_operation(
             }
         }
         OrderbookOperationV1::SettlementReceipt(instruction) => {
+            let receipt = decode_settlement_receipt_v1(instruction.receipt_payload())
+                .map_err(|_| OrderbookTransactionForwarderError::InvalidOrderbookOperation)?;
+            if receipt.bytes_delivered > governed_policy.max_receipt_bytes {
+                return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
+            }
+            verify_settlement_receipt_signature_v1(&receipt)
+                .map_err(|_| OrderbookTransactionForwarderError::InvalidOrderbookOperation)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_reconciliation_operation_shape(
+    operation: &OrderbookOperationV1,
+) -> Result<(), OrderbookTransactionForwarderError> {
+    if operation.policy_digest() == [0; 32] {
+        return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
+    }
+    let operation_bytes = norito::to_bytes(operation)
+        .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
+    if operation_bytes.len() > ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1 {
+        return Err(OrderbookTransactionForwarderError::ResourceLimitExceeded);
+    }
+    match operation {
+        OrderbookOperationV1::Match(instruction) => {
+            if !(1..=ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1).contains(instruction.max_fills()) {
+                return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
+            }
+        }
+        OrderbookOperationV1::Maintain(instruction) => {
+            if !(1..=ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1).contains(instruction.max_items()) {
+                return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
+            }
+        }
+        OrderbookOperationV1::SettlementReceipt(instruction) => {
+            if instruction.receipt_payload().is_empty()
+                || instruction.receipt_payload().len()
+                    > ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1
+            {
+                return Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation);
+            }
             let receipt = decode_settlement_receipt_v1(instruction.receipt_payload())
                 .map_err(|_| OrderbookTransactionForwarderError::InvalidOrderbookOperation)?;
             verify_settlement_receipt_signature_v1(&receipt)
@@ -1411,7 +1637,11 @@ fn semantic_digest(
     operation: &OrderbookOperationV1,
 ) -> Result<[u8; 32], OrderbookTransactionForwarderError> {
     let chain_id = chain_id.as_str();
-    let authority = authority.to_string();
+    // A provider-signed receipt has one semantic identity regardless of which
+    // valid relayer wraps it. Matcher operations remain authority-bound.
+    let authority = (operation.kind() != OrderbookTransactionKindV1::SettlementReceipt)
+        .then(|| authority.to_string())
+        .unwrap_or_default();
     let operation = norito::to_bytes(operation)
         .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
     let chain_id_len = u64::try_from(chain_id.len())
@@ -1846,10 +2076,13 @@ pub enum OrderbookTransactionForwarderError {
     /// Native orderbook instruction or embedded receipt is invalid.
     #[error("native orderbook operation is invalid")]
     InvalidOrderbookOperation,
+    /// Unsigned settlement generation omitted an explicit relayer signer.
+    #[error("unsigned settlement receipt requires an explicit relayer authority")]
+    ExplicitRelayerAuthorityRequired,
     /// Instruction policy digest differs from the finalized governed policy.
     #[error("orderbook transaction policy digest does not match finalized governance")]
     PolicyDigestMismatch,
-    /// Signed authority is not the exact governed matcher/settlement account.
+    /// Signed authority is not the exact governed matcher account.
     #[error("orderbook transaction authority does not match finalized governance")]
     GovernedAuthorityMismatch,
     /// Match/maintenance expected revision differs from finalized book state.
@@ -2118,9 +2351,11 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_operations_bind_governed_authorities_and_revision_cas() {
+    fn unsigned_operations_bind_matcher_and_require_explicit_receipt_relayer() {
         let matcher = key(1);
         let settlement = key(2);
+        let relayer = key(3);
+        let relayer_id = AccountId::new(relayer.public_key().clone());
         let context = context(&matcher, &settlement, 7, cursor(10, 0xA1));
         let forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
 
@@ -2132,8 +2367,17 @@ mod tests {
             .enqueue_unsigned_operation(maintain_operation(&context), &context)
             .unwrap()
             .operation_id();
+        let receipt_operation = settlement_operation(&context, [0x61; 32]);
+        assert!(matches!(
+            forwarder.enqueue_unsigned_operation(receipt_operation.clone(), &context),
+            Err(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)
+        ));
         let receipt_id = forwarder
-            .enqueue_unsigned_operation(settlement_operation(&context, [0x61; 32]), &context)
+            .enqueue_unsigned_operation_with_authority(
+                relayer_id.clone(),
+                receipt_operation,
+                &context,
+            )
             .unwrap()
             .operation_id();
 
@@ -2156,7 +2400,7 @@ mod tests {
                 .operation_for_reconciliation(receipt_id)
                 .unwrap()
                 .authority,
-            context.policy_record.policy.settlement_authority
+            relayer_id
         );
 
         let stale = OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
@@ -2177,6 +2421,31 @@ mod tests {
     }
 
     #[test]
+    fn settlement_receipt_exceeding_governed_byte_bound_is_rejected_before_enqueue() {
+        let matcher = key(0x21);
+        let settlement = key(0x22);
+        let mut context = context(&matcher, &settlement, 7, cursor(10, 0xA1));
+        context.policy_record.policy.max_receipt_bytes = 16;
+        context.policy_record.policy_digest = context
+            .policy_record
+            .policy
+            .digest()
+            .expect("policy digest");
+        let operation = settlement_operation(&context, [0x62; 32]);
+
+        assert!(matches!(
+            OrderbookTransactionForwarder::in_memory(policy())
+                .expect("forwarder")
+                .enqueue_unsigned_operation_with_authority(
+                    AccountId::new(key(0x23).public_key().clone()),
+                    operation,
+                    &context,
+                ),
+            Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation)
+        ));
+    }
+
+    #[test]
     fn signed_transactions_require_exact_governed_authority_and_single_native_instruction() {
         let matcher = key(3);
         let settlement = key(4);
@@ -2191,7 +2460,27 @@ mod tests {
             .operation_id();
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), valid);
 
-        let wrong_authority = signed_operation(&attacker, operation.clone(), 2);
+        let receipt_operation = settlement_operation(&context, [0x63; 32]);
+        let relayed_receipt = signed_operation(&attacker, receipt_operation.clone(), 2);
+        let receipt_forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
+        let relayed_id = receipt_forwarder
+            .enqueue_signed_transaction(&relayed_receipt, &context)
+            .expect("unrelated relayer may wrap a provider-signed receipt")
+            .operation_id();
+        assert_eq!(
+            receipt_forwarder.begin_submission(relayed_id).unwrap(),
+            relayed_receipt
+        );
+        let governed_wrapper = signed_operation(&settlement, receipt_operation, 3);
+        assert!(matches!(
+            receipt_forwarder
+                .enqueue_signed_transaction(&governed_wrapper, &context)
+                .expect("same provider receipt deduplicates across relayers"),
+            OrderbookTransactionEnqueueResultV1::Existing { operation_id }
+                if operation_id == relayed_id
+        ));
+
+        let wrong_authority = signed_operation(&attacker, operation.clone(), 4);
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
                 .unwrap()
@@ -2204,7 +2493,7 @@ mod tests {
             &matcher,
             AccountId::new(matcher.public_key().clone()),
             [operation.clone().into()],
-            3,
+            5,
         );
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
@@ -2220,7 +2509,7 @@ mod tests {
                 operation.clone().into(),
                 maintain_operation(&context).into(),
             ],
-            4,
+            6,
         );
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
@@ -2233,7 +2522,7 @@ mod tests {
             &matcher,
             AccountId::new(matcher.public_key().clone()),
             [Log::new(iroha_data_model::Level::INFO, "not orderbook".to_owned()).into()],
-            5,
+            7,
         );
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
@@ -2242,7 +2531,7 @@ mod tests {
             Err(OrderbookTransactionForwarderError::InvalidSignedTransaction)
         ));
 
-        let mut malformed = signed_operation(&matcher, operation, 6);
+        let mut malformed = signed_operation(&matcher, operation, 8);
         malformed.push(0);
         assert!(matches!(
             OrderbookTransactionForwarder::in_memory(policy())
@@ -2322,9 +2611,10 @@ mod tests {
         ));
 
         let receipt_forwarder = OrderbookTransactionForwarder::in_memory(policy()).unwrap();
+        let relayer = AccountId::new(key(0x31).public_key().clone());
         let first = settlement_operation(&context, [0x71; 32]);
         receipt_forwarder
-            .enqueue_unsigned_operation(first, &context)
+            .enqueue_unsigned_operation_with_authority(relayer.clone(), first, &context)
             .unwrap();
         let mut second = settlement_operation(&context, [0x71; 32]);
         if let OrderbookOperationV1::SettlementReceipt(instruction) = &second {
@@ -2342,7 +2632,7 @@ mod tests {
             );
         }
         assert!(matches!(
-            receipt_forwarder.enqueue_unsigned_operation(second, &context),
+            receipt_forwarder.enqueue_unsigned_operation_with_authority(relayer, second, &context),
             Err(OrderbookTransactionForwarderError::IdentityConflict)
         ));
     }
@@ -2679,7 +2969,11 @@ mod tests {
             );
         }
         assert!(matches!(
-            forwarder.enqueue_unsigned_operation(invalid, &context),
+            forwarder.enqueue_unsigned_operation_with_authority(
+                AccountId::new(key(0x24).public_key().clone()),
+                invalid,
+                &context,
+            ),
             Err(OrderbookTransactionForwarderError::InvalidOrderbookOperation)
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());

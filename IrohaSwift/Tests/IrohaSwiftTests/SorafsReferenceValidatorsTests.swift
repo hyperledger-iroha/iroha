@@ -824,6 +824,78 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         )
         XCTAssertTrue(outcome.contains("\"status\": \"Ok\""), outcome)
 
+        let askFields = SorafsSignedOrderbookOrderRequestFields(
+            side: .ask,
+            tier: .hot,
+            pricePerGib: "1.25",
+            quantityGib: 4,
+            ownerAccount: owner,
+            providerId: Data(repeating: 0x72, count: 32),
+            expiryUnix: 1_800_000_000,
+            nonce: 8,
+            makerFeeBps: 10,
+            takerFeeBps: 15
+        )
+        let ask = try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            askFields,
+            privateKey: Data(repeating: 0xB7, count: 32)
+        )
+        let askOutcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderRequest,
+            payload: ask,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(askOutcome.contains("\"status\": \"Ok\""), askOutcome)
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                SorafsSignedOrderbookOrderRequestFields(
+                    side: .bid,
+                    tier: .hot,
+                    pricePerGib: "1",
+                    quantityGib: 1,
+                    ownerAccount: owner,
+                    providerId: Data(repeating: 0x72, count: 32),
+                    expiryUnix: 1_800_000_000,
+                    nonce: 17,
+                    makerFeeBps: 0,
+                    takerFeeBps: 0
+                ),
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField(
+                    "providerId must be absent or empty for bid orders"
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                SorafsSignedOrderbookOrderRequestFields(
+                    side: .ask,
+                    tier: .hot,
+                    pricePerGib: "1",
+                    quantityGib: 1,
+                    ownerAccount: owner,
+                    expiryUnix: 1_800_000_000,
+                    nonce: 17,
+                    makerFeeBps: 0,
+                    takerFeeBps: 0
+                ),
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField(
+                    "providerId must be exactly 32 bytes for ask orders"
+                )
+            )
+        }
+
         let mismatchedFields = SorafsSignedOrderbookOrderRequestFields(
             orderId: Data(repeating: 0x11, count: 32),
             side: .bid,

@@ -1584,6 +1584,20 @@ production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config
 production_config_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_config --lib -- --list --ignored
 )"
+multilane_config_runtime_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config \
+    --test sumeragi_v2_merge_runtime_config -- --list
+)"
+multilane_config_runtime_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config \
+    --test sumeragi_v2_merge_runtime_config -- --list --ignored
+)"
+multilane_config_fixtures_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config --test fixtures -- --list
+)"
+multilane_config_fixtures_ignored_unit_list="$(
+  run_cargo test --locked --offline -p iroha_config --test fixtures -- --list --ignored
+)"
 production_data_model_modules=(
   block::consensus_v2::finality::tests
   offline::kagemusha_v4_topup_provenance_tests
@@ -1725,6 +1739,18 @@ required_multilane_core_focus_tests=(
   torii_proxy::tests::torii_routing_plan_hint_enforces_native_amx_participant_limit
   torii_proxy::tests::torii_routing_plan_hint_rejects_duplicate_participants_without_deduplication
   torii_proxy::tests::torii_routing_plan_hint_rejects_out_of_order_participants_without_sorting
+  kura::tests::configured_pending_control_limits_fail_before_store_creation
+  kura::tests::configured_pending_control_count_limits_gate_live_admission
+  kura::tests::configured_pending_control_count_limit_rejects_oversized_startup_inventory
+  kura::tests::configured_pending_control_shared_bytes_reject_oversized_startup_inventory
+  kura::tests::pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round
+  kura::tests::pending_certified_merge_work_stops_before_later_malformed_entry
+  kura::tests::bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow
+  kura::tests::complete_merge_retry_ignores_unrelated_pending_sidecar_capacity
+  kura::tests::bounded_pending_merge_selection_skips_committed_prefix_without_underfill
+  sumeragi::v2_lane_work::tests::historical_recovery_diagnostics_are_typed_bounded_and_payload_free
+  sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings
+  sumeragi::v2_lane_work::tests::merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_journal
 )
 required_multilane_queue_journal_focus_tests=(
   queue::journal::tests::queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context
@@ -1803,10 +1829,36 @@ required_multilane_queue_journal_focus_tests=(
   queue::tests::ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain
   queue::tests::ambiguous_reservation_compaction_fails_closed_after_terminal_application
   queue::tests::install_replay_reconciliation_fault_publishes_backpressure_after_unlock
+  queue::tests::reservation_journal_install_rejects_selection_publication_window
+  queue::tests::second_reservation_journal_installer_cannot_touch_its_losing_path
+  queue::tests::concurrent_reservation_journal_installers_publish_one_untouched_winner
+  queue::tests::missing_replayed_reservation_owns_capacity_until_exact_payload_replay
+  queue::tests::missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay
+  queue::reservation_journal::tests::configured_frame_limit_rejects_valid_oversized_payload_before_replay
+  queue::reservation_journal::tests::configured_file_limit_rejects_oversized_startup_journal_before_scan
+  queue::reservation_journal::tests::replay_rejects_more_distinct_owners_than_configured_queue_capacity
+  queue::reservation_journal::tests::invalid_runtime_limits_fail_before_creating_a_journal
+  queue::reservation_journal::tests::every_execution_group_rejects_4097_members_before_mutating_replay_state
+  queue::reservation_journal::tests::every_snapshot_top_level_vector_obeys_configured_owner_capacity
+  queue::reservation_journal::tests::runtime_owner_limit_rejects_before_write_and_remains_reopenable
+  queue::reservation_journal::tests::stale_forget_release_does_not_undercount_completed_ownership
+  queue::reservation_journal::tests::replay_rejects_same_length_valid_content_mutation_on_retained_append_handle
+  queue::reservation_journal::tests::ownership_limit_is_checked_before_applying_the_exceeding_prefix
+  queue::reservation_journal::tests::ownership_union_counts_tombstones_and_completed_releases_exactly_once
+  queue::reservation_journal::tests::deterministic_file_budget_exhaustion_does_not_poison_or_extend_journal
+  queue::reservation_journal::tests::decoder_allocation_ceiling_tracks_configured_frame_budget
+  queue::reservation_journal::tests::compaction_preserves_valid_owner_state_larger_than_one_execution_group
+  queue::reservation_journal::tests::journal_exclusive_owner_lock_blocks_a_second_runtime
+  queue::reservation_journal::tests::cached_revision_rejects_an_unlocked_same_length_external_rewrite
+  queue::reservation_journal::tests::indexed_replay_matches_reference_vector_transitions_and_ordering
+  queue::reservation_journal::tests::indexed_transition_rejections_are_atomic_and_match_reference_replay
+  queue::reservation_journal::tests::runtime_semantic_preflight_rejects_invalid_frames_before_durable_append
+  queue::reservation_journal::tests::production_replay_handles_many_singleton_frames_with_exact_order
 )
 required_multilane_data_model_focus_tests=(
   block::consensus::tests::native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift
   block::consensus::tests::native_amx_mixed_role_marker_defers_only_separate_participant_anchor
+  block::consensus::tests::native_amx_receipt_negative_corpus_fails_closed
   block::consensus::tests::native_amx_application_evidence_negative_corpus_fails_closed
   block::consensus::tests::native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups
   block::consensus::tests::autonomous_lane_execution_diagnostics_roundtrip_order_and_bound
@@ -1861,9 +1913,24 @@ required_multilane_integration_lib_focus_tests=(
   sandbox::tests::sandboxed_network_start_helper_preserves_optional_developer_skip
   sandbox::tests::sandboxed_network_start_helper_fails_required_release_scenario
 )
-readonly expected_multilane_focus_test_count=212
+required_multilane_config_lib_focus_tests=(
+  parameters::actual::tests::sumeragi_v2_shared_config_defaults_are_finite_and_deterministic
+  parameters::actual::tests::sumeragi_v2_shared_fingerprint_binds_every_runtime_category
+  parameters::actual::tests::sumeragi_v2_config_rejects_merge_runtime_limit_boundaries
+)
+required_multilane_config_runtime_focus_tests=(
+  every_merge_runtime_override_reaches_the_actual_config
+  tight_valid_merge_runtime_geometry_is_admitted
+)
+required_multilane_config_fixtures_focus_tests=(
+  minimal_config_snapshot
+)
+readonly expected_multilane_focus_test_count=256
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
+    + ${#required_multilane_config_lib_focus_tests[@]}
+    + ${#required_multilane_config_runtime_focus_tests[@]}
+    + ${#required_multilane_config_fixtures_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
     + ${#required_multilane_torii_focus_tests[@]}
     + ${#required_multilane_torii_shared_focus_tests[@]}
@@ -1889,6 +1956,38 @@ for required_test in "${required_multilane_queue_journal_focus_tests[@]}"; do
   fi
   if grep -Fqx -- "${required_test}: test" <<<"$production_ignored_unit_list"; then
     echo "required multilane queue-journal focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_config_lib_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_config_unit_list"; then
+    echo "missing required multilane iroha_config library focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_config_ignored_unit_list"; then
+    echo "required multilane iroha_config library focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_config_runtime_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_config_runtime_unit_list"; then
+    echo "missing required multilane iroha_config runtime focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_config_runtime_ignored_unit_list"; then
+    echo "required multilane iroha_config runtime focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+for required_test in "${required_multilane_config_fixtures_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_config_fixtures_unit_list"; then
+    echo "missing required multilane iroha_config fixture focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" \
+    <<<"$multilane_config_fixtures_ignored_unit_list"; then
+    echo "required multilane iroha_config fixture focus test is ignored: ${required_test}" >&2
     exit 1
   fi
 done
@@ -1963,6 +2062,17 @@ run_multilane_focus_crate_tests() {
   done
 }
 
+run_multilane_focus_test_target() {
+  local package="$1"
+  local test_target="$2"
+  shift 2
+  local focus_test
+  for focus_test in "$@"; do
+    run_cargo test --locked --offline -p "$package" --test "$test_target" \
+      "$focus_test" -- --exact --test-threads=1 || return
+  done
+}
+
 append_g_unit_inventory() {
   local leg_id="$1"
   local package="$2"
@@ -1986,7 +2096,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 212-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 256-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2012,6 +2122,43 @@ if ((corridor_enabled)); then
       iroha_core "${required_multilane_queue_journal_focus_tests[@]}"
   require_g_unit_log_results \
     "${required_multilane_queue_journal_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-lib iroha_config \
+    "${required_multilane_config_lib_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-lib cargo-focus \
+    "${#required_multilane_config_lib_focus_tests[@]}" \
+    'for test in required_multilane_config_lib_focus_tests; do cargo test --locked --offline -p iroha_config --lib "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_crate_tests \
+      iroha_config "${required_multilane_config_lib_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_lib_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-runtime iroha_config \
+    "${required_multilane_config_runtime_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-runtime cargo-focus \
+    "${#required_multilane_config_runtime_focus_tests[@]}" \
+    'for test in required_multilane_config_runtime_focus_tests; do cargo test --locked --offline -p iroha_config --test sumeragi_v2_merge_runtime_config "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_test_target \
+      iroha_config sumeragi_v2_merge_runtime_config \
+      "${required_multilane_config_runtime_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_runtime_focus_tests[@]}"
+
+  append_g_unit_inventory \
+    g-unit-iroha-config-fixtures iroha_config \
+    "${required_multilane_config_fixtures_focus_tests[@]}"
+  run_corridor_leg \
+    g-unit-iroha-config-fixtures cargo-focus \
+    "${#required_multilane_config_fixtures_focus_tests[@]}" \
+    'for test in required_multilane_config_fixtures_focus_tests; do cargo test --locked --offline -p iroha_config --test fixtures "$test" -- --exact --test-threads=1; done' \
+    run_multilane_focus_test_target \
+      iroha_config fixtures "${required_multilane_config_fixtures_focus_tests[@]}"
+  require_g_unit_log_results \
+    "${required_multilane_config_fixtures_focus_tests[@]}"
 
   append_g_unit_inventory \
     g-unit-iroha-data-model iroha_data_model \
@@ -2057,8 +2204,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 213 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 212 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 255 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 256 focused tests" >&2
     exit 1
   fi
 fi
@@ -2444,9 +2591,9 @@ if [[ "$profile" == "--release" ]]; then
     java
   )
   native_amx_grouped_parity_test_counts=(
-    4
-    47
-    48
+    7
+    56
+    54
     3
     6
     5
@@ -2540,6 +2687,9 @@ seed_launcher_contract_tests=(
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_ambiguous_test_summary
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_preserves_cargo_failure_through_tee
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_bundle_tampering_before_completion
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion
+  pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_marker_durability_failure_is_not_terminal
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_parent_source_manifest_mismatch
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_source_drift_before_completion
   pytests/scripts/sumeragi_v2_seed_matrix_test.py::test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering
@@ -2553,15 +2703,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 seed_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 seed_launcher_pass_summary="$(
-  grep -Ec '^11 passed in [0-9]+([.][0-9]+)?s$' "$seed_launcher_contract_log" || true
+  grep -Ec '^14 passed in [0-9]+([.][0-9]+)?s$' "$seed_launcher_contract_log" || true
 )"
 if ((seed_launcher_pipeline_status[0] != 0 || seed_launcher_pipeline_status[1] != 0)) \
   || [[ "$seed_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 seed-launcher contract preflight did not run exactly 11 passing tests (pytest=${seed_launcher_pipeline_status[0]}, tee=${seed_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 seed-launcher contract preflight did not run exactly 14 passing tests (pytest=${seed_launcher_pipeline_status[0]}, tee=${seed_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-seed-launcher pytest 11 \
+  preflight-seed-launcher pytest 14 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${seed_launcher_contract_tests[*]}" \
   "$seed_launcher_contract_log" \
   "${seed_launcher_pipeline_status[0]}" "${seed_launcher_pipeline_status[1]}"
@@ -2681,6 +2831,8 @@ fi
 # evidence changes before the corridor relies on the final release receipt.
 release_receipt_contract_files=(
   pytests/scripts/sumeragi_v2_release_receipt_test.py
+  pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py
+  pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py
 )
 release_receipt_contract_log="$(corridor_contract_log_path preflight-release-receipt)"
 set +e
@@ -2689,16 +2841,16 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^232 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^316 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 232 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt/bundle contract preflight did not run exactly 316 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 232 \
+  preflight-release-receipt pytest 316 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
@@ -2792,10 +2944,18 @@ record_corridor_log \
 ((corridor_enabled)) || rm -f -- "$formal_launcher_contract_log"
 
 # Run the complete mocked soak launcher/evidence corpus as one exact file-bound
-# preflight. The 39-pass summary rejects missing, added, skipped, or xfailed
+# preflight. The 42-pass summary rejects missing, added, skipped, or xfailed
 # cases before the release corridor can trust the 24-hour evidence path.
 taira_soak_contract_files=(
-  pytests/scripts/taira_v2_soak_test.py
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_pins_complete_profile_and_runs_exactly_one_test
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_inventory
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_zero_test_execution_output
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_bundle_tampering_before_completion
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_symlinked_marker_temp_without_completion
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_marker_durability_failure_is_not_terminal
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_profile_override_arguments_before_cargo
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_rejects_a_concurrent_source_bound_soak
+  pytests/scripts/taira_v2_soak_test.py::test_launcher_does_not_promote_provisional_evidence_when_validation_fails
   pytests/scripts/taira_v2_soak_evidence_test.py
 )
 taira_soak_contract_log="$(corridor_contract_log_path preflight-taira-soak)"
@@ -2805,15 +2965,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 taira_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 taira_soak_pass_summary="$(
-  grep -Ec '^39 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
+  grep -Ec '^42 passed in [0-9]+([.][0-9]+)?s$' "$taira_soak_contract_log" || true
 )"
 if ((taira_soak_pipeline_status[0] != 0 || taira_soak_pipeline_status[1] != 0)) \
   || [[ "$taira_soak_pass_summary" != 1 ]]; then
-  echo "Taira v2 soak launcher/evidence preflight did not run exactly 39 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
+  echo "Taira v2 soak launcher/evidence preflight did not run exactly 42 passing tests (pytest=${taira_soak_pipeline_status[0]}, tee=${taira_soak_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-taira-soak pytest 39 \
+  preflight-taira-soak pytest 42 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${taira_soak_contract_files[*]}" \
   "$taira_soak_contract_log" \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
@@ -2822,7 +2982,11 @@ publish_corridor_completion() {
   if ((!corridor_enabled)); then
     return
   fi
-  readonly expected_corridor_leg_count=78
+  if ! localnet_binary_attestation_valid; then
+    echo "source-bound localnet binary bundle changed before corridor completion" >&2
+    return 1
+  fi
+  readonly expected_corridor_leg_count=81
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -2887,7 +3051,7 @@ publish_corridor_completion() {
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
       "$native_amx_grouped_suite_source_manifest_sha256" \
-    native_amx_grouped_negative_control_count 45 \
+    native_amx_grouped_negative_control_count 50 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
@@ -3206,4 +3370,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 212/212 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 256/256 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

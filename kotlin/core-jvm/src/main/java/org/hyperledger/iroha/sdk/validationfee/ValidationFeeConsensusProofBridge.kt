@@ -38,7 +38,7 @@ class ValidationFeeConsensusProofBridge private constructor() {
             require(trustedCheckpointHeight > 0) {
                 "trustedCheckpointHeight must be positive"
             }
-            requireNonzeroHash(trustedCheckpointContextId, "trustedCheckpointContextId")
+            requireIrohaHash(trustedCheckpointContextId, "trustedCheckpointContextId")
             requireNative()
             return nativeEncodeCurrentPolicyProofRequestV1(
                 trustedCheckpointHeight,
@@ -70,12 +70,12 @@ class ValidationFeeConsensusProofBridge private constructor() {
             ) {
                 "chainId must be canonical bounded text"
             }
-            requireNonzeroHash(boundGenesisHash, "boundGenesisHash")
-            requireNonzeroHash(policyChainGenesisHash, "policyChainGenesisHash")
+            requireIrohaHash(boundGenesisHash, "boundGenesisHash")
+            requireIrohaHash(policyChainGenesisHash, "policyChainGenesisHash")
             require(trustedCheckpointHeight > 0) {
                 "trustedCheckpointHeight must be positive"
             }
-            requireNonzeroHash(trustedCheckpointContextId, "trustedCheckpointContextId")
+            requireIrohaHash(trustedCheckpointContextId, "trustedCheckpointContextId")
             requireNative()
             val json = nativeVerifyCurrentPolicyProofV1(
                 proofNorito.copyOf(),
@@ -89,9 +89,9 @@ class ValidationFeeConsensusProofBridge private constructor() {
             return json.toString(Charsets.UTF_8)
         }
 
-        internal fun requireNonzeroHash(value: ByteArray, label: String) {
-            require(value.size == HASH_BYTES && value.any { it.toInt() != 0 }) {
-                "$label must contain one non-zero 32-byte Iroha hash"
+        internal fun requireIrohaHash(value: ByteArray, label: String) {
+            require(value.size == HASH_BYTES && (value[HASH_BYTES - 1].toInt() and 1) == 1) {
+                "$label must contain one canonical 32-byte Iroha hash"
             }
         }
 

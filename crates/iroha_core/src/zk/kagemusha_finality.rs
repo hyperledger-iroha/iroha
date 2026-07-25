@@ -602,7 +602,8 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
+            KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
             KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
@@ -613,11 +614,11 @@ mod tests {
             KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
             KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4,
             KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
-            KagemushaRecursiveSpendTopUpAnchorV4, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaStepCircuitParamsV4,
-            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
-            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-            KagemushaTopUpFinalityRosterArtifactReferenceV4,
+            KagemushaRecursiveSpendTopUpAnchorV4, KagemushaReviewedSourceClosureV1,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaStepCircuitParamsV4, KagemushaTopUpAnchorMerkleProofV2,
+            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
+            KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactReferenceV4,
             KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -635,6 +636,38 @@ mod tests {
         manifest_digest: [u8; 32],
         finality_artifact: V2FinalityArtifact,
         signing_keys: Vec<KeyPair>,
+    }
+
+    fn reviewed_source_closure(
+        source_commit: &str,
+        source_tree_sha256: [u8; 32],
+    ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
+        let tracked_binary_diff_sha256 = Sha256::digest([0x93; 32]).into();
+        let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
+        let mut combined = Sha256::new();
+        combined.update(b"iroha-source-diff-v1\0");
+        combined.update(b"tracked-binary-diff-sha256\0");
+        combined.update(tracked_binary_diff_sha256);
+        combined.update(b"untracked-path-blob-manifest-sha256\0");
+        combined.update(untracked_path_mode_blob_oid_manifest_sha256);
+        let closure = KagemushaReviewedSourceClosureV1 {
+            schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
+            base_commit: source_commit.to_owned(),
+            source_commit: source_commit.to_owned(),
+            source_repo_dirty: true,
+            source_tree_sha256,
+            tracked_binary_diff_sha256,
+            untracked_file_count: 0,
+            untracked_path_mode_blob_oid_manifest: Vec::new(),
+            untracked_path_mode_blob_oid_manifest_sha256,
+            ignored_cargo_lock_size_bytes: 1,
+            ignored_cargo_lock_sha256: Sha256::digest([0x94]).into(),
+            combined_source_fingerprint_sha256: combined.finalize().into(),
+        };
+        let descriptor_sha256 = closure
+            .canonical_descriptor_sha256()
+            .expect("finality reviewed source closure fixture");
+        (closure, descriptor_sha256)
     }
 
     fn artifact(
@@ -792,6 +825,10 @@ mod tests {
         mutate_roster(&mut roster);
         let roster_bytes = norito::to_bytes(&roster).expect("roster bytes");
         let roster_digest = Sha256::digest(&roster_bytes).into();
+        let source_commit = "0123456789abcdef0123456789abcdef01234567";
+        let source_tree_sha256 = [0x52; 32];
+        let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
+            reviewed_source_closure(source_commit, source_tree_sha256);
         let manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -799,9 +836,11 @@ mod tests {
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
             generation: "release-generation-1".to_owned(),
-            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            source_tree_sha256: [0x52; 32],
+            source_commit: source_commit.to_owned(),
+            source_tree_sha256,
             source_repo_dirty: true,
+            reviewed_source_closure,
+            reviewed_source_closure_descriptor_sha256,
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: 2,
@@ -1354,7 +1393,7 @@ mod tests {
                     swapped_roster.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::RosterContextMismatch
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
 
         let changed_power = fixture_with_roster(|roster| {

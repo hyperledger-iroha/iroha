@@ -79,10 +79,7 @@ use sorafs_manifest::{
 };
 
 use super::*;
-use crate::{
-    smartcontracts::ValidSingularQuery,
-    state::StateTransaction,
-};
+use crate::{smartcontracts::ValidSingularQuery, state::StateTransaction};
 
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -5676,6 +5673,16 @@ mod sorafs_tests {
         )
     }
 
+    fn replace_test_tier(schedule: &mut PricingScheduleRecord, replacement: TierRate) {
+        let storage_class = replacement.storage_class;
+        let tier = schedule
+            .tiers
+            .iter_mut()
+            .find(|tier| tier.storage_class == storage_class)
+            .expect("launch schedule contains every storage class");
+        *tier = replacement;
+    }
+
     #[test]
     fn xor_quantity_ratio_is_exact_checked_and_rounds_at_nano_boundaries() {
         let zero = Quantity::zero();
@@ -6091,6 +6098,15 @@ mod sorafs_tests {
             .get_mut(&alice())
             .expect("Alice permission set")
             .insert(AccountPermission::new(name.to_owned(), Json::new(())));
+    }
+
+    fn smart_contract_error_message(error: &InstructionExecutionError) -> &str {
+        match error {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("expected smart-contract parameter error, got {other:?}"),
+        }
     }
 
     fn default_chunker() -> ChunkerProfileHandle {
@@ -7014,12 +7030,15 @@ mod sorafs_tests {
         let allocation_bomb = norito::to_bytes(&bomb).expect("encode dispute allocation bomb");
         assert!(allocation_bomb.len() <= MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES);
 
-        for payload in [
-            Vec::new(),
-            vec![0xFF],
-            vec![0xA5; MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES + 1],
-            alternate,
-            allocation_bomb,
+        for (payload, expected) in [
+            (Vec::new(), "invalid capacity dispute payload"),
+            (vec![0xFF], "invalid capacity dispute payload"),
+            (
+                vec![0xA5; MAX_CAPACITY_DISPUTE_PAYLOAD_BYTES + 1],
+                "invalid capacity dispute payload",
+            ),
+            (alternate, "invalid capacity dispute payload"),
+            (allocation_bomb, "description must be"),
         ] {
             let mut record = base_record.clone();
             record.dispute_payload = payload;
@@ -7031,7 +7050,7 @@ mod sorafs_tests {
                 err,
                 InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(message)
-                ) if message.contains("invalid capacity dispute payload")
+                ) if message.contains(expected)
             ));
             assert!(stx.world.capacity_disputes.get(&dispute_id).is_none());
         }
@@ -7482,6 +7501,8 @@ mod sorafs_tests {
         let alias = default_alias_binding();
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
+        let manifest_digest =
+            ManifestDigest::from_manifest(&manifest).expect("derive governed manifest digest");
         RegisterPinManifest {
             manifest_payload: manifest.encode().expect("encode manifest"),
             submitted_epoch: 5,
@@ -7494,7 +7515,7 @@ mod sorafs_tests {
         let pending = stx
             .world
             .pin_manifests
-            .get(&default_digest())
+            .get(&manifest_digest)
             .expect("pending manifest stored")
             .clone();
         assert_eq!(pending.status, PinStatus::Pending);
@@ -7516,7 +7537,7 @@ mod sorafs_tests {
         );
         let (envelope, _) = build_envelope(&pending, &council_key);
         ApprovePinManifest {
-            digest: default_digest(),
+            digest: manifest_digest,
             approved_epoch: 6,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
@@ -7527,7 +7548,7 @@ mod sorafs_tests {
         let approved = stx
             .world
             .pin_manifests
-            .get(&default_digest())
+            .get(&manifest_digest)
             .expect("approved manifest stored");
         assert_eq!(approved.status, PinStatus::Approved(6));
         assert!(approved.council_envelope_digest.is_some());
@@ -7772,7 +7793,7 @@ mod sorafs_tests {
                 vec![0xA5; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1],
                 "manifest payload has",
             ),
-            (alternate, "canonical first-release Norito"),
+            (alternate, "canonical Norito encoding"),
             (trailing, "ManifestV1"),
             (allocation_bomb, "invalid canonical ManifestV1"),
         ] {
@@ -7948,6 +7969,8 @@ mod sorafs_tests {
 
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
+        let manifest_digest =
+            ManifestDigest::from_manifest(&manifest).expect("derive manifest digest");
         RegisterPinManifest {
             manifest_payload: manifest.encode().expect("encode manifest"),
             submitted_epoch: 5,
@@ -7963,7 +7986,7 @@ mod sorafs_tests {
             .iter()
             .next()
             .expect("auto replication order stored");
-        assert_eq!(order.manifest_digest, default_digest());
+        assert_eq!(order.manifest_digest, manifest_digest);
         assert_eq!(order.issued_epoch, 5);
         assert_eq!(order.deadline_epoch, 6);
 
@@ -8104,7 +8127,13 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
 
         let alias = default_alias_binding();
-        let duplicate_alias = alias_binding_for(second_digest(), "sora", "docs", 0, 0);
+        let duplicate_alias = alias_binding_for(
+            second_digest(),
+            "sora",
+            "docs",
+            6,
+            default_policy().retention_epoch,
+        );
         let first = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             submitted_epoch: 5,
@@ -8350,7 +8379,9 @@ mod sorafs_tests {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message,
             )) => assert!(
-                message.contains("alias proof manifest CID does not match registered digest"),
+                message.contains(
+                    "alias proof manifest CID does not match content root registered for manifest"
+                ),
                 "unexpected error message: {message}"
             ),
             other => panic!("unexpected error: {other:?}"),
@@ -9684,7 +9715,7 @@ mod sorafs_tests {
             other => panic!("unexpected error: {other:?}"),
         };
         assert!(
-            message.contains("stored digest"),
+            message.contains("stored council envelope digest"),
             "unexpected error message: {message}"
         );
     }
@@ -10842,12 +10873,16 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
-        let providers = vec![ProviderId::new([0x50; 32])];
+        let providers = vec![
+            ProviderId::new([0x50; 32]),
+            ProviderId::new([0x51; 32]),
+            ProviderId::new([0x52; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &alice());
 
         let mismatch_id = ReplicationOrderId::new([0x68; 32]);
-        let mut mismatch = replication_order_struct(mismatch_id, default_digest(), &providers, 1);
-        mismatch.manifest_cid = vec![0x99; 32];
+        let mut mismatch = replication_order_struct(mismatch_id, default_digest(), &providers, 3);
+        mismatch.manifest_cid = manifest_fixture(0xBB).root_cid;
         let error = IssueReplicationOrder {
             order_id: mismatch_id,
             order_payload: encode_replication_order(&mismatch),
@@ -10860,12 +10895,12 @@ mod sorafs_tests {
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("manifest CID must equal")
+            ) if message.contains("manifest CID does not match content root")
         ));
 
         let noncanonical_id = ReplicationOrderId::new([0x69; 32]);
         let noncanonical =
-            replication_order_struct(noncanonical_id, default_digest(), &providers, 1);
+            replication_order_struct(noncanonical_id, default_digest(), &providers, 3);
         let noncanonical_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&noncanonical).expect("encode alternate-layout fixture")
@@ -10903,7 +10938,7 @@ mod sorafs_tests {
 
         let allocation_bomb_id = ReplicationOrderId::new([0x6C; 32]);
         let mut allocation_bomb =
-            replication_order_struct(allocation_bomb_id, default_digest(), &providers, 1);
+            replication_order_struct(allocation_bomb_id, default_digest(), &providers, 3);
         allocation_bomb.metadata.push(CapacityMetadataEntry {
             key: "bomb".to_owned(),
             value: "x".repeat(sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES + 1),
@@ -10922,7 +10957,7 @@ mod sorafs_tests {
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("invalid replication order payload")
+            ) if message.contains("replication order validation failed")
         ));
 
         assert_eq!(stx.world.replication_orders.iter().count(), 0);
@@ -10992,7 +11027,11 @@ mod sorafs_tests {
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let order_id = ReplicationOrderId::new([0x45; 32]);
-        let providers = vec![ProviderId::new([0x24; 32])];
+        let providers = vec![
+            ProviderId::new([0x24; 32]),
+            ProviderId::new([0x25; 32]),
+            ProviderId::new([0x26; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &bob());
 
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
@@ -11118,13 +11157,17 @@ mod sorafs_tests {
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let order_id = ReplicationOrderId::new([0x76; 32]);
-        let providers = vec![ProviderId::new([0x30; 32])];
+        let providers = vec![
+            ProviderId::new([0x30; 32]),
+            ProviderId::new([0x31; 32]),
+            ProviderId::new([0x32; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let payload = encode_replication_order(&replication_order_struct(
             order_id,
             default_digest(),
             &providers,
-            1,
+            3,
         ));
         IssueReplicationOrder {
             order_id,
@@ -11166,13 +11209,17 @@ mod sorafs_tests {
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let order_id = ReplicationOrderId::new([0x74; 32]);
-        let providers = vec![ProviderId::new([0x2E; 32])];
+        let providers = vec![
+            ProviderId::new([0x2E; 32]),
+            ProviderId::new([0x2F; 32]),
+            ProviderId::new([0x30; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let payload = encode_replication_order(&replication_order_struct(
             order_id,
             default_digest(),
             &providers,
-            1,
+            3,
         ));
         IssueReplicationOrder {
             order_id,
@@ -11257,13 +11304,17 @@ mod sorafs_tests {
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let order_id = ReplicationOrderId::new([0x73; 32]);
-        let providers = vec![ProviderId::new([0x2D; 32])];
+        let providers = vec![
+            ProviderId::new([0x2D; 32]),
+            ProviderId::new([0x2E; 32]),
+            ProviderId::new([0x2F; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let payload = encode_replication_order(&replication_order_struct(
             order_id,
             default_digest(),
             &providers,
-            1,
+            3,
         ));
         IssueReplicationOrder {
             order_id,
@@ -11314,13 +11365,17 @@ mod sorafs_tests {
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
 
         let order_id = ReplicationOrderId::new([0x75; 32]);
-        let providers = vec![ProviderId::new([0x2F; 32])];
+        let providers = vec![
+            ProviderId::new([0x2F; 32]),
+            ProviderId::new([0x30; 32]),
+            ProviderId::new([0x31; 32]),
+        ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let payload = encode_replication_order(&replication_order_struct(
             order_id,
             default_digest(),
             &providers,
-            1,
+            3,
         ));
         IssueReplicationOrder {
             order_id,
@@ -11563,11 +11618,14 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(
-            StorageClass::Hot,
-            xor_quantity_nanos(1_000_000_000),
-            xor_quantity_nanos(1_000_000),
-        )];
+        replace_test_tier(
+            &mut schedule,
+            TierRate::new(
+                StorageClass::Hot,
+                xor_quantity_nanos(1_000_000_000),
+                xor_quantity_nanos(1_000_000),
+            ),
+        );
         schedule.credit = CreditPolicy {
             settlement_window_secs: SECONDS_PER_BILLING_MONTH,
             settlement_grace_secs: 0,
@@ -11653,6 +11711,8 @@ mod sorafs_tests {
 
     #[test]
     fn record_capacity_telemetry_caps_credit_debit_at_zero() {
+        // The zero lower bound is enforced fail-closed: an unaffordable debit
+        // is rejected atomically rather than clamped into a partial charge.
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -11664,11 +11724,14 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(
-            StorageClass::Hot,
-            xor_quantity_nanos(1_000_000_000),
-            xor_quantity_nanos(1),
-        )];
+        replace_test_tier(
+            &mut schedule,
+            TierRate::new(
+                StorageClass::Hot,
+                xor_quantity_nanos(1_000_000_000),
+                xor_quantity_nanos(1),
+            ),
+        );
         schedule.credit.settlement_window_secs = SECONDS_PER_BILLING_MONTH;
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
@@ -11679,6 +11742,12 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("seed one-nano provider credit");
+        let ledger_before = stx
+            .world
+            .capacity_fee_ledger
+            .get(&provider)
+            .cloned()
+            .expect("capacity ledger exists");
 
         let telemetry = CapacityTelemetryRecord::new(
             provider,
@@ -11698,22 +11767,30 @@ mod sorafs_tests {
             0,
         )
         .with_nonce(SECONDS_PER_BILLING_MONTH);
-        RecordCapacityTelemetry { record: telemetry }
+        let err = RecordCapacityTelemetry { record: telemetry }
             .execute(&alice(), &mut stx)
-            .expect("debit larger than credit is capped without underflow");
+            .expect_err("debit larger than credit must fail closed");
+        assert!(
+            matches!(
+                err,
+                InstructionExecutionError::InvariantViolation(ref message)
+                    if message.contains("credit debit")
+                        && message.contains("exceeds available balance")
+            ),
+            "unexpected insufficient-credit error: {err:?}"
+        );
 
         let credit = stx
             .world
             .provider_credit_ledger
             .get(&provider)
             .expect("provider credit stored");
-        assert_eq!(credit.available_credit, Quantity::zero());
-        let ledger = stx
-            .world
-            .capacity_fee_ledger
-            .get(&provider)
-            .expect("capacity ledger stored");
-        assert_eq!(ledger.storage_fee, xor_quantity_nanos(1_000_000_000));
+        assert_eq!(credit.available_credit, xor_quantity_nanos(1));
+        assert_eq!(
+            stx.world.capacity_fee_ledger.get(&provider),
+            Some(&ledger_before),
+            "failed debit must leave the existing capacity ledger unchanged"
+        );
     }
 
     #[test]
@@ -11729,11 +11806,14 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(
-            StorageClass::Hot,
-            max_positive_quantity(),
-            xor_quantity_nanos(1),
-        )];
+        replace_test_tier(
+            &mut schedule,
+            TierRate::new(
+                StorageClass::Hot,
+                max_positive_quantity(),
+                xor_quantity_nanos(1),
+            ),
+        );
         schedule.credit.settlement_window_secs = SECONDS_PER_BILLING_MONTH;
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
@@ -11780,9 +11860,8 @@ mod sorafs_tests {
             .expect_err("overflowing storage charge must be rejected");
         assert!(matches!(
             error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("capacity storage fee")
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("SoraFS storage fee calculation failed")
         ));
         assert_eq!(
             stx.world.capacity_fee_ledger.get(&provider),
@@ -11936,11 +12015,7 @@ mod sorafs_tests {
     #[test]
     fn record_capacity_telemetry_requires_authorised_submitter() {
         let mut state = make_state();
-        let bob = AccountId::new(
-            "ed01208B6BD94034D1145C0B149DB43A07F56977AF58C1871F43B6D54A4D3F33D5B451"
-                .parse()
-                .expect("public key"),
-        );
+        let bob = bob();
         seed_sorafs_permissions(&mut state, &bob);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -12084,7 +12159,7 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            xor_quantity_nanos(25_000_000_000),
+            xor_quantity_nanos(1_000_000_000_000),
             xor_quantity_nanos(8_000_000_000),
             Quantity::zero(),
             Quantity::zero(),
@@ -12416,7 +12491,7 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
@@ -12424,7 +12499,7 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            xor_quantity_nanos(10_000_000_000),
+            xor_quantity_nanos(1_000_000_000_000),
             xor_quantity_nanos(6_000_000_000),
             Quantity::zero(),
             Quantity::zero(),
@@ -12508,7 +12583,7 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
@@ -12516,7 +12591,7 @@ mod sorafs_tests {
 
         let credit = ProviderCreditRecord::new(
             provider,
-            xor_quantity_nanos(10_000_000_000),
+            xor_quantity_nanos(1_000_000_000_000),
             xor_quantity_nanos(6_000_000_000),
             Quantity::zero(),
             Quantity::zero(),
@@ -12598,13 +12673,13 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = provider_credit_nanos(provider, 10_000_000_000, 6_000_000_000);
+        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -12696,13 +12771,13 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = provider_credit_nanos(provider, 10_000_000_000, 6_000_000_000);
+        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -12764,13 +12839,13 @@ mod sorafs_tests {
             schedule.collateral = CollateralPolicy {
                 multiplier_bps: 20_000,
                 onboarding_discount_bps: 1,
-                onboarding_period_secs: 0,
+                onboarding_period_secs: 1,
             };
             SetPricingSchedule { schedule }
                 .execute(&alice(), &mut stx)
                 .expect("set pricing schedule");
 
-            let credit = provider_credit_nanos(provider, 9_000_000_000, 6_000_000_000);
+            let credit = provider_credit_nanos(provider, 1_000_000_000_000, 6_000_000_000);
             UpsertProviderCredit { record: credit }
                 .execute(&alice(), &mut stx)
                 .expect("seed provider credit");
@@ -12860,13 +12935,13 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = provider_credit_nanos(provider, 7_500_000_000, 5_000_000_000);
+        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 5_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -12949,13 +13024,13 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = provider_credit_nanos(provider, 5_500_000_000, 3_500_000_000);
+        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 3_500_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -13037,13 +13112,13 @@ mod sorafs_tests {
         schedule.collateral = CollateralPolicy {
             multiplier_bps: 20_000,
             onboarding_discount_bps: 1,
-            onboarding_period_secs: 0,
+            onboarding_period_secs: 1,
         };
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
 
-        let credit = provider_credit_nanos(provider, 6_000_000_000, 4_000_000_000);
+        let credit = provider_credit_nanos(provider, 1_000_000_000_000, 4_000_000_000);
         UpsertProviderCredit { record: credit }
             .execute(&alice(), &mut stx)
             .expect("seed provider credit");
@@ -13183,7 +13258,7 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("register capacity declaration");
 
-            let credit = provider_credit_nanos(provider, 40_000_000_000, 12_000_000_000);
+            let credit = provider_credit_nanos(provider, 1_000_000_000_000_000, 12_000_000_000);
             UpsertProviderCredit { record: credit }
                 .execute(&alice(), &mut stx)
                 .expect("seed provider credit");
@@ -13328,11 +13403,14 @@ mod sorafs_tests {
             .expect("register capacity declaration");
 
         let mut schedule = PricingScheduleRecord::launch_default();
-        schedule.tiers = vec![TierRate::new(
-            StorageClass::Hot,
-            xor_quantity_nanos(1),
-            xor_quantity_nanos(2_000_000),
-        )];
+        replace_test_tier(
+            &mut schedule,
+            TierRate::new(
+                StorageClass::Hot,
+                xor_quantity_nanos(1),
+                xor_quantity_nanos(2_000_000),
+            ),
+        );
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
@@ -13455,18 +13533,22 @@ mod sorafs_tests {
 
         let mut schedule = PricingScheduleRecord::launch_default();
         schedule.default_storage_class = StorageClass::Hot;
-        schedule.tiers = vec![
+        replace_test_tier(
+            &mut schedule,
             TierRate::new(
                 StorageClass::Hot,
                 xor_quantity_nanos(5_000_000),
                 xor_quantity_nanos(5_000),
             ),
+        );
+        replace_test_tier(
+            &mut schedule,
             TierRate::new(
                 StorageClass::Cold,
                 xor_quantity_nanos(1_000_000),
                 xor_quantity_nanos(1_000),
             ),
-        ];
+        );
         SetPricingSchedule { schedule }
             .execute(&alice(), &mut stx)
             .expect("set pricing schedule");
@@ -13722,12 +13804,15 @@ mod sorafs_tests {
             .expect("encode capacity declaration allocation bomb");
         assert!(allocation_bomb.len() <= MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES);
 
-        for payload in [
-            Vec::new(),
-            vec![0xFF],
-            vec![0xA5; MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES + 1],
-            alternate,
-            allocation_bomb,
+        for (payload, expected) in [
+            (Vec::new(), "invalid capacity declaration payload"),
+            (vec![0xFF], "invalid capacity declaration payload"),
+            (
+                vec![0xA5; MAX_CAPACITY_DECLARATION_PAYLOAD_BYTES + 1],
+                "invalid capacity declaration payload",
+            ),
+            (alternate, "invalid capacity declaration payload"),
+            (allocation_bomb, "capacity declaration validation failed"),
         ] {
             let mut record = base_record.clone();
             record.declaration = payload;
@@ -13742,7 +13827,7 @@ mod sorafs_tests {
                 other => panic!("unexpected error: {other:?}"),
             };
             assert!(
-                message.contains("invalid capacity declaration payload"),
+                message.contains(expected),
                 "unexpected error message: {message}"
             );
             assert!(stx.world.capacity_declarations.get(&provider).is_none());
@@ -14061,7 +14146,7 @@ mod sorafs_tests {
             )
             .execute(&alice(), &mut transaction)
             .expect_err("source identity cannot bind a different report");
-            assert!(conflict.to_string().contains("different canonical report"));
+            assert!(smart_contract_error_message(&conflict).contains("different canonical report"));
 
             ApplySorafsRepairTaskAction::new(
                 report.ticket_id.0.clone(),
@@ -14083,7 +14168,7 @@ mod sorafs_tests {
             )
             .execute(&bob(), &mut transaction)
             .expect_err("second worker cannot claim an unexpired lease");
-            assert!(competing_claim.to_string().contains("lease is held"));
+            assert!(smart_contract_error_message(&competing_claim).contains("lease is held"));
 
             transaction.apply();
             block.commit().expect("commit first repair block");
@@ -14118,9 +14203,10 @@ mod sorafs_tests {
             )
             .execute(&alice(), &mut transaction)
             .expect_err("old lease owner cannot finalize after reclaim");
+            let stale_terminal_message = smart_contract_error_message(&stale_terminal);
             assert!(
-                stale_terminal.to_string().contains("different account")
-                    || stale_terminal.to_string().contains("generation mismatch")
+                stale_terminal_message.contains("different account")
+                    || stale_terminal_message.contains("generation mismatch")
             );
 
             let completion = ApplySorafsRepairTaskAction::new(
@@ -14151,7 +14237,7 @@ mod sorafs_tests {
             )
             .execute(&bob(), &mut transaction)
             .expect_err("same idempotency key cannot authorize a different terminal");
-            assert!(reused_key.to_string().contains("different action"));
+            assert!(smart_contract_error_message(&reused_key).contains("different action"));
 
             let second_terminal = ApplySorafsRepairTaskAction::new(
                 report.ticket_id.0.clone(),
@@ -14164,7 +14250,7 @@ mod sorafs_tests {
             )
             .execute(&bob(), &mut transaction)
             .expect_err("a task has exactly one terminal outcome");
-            assert!(second_terminal.to_string().contains("terminal outcome"));
+            assert!(smart_contract_error_message(&second_terminal).contains("terminal outcome"));
 
             transaction.apply();
             block.commit().expect("commit second repair block");
@@ -14379,9 +14465,7 @@ mod sorafs_tests {
             .execute(&alice(), transaction)
             .expect_err("revoked lease owner cannot renew");
             assert!(
-                revoked_renewal
-                    .to_string()
-                    .contains("current provider-scoped")
+                smart_contract_error_message(&revoked_renewal).contains("current provider-scoped")
             );
 
             let revoked_terminal = ApplySorafsRepairTaskAction::new(
@@ -14396,9 +14480,7 @@ mod sorafs_tests {
             .execute(&alice(), transaction)
             .expect_err("revoked lease owner cannot commit a terminal outcome");
             assert!(
-                revoked_terminal
-                    .to_string()
-                    .contains("current provider-scoped")
+                smart_contract_error_message(&revoked_terminal).contains("current provider-scoped")
             );
             let revoked_slash = ApplySorafsRepairTaskAction::new(
                 report.ticket_id.0.clone(),
@@ -14412,9 +14494,7 @@ mod sorafs_tests {
             .execute(&alice(), transaction)
             .expect_err("revoked lease owner cannot commit a slash proposal");
             assert!(
-                revoked_slash
-                    .to_string()
-                    .contains("current provider-scoped")
+                smart_contract_error_message(&revoked_slash).contains("current provider-scoped")
             );
 
             ApplySorafsRepairTaskAction::new(
@@ -14440,8 +14520,7 @@ mod sorafs_tests {
             .execute(&alice(), transaction)
             .expect_err("revoked former owner cannot race the replacement");
             assert!(
-                revoked_after_reclaim
-                    .to_string()
+                smart_contract_error_message(&revoked_after_reclaim)
                     .contains("current provider-scoped")
             );
 
@@ -14472,7 +14551,7 @@ mod sorafs_tests {
             )
             .execute(&bob(), transaction)
             .expect_err("replacement cannot commit a second terminal outcome");
-            assert!(duplicate_terminal.to_string().contains("terminal outcome"));
+            assert!(smart_contract_error_message(&duplicate_terminal).contains("terminal outcome"));
             Ok(())
         })
         .expect("commit permission-revocation takeover");
@@ -14587,8 +14666,8 @@ mod sorafs_tests {
 
     #[test]
     fn repair_task_byte_budget_returns_stable_continuation_cursor() {
-        const TASK_COUNT: usize = 150;
-        const EVIDENCE_PADDING_BYTES: usize = 58 * 1024;
+        const TASK_COUNT: usize = 300;
+        const EVIDENCE_PADDING_BYTES: usize = 30 * 1024;
 
         let mut state = make_state();
         let provider = ProviderId::new([0xC2; 32]);
@@ -14844,16 +14923,11 @@ mod sorafs_tests {
             .into_iter()
             .next()
             .expect("repair budget fixture has one event");
-        let encoded_event_len = to_bytes(&event)
-            .expect("encode repair budget fixture event")
-            .len();
-        let oversized_event_count = REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1
-            .checked_div(encoded_event_len)
-            .and_then(|count| count.checked_add(2))
-            .expect("bounded repair event fixture count");
+        let mut oversized_event = event;
+        oversized_event.event.ticket_id = "x".repeat(REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1 + 1);
         let oversized_event_page = RepairFinalizedEventPageV1 {
             finalized_cursor: finalized_task.finalized_cursor,
-            events: vec![event; oversized_event_count],
+            events: vec![oversized_event],
             has_more: false,
             next_after: None,
         };
@@ -14939,7 +15013,7 @@ mod sorafs_tests {
         )
         .execute(&bob(), &mut transaction)
         .expect_err("appeal idempotency key cannot be rebound");
-        assert!(conflicting_replay.to_string().contains("different action"));
+        assert!(smart_contract_error_message(&conflicting_replay).contains("different action"));
         let duplicate_appeal = SubmitSorafsRepairAppeal::new(
             report.ticket_id.0.clone(),
             4,
@@ -14949,7 +15023,7 @@ mod sorafs_tests {
         )
         .execute(&bob(), &mut transaction)
         .expect_err("slash proposal permits only one appeal");
-        assert!(duplicate_appeal.to_string().contains("single appeal"));
+        assert!(smart_contract_error_message(&duplicate_appeal).contains("single appeal"));
 
         transaction.apply();
         block.commit().expect("commit repair escalation block");

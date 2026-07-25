@@ -7,6 +7,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.function.Supplier;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.InstructionBox;
@@ -19,6 +20,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Package-private canonical Norito codec for the current registration instruction. */
 final class OfflineDeviceAttestationCodec {
+  private static final ThreadLocal<Integer> DECODE_CHAIN_DISCRIMINANT = new ThreadLocal<>();
 
   static final String REGISTRATION_SCHEMA =
       "iroha_data_model::offline::OfflineDeviceAttestationRegistration";
@@ -45,17 +47,25 @@ final class OfflineDeviceAttestationCodec {
         NoritoHeader.COMPACT_LEN);
   }
 
-  static DeviceAttestationRegistration decodeRegistrationCanonical(final byte[] archive) {
-    final byte[] snapshot = Objects.requireNonNull(archive, "archive").clone();
-    final NoritoCodec.ArchiveView view = NoritoCodec.fromBytesView(snapshot, REGISTRATION_SCHEMA);
-    if (view.flags() != NoritoHeader.COMPACT_LEN) {
-      throw new IllegalArgumentException("registration archive must use canonical compact lengths");
-    }
-    final DeviceAttestationRegistration decoded = view.decode(REGISTRATION_ADAPTER);
-    if (!Arrays.equals(snapshot, encodeRegistration(decoded))) {
-      throw new IllegalArgumentException("registration archive is not canonically encoded");
-    }
-    return decoded;
+  static DeviceAttestationRegistration decodeRegistrationCanonical(
+      final byte[] archive, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> {
+          final byte[] snapshot = Objects.requireNonNull(archive, "archive").clone();
+          final NoritoCodec.ArchiveView view =
+              NoritoCodec.fromBytesView(snapshot, REGISTRATION_SCHEMA);
+          if (view.flags() != NoritoHeader.COMPACT_LEN) {
+            throw new IllegalArgumentException(
+                "registration archive must use canonical compact lengths");
+          }
+          final DeviceAttestationRegistration decoded = view.decode(REGISTRATION_ADAPTER);
+          if (!Arrays.equals(snapshot, encodeRegistration(decoded))) {
+            throw new IllegalArgumentException(
+                "registration archive is not canonically encoded");
+          }
+          return decoded;
+        });
   }
 
   static byte[] encodeInstructionPayload(final DeviceAttestationRegistration registration) {
@@ -66,17 +76,25 @@ final class OfflineDeviceAttestationCodec {
         NoritoHeader.COMPACT_LEN);
   }
 
-  static DeviceAttestationRegistration decodeInstructionPayloadCanonical(final byte[] archive) {
-    final byte[] snapshot = Objects.requireNonNull(archive, "archive").clone();
-    final NoritoCodec.ArchiveView view = NoritoCodec.fromBytesView(snapshot, INSTRUCTION_SCHEMA);
-    if (view.flags() != NoritoHeader.COMPACT_LEN) {
-      throw new IllegalArgumentException("instruction archive must use canonical compact lengths");
-    }
-    final DeviceAttestationRegistration decoded = view.decode(INSTRUCTION_ADAPTER);
-    if (!Arrays.equals(snapshot, encodeInstructionPayload(decoded))) {
-      throw new IllegalArgumentException("instruction archive is not canonically encoded");
-    }
-    return decoded;
+  static DeviceAttestationRegistration decodeInstructionPayloadCanonical(
+      final byte[] archive, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> {
+          final byte[] snapshot = Objects.requireNonNull(archive, "archive").clone();
+          final NoritoCodec.ArchiveView view =
+              NoritoCodec.fromBytesView(snapshot, INSTRUCTION_SCHEMA);
+          if (view.flags() != NoritoHeader.COMPACT_LEN) {
+            throw new IllegalArgumentException(
+                "instruction archive must use canonical compact lengths");
+          }
+          final DeviceAttestationRegistration decoded = view.decode(INSTRUCTION_ADAPTER);
+          if (!Arrays.equals(snapshot, encodeInstructionPayload(decoded))) {
+            throw new IllegalArgumentException(
+                "instruction archive is not canonically encoded");
+          }
+          return decoded;
+        });
   }
 
   static InstructionBox instruction(final DeviceAttestationRegistration registration) {
@@ -184,7 +202,10 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, OfflineDeviceAttestationCodec::readString),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
           readField(decoder, child -> TransferWirePayloadEncoder.decodeAccountIdPayload(
-              child.readBytes(child.remaining()), child.flags(), child.flagsHint())),
+              child.readBytes(child.remaining()),
+              requiredDecodeChainDiscriminant(),
+              child.flags(),
+              child.flagsHint())),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionAssetDefinitionId),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
@@ -206,6 +227,36 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, child -> child.readUInt(64)),
           readField(decoder, child -> readHash(child, "recent_block_hash")),
           readField(decoder, child -> child.readUInt(64)));
+    }
+  }
+
+  private static int requiredDecodeChainDiscriminant() {
+    final Integer value = DECODE_CHAIN_DISCRIMINANT.get();
+    if (value == null) {
+      throw new IllegalStateException(
+          "offline attestation decoding requires an explicit chainDiscriminant");
+    }
+    return value;
+  }
+
+  private static <T> T withDecodeChain(
+      final int chainDiscriminant, final Supplier<T> operation) {
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    final Integer previous = DECODE_CHAIN_DISCRIMINANT.get();
+    if (previous != null && previous.intValue() != chainDiscriminant) {
+      throw new IllegalStateException("Conflicting nested chainDiscriminant context");
+    }
+    DECODE_CHAIN_DISCRIMINANT.set(chainDiscriminant);
+    try {
+      return operation.get();
+    } finally {
+      if (previous == null) {
+        DECODE_CHAIN_DISCRIMINANT.remove();
+      } else {
+        DECODE_CHAIN_DISCRIMINANT.set(previous);
+      }
     }
   }
 

@@ -4772,11 +4772,19 @@ impl NetworkRelayShared {
                 Some(certificate.proposal.descriptor.lane_block_height),
                 Some(certificate.proposal.descriptor.lane_block_view),
             ),
-            LaneHistoricalRecoveryRequest(request) => (
-                "LaneHistoricalRecoveryRequest",
-                Some(request.proposal().descriptor.lane_block_height),
-                Some(request.proposal().descriptor.lane_block_view),
-            ),
+            LaneHistoricalRecoveryRequest(request) => {
+                let proposal = request.proposal();
+                (
+                    "LaneHistoricalRecoveryRequest",
+                    proposal
+                        .map(|proposal| proposal.descriptor.lane_block_height)
+                        .or_else(|| {
+                            let source_height = request.source_height();
+                            (source_height != 0).then_some(source_height)
+                        }),
+                    proposal.map(|proposal| proposal.descriptor.lane_block_view),
+                )
+            }
             LaneHistoricalRecoveryResponse(response) => match &response.payload {
                 iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
                     block,
@@ -7490,11 +7498,12 @@ impl Iroha {
         });
 
         let (kura, mut block_count) =
-            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
+            Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
                 &config.kura,
                 &config.nexus.lane_config,
                 &config.nexus.configured_lane_catalog,
                 &config.snapshot.bootstrap,
+                &config.sumeragi.limits,
             )
             .map_err(|err| {
                 let resolved = config.kura.store_dir.resolve_relative_path();
@@ -8956,10 +8965,8 @@ impl Iroha {
 
         let sorafs_storage_config =
             sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
-        let sorafs_repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
-            &config.torii.sorafs_repair,
-            &state.gov.sorafs_repair_escalation,
-        );
+        let sorafs_repair_config =
+            sorafs_node::config::RepairConfig::from(&config.torii.sorafs_repair);
         let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
@@ -9077,6 +9084,16 @@ impl Iroha {
             // deployments can replace it with PKCS#11/HSM signing without
             // exposing key material to the durable forwarder.
             .with_sorafs_repair_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Reserve/rent forwarding has its own runtime-only signer boundary.
+            // The standard launcher adapts the node key, but the durable
+            // worker never sees key material. Reference production must
+            // replace this adapter through ToriiRuntimeDeps with PKCS#11/HSM.
+            .with_sorafs_reserve_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Native orderbook matcher/maintenance forwarding has a separate
+            // runtime-only signing boundary. The standard launcher adapts the
+            // node key for reproducible deployments; reference production
+            // must inject its governed PKCS#11/HSM-backed signer here.
+            .with_sorafs_orderbook_transaction_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -12407,17 +12424,19 @@ fn validate_genesis_execution_offline(
     })?;
     let mut kura_config = config.kura.clone();
     kura_config.store_dir = WithOrigin::inline(validation_root.path().join("kura"));
-    let (kura, block_count) = Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap(
-        &kura_config,
-        &config.nexus.lane_config,
-        &config.nexus.configured_lane_catalog,
-        &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "failed to initialize disposable Kura for genesis validation: {error}"
-        ))
-    })?;
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            &kura_config,
+            &config.nexus.lane_config,
+            &config.nexus.configured_lane_catalog,
+            &iroha_config::parameters::actual::SnapshotBootstrapPolicy::default(),
+            &config.sumeragi.limits,
+        )
+        .map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "failed to initialize disposable Kura for genesis validation: {error}"
+            ))
+        })?;
     if block_count.0 != 0 {
         return Err(Report::new(MainError::Config).attach(format!(
             "disposable genesis validation storage was not empty ({} blocks)",

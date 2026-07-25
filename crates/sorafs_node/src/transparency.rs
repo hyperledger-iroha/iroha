@@ -14,14 +14,18 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_crypto::sorafs::proof_token::{
     ModerationAction as ProofTokenModerationAction, ProofToken,
 };
-use iroha_data_model::sorafs::{
-    gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
-    reserve::ReserveLifecycleStage,
-    transparency::{
-        MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
-        ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
-        ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1, ModerationPrivacyModeV1,
-        ModerationPrivacyParametersV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+use iroha_data_model::{
+    events::data::sorafs::SorafsReserveLedgerEventKind,
+    sorafs::{
+        gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
+        reserve::{ReserveFinalizedEventV1, ReserveLifecycleStage},
+        transparency::{
+            MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
+            ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+            ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
+            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+            PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+        },
     },
 };
 use norito::codec::Encode as NoritoEncode;
@@ -180,6 +184,12 @@ pub enum TransparencySourceEntryAdapterError {
     /// Appeal finance settlement receipt source data is malformed.
     #[error("invalid appeal finance settlement receipt source: {message}")]
     InvalidAppealFinanceSettlementReceipt {
+        /// Validation detail.
+        message: String,
+    },
+    /// A typed committed reserve-ledger event is malformed.
+    #[error("invalid finalized reserve-ledger event source: {message}")]
+    InvalidReserveFinalizedEvent {
         /// Validation detail.
         message: String,
     },
@@ -606,6 +616,194 @@ pub fn moderation_evidence_viewer_audit_report_source_entry(
         payload_digest,
         summary_digest: source_summary_digest("evidence_viewer_audit_report", &metadata),
         policy_digest: report.policy_digest,
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from one typed committed reserve-ledger event.
+///
+/// The finalized event cursor, rather than a process-local sequence or wall
+/// clock, is the source identity. This makes duplicate suppression
+/// byte-identical across replicas and prevents a stale-fork event from
+/// masquerading as the committed transition with the same journal sequence.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when the event/cursor
+/// invariants emitted by the native reserve ledger are malformed or the
+/// derived public entry is invalid.
+pub fn reserve_finalized_event_source_entry(
+    record: &ReserveFinalizedEventV1,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    if record.sequence == 0 {
+        return Err(reserve_finalized_event_source_error(
+            "sequence must be non-zero",
+        ));
+    }
+    if record.block_height == 0 {
+        return Err(reserve_finalized_event_source_error(
+            "block_height must be non-zero",
+        ));
+    }
+    validate_reserve_source_id(
+        "block_hash",
+        &record.block_hash,
+        reserve_finalized_event_source_error,
+    )?;
+    validate_reserve_source_id(
+        "policy_digest",
+        &record.event.policy_digest,
+        reserve_finalized_event_source_error,
+    )?;
+    let occurred_at_unix = unix_ms_to_secs(record.event.occurred_at_unix_ms)
+        .map_err(reserve_finalized_event_source_error)?;
+
+    let operation_required = matches!(
+        record.event.kind,
+        SorafsReserveLedgerEventKind::MovementRequested
+            | SorafsReserveLedgerEventKind::MovementApproved
+            | SorafsReserveLedgerEventKind::MovementRejected
+            | SorafsReserveLedgerEventKind::AppealSubmitted
+            | SorafsReserveLedgerEventKind::AppealAccepted
+            | SorafsReserveLedgerEventKind::AppealRejected
+    );
+    match record.event.kind {
+        SorafsReserveLedgerEventKind::PolicyActivated => {
+            if record.event.provider_id.is_some()
+                || record.event.operation_id.is_some()
+                || record.event.provider_revision != 0
+                || record.event.resulting_lifecycle_stage.is_some()
+            {
+                return Err(reserve_finalized_event_source_error(
+                    "policy activation must not carry provider state",
+                ));
+            }
+        }
+        _ => {
+            let provider_id = record.event.provider_id.ok_or_else(|| {
+                reserve_finalized_event_source_error(
+                    "provider transition must carry provider_id",
+                )
+            })?;
+            validate_reserve_source_id(
+                "provider_id",
+                provider_id.as_bytes(),
+                reserve_finalized_event_source_error,
+            )?;
+            if record.event.provider_revision == 0 {
+                return Err(reserve_finalized_event_source_error(
+                    "provider_revision must be non-zero",
+                ));
+            }
+            if record.event.resulting_lifecycle_stage.is_none() {
+                return Err(reserve_finalized_event_source_error(
+                    "provider transition must carry resulting_lifecycle_stage",
+                ));
+            }
+            if operation_required != record.event.operation_id.is_some() {
+                return Err(reserve_finalized_event_source_error(
+                    "operation_id presence does not match reserve transition kind",
+                ));
+            }
+            if let Some(operation_id) = record.event.operation_id {
+                validate_reserve_source_id(
+                    "operation_id",
+                    &operation_id,
+                    reserve_finalized_event_source_error,
+                )?;
+            }
+        }
+    }
+
+    let event_kind = reserve_ledger_event_kind_label(record.event.kind);
+    let block_hash_hex = hex::encode(record.block_hash);
+    let policy_digest_hex = hex::encode(record.event.policy_digest);
+    let provider_id_hex = record
+        .event
+        .provider_id
+        .map(|provider_id| hex::encode(provider_id.as_bytes()));
+    let subject_key = provider_id_hex
+        .as_deref()
+        .unwrap_or(policy_digest_hex.as_str());
+    let subject = provider_id_hex.as_ref().map_or_else(
+        || format!("reserve-policy:{policy_digest_hex}"),
+        |provider_id| format!("reserve-provider:{provider_id}"),
+    );
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert("block_hash_hex".to_string(), block_hash_hex.clone());
+    metadata.insert(
+        "block_height".to_string(),
+        record.block_height.to_string(),
+    );
+    metadata.insert(
+        "event_family".to_string(),
+        "reserve_finalized_ledger".to_string(),
+    );
+    metadata.insert("event_index".to_string(), record.event_index.to_string());
+    metadata.insert("event_kind".to_string(), event_kind.to_string());
+    metadata.insert(
+        "occurred_at_unix_ms".to_string(),
+        record.event.occurred_at_unix_ms.to_string(),
+    );
+    metadata.insert(
+        "policy_digest_hex".to_string(),
+        policy_digest_hex.clone(),
+    );
+    metadata.insert(
+        "provider_revision".to_string(),
+        record.event.provider_revision.to_string(),
+    );
+    metadata.insert("sequence".to_string(), record.sequence.to_string());
+    metadata.insert(
+        "authority_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex(
+            "authority_account",
+            record.event.authority.to_string().as_bytes(),
+        ),
+    );
+    if let Some(provider_id_hex) = &provider_id_hex {
+        metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    }
+    if let Some(operation_id) = record.event.operation_id {
+        metadata.insert("operation_id_hex".to_string(), hex::encode(operation_id));
+    }
+    if let Some(stage) = record.event.resulting_lifecycle_stage {
+        metadata.insert(
+            "resulting_lifecycle_stage".to_string(),
+            reserve_lifecycle_stage_label(stage).to_string(),
+        );
+    }
+    let metadata = metadata_vec(metadata);
+    let encoded_record = record.encode();
+    let payload_digest = reserve_source_payload_digest(
+        "reserve_finalized_event",
+        &[("canonical_event", encoded_record.as_slice())],
+    );
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!(
+            "reserve-ledger:{}:{}:{}:{}",
+            record.sequence, record.block_height, block_hash_hex, record.event_index
+        ),
+        occurred_at_unix,
+        kind: match record.event.kind {
+            SorafsReserveLedgerEventKind::AppealAccepted
+            | SorafsReserveLedgerEventKind::AppealRejected => {
+                ModerationLedgerEntryKindV1::AppealOutcome
+            }
+            _ => ModerationLedgerEntryKindV1::Custom(format!("sorafs_reserve_{event_kind}")),
+        },
+        subject,
+        subject_digest: source_subject_digest(
+            "reserve_finalized_event",
+            subject_key,
+            &payload_digest,
+        ),
+        payload_digest,
+        summary_digest: source_summary_digest("reserve_finalized_event", &metadata),
+        policy_digest: Some(record.event.policy_digest),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -4050,6 +4248,14 @@ fn reserve_lifecycle_source_error(
     }
 }
 
+fn reserve_finalized_event_source_error(
+    message: impl Into<String>,
+) -> TransparencySourceEntryAdapterError {
+    TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent {
+        message: message.into(),
+    }
+}
+
 fn reserve_movement_source_error(
     message: impl Into<String>,
 ) -> TransparencySourceEntryAdapterError {
@@ -4079,6 +4285,23 @@ fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
         ReserveLifecycleStage::Grace => "grace",
         ReserveLifecycleStage::Delinquent => "delinquent",
         ReserveLifecycleStage::Default => "default",
+    }
+}
+
+fn reserve_ledger_event_kind_label(kind: SorafsReserveLedgerEventKind) -> &'static str {
+    match kind {
+        SorafsReserveLedgerEventKind::PolicyActivated => "policy_activated",
+        SorafsReserveLedgerEventKind::ProviderRegistered => "provider_registered",
+        SorafsReserveLedgerEventKind::MovementRequested => "movement_requested",
+        SorafsReserveLedgerEventKind::MovementApproved => "movement_approved",
+        SorafsReserveLedgerEventKind::MovementRejected => "movement_rejected",
+        SorafsReserveLedgerEventKind::RentCharged => "rent_charged",
+        SorafsReserveLedgerEventKind::LifecycleAdvanced => "lifecycle_advanced",
+        SorafsReserveLedgerEventKind::CreditDrawn => "credit_drawn",
+        SorafsReserveLedgerEventKind::CreditRepaid => "credit_repaid",
+        SorafsReserveLedgerEventKind::AppealSubmitted => "appeal_submitted",
+        SorafsReserveLedgerEventKind::AppealAccepted => "appeal_accepted",
+        SorafsReserveLedgerEventKind::AppealRejected => "appeal_rejected",
     }
 }
 
@@ -4279,6 +4502,40 @@ mod tests {
         )
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("account id")
+    }
+
+    fn reserve_finalized_event_fixture(
+        kind: SorafsReserveLedgerEventKind,
+    ) -> ReserveFinalizedEventV1 {
+        let policy_activation = kind == SorafsReserveLedgerEventKind::PolicyActivated;
+        let operation = matches!(
+            kind,
+            SorafsReserveLedgerEventKind::MovementRequested
+                | SorafsReserveLedgerEventKind::MovementApproved
+                | SorafsReserveLedgerEventKind::MovementRejected
+                | SorafsReserveLedgerEventKind::AppealSubmitted
+                | SorafsReserveLedgerEventKind::AppealAccepted
+                | SorafsReserveLedgerEventKind::AppealRejected
+        );
+        ReserveFinalizedEventV1 {
+            sequence: 17,
+            block_height: 43,
+            block_hash: [0xA1; 32],
+            event_index: 2,
+            event: iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
+                kind,
+                provider_id: (!policy_activation).then(|| {
+                    iroha_data_model::sorafs::capacity::ProviderId::new([0xB2; 32])
+                }),
+                operation_id: operation.then_some([0xC3; 32]),
+                policy_digest: [0xD4; 32],
+                provider_revision: if policy_activation { 0 } else { 9 },
+                resulting_lifecycle_stage: (!policy_activation)
+                    .then_some(ReserveLifecycleStage::Grace),
+                authority: gar_operator_account(),
+                occurred_at_unix_ms: 1_800_000_123_000,
+            },
+        }
     }
 
     fn gar_receipt_fixture(action: GarEnforcementActionV1) -> GarEnforcementReceiptV1 {
@@ -5661,6 +5918,196 @@ mod tests {
         reserve_policy_entry
             .validate()
             .expect("reserve policy entry validates");
+    }
+
+    #[test]
+    fn finalized_reserve_event_adapter_binds_exact_committed_cursor_and_payload() {
+        let event =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let entry =
+            reserve_finalized_event_source_entry(&event).expect("finalized reserve source entry");
+        let expected_block_hash = hex::encode(event.block_hash);
+        let expected_provider_id = hex::encode(
+            event
+                .event
+                .provider_id
+                .expect("provider transition")
+                .as_bytes(),
+        );
+
+        assert_eq!(
+            entry.event_id,
+            format!(
+                "reserve-ledger:{}:{}:{}:{}",
+                event.sequence, event.block_height, expected_block_hash, event.event_index
+            )
+        );
+        assert_eq!(entry.occurred_at_unix, 1_800_000_123);
+        assert_eq!(
+            entry.kind,
+            ModerationLedgerEntryKindV1::Custom(
+                "sorafs_reserve_movement_approved".to_string()
+            )
+        );
+        assert_eq!(entry.policy_digest, Some(event.event.policy_digest));
+        assert_eq!(
+            entry.subject,
+            format!("reserve-provider:{expected_provider_id}")
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "block_hash_hex" && item.value == expected_block_hash)
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "event_kind" && item.value == "movement_approved")
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "operation_id_hex"
+                    && item.value == hex::encode([0xC3; 32]))
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "authority_account_digest_hex")
+        );
+        assert!(
+            entry
+                .metadata
+                .iter()
+                .all(|item| item.value != event.event.authority.to_string()),
+            "raw authority account must not enter public transparency metadata"
+        );
+        let canonical = event.encode();
+        assert_eq!(
+            entry.payload_digest,
+            reserve_source_payload_digest(
+                "reserve_finalized_event",
+                &[("canonical_event", canonical.as_slice())],
+            )
+        );
+        entry.validate().expect("derived entry validates");
+
+        let replica =
+            reserve_finalized_event_source_entry(&event).expect("second replica source entry");
+        assert_eq!(replica, entry);
+        assert_eq!(
+            replica.encode(),
+            entry.encode(),
+            "replicas must emit byte-identical source entries"
+        );
+
+        let mut competing_fork = event.clone();
+        competing_fork.block_hash[0] ^= 0xFF;
+        let competing_entry = reserve_finalized_event_source_entry(&competing_fork)
+            .expect("well-formed competing cursor");
+        assert_ne!(competing_entry.event_id, entry.event_id);
+        assert_ne!(competing_entry.payload_digest, entry.payload_digest);
+    }
+
+    #[test]
+    fn finalized_reserve_event_adapter_maps_policy_and_appeal_kinds() {
+        let policy =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        let policy_entry =
+            reserve_finalized_event_source_entry(&policy).expect("policy activation source");
+        assert_eq!(
+            policy_entry.kind,
+            ModerationLedgerEntryKindV1::Custom(
+                "sorafs_reserve_policy_activated".to_string()
+            )
+        );
+        assert_eq!(
+            policy_entry.subject,
+            format!("reserve-policy:{}", hex::encode(policy.event.policy_digest))
+        );
+
+        for kind in [
+            SorafsReserveLedgerEventKind::AppealAccepted,
+            SorafsReserveLedgerEventKind::AppealRejected,
+        ] {
+            let appeal = reserve_finalized_event_fixture(kind);
+            let appeal_entry =
+                reserve_finalized_event_source_entry(&appeal).expect("appeal outcome source");
+            assert_eq!(
+                appeal_entry.kind,
+                ModerationLedgerEntryKindV1::AppealOutcome
+            );
+        }
+    }
+
+    #[test]
+    fn finalized_reserve_event_adapter_rejects_malformed_native_invariants() {
+        let base =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
+        let mut malformed = Vec::new();
+
+        let mut zero_sequence = base.clone();
+        zero_sequence.sequence = 0;
+        malformed.push(zero_sequence);
+        let mut zero_height = base.clone();
+        zero_height.block_height = 0;
+        malformed.push(zero_height);
+        let mut zero_hash = base.clone();
+        zero_hash.block_hash = [0; 32];
+        malformed.push(zero_hash);
+        let mut zero_policy = base.clone();
+        zero_policy.event.policy_digest = [0; 32];
+        malformed.push(zero_policy);
+        let mut sub_second_timestamp = base.clone();
+        sub_second_timestamp.event.occurred_at_unix_ms = 999;
+        malformed.push(sub_second_timestamp);
+        let mut missing_provider = base.clone();
+        missing_provider.event.provider_id = None;
+        malformed.push(missing_provider);
+        let mut zero_provider = base.clone();
+        zero_provider.event.provider_id = Some(
+            iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]),
+        );
+        malformed.push(zero_provider);
+        let mut zero_revision = base.clone();
+        zero_revision.event.provider_revision = 0;
+        malformed.push(zero_revision);
+        let mut missing_stage = base.clone();
+        missing_stage.event.resulting_lifecycle_stage = None;
+        malformed.push(missing_stage);
+        let mut missing_operation = base.clone();
+        missing_operation.event.operation_id = None;
+        malformed.push(missing_operation);
+        let mut zero_operation = base.clone();
+        zero_operation.event.operation_id = Some([0; 32]);
+        malformed.push(zero_operation);
+
+        let mut unexpected_operation =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::RentCharged);
+        unexpected_operation.event.operation_id = Some([0xE5; 32]);
+        malformed.push(unexpected_operation);
+
+        let mut malformed_policy =
+            reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
+        malformed_policy.event.provider_id =
+            Some(iroha_data_model::sorafs::capacity::ProviderId::new([0xF6; 32]));
+        malformed.push(malformed_policy);
+
+        for event in malformed {
+            assert!(
+                matches!(
+                    reserve_finalized_event_source_entry(&event),
+                    Err(
+                        TransparencySourceEntryAdapterError::InvalidReserveFinalizedEvent { .. }
+                    )
+                ),
+                "malformed event unexpectedly accepted: {event:?}"
+            );
+        }
     }
 
     #[test]

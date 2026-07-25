@@ -122,7 +122,7 @@ public final class TransactionPayloadFixtureTests {
 
   private static void runFixtures() throws Exception {
     final Path path = TransactionPayloadFixtures.resolveFixturePath();
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     for (TransactionPayloadFixtures.Fixture fixture : TransactionPayloadFixtures.load(path)) {
       final String name = fixture.name();
       if (!fixture.isDecodable()) {

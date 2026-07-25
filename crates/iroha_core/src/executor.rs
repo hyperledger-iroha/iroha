@@ -9470,7 +9470,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         return true;
     }
 
-    // CBDC account control, native multisig rotation, and alias lifecycle.
+    // CBDC account control, native multisig/consensus-key rotation, and alias lifecycle.
     if is_any!(
         iroha_data_model::isi::AddSignatory,
         iroha_data_model::isi::RemoveSignatory,
@@ -9487,6 +9487,9 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew,
         iroha_data_model::isi::alias_setup::RebindAccountAlias,
         iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
+        iroha_data_model::isi::consensus_keys::RegisterConsensusKey,
+        iroha_data_model::isi::consensus_keys::RotateConsensusKey,
+        iroha_data_model::isi::consensus_keys::DisableConsensusKey,
     ) {
         return true;
     }
@@ -9556,6 +9559,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
         iroha_data_model::isi::governance::ApproveGovernanceProposal,
         iroha_data_model::isi::governance::CastParliamentBallot,
+        iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::FinalizeReferendum,
         iroha_data_model::isi::governance::EnactReferendum,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
@@ -11252,7 +11256,7 @@ mod tests {
     };
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         asset::AssetTransferControlWindow,
         executor::{self as data_model_executor, ExecutorDataModel},
@@ -12506,11 +12510,6 @@ mod tests {
                 std::num::NonZeroU16::new(1).expect("quorum"),
             )
             .into(),
-            iroha_data_model::isi::governance::FinalizeReferendum {
-                referendum_id: "attacker-forced-finalization".to_owned(),
-                proposal_id: [0xA5; 32],
-            }
-            .into(),
         ];
 
         for instruction in instructions {
@@ -12524,6 +12523,31 @@ mod tests {
                 "{error:?}"
             );
         }
+
+        // Referendum finalization is intentionally permissionless once its
+        // authenticated governance records exist. A fabricated identifier must
+        // instead fail closed on the missing proposal before any finalization.
+        let forced_proposal_id = [0xA5; 32];
+        let error = super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &attacker,
+                iroha_data_model::isi::governance::FinalizeReferendum {
+                    referendum_id: hex::encode(forced_proposal_id),
+                    proposal_id: forced_proposal_id,
+                }
+                .into(),
+            )
+            .expect_err("a fabricated referendum must not mutate governance state");
+        assert!(
+            matches!(
+                error,
+                ValidationFail::InstructionFailed(
+                    InstructionExecutionError::InvariantViolation(ref message)
+                ) if message.as_ref() == "governance proposal not found"
+            ),
+            "{error:?}"
+        );
         assert!(matches!(
             &*state_transaction.world.executor,
             super::Executor::Initial
@@ -13816,7 +13840,8 @@ mod tests {
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
-        let (program, _) = contract_program_with_entrypoint("run", None);
+        const ENTRYPOINT_PERMISSION: &str = "CanRunGenesisPreparedContract";
+        let (program, _) = contract_program_with_entrypoint("run", Some(ENTRYPOINT_PERMISSION));
         let verified =
             ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
         let code_hash = ivm::contract_code_hash(&program);
@@ -13859,6 +13884,13 @@ mod tests {
                 &authority,
                 &fee_asset,
             );
+        state_transaction.world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([Permission::new(
+                ENTRYPOINT_PERMISSION.to_owned(),
+                Json::new(()),
+            )]),
+        );
         let subject_binding =
             crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
         state_transaction
@@ -14422,6 +14454,8 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &initial_tech, &gas_asset, 1);
+        state_transaction.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
+        state_transaction.current_tx_hash = Some(transaction.hash());
 
         validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect("pre-effect policy accepts its exact signed limit");
@@ -16470,11 +16504,14 @@ mod tests {
                 Json::new(true),
             )),
         );
-        assert!(matches!(
-            unprivileged_metadata,
-            Err(ValidationFail::NotPermitted(ref message))
-                if message.contains("asset-definition metadata")
-        ));
+        assert!(
+            matches!(
+                unprivileged_metadata,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("metadata")
+            ),
+            "unexpected unprivileged PKR metadata result: {unprivileged_metadata:?}"
+        );
 
         stx.world.account_permissions.insert(
             retail.clone(),
@@ -17537,13 +17574,15 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
 
-        let tx = TransactionBuilder::new(
+        let builder = TransactionBuilder::new(
             chain,
             multisig_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_executable(Executable::Instructions(Vec::new().into()))
-        .sign(signer.private_key());
+        .with_executable(Executable::Instructions(Vec::new().into()));
+        let signature = Signature::try_new(signer.private_key(), &builder.payload_hash_bytes())
+            .expect("fixture signer should sign the multisig-authority payload prehash");
+        let tx = builder.build_with_signature(signature);
 
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -20039,25 +20078,11 @@ seiyaku IdentityRequired {
 
     #[test]
     fn migrate_invokes_entrypoint_and_swaps_executor() {
-        // Use the default bundled executor bytecode when available; otherwise
-        // generate a minimal OK program deterministically.
-        let default_executor =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/executor.to");
-        let mut bytecode = None;
-        for candidate in [
-            default_executor.as_path(),
-            std::path::Path::new("defaults/executor.to"),
-        ] {
-            if let Ok(bytes) = std::fs::read(candidate) {
-                let raw_candidate =
-                    data_model_executor::Executor::new(IvmBytecode::from_compiled(bytes.clone()));
-                if super::LoadedExecutor::load(raw_candidate).is_ok() {
-                    bytecode = Some(bytes);
-                    break;
-                }
-            }
-        }
-        let bytecode = bytecode.unwrap_or_else(generate_ok_program);
+        // A loadable validation executor is not necessarily a migration
+        // executor: migration must return the canonical migration payload.
+        // Build that exact entrypoint contract instead of depending on the
+        // independently generated bundled validation fixture.
+        let bytecode = generate_migration_program(&Ok(initial_executor_data_model_fallback()));
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
 
         // Start with the initial executor

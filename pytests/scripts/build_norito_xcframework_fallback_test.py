@@ -23,7 +23,7 @@ SLICE_IDS = (
     "ios-arm64_x86_64-simulator",
     "macos-arm64",
 )
-REPO_BUILD_LOCK = ROOT / "build" / ".NoritoBridge.build-publish.lockfile"
+BUILD_LOCK_NAME = ".NoritoBridge.build-publish.lockfile"
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -227,7 +227,7 @@ def _run_builder(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 def test_manual_xcframework_fallback_writes_required_info_plist(
     tmp_path: Path,
 ) -> None:
-    _, out_dir, env, checker_marker = _build_environment(tmp_path)
+    build_dir, out_dir, env, checker_marker = _build_environment(tmp_path)
     result = _run_builder(env)
 
     assert result.returncode == 0, result.stderr
@@ -292,13 +292,13 @@ def test_manual_xcframework_fallback_writes_required_info_plist(
     assert checked_candidate.name.startswith(".NoritoBridge.publish.")
     assert not checked_candidate.exists()
     assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert REPO_BUILD_LOCK.is_file()
+    assert (build_dir / BUILD_LOCK_NAME).is_file()
 
 
 def test_prepublication_checker_failure_preserves_live_pair(
     tmp_path: Path,
 ) -> None:
-    _, out_dir, env, checker_marker = _build_environment(
+    build_dir, out_dir, env, checker_marker = _build_environment(
         tmp_path,
         checker_exit=73,
     )
@@ -328,13 +328,13 @@ def test_prepublication_checker_failure_preserves_live_pair(
     assert checked_candidate.parent == out_dir
     assert not checked_candidate.exists()
     assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert REPO_BUILD_LOCK.is_file()
+    assert (build_dir / BUILD_LOCK_NAME).is_file()
 
 
 def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
     tmp_path: Path,
 ) -> None:
-    _, out_dir, env, _ = _build_environment(tmp_path)
+    build_dir, out_dir, env, _ = _build_environment(tmp_path)
     wait_marker = tmp_path / "xcodebuild-waiting"
     env["NORITO_BRIDGE_XCODE_WAIT_MARKER"] = str(wait_marker)
     live_framework = out_dir / "NoritoBridge.xcframework"
@@ -375,11 +375,11 @@ def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
     assert not live_manifest.is_symlink()
     assert live_manifest.read_bytes() == original_manifest
     assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert REPO_BUILD_LOCK.is_file()
+    assert (build_dir / BUILD_LOCK_NAME).is_file()
 
 
 def test_builder_does_not_require_process_table_access(tmp_path: Path) -> None:
-    _, out_dir, env, _ = _build_environment(tmp_path)
+    build_dir, out_dir, env, _ = _build_environment(tmp_path)
     tools_dir = Path(env["PATH"].split(os.pathsep, 1)[0])
     _write_executable(
         tools_dir / "ps",
@@ -392,4 +392,4 @@ exit 99
     result = _run_builder(env)
     assert result.returncode == 0, result.stderr
     assert (out_dir / "NoritoBridge.artifacts.json").is_symlink()
-    assert REPO_BUILD_LOCK.is_file()
+    assert (build_dir / BUILD_LOCK_NAME).is_file()

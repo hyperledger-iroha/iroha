@@ -7,6 +7,7 @@ import java.util.Map;
 public final class NexusAppConfig {
 
   private final String chainId;
+  private final int chainDiscriminant;
   private final String appId;
   private final String relayUrl;
   private final String node;
@@ -14,12 +15,21 @@ public final class NexusAppConfig {
   private final byte[] signingPublicKey;
   private final Map<String, String> appMetadata;
 
-  public NexusAppConfig(final String chainId) {
-    this(chainId, null, null, null, null, null, Collections.emptyMap());
+  public NexusAppConfig(final String chainId, final int chainDiscriminant) {
+    this(
+        chainId,
+        chainDiscriminant,
+        null,
+        null,
+        null,
+        null,
+        null,
+        Collections.emptyMap());
   }
 
   public NexusAppConfig(
       final String chainId,
+      final int chainDiscriminant,
       final String appId,
       final String relayUrl,
       final String node,
@@ -27,6 +37,10 @@ public final class NexusAppConfig {
       final byte[] signingPublicKey,
       final Map<String, String> appMetadata) {
     this.chainId = NexusModelUtils.requireNonBlank(chainId, "chainId");
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    this.chainDiscriminant = chainDiscriminant;
     this.appId = appId;
     this.relayUrl = relayUrl;
     this.node = node;
@@ -37,6 +51,10 @@ public final class NexusAppConfig {
 
   public String chainId() {
     return chainId;
+  }
+
+  public int chainDiscriminant() {
+    return chainDiscriminant;
   }
 
   public String appId() {

@@ -396,6 +396,7 @@ pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFi
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineReadinessBlocker {
     /// Stable SDK-facing blocker code.
     pub code: String,
@@ -407,6 +408,7 @@ pub struct OfflineReadinessBlocker {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineVerifierId {
     /// Proof-backend namespace of the registered key.
     pub backend: String,
@@ -1039,9 +1041,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn readiness_roundtrips_through_both_public_representations() {
-        let readiness = OfflineReadiness {
+    fn available_readiness() -> OfflineReadiness {
+        OfflineReadiness {
             required_bridge_abi_version: 21,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
@@ -1136,7 +1137,12 @@ mod tests {
             recursive_lineage_supported: true,
             ready: true,
             blockers: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn readiness_roundtrips_through_both_public_representations() {
+        let readiness = available_readiness();
 
         let json = norito::json::to_vec(&readiness).expect("encode readiness JSON");
         let decoded_json: OfflineReadiness =
@@ -1165,6 +1171,37 @@ mod tests {
         let error = norito::json::from_str::<OfflineReadiness>(&wrong_type)
             .expect_err("declared readiness field typing is exact");
         assert!(error.to_string().contains("bool"));
+    }
+
+    #[test]
+    fn readiness_json_rejects_unknown_nested_verifier_and_blocker_members() {
+        let available =
+            norito::json::to_string(&available_readiness()).expect("encode available readiness");
+        let verifier_injection = available.replacen(
+            r#""backend":"halo2/ipa""#,
+            r#""backend":"halo2/ipa","future_registry_selector":true"#,
+            1,
+        );
+        let error = norito::json::from_str::<OfflineReadiness>(&verifier_injection)
+            .expect_err("unknown nested verifier identity members fail closed");
+        assert!(
+            error.to_string().contains("future_registry_selector"),
+            "unexpected nested verifier error: {error}"
+        );
+
+        let unavailable = norito::json::to_string(&unavailable_readiness(Some(9)))
+            .expect("encode unavailable readiness");
+        let blocker_injection = unavailable.replacen(
+            r#""code":"transfer_verifier_unavailable""#,
+            r#""code":"transfer_verifier_unavailable","future_blocker_state":true"#,
+            1,
+        );
+        let error = norito::json::from_str::<OfflineReadiness>(&blocker_injection)
+            .expect_err("unknown nested blocker members fail closed");
+        assert!(
+            error.to_string().contains("future_blocker_state"),
+            "unexpected nested blocker error: {error}"
+        );
     }
 
     #[test]

@@ -78,6 +78,152 @@ def copy_async_source_fidelity_fixture(
     return formal_dir
 
 
+def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
+    """Copy only the config-v6 merge/pending projection and its live consumers."""
+
+    for relative in (
+        Path("crates/iroha_config/src/parameters/defaults.rs"),
+        Path("crates/iroha_config/src/parameters/actual.rs"),
+        Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    kura = tmp_path / "crates/iroha_core/src/kura.rs"
+    kura.write_text(
+        """
+pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits() {
+    let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
+        sumeragi_limits,
+        &config.store_dir.resolve_relative_path(),
+    )?;
+}
+
+fn pending_merge_entry_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+}
+
+fn pending_queue_plan_admission_paths_unlocked() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+}
+
+fn validate_pending_merge_entries_on_startup() {
+    if !self
+        .pending_control_sidecar_limits
+        .combined_bytes_within_limit(merge_bytes, admission_bytes)
+    {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            self.store_root.clone(),
+            "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+        ));
+    }
+}
+
+pub(crate) fn persist_pending_certified_merge_entry() {
+    if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+        return Err(Self::invalid_pending_merge_entry_error(
+            directory,
+            "pending certified merge entry count exceeds the hard limit",
+        ));
+    }
+    if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
+        !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(total, admission_bytes)
+    }) {
+        return Err(error);
+    }
+}
+
+pub fn persist_pending_queue_plan_admission_certificate() {
+    if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+        return Err(Self::invalid_pending_queue_plan_admission_error(
+            directory,
+            "pending QueuePlan admission certificate count exceeds the hard limit",
+        ));
+    }
+    if admission_bytes
+        .checked_add(canonical_certificate_bytes.len())
+        .is_none_or(|total| {
+            !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(merge_bytes, total)
+        })
+    {
+        return Err(error);
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    daemon = tmp_path / "crates/irohad/src/main.rs"
+    daemon.parent.mkdir(parents=True, exist_ok=True)
+    daemon.write_text(
+        """
+fn production_startup() {
+    Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+        &config.kura,
+        &config.nexus.lane_config,
+        &config.nexus.configured_lane_catalog,
+        &config.snapshot.bootstrap,
+        &config.sumeragi.limits,
+    );
+}
+""",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def merge_runtime_config_errors(repo_root: Path) -> list[str]:
+    """Run one mutation check in a fresh process so large Rust tokens are released."""
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("merge_runtime_checker", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+print(json.dumps(module._merge_runtime_config_production_source_fidelity_errors(
+    Path(sys.argv[2])
+)))
+""",
+            str(SCRIPT),
+            str(repo_root),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert probe.returncode == 0, probe.stderr
+    errors = json.loads(probe.stdout)
+    assert isinstance(errors, list) and all(isinstance(error, str) for error in errors)
+    return errors
+
+
 def mutate_tla_operator(
     source: str,
     symbol: str,
@@ -19353,7 +19499,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "pytests/scripts/seal_workspace_source_test.py" in release_source
     assert "did not run exactly 30 passing tests" in release_source
     assert "seed_launcher_contract_tests=(" in release_source
-    assert "did not run exactly 11 passing tests" in release_source
+    assert "did not run exactly 14 passing tests" in release_source
+    for seed_contract in (
+        "test_mocked_seed_matrix_rejects_bundle_tampering_before_completion",
+        "test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion",
+        "test_mocked_seed_matrix_marker_durability_failure_is_not_terminal",
+    ):
+        assert seed_contract in release_source
+    assert (
+        '"preflight-seed-launcher",\n                "pytest",\n                14,'
+        in receipt_source
+    )
     assert "did not run exactly five passing tests" in release_source
     assert "preflight-chaos-launcher pytest 5" in release_source
     assert "did not run exactly 68 passing tests" in release_source
@@ -19362,8 +19518,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-release-bootstrap pytest 82" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 232 passing tests" in release_source
-    assert "preflight-release-receipt pytest 232" in release_source
+    assert "did not run exactly 316 passing tests" in release_source
+    assert "preflight-release-receipt pytest 316" in release_source
+    assert "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py" in release_source
+    assert (
+        "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py"
+        in release_source
+    )
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
@@ -19381,7 +19542,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                232,'
+        '"preflight-release-receipt",\n                "pytest",\n                316,'
         in receipt_source
     )
     assert "did not run exactly 1045 passing tests" in release_source
@@ -19426,7 +19587,18 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
-    assert "did not run exactly 39 passing tests" in release_source
+    assert "did not run exactly 42 passing tests" in release_source
+    for soak_contract in (
+        "test_launcher_rejects_bundle_tampering_before_completion",
+        "test_launcher_rejects_symlinked_marker_temp_without_completion",
+        "test_launcher_marker_durability_failure_is_not_terminal",
+        "test_launcher_does_not_promote_provisional_evidence_when_validation_fails",
+    ):
+        assert soak_contract in release_source
+    assert (
+        '"preflight-taira-soak",\n                "pytest",\n                42,'
+        in receipt_source
+    )
     assert (
         "expected_corridor_leg_count="
         f"{module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
@@ -20903,6 +21075,225 @@ def test_async_source_fidelity_pins_timeout_vote_semantic_capacity_bypass(
         )
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any("semantic-capacity bypass" in error for error in errors)
+
+
+MERGE_RUNTIME_PROJECTED_FIELDS = (
+    "merge_sidecar_inbound_session_capacity",
+    "merge_sidecar_inbound_sessions_per_peer",
+    "merge_sidecar_inbound_assembly_bytes",
+    "merge_sidecar_inbound_assembly_bytes_per_peer",
+    "merge_sidecar_deferred_block_capacity",
+    "merge_sidecar_future_block_distance",
+    "merge_sidecar_request_timeout_ms",
+    "merge_sidecar_outbound_sessions_per_source",
+    "merge_sidecar_outbound_bytes_per_source",
+    "merge_sidecar_server_request_gates_per_source",
+    "merge_sidecar_server_request_gate_ttl_ms",
+    "pending_certified_merge_entry_capacity",
+    "pending_queue_plan_admission_capacity",
+    "pending_control_sidecar_bytes",
+    "merge_signing_guard_record_capacity",
+    "merge_signing_guard_record_bytes",
+    "merge_signing_guard_total_bytes",
+)
+
+
+def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
+    module = load_checker()
+    checker_source = SCRIPT.read_text(encoding="utf-8")
+
+    assert tuple(
+        projected_field
+        for projected_field, *_rest in module.MERGE_RUNTIME_CONFIG_FIELDS
+    ) == MERGE_RUNTIME_PROJECTED_FIELDS
+    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 17
+    assert (
+        checker_source.count(
+            '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
+        )
+        == 2
+    )
+    assert (
+        '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;"'
+        not in checker_source
+    )
+
+
+def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
+    module = load_checker()
+
+    assert module._merge_runtime_config_production_source_fidelity_errors() == []
+
+
+@pytest.mark.parametrize("field", MERGE_RUNTIME_PROJECTED_FIELDS)
+def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    actual_path = repo_root / "crates/iroha_config/src/parameters/actual.rs"
+    source = actual_path.read_text(encoding="utf-8")
+    projection_start = source.index("limits: SumeragiV2Limits {")
+    projection_end = source.index(
+        "native_amx_signing_guard_record_capacity,", projection_start
+    )
+    needle = f"                {field},"
+    position = source.index(needle, projection_start, projection_end)
+    replacement = f"                {field}: 0,"
+    actual_path.write_text(
+        source[:position] + replacement + source[position + len(needle) :],
+        encoding="utf-8",
+    )
+
+    errors = merge_runtime_config_errors(repo_root)
+
+    assert any(
+        "shared fingerprint projection carries all 17 config-v6 merge fields"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("relative", "region", "old", "new", "expected_error"),
+    (
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION:",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 5;",
+            "merge-runtime shared-config format version 6",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY:",
+            "V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "V2_RETIRED_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "config-v6 default V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES:",
+            "V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES",
+            "V2_RETIRED_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES",
+            "merge-signing metadata headroom has one named config source",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "pub struct SumeragiV2RuntimeLimits {",
+            "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+            "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER",
+            "user config field merge_sidecar_inbound_session_capacity",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "limits: actual::SumeragiV2RuntimeLimits {",
+            ".merge_sidecar_inbound_session_capacity,",
+            ".merge_sidecar_inbound_sessions_per_peer,",
+            "user parsing maps all 17 config-v6 merge fields without substitution",
+        ),
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            "let merge_sidecar_inbound_session_capacity = canonical_bounded_size(",
+            "merge_sidecar_inbound_sessions_per_peer,\n"
+            "            merge_sidecar_inbound_session_capacity,",
+            "merge_sidecar_inbound_sessions_per_peer,\n"
+            "            merge_sidecar_inbound_sessions_per_peer,",
+            "config validation preserves decided and ordinary inbound session corridors",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "let merge_sidecar_limits = MergeSidecarLimits::new(",
+            "non_zero(config.limits.merge_sidecar_inbound_sessions_per_peer)?",
+            "non_zero(config.limits.merge_sidecar_inbound_session_capacity)?",
+            "runner constructs live sidecar and signing limits from all projected merge fields",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "merge_sidecars: MergeSidecarTransport::with_limits(",
+            "limits.merge_sidecar_limits,",
+            "MergeSidecarLimits::defaults(),",
+            "adapter installs fingerprinted merge-sidecar limits in live transport",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(",
+            "limits.merge_signing_guard_limits,",
+            "MergeSigningGuardLimits::defaults(),",
+            "adapter opens the durable merge-signing journal with fingerprinted limits",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn defer_block_with_priority(",
+            "self.limits.future_block_distance",
+            "u64::MAX",
+            "live sidecar carrier admission consumes configured future distance",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "if bytes.len() > self.limits.max_record_bytes",
+            "total > self.limits.max_total_bytes",
+            "total > usize::MAX",
+            "merge-signing authorization consumes configured aggregate bytes",
+        ),
+        (
+            "crates/irohad/src/main.rs",
+            "Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(",
+            "&config.sumeragi.limits,",
+            "&iroha_config::parameters::actual::SumeragiV2RuntimeLimits::default(),",
+            "daemon passes fingerprinted pending-control limits into production Kura",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(",
+            "sumeragi_limits,",
+            "&SumeragiV2RuntimeLimits::default(),",
+            "Kura validates pending-control limits before opening its store",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "pub(crate) fn persist_pending_certified_merge_entry(",
+            "paths.len() == self.pending_control_sidecar_limits.certified_merge_entries",
+            "paths.len() == usize::MAX",
+            "Kura merge admission consumes the configured pending-entry count",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "pub fn persist_pending_queue_plan_admission_certificate(",
+            "paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions",
+            "paths.len() == usize::MAX",
+            "Kura QueuePlan admission consumes the configured certificate count",
+        ),
+        (
+            "crates/iroha_core/src/kura.rs",
+            "fn validate_pending_merge_entries_on_startup(",
+            ".combined_bytes_within_limit(merge_bytes, admission_bytes)",
+            ".merge_bytes_within_limit(merge_bytes)",
+            "Kura startup consumes the configured shared pending byte limit",
+        ),
+    ),
+)
+def test_merge_runtime_config_v6_rejects_disconnected_production_seams(
+    tmp_path: Path,
+    relative: str,
+    region: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    path = repo_root / relative
+    source = path.read_text(encoding="utf-8")
+    region_start = source.index(region)
+    mutation = source.index(old, region_start)
+    path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+
+    errors = merge_runtime_config_errors(repo_root)
+
+    assert any(expected_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

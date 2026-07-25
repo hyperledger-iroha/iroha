@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
+import { bls12_381 } from "@noble/curves/bls12-381";
 
 import {
   resolveToriiClientConfig,
@@ -14730,6 +14731,289 @@ function countSumeragiBitmapSigners(bitmap) {
   }, 0);
 }
 
+const SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN =
+  /^(?:bls_normal:)?(ea0130[0-9A-F]{96})$/;
+const SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE =
+  "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage";
+const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
+  "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
+const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
+  "iroha_data_model::block::consensus::LaneBlockCommitment";
+
+function parseSumeragiBlsNormalPeerId(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId string`);
+  }
+  if (value.trim() !== value) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  const matched = SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN.exec(value);
+  if (matched === null) {
+    throw new TypeError(`${context} must be a canonical BLS-Normal PeerId`);
+  }
+  const compressed = Buffer.from(matched[1].slice(6), "hex");
+  try {
+    const point = bls12_381.G1.Point.fromHex(compressed);
+    point.assertValidity();
+    if (point.is0()) {
+      throw new Error("identity public keys are forbidden");
+    }
+  } catch (error) {
+    throw new TypeError(`${context} contains an invalid BLS-Normal public key`, {
+      cause: error,
+    });
+  }
+  return Object.freeze({
+    literal: matched[1],
+    orderingKey: Buffer.concat([Buffer.from([2]), compressed]),
+  });
+}
+
+function parseSumeragiBlsNormalValidatorSet(value, context) {
+  const parsed = value.map((validator, index) =>
+    parseSumeragiBlsNormalPeerId(validator, `${context}[${index}]`),
+  );
+  if (
+    parsed.some(
+      (validator, index) =>
+        index > 0 &&
+        Buffer.compare(parsed[index - 1].orderingKey, validator.orderingKey) >= 0,
+    )
+  ) {
+    throw new TypeError(
+      `${context} must be strictly ordered by canonical validator id`,
+    );
+  }
+  return Object.freeze(parsed.map((validator) => validator.literal));
+}
+
+function encodeSumeragiNativeU32(value) {
+  const buffer = Buffer.allocUnsafe(4);
+  buffer.writeUInt32LE(value, 0);
+  return buffer;
+}
+
+function encodeSumeragiNativeStruct(fields) {
+  return Buffer.concat(fields.map((field) => encodeNoritoField(field, true)));
+}
+
+function encodeSumeragiNativeString(value) {
+  const encoded = Buffer.from(value, "utf8");
+  return Buffer.concat([encodeUnsignedLeb128(encoded.length), encoded]);
+}
+
+function encodeSumeragiNativeHash(value) {
+  return Buffer.from(parseHashLiteralToHex(value, "Native AMX canonical hash"), "hex");
+}
+
+function encodeSumeragiNativeLaneId(value) {
+  return encodeNoritoField(encodeSumeragiNativeU32(value), true);
+}
+
+function encodeSumeragiNativeDataspaceId(value) {
+  return encodeNoritoField(u64ToLittleEndianBuffer(value), true);
+}
+
+function encodeSumeragiNativeOptionalHash(value) {
+  if (value === null || value === undefined) {
+    return Buffer.from([0]);
+  }
+  return Buffer.concat([
+    Buffer.from([1]),
+    encodeNoritoField(encodeSumeragiNativeHash(value), true),
+  ]);
+}
+
+function encodeSumeragiNativePeerId(value) {
+  const { orderingKey } = parseSumeragiBlsNormalPeerId(
+    value,
+    "Native AMX validator",
+  );
+  const compactKey = Buffer.concat([
+    u64ToLittleEndianBuffer(orderingKey.length),
+    ...Array.from(orderingKey, (byte) =>
+      encodeNoritoField(Buffer.from([byte]), true),
+    ),
+  ]);
+  return encodeNoritoField(compactKey, true);
+}
+
+function encodeSumeragiNativeValidatorSet(validators) {
+  return encodeNoritoVec(
+    validators,
+    encodeSumeragiNativePeerId,
+    true,
+  );
+}
+
+function formatSumeragiNativeHash(payload) {
+  return formatHashLiteral(irohaHashBytes([payload]).toString("hex"));
+}
+
+function computeSumeragiNativeValidatorSetHash(validators) {
+  return formatSumeragiNativeHash(
+    encodeSumeragiNativeValidatorSet(validators),
+  );
+}
+
+function computeSumeragiNativeDescriptorHash(descriptor) {
+  const payload = encodeSumeragiNativeStruct([
+    encodeSumeragiNativeString("nexus:lane-block-descriptor:v1"),
+    Buffer.from([1]),
+    encodeSumeragiNativeLaneId(descriptor.lane_id),
+    encodeSumeragiNativeDataspaceId(descriptor.dataspace_id),
+    encodeSumeragiNativeHash(descriptor.lane_incarnation),
+    u64ToLittleEndianBuffer(descriptor.proposal_height),
+    u64ToLittleEndianBuffer(descriptor.previous_lane_block_height),
+    encodeSumeragiNativeOptionalHash(
+      descriptor.previous_lane_block_descriptor_hash,
+    ),
+    u64ToLittleEndianBuffer(descriptor.lane_block_height),
+    u64ToLittleEndianBuffer(descriptor.lane_block_view),
+    encodeSumeragiNativeHash(descriptor.subject_hash),
+    encodeSumeragiNativeHash(descriptor.payload_ownership_hash),
+    encodeSumeragiNativeHash(descriptor.rbc_instance_hash),
+    encodeNoritoVec(
+      descriptor.accepted_candidate_indices,
+      u64ToLittleEndianBuffer,
+      true,
+    ),
+    encodeNoritoVec(
+      descriptor.accepted_transaction_hashes,
+      encodeSumeragiNativeHash,
+      true,
+    ),
+    Buffer.from([
+      descriptor.validator_set_hash_version & 0xff,
+      (descriptor.validator_set_hash_version >>> 8) & 0xff,
+    ]),
+    encodeSumeragiNativeHash(descriptor.validator_set_hash),
+    encodeSumeragiNativeValidatorSet(descriptor.validator_set),
+    encodeSumeragiNativeU32(descriptor.validator_count),
+    encodeSumeragiNativeU32(descriptor.min_quorum),
+    encodeSumeragiNativeString(descriptor.qc_mode_tag),
+  ]);
+  return formatSumeragiNativeHash(
+    frameNoritoPayload(
+      SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE,
+      payload,
+      2,
+    ),
+  );
+}
+
+function computeSumeragiNativeProposalHash(descriptor) {
+  const payload = encodeSumeragiNativeStruct([
+    encodeSumeragiNativeString("nexus:lane-block-proposal:v1"),
+    Buffer.from([1]),
+    u64ToLittleEndianBuffer(descriptor.proposal_height),
+    encodeSumeragiNativeHash(descriptor.descriptor_hash),
+    encodeSumeragiNativeLaneId(descriptor.lane_id),
+    encodeSumeragiNativeDataspaceId(descriptor.dataspace_id),
+    encodeSumeragiNativeHash(descriptor.lane_incarnation),
+    u64ToLittleEndianBuffer(descriptor.lane_block_height),
+    u64ToLittleEndianBuffer(descriptor.lane_block_view),
+    encodeSumeragiNativeHash(descriptor.subject_hash),
+    encodeSumeragiNativeHash(descriptor.payload_ownership_hash),
+    encodeSumeragiNativeHash(descriptor.rbc_instance_hash),
+    encodeNoritoVec(
+      descriptor.accepted_candidate_indices,
+      u64ToLittleEndianBuffer,
+      true,
+    ),
+    encodeNoritoVec(
+      descriptor.accepted_transaction_hashes,
+      encodeSumeragiNativeHash,
+      true,
+    ),
+    Buffer.from([
+      descriptor.validator_set_hash_version & 0xff,
+      (descriptor.validator_set_hash_version >>> 8) & 0xff,
+    ]),
+    encodeSumeragiNativeHash(descriptor.validator_set_hash),
+    encodeSumeragiNativeValidatorSet(descriptor.validator_set),
+    encodeSumeragiNativeU32(descriptor.validator_count),
+    encodeSumeragiNativeU32(descriptor.min_quorum),
+    encodeSumeragiNativeString(descriptor.qc_mode_tag),
+  ]);
+  return formatSumeragiNativeHash(
+    frameNoritoPayload(
+      SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE,
+      payload,
+      2,
+    ),
+  );
+}
+
+function encodeSumeragiNativeBigInt(value) {
+  if (value === 0n) {
+    return Buffer.alloc(0);
+  }
+  let hex = value.toString(16);
+  if (hex.length % 2 !== 0) {
+    hex = `0${hex}`;
+  }
+  const bigEndian = Buffer.from(hex, "hex");
+  const littleEndian = Buffer.from(bigEndian).reverse();
+  return (littleEndian[littleEndian.length - 1] & 0x80) !== 0
+    ? Buffer.concat([littleEndian, Buffer.from([0])])
+    : littleEndian;
+}
+
+function encodeSumeragiNativeQuantity(value) {
+  const [whole, fraction = ""] = value.split(".");
+  const mantissa = BigInt(`${whole}${fraction}`);
+  const encoded = encodeSumeragiNativeBigInt(mantissa);
+  return encodeSumeragiNativeStruct([
+    Buffer.concat([encodeSumeragiNativeU32(encoded.length), encoded]),
+    encodeSumeragiNativeU32(fraction.length),
+  ]);
+}
+
+function encodeSumeragiNativeSettlementReceipt(receipt) {
+  return encodeSumeragiNativeStruct([
+    Buffer.from(receipt.source_id, "hex"),
+    encodeSumeragiNativeQuantity(receipt.local_amount),
+    encodeSumeragiNativeQuantity(receipt.xor_due),
+    encodeSumeragiNativeQuantity(receipt.xor_after_haircut),
+    encodeSumeragiNativeQuantity(receipt.xor_variance),
+    u64ToLittleEndianBuffer(receipt.timestamp_ms),
+  ]);
+}
+
+function computeSumeragiNativeParticipantSettlementHash(settlement) {
+  const payload = encodeSumeragiNativeStruct([
+    u64ToLittleEndianBuffer(settlement.block_height),
+    encodeSumeragiNativeLaneId(settlement.lane_id),
+    encodeSumeragiNativeHash(settlement.lane_incarnation),
+    encodeSumeragiNativeDataspaceId(settlement.dataspace_id),
+    u64ToLittleEndianBuffer(settlement.tx_count),
+    encodeSumeragiNativeQuantity(settlement.total_local_amount),
+    encodeSumeragiNativeQuantity(settlement.total_xor_due),
+    encodeSumeragiNativeQuantity(settlement.total_xor_after_haircut),
+    encodeSumeragiNativeQuantity(settlement.total_xor_variance),
+    Buffer.from([0]),
+    encodeNoritoVec(
+      settlement.receipts,
+      encodeSumeragiNativeSettlementReceipt,
+      true,
+    ),
+    encodeNoritoVec([], (value) => value, true),
+    encodeNoritoVec([], (value) => value, true),
+  ]);
+  return formatSumeragiNativeHash(
+    frameNoritoPayload(SUMERAGI_NATIVE_SETTLEMENT_TYPE, payload, 2),
+  );
+}
+
+export const __sumeragiNativeAmxTestHelpers = Object.freeze({
+  computeDescriptorHash: computeSumeragiNativeDescriptorHash,
+  computeParticipantSettlementHash:
+    computeSumeragiNativeParticipantSettlementHash,
+  computeProposalHash: computeSumeragiNativeProposalHash,
+  computeValidatorSetHash: computeSumeragiNativeValidatorSetHash,
+});
+
 function parseSumeragiNativeAmxQc(value, context) {
   const record = assertExactSumeragiRecord(
     value,
@@ -14753,26 +15037,27 @@ function parseSumeragiNativeAmxQc(value, context) {
   if (version !== 1) {
     throw new RangeError(`${context}.validator_set_hash_version must equal 1`);
   }
-  const validators = Object.freeze(
-    assertSumeragiArrayBound(record.validator_set, 128, `${context}.validator_set`, 1).map(
-      (validator, index) =>
-        requireExactNonEmptyString(validator, `${context}.validator_set[${index}]`),
+  const validators = parseSumeragiBlsNormalValidatorSet(
+    assertSumeragiArrayBound(
+      record.validator_set,
+      128,
+      `${context}.validator_set`,
+      1,
     ),
+    `${context}.validator_set`,
   );
-  if (validators.some((validator, index) => index > 0 && validators[index - 1] >= validator)) {
-    throw new TypeError(
-      `${context}.validator_set must be strictly ordered by validator id`,
-    );
-  }
   const validatorSetHash = parseSumeragiHash(
     record.validator_set_hash,
     `${context}.validator_set_hash`,
   );
+  const computedValidatorSetHash =
+    computeSumeragiNativeValidatorSetHash(validators);
   const expectedQuorum = validators.length - Math.floor((validators.length - 1) / 3);
   if (
     body.participant_validator_count !== validators.length ||
     body.participant_min_quorum !== expectedQuorum ||
-    body.participant_validator_set_hash !== validatorSetHash
+    body.participant_validator_set_hash !== validatorSetHash ||
+    validatorSetHash !== computedValidatorSetHash
   ) {
     throw new TypeError(`${context} committee fields differ from its signed body`);
   }
@@ -14926,21 +15211,15 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     throw new TypeError(`${descriptorContext} accepted work is inconsistent`);
   }
 
-  const validators = Object.freeze(
+  const validators = parseSumeragiBlsNormalValidatorSet(
     assertSumeragiArrayBound(
       descriptor.validator_set,
       128,
       `${descriptorContext}.validator_set`,
       1,
-    ).map((validator, index) =>
-      requireExactNonEmptyString(validator, `${descriptorContext}.validator_set[${index}]`),
     ),
+    `${descriptorContext}.validator_set`,
   );
-  if (validators.some((validator, index) => index > 0 && validators[index - 1] >= validator)) {
-    throw new TypeError(
-      `${descriptorContext}.validator_set must be strictly ordered by validator id`,
-    );
-  }
   const validatorCount = parseSumeragiExactUnsigned(
     descriptor.validator_count,
     `${descriptorContext}.validator_count`,
@@ -15022,12 +15301,34 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
       `${descriptorContext}.descriptor_hash`,
     ),
   };
+  if (
+    normalizedDescriptor.validator_set_hash !==
+    computeSumeragiNativeValidatorSetHash(validators)
+  ) {
+    throw new TypeError(
+      `${descriptorContext}.validator_set_hash does not match the canonical committee`,
+    );
+  }
+  if (
+    normalizedDescriptor.descriptor_hash !==
+    computeSumeragiNativeDescriptorHash(normalizedDescriptor)
+  ) {
+    throw new TypeError(
+      `${descriptorContext}.descriptor_hash does not match its canonical preimage`,
+    );
+  }
+  const proposalHash = parseSumeragiNonzeroHash(
+    proposal.proposal_hash,
+    `${context}.proposal_hash`,
+  );
+  if (proposalHash !== computeSumeragiNativeProposalHash(normalizedDescriptor)) {
+    throw new TypeError(
+      `${context}.proposal_hash does not match its canonical preimage`,
+    );
+  }
   return Object.freeze({
     descriptor: Object.freeze(normalizedDescriptor),
-    proposal_hash: parseSumeragiNonzeroHash(
-      proposal.proposal_hash,
-      `${context}.proposal_hash`,
-    ),
+    proposal_hash: proposalHash,
   });
 }
 
@@ -15080,6 +15381,14 @@ function parseSumeragiNativeAmxLeg(value, context) {
     record.participant_settlement_hash,
     `${context}.participant_settlement_hash`,
   );
+  if (
+    participantSettlementHash !==
+    computeSumeragiNativeParticipantSettlementHash(participantSettlement)
+  ) {
+    throw new TypeError(
+      `${context}.participant_settlement_hash does not match its canonical commitment`,
+    );
+  }
   const prepareQc = parseSumeragiNativeAmxQc(record.prepare_qc, `${context}.prepare_qc`);
   const commitQc = parseSumeragiNativeAmxQc(record.commit_qc, `${context}.commit_qc`);
   if (prepareQc.body.phase.phase !== "prepare") {

@@ -238,6 +238,8 @@ class ZkAssetMerklePathTest {
         }
         return """
             {
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "${"0a".repeat(32)}",
               "root": "${hex(root)}",
               "frontier_len": 2,
               "tree_depth": $treeDepth,

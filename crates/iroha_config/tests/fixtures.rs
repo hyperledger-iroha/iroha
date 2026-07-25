@@ -971,6 +971,18 @@ fn minimal_config_snapshot() {
                             67108864,
                         ),
                     },
+                    reserve_worker: SorafsReserveWorker {
+                        enabled: false,
+                        scan_interval: 1s,
+                        scan_batch_limit: 128,
+                        max_pending: 4096,
+                        max_completed: 65536,
+                        max_dead_letters: 4096,
+                        max_attempts: 8,
+                        checkpoint_max_bytes: Bytes(
+                            67108864,
+                        ),
+                    },
                     orderbook: SorafsOrderbook {
                         min_order_gib: 1,
                         price_tick: Quantity(
@@ -990,8 +1002,8 @@ fn minimal_config_snapshot() {
                         publish_delay_seconds: 3600,
                         aggregate_id_prefix: "sfm4c-cycle",
                         query_id: None,
-                        population_inventory: vec![],
-                        metric_schema: vec![],
+                        population_inventory: [],
+                        metric_schema: [],
                         privacy_mode: "differential_privacy_with_suppression",
                         epsilon_numerator: 4,
                         epsilon_denominator: 5,
@@ -1062,27 +1074,10 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_repair: SorafsRepair {
                     enabled: false,
-                    state_dir: None,
                     claim_ttl_secs: 900,
                     heartbeat_interval_secs: 60,
                     max_attempts: 3,
                     worker_concurrency: 4,
-                    backoff_initial_secs: 5,
-                    backoff_max_secs: 60,
-                    default_slash_penalty: XorQuantity(
-                        Quantity(
-                            Numeric {
-                                mantissa: 1,
-                                scale: 0,
-                            },
-                        ),
-                    ),
-                    auditor_rate_per_sec: Some(
-                        4,
-                    ),
-                    auditor_burst: Some(
-                        16,
-                    ),
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,
@@ -1090,7 +1085,6 @@ fn minimal_config_snapshot() {
                     interval_secs: 900,
                     max_deletions_per_run: 500,
                     retention_grace_secs: 86400,
-                    pre_admission_sweep: true,
                 },
                 sorafs_quota: SorafsQuota {
                     capacity_declaration: SorafsQuotaWindow {
@@ -1597,6 +1591,23 @@ fn minimal_config_snapshot() {
                     historical_recovery_retry_tier_attempts: 4,
                     historical_recovery_max_retry_tier: 6,
                     sidecar_service_burst: 8,
+                    merge_sidecar_inbound_session_capacity: 32,
+                    merge_sidecar_inbound_sessions_per_peer: 4,
+                    merge_sidecar_inbound_assembly_bytes: 67108864,
+                    merge_sidecar_inbound_assembly_bytes_per_peer: 33554432,
+                    merge_sidecar_deferred_block_capacity: 128,
+                    merge_sidecar_future_block_distance: 64,
+                    merge_sidecar_request_timeout: 10s,
+                    merge_sidecar_outbound_sessions_per_source: 2,
+                    merge_sidecar_outbound_bytes_per_source: 16777216,
+                    merge_sidecar_server_request_gates_per_source: 4,
+                    merge_sidecar_server_request_gate_ttl: 10s,
+                    pending_certified_merge_entry_capacity: 1024,
+                    pending_queue_plan_admission_capacity: 1024,
+                    pending_control_sidecar_bytes: 268435456,
+                    merge_signing_guard_record_capacity: 1024,
+                    merge_signing_guard_record_bytes: 16842752,
+                    merge_signing_guard_total_bytes: 268435456,
                     native_amx_signing_guard_record_capacity: 524288,
                     native_amx_signing_guard_record_bytes: 16384,
                     native_amx_signing_guard_anchor_bytes: 4096,
@@ -2505,7 +2516,7 @@ fn minimal_config_snapshot() {
                     allowed_storage_classes: None,
                     require_council_signatures: false,
                     approval_quorum: 1,
-                    approval_signers: vec![],
+                    approval_signers: [],
                 },
                 sorafs_pin_fee_asset_id: AssetDefinitionId {
                     aid_bytes: [
@@ -2617,20 +2628,6 @@ fn minimal_config_snapshot() {
                     cooldown_windows: 2,
                     max_pdp_failures: 0,
                     max_potr_breaches: 0,
-                },
-                sorafs_repair_escalation: RepairEscalationPolicyV1 {
-                    quorum_bps: 6667,
-                    minimum_voters: 3,
-                    dispute_window_secs: 86400,
-                    appeal_window_secs: 604800,
-                    max_penalty: XorQuantity(
-                        Quantity(
-                            Numeric {
-                                mantissa: 1,
-                                scale: 0,
-                            },
-                        ),
-                    ),
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {
                     require_submitter: false,

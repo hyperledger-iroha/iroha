@@ -36,6 +36,7 @@ class RegisterAccountWirePayloadEncoderParityTest {
         val kotlinHex = FixtureGeneratorRunner.bytesToHex(wirePayload.payloadBytes)
         val decodedAccountId = RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(
             wirePayload.payloadBytes,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
         )
 
         assertEquals(accountId, decodedAccountId)
@@ -50,12 +51,18 @@ class RegisterAccountWirePayloadEncoderParityTest {
         )
 
         assertFailsWith<IllegalArgumentException> {
-            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(wirePayload.payloadBytes.copyOf(12))
+            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(
+                wirePayload.payloadBytes.copyOf(12),
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
         val mutated = wirePayload.payloadBytes.copyOf()
         mutated[mutated.lastIndex] = (mutated.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
-            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(mutated)
+            RegisterAccountWirePayloadEncoder.decodeRegisterAccountPayload(
+                mutated,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
     }
 }

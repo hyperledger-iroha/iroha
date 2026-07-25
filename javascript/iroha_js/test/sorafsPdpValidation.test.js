@@ -211,9 +211,19 @@ test("validatePdpChallengeProof returns signature outcomes for invalid proof fix
   assert.equal(outcome.code, "SFS-SIG-008");
 });
 
-test("validatePdpPayload rejects unknown kinds before native validation", () => {
-  assert.throws(
-    () => validatePdpPayload("bad-kind", Buffer.alloc(8)),
-    /unsupported SoraFS PDP payload kind/i,
-  );
+test("validatePdpPayload rejects unknown and retired kind aliases", () => {
+  for (const kind of [
+    "bad-kind",
+    "pdp-proof",
+    "pdp_proof",
+    "PROOF",
+    "Proof",
+    " proof ",
+  ]) {
+    assert.throws(
+      () => validatePdpPayload(kind, Buffer.alloc(8)),
+      /unsupported SoraFS PDP payload kind/i,
+      kind,
+    );
+  }
 });

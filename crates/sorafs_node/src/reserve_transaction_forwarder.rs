@@ -27,9 +27,10 @@ use iroha_data_model::{
         capacity::ProviderId,
         reserve::{
             RESERVE_MAX_OPEN_APPEALS_V1, RESERVE_MAX_PENDING_MOVEMENTS_V1,
-            RESERVE_MAX_REASON_BYTES_V1, ReserveAppealRecordV1, ReserveAppealStatusV1,
-            ReserveAuthorityPolicyRecordV1, ReserveFinalizedCursorV1, ReserveMovementRecordV1,
-            ReserveMovementStatusV1, ReserveProviderAccountV1,
+            RESERVE_MAX_REASON_BYTES_V1, RESERVE_RENT_MAX_BILLING_PERIODS_V1,
+            ReserveAppealRecordV1, ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1,
+            ReserveFinalizedCursorV1, ReserveMovementRecordV1, ReserveMovementStatusV1,
+            ReserveProviderAccountV1,
         },
     },
     transaction::{Executable, SignedTransaction},
@@ -438,6 +439,95 @@ pub struct ReserveTransactionPendingV1 {
     pub baseline_finalized_block_hash: [u8; 32],
     /// Exact signed transaction bytes, present after signing.
     pub signed_transaction_bytes: Option<Vec<u8>>,
+}
+
+/// Validate one payload-bounded pending snapshot exported by the durable forwarder.
+///
+/// This is the canonical runtime boundary for delivery-state and exact
+/// signed-byte digest invariants. Workers must call this helper instead of
+/// reproducing the forwarder's private digest algorithm.
+pub fn validate_reserve_pending_delivery_v1(
+    delivery: &ReserveTransactionPendingV1,
+) -> Result<(), ReserveTransactionForwarderError> {
+    if delivery.sequence == 0
+        || delivery.operation_id == [0; 32]
+        || delivery.semantic_digest == [0; 32]
+        || delivery.policy_digest == [0; 32]
+        || delivery.policy_revision == 0
+        || delivery.chain_id.as_str().is_empty()
+        || delivery.chain_id.as_str().len() > RESERVE_TRANSACTION_MAX_CHAIN_ID_BYTES_V1
+        || delivery.expected_provider_revision == Some(0)
+        || delivery.baseline_finalized_height == 0
+        || delivery.baseline_finalized_block_hash == [0; 32]
+    {
+        return Err(ReserveTransactionForwarderError::InvalidCheckpoint);
+    }
+    let signed_material_is_complete =
+        delivery
+            .signed_transaction_bytes
+            .as_ref()
+            .is_some_and(|bytes| {
+                !bytes.is_empty()
+                    && bytes.len() <= RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1
+                    && delivery.transaction_digest == Some(transaction_digest(bytes))
+            });
+    let signed_material_is_absent =
+        delivery.signed_transaction_bytes.is_none() && delivery.transaction_digest.is_none();
+    let valid_state = match delivery.state {
+        ReserveTransactionDeliveryStateV1::Ready => signed_material_is_absent,
+        ReserveTransactionDeliveryStateV1::Signing => {
+            signed_material_is_absent && delivery.attempts != 0
+        }
+        ReserveTransactionDeliveryStateV1::Signed
+        | ReserveTransactionDeliveryStateV1::Ambiguous
+        | ReserveTransactionDeliveryStateV1::Submitted => {
+            signed_material_is_complete && delivery.attempts != 0
+        }
+    };
+    if !valid_state {
+        return Err(ReserveTransactionForwarderError::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+/// Validate that exported pending and reconciliation snapshots retain one operation.
+///
+/// Stable identity and semantic digests are recomputed through the forwarder's
+/// private canonical domains. This prevents a worker from accepting a
+/// different operation that happens to share the same kind, provider, policy,
+/// and revision fields.
+pub fn validate_reserve_reconciliation_material_v1(
+    delivery: &ReserveTransactionPendingV1,
+    retained: &ReserveTransactionReconciliationV1,
+) -> Result<(), ReserveTransactionForwarderError> {
+    validate_reserve_pending_delivery_v1(delivery)?;
+    let prepared = PreparedReserveOperation::new_bounded(
+        retained.request.chain_id.clone(),
+        retained.request.authority.clone(),
+        retained.policy_record.clone(),
+        retained.projection.clone(),
+        retained.request.operation.clone(),
+        RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+    )
+    .map_err(|_| ReserveTransactionForwarderError::InvalidCheckpoint)?;
+    if retained.request.operation_id != delivery.operation_id
+        || retained.request.chain_id != delivery.chain_id
+        || retained.request.authority != delivery.authority
+        || retained.request.operation.kind() != delivery.kind
+        || retained.request.operation.policy_digest() != delivery.policy_digest
+        || retained.policy_record.policy_digest != delivery.policy_digest
+        || retained.policy_record.policy.revision != delivery.policy_revision
+        || operation_provider_id(&retained.request.operation, &retained.projection)
+            != delivery.provider_id
+        || retained.request.operation.expected_provider_revision()
+            != delivery.expected_provider_revision
+        || prepared.identity_digest == [0; 32]
+        || prepared.semantic_digest != delivery.semantic_digest
+        || operation_id(&prepared) != delivery.operation_id
+    {
+        return Err(ReserveTransactionForwarderError::InvalidCheckpoint);
+    }
+    Ok(())
 }
 
 /// Terminal reason retained without private transaction payloads.
@@ -1603,7 +1693,9 @@ fn validate_operation(
                 *instruction.provider_id(),
                 *instruction.expected_provider_revision(),
             )?;
-            if !(1..=12).contains(instruction.billing_periods()) {
+            if !(1..=RESERVE_RENT_MAX_BILLING_PERIODS_V1)
+                .contains(instruction.billing_periods())
+            {
                 return Err(ReserveTransactionForwarderError::InvalidReserveOperation);
             }
         }
@@ -1705,8 +1797,11 @@ fn validate_provider_account(
         || account.debt_principal > account.credit_cap
         || account.pending_movements > RESERVE_MAX_PENDING_MOVEMENTS_V1
         || account.open_appeals > RESERVE_MAX_OPEN_APPEALS_V1
+        || account.rent_charged_through_unix == 0
         || account.interest_accrued_at_unix == 0
         || account.updated_at_unix == 0
+        || account.rent_charged_through_unix > account.updated_at_unix
+        || account.interest_accrued_at_unix > account.updated_at_unix
     {
         return Err(ReserveTransactionForwarderError::InvalidFinalizedProjection);
     }
@@ -2544,6 +2639,7 @@ mod tests {
             days_past_due: 2,
             pending_movements: 1,
             open_appeals: 1,
+            rent_charged_through_unix: 100,
             interest_accrued_at_unix: 100,
             updated_at_unix: 100,
         }
@@ -2996,6 +3092,19 @@ mod tests {
             transaction_digest(&exact)
         );
         assert_eq!(forwarder.begin_submission(operation_id).unwrap(), exact);
+        let pending = forwarder.pending(1).unwrap().remove(0);
+        validate_reserve_pending_delivery_v1(&pending)
+            .expect("forwarder snapshot has canonical signed-byte metadata");
+        let mut digest_corrupted = pending.clone();
+        digest_corrupted.transaction_digest.as_mut().unwrap()[0] ^= 0x80;
+        let mut bytes_corrupted = pending;
+        bytes_corrupted.signed_transaction_bytes.as_mut().unwrap()[0] ^= 0x80;
+        for corrupted in [digest_corrupted, bytes_corrupted] {
+            assert!(matches!(
+                validate_reserve_pending_delivery_v1(&corrupted),
+                Err(ReserveTransactionForwarderError::InvalidCheckpoint)
+            ));
+        }
 
         let wrong_chain = signed_bytes_on_chain(
             ChainId::from("foreign-reserve-chain"),
@@ -3067,6 +3176,19 @@ mod tests {
                     .operation_id(),
             );
         }
+        let mut single_item_cursor = None;
+        let mut single_item_visits = Vec::new();
+        for _ in 0..6 {
+            let page = forwarder.pending_after(single_item_cursor, 1).unwrap();
+            let sequence = page
+                .first()
+                .expect("unchanged pending entry remains visitable")
+                .sequence;
+            single_item_visits.push(sequence);
+            single_item_cursor = Some(sequence);
+        }
+        assert_eq!(single_item_visits, vec![1, 2, 3, 1, 2, 3]);
+
         let first_page = forwarder.pending_after(Some(2), 3).unwrap();
         assert_eq!(
             first_page

@@ -1792,6 +1792,80 @@ mod tests {
         }
     }
 
+    fn install_v2_finality_for_fixture(state: &State, fixture: &V2EvidenceFixture) {
+        let committed = crate::block::ValidBlock::new_dummy_and_modify_header(
+            fixture.keys[0].private_key(),
+            |header| {
+                header.set_height(core::num::NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+                header.merkle_root = None;
+            },
+        )
+        .commit_unchecked()
+        .unpack(|_| {});
+        let block: std::sync::Arc<iroha_data_model::block::SignedBlock> =
+            std::sync::Arc::new(committed.into());
+        state
+            .kura()
+            .store_block(std::sync::Arc::clone(&block))
+            .expect("store canonical v2 evidence fixture block");
+
+        let subject = wire_v2::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("canonical proposal wire"),
+        };
+        let execution_commitment = wire_v2::ExecutionCommitment::without_topups(
+            Hash::new(b"v2 evidence finality parent state"),
+            Hash::new(b"v2 evidence finality post state"),
+            Hash::new(b"v2 evidence finality ordinary writes"),
+            block
+                .executed_block_wire_hash()
+                .expect("canonical executed block wire"),
+        );
+        let round = wire_v2::ConsensusRound {
+            context_id: fixture.context.id(),
+            height: fixture.context.height,
+            view: block.header().view_change_index(),
+        };
+        let mut certificate = wire_v2::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire_v2::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x5A; 48],
+        };
+        let preimage = certificate
+            .signer_preimage(&fixture.context, 0)
+            .expect("valid finality fixture signer");
+        let shares = fixture.keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::try_new(key.private_key(), &preimage)
+                    .expect("sign finality fixture vote")
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        certificate.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                .expect("aggregate finality fixture CommitQC");
+        let _ = state
+            .kura()
+            .store_v2_finality_artifact(&wire_v2::finality::V2FinalityArtifact::new(
+                fixture.context.clone(),
+                subject,
+                certificate,
+                fixture.proofs.clone(),
+            ))
+            .expect("persist canonical v2 evidence fixture finality");
+    }
+
     fn swap_v2_conflict(
         conflict: &wire_v2::SumeragiV2Equivocation,
     ) -> wire_v2::SumeragiV2Equivocation {
@@ -2264,8 +2338,10 @@ mod tests {
     #[test]
     fn asymmetric_v2_observation_converges_after_committed_admission() {
         let fixture = V2EvidenceFixture::new();
-        let proposer = test_state_for_v2_fixture_with_slashing_delay(&fixture, 0);
-        let follower = test_state_for_v2_fixture_with_slashing_delay(&fixture, 0);
+        let proposer = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
+        let follower = test_state_for_v2_fixture_with_slashing_delay(&fixture, 1);
+        install_v2_finality_for_fixture(&proposer, &fixture);
+        install_v2_finality_for_fixture(&follower, &fixture);
         let offender = fixture.context.roster[1].validator.clone();
         add_v2_penalty_validator(&proposer, &offender);
         add_v2_penalty_validator(&follower, &offender);

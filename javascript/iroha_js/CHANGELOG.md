@@ -26,11 +26,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   admission result against the compiler identities and canonical manifest
   before any node read, signing callback, or transaction submission.
 - Made canonical Torii request authentication browser-safe and first-release
-  exact: `X-Iroha-Account` now requires a canonical lowercase ASCII account
-  alias and rejects I105, padded, case-foldable, non-ASCII, percent-encoded,
-  and base64-substitute credentials before I/O. Removed the private raw-header
-  Fetch extension and Node socket transport; I105 remains unchanged in normal
-  account request/path/response models.
+  exact: `X-Iroha-Account` accepts either a canonical I105 account literal or
+  a canonical lowercase ASCII account alias, rejects padded, case-foldable,
+  percent-encoded, and base64-substitute credentials before I/O, and carries
+  I105 as exact UTF-8 header bytes through Fetch's ByteString surface. Removed
+  the private raw-header Fetch extension and Node socket transport.
 - Migrated SoraFS pin registration to the first-release canonical manifest
   contract. Requests now carry only the canonical manifest payload and
   transaction metadata, reject legacy/unknown fields and inert successors,

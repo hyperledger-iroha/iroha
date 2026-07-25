@@ -508,15 +508,23 @@ def render_edge_nginx_conf(
     upstream_fail_timeout: str = DEFAULT_UPSTREAM_FAIL_TIMEOUT,
 ) -> str:
     soracloud_alias_routes = soracloud_alias_routes or []
+    if not validators:
+        raise ValueError("at least one edge validator is required")
     if public_upstream_host is None:
-        public_upstream_host = (
-            validators[1].validator_host if len(validators) > 1 else validators[0].validator_host
-        )
-    connect_validator = next(
-        (validator for validator in validators if validator.validator_host == public_upstream_host),
-        validators[1] if len(validators) > 1 else validators[0],
+        public_upstream_host = validators[0].validator_host
+    public_validator = next(
+        (
+            validator
+            for validator in validators
+            if validator.validator_host == public_upstream_host
+        ),
+        None,
     )
-    connect_upstream = f"{connect_validator.upstream_name}_upstream"
+    if public_validator is None:
+        raise ValueError(
+            "public upstream host must match a validator hostname from the roster"
+        )
+    public_validator_upstream = f"{public_validator.upstream_name}_upstream"
 
     escaped_mon_host_suffix = mon_host_suffix.replace(".", r"\.")
     mon_host_pattern = f"~^.+\\.{escaped_mon_host_suffix}$"
@@ -574,9 +582,14 @@ def render_edge_nginx_conf(
         )
         lines.append("")
 
+    # A public request must observe one coherent validator state. Passive nginx
+    # health checks only detect transport failure; they cannot detect a live
+    # validator that is hundreds of blocks behind. Keep the public convenience
+    # origin pinned to the explicitly selected canonical validator. Operators
+    # may move that pin only after verifying the replacement validator's state.
     shared_upstream_servers = [
-        f"  server {validator.upstream_address} max_fails=1 fail_timeout={upstream_fail_timeout};"
-        for validator in validators
+        f"  server {public_validator.upstream_address} "
+        f"max_fails=1 fail_timeout={upstream_fail_timeout};"
     ]
     lines.extend(
         _render_upstream("taira_public_edge_upstream", shared_upstream_servers, upstream_keepalive)
@@ -616,7 +629,7 @@ def render_edge_nginx_conf(
     lines.extend(_render_public_torii_cors_server_lines())
     lines.extend(
         _render_connect_stateful_locations(
-            connect_upstream,
+            public_validator_upstream,
             host_expr=public_upstream_host,
             forwarded_host_expr="$host",
         )
@@ -833,7 +846,7 @@ def render_edge_nginx_conf(
     )
     lines.extend(
         _render_connect_stateful_locations(
-            connect_upstream,
+            public_validator_upstream,
             host_expr=public_upstream_host,
             forwarded_host_expr=public_host,
         )
@@ -864,7 +877,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Host header used when proxying the public convenience host to Torii "
-            "(defaults to the second validator hostname when present)"
+            "(defaults to the first validator hostname)"
         ),
     )
     parser.add_argument("--explorer-host", default=DEFAULT_EXPLORER_HOST)

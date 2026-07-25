@@ -296,11 +296,11 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
    - Rebuild repair work from the finalized native task and typed-event
      projections at one exact height/block-hash anchor. Storage execution is
      permitted only for the reconciled live lease owner, generation, revision,
-     and expiry. The retained `repair/repair_state.to` loader belongs to the
-     residual local `RepairManager`; it is not production authority and its
-     public manager/checkpoint plus GC/reconciliation consumers must be removed
-     before V1 promotion. A local checkpoint may never create, lease, complete,
-     fail, escalate, or appeal a task.
+     provider binding, and expiry. The retired `repair/repair_state.to`,
+     `FileRepairStore`, and local `RepairManager` have no loader or migration
+     path. GC and reconciliation first prove one complete bounded task
+     projection from a single immutable finalized query view. No local
+     checkpoint can create, lease, complete, fail, escalate, or appeal a task.
    - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
      fetch, PoR sample, telemetry).
    - Spawn the PoR sampling worker and quota monitor.
@@ -375,12 +375,18 @@ The persisted storage boundary is fail-closed in v1:
   data after the new index is authoritative, and removes stale staging or
   unindexed ingest directories. Unknown transaction names and symlinked
   transaction directories fail startup instead of being traversed;
-- atomic index and metadata replacement syncs both the file and its parent
-  directory after rename, so a reported commit survives a host crash rather
-  than depending on an unflushed directory entry. If rename succeeds but the
-  directory sync fails, the backend records the uncertain commit, refuses all
-  subsequent reads and mutations, and requires restart recovery; it never
-  guesses whether the old or new state is authoritative;
+- atomic index and metadata replacement pins the opened parent identity before
+  publication, renames only beneath that stable identity (`/proc/self/fd` on
+  Linux and the volume/file-id namespace on macOS), and syncs both the file and
+  parent directory. Linux fails startup if the required procfs descriptor
+  namespace is unavailable; macOS opens with all-component no-follow
+  semantics. A bounded per-target publication lock keeps rename,
+  post-commit identity verification, and directory sync indivisible across
+  local writers while allowing temporary-file writes to proceed concurrently.
+  If rename succeeds but identity verification or directory sync fails, the
+  backend records the uncertain commit, refuses all subsequent reads and
+  mutations, and requires restart recovery; it never guesses whether the old
+  or new state is authoritative;
 - metadata updates are copy-on-write in memory and on disk. A failure before
   rename leaves the live descriptor unchanged, while an uncertain post-rename
   result installs the committed descriptor and immediately fail-stops the

@@ -44,7 +44,10 @@ public final class HttpClientRejectCodeTests {
             .build();
     final byte[] encodedPayload;
     try {
-      encodedPayload = new NoritoJavaCodecAdapter().encodeTransaction(payload);
+      encodedPayload =
+          new NoritoJavaCodecAdapter(
+                  org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
+              .encodeTransaction(payload);
     } catch (final NoritoException ex) {
       throw new IllegalStateException("Failed to encode payload fixture", ex);
     }

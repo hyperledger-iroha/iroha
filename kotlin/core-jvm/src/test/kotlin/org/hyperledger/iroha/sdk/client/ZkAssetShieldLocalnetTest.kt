@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
 import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
@@ -82,6 +83,7 @@ class ZkAssetShieldLocalnetTest {
         val registerTx = NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
             algorithm = SigningAlgorithm.ED25519,
             chainId = chainId,
+            chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority = authority,
             creationTimeMs = System.currentTimeMillis(),
             ttlMs = null,
@@ -102,6 +104,7 @@ class ZkAssetShieldLocalnetTest {
         val shieldTx = NativeSignerBridge.encodeShieldSignedTransaction(
             algorithm = SigningAlgorithm.ED25519,
             chainId = chainId,
+            chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority = authority,
             creationTimeMs = System.currentTimeMillis(),
             ttlMs = null,

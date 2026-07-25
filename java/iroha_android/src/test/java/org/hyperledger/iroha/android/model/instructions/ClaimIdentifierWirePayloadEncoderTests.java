@@ -96,7 +96,8 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
         : "Receipt attestation bytes mismatch";
 
     final ClaimIdentifierWirePayloadEncoder.DecodedClaimIdentifierPayload roundTrip =
-        ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes());
+        ClaimIdentifierWirePayloadEncoder.decodePayload(
+            wirePayload.payloadBytes(), AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert ACCOUNT_ID.equals(roundTrip.accountId()) : "decoded ClaimIdentifier account mismatch";
     assert java.util.Arrays.equals(embeddedPayload, roundTrip.receiptPayloadBytes())
         : "decoded ClaimIdentifier receipt payload mismatch";
@@ -225,7 +226,8 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
 
     boolean threw = false;
     try {
-      ClaimIdentifierWirePayloadEncoder.decodePayload(reframe(decoded.header(), mutated));
+      ClaimIdentifierWirePayloadEncoder.decodePayload(
+          reframe(decoded.header(), mutated), AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("Trailing bytes");
     }
@@ -244,7 +246,8 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
 
     boolean threw = false;
     try {
-      ClaimIdentifierWirePayloadEncoder.decodePayload(reframe(decoded.header(), mutated));
+      ClaimIdentifierWirePayloadEncoder.decodePayload(
+          reframe(decoded.header(), mutated), AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("payload bytes must not be empty");
     }

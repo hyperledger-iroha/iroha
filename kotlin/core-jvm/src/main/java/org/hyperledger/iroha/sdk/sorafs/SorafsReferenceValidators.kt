@@ -301,6 +301,7 @@ class SorafsReferenceValidators private constructor() {
             pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray?,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,
@@ -315,6 +316,7 @@ class SorafsReferenceValidators private constructor() {
                 pricePerGib,
                 quantityGib,
                 ownerAccount,
+                providerId,
                 expiryUnix,
                 nonce,
                 makerFeeBps,
@@ -332,6 +334,7 @@ class SorafsReferenceValidators private constructor() {
             pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray?,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,
@@ -341,6 +344,7 @@ class SorafsReferenceValidators private constructor() {
         ): ByteArray {
             val orderIdBytes = requireFixed32(orderId, "orderId")
             val ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount")
+            val providerBytes = requireProviderId(side, providerId)
             val priceBytes = xorQuantityBytes(pricePerGib, "pricePerGib", positive = true)
             requirePositive(quantityGib, "quantityGib")
             requirePositive(remainingGib, "remainingGib")
@@ -364,6 +368,7 @@ class SorafsReferenceValidators private constructor() {
                         quantityGib,
                         remainingGib,
                         ownerBytes,
+                        providerBytes,
                         expiryUnix,
                         nonce,
                         makerFee,
@@ -593,6 +598,25 @@ class SorafsReferenceValidators private constructor() {
             return bytes.copyOf()
         }
 
+        private fun requireProviderId(
+            side: SorafsOrderbookSide,
+            providerId: ByteArray?,
+        ): ByteArray {
+            if (side == SorafsOrderbookSide.BID) {
+                require(providerId == null || providerId.isEmpty()) {
+                    "providerId must be absent or empty for bid orders"
+                }
+                return ByteArray(0)
+            }
+            require(providerId != null && providerId.size == 32) {
+                "providerId must be exactly 32 bytes for ask orders"
+            }
+            require(providerId.any { it.toInt() != 0 }) {
+                "providerId must not be all zero"
+            }
+            return providerId.copyOf()
+        }
+
         private fun requireNonEmptyBytes(bytes: ByteArray, field: String): ByteArray {
             require(bytes.isNotEmpty()) { "$field must not be empty" }
             require(bytes.size <= ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1) {
@@ -752,6 +776,7 @@ class SorafsReferenceValidators private constructor() {
             quantityGib: Long,
             remainingGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,

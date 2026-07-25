@@ -841,22 +841,18 @@ impl NativeAmxApplicationManifestLeafV1 {
             Hash::from(self.application_block_hash),
             self.executed_block_wire_hash,
         ];
-        if identities
-            .iter()
-            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+        let is_zero_like = |hash: &Hash| {
+            let bytes = hash.as_ref();
+            bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] <= 1
+        };
+        if identities.iter().any(is_zero_like)
             || self
                 .predecessor_descriptor_hash
-                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+                .is_some_and(|hash| is_zero_like(&hash))
             || self.members.iter().any(|member| {
                 member.source_id.iter().all(|byte| *byte == 0)
-                    || Hash::from(member.entrypoint_hash)
-                        .as_ref()
-                        .iter()
-                        .all(|byte| *byte == 0)
-                    || Hash::from(member.result_hash)
-                        .as_ref()
-                        .iter()
-                        .all(|byte| *byte == 0)
+                    || is_zero_like(&Hash::from(member.entrypoint_hash))
+                    || is_zero_like(&Hash::from(member.result_hash))
             })
         {
             return Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf);

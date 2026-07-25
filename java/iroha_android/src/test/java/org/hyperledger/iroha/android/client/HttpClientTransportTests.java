@@ -710,10 +710,12 @@ public final class HttpClientTransportTests {
   private static void submitQueuesTransactionsWithExportedKey() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
-    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
+    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), keyManager);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setChainId("00000000")
+            .setAuthority(TestAccountIds.ed25519Authority(0x27))
             .setInstructions(Collections.emptyList())
             .build();
     final SignedTransaction transaction =
@@ -759,10 +761,12 @@ public final class HttpClientTransportTests {
   private static void submitQueuesTransactionsSkipsExportWhenProviderDeclines() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
-    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
+    final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT), keyManager);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setChainId("00000000")
+            .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setInstructions(Collections.emptyList())
             .build();
     final SignedTransaction transaction =
@@ -3804,10 +3808,13 @@ public final class HttpClientTransportTests {
 
   private static void resolveRestrictedAccountAliasUsesCanonicalAuthentication()
       throws Exception {
+    final String accountId = TestAccountIds.ed25519Authority(0x42);
     final String json =
         "{"
             + "\"alias\":\"merchant@private\","
-            + "\"account_id\":\"aid:merchant-123\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
             + "\"source\":\"world_state\""
             + "}";
     final StubResponseExecutor executor =
@@ -3824,7 +3831,7 @@ public final class HttpClientTransportTests {
         transport.resolveAccountAlias("merchant@private", auth).join();
 
     assert response.isPresent() : "Restricted alias resolution should be present";
-    assert "aid:merchant-123".equals(response.orElseThrow().accountId())
+    assert accountId.equals(response.orElseThrow().accountId())
         : "Restricted alias target mismatch";
     final TransportRequest request = executor.lastRequest();
     assert request != null : "Restricted alias request must be captured";
@@ -3944,10 +3951,13 @@ public final class HttpClientTransportTests {
   }
 
   private static void resolveAccountAliasRequestParsesResponseWithoutIndex() {
+    final String accountId = TestAccountIds.ed25519Authority(0x13);
     final String json =
         "{"
             + "\"alias\":\"banking@centralbank.universal\","
-            + "\"account_id\":\"aid:banking-123\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
             + "\"source\":\"rekey_record\""
             + "}";
     final StubResponseExecutor executor =
@@ -3963,16 +3973,19 @@ public final class HttpClientTransportTests {
     assert response.isPresent() : "Account alias resolution should be present";
     final AccountAliasResolution resolution = response.orElseThrow();
     assert "banking@centralbank.universal".equals(resolution.alias()) : "Alias mismatch";
-    assert "aid:banking-123".equals(resolution.accountId()) : "Account id mismatch";
+    assert accountId.equals(resolution.accountId()) : "Account id mismatch";
     assert resolution.index() == null : "Index should be absent when the payload omits it";
     assert "rekey_record".equals(resolution.source()) : "Source mismatch";
   }
 
   private static void resolveAccountAliasRejectsNonIntegerIndex() {
+    final String accountId = TestAccountIds.ed25519Authority(0x14);
     final String json =
         "{"
             + "\"alias\":\"alice@universal\","
-            + "\"account_id\":\"aid:alice-123\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
             + "\"index\":3.5"
             + "}";
     final StubResponseExecutor executor =
@@ -3996,10 +4009,13 @@ public final class HttpClientTransportTests {
   }
 
   private static void accountAliasParserRejectsNonExactResponseFields() {
+    final String accountId = TestAccountIds.ed25519Authority(0x15);
     final String canonical =
         "{"
             + "\"alias\":\"alice@universal\","
-            + "\"account_id\":\"aid:alice-123\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
             + "\"index\":7,"
             + "\"source\":\"directory\""
             + "}";
@@ -4010,7 +4026,9 @@ public final class HttpClientTransportTests {
       },
       {
         "account alias resolution.account_id",
-        canonical.replace("\"account_id\":\"aid:alice-123\"", "\"account_id\":\"aid:alice-123 \"")
+        canonical.replace(
+            "\"account_id\":\"" + accountId + "\"",
+            "\"account_id\":\"" + accountId + " \"")
       },
       {
         "account alias resolution.source",
@@ -6270,7 +6288,7 @@ public final class HttpClientTransportTests {
             .setNonce(fillValue & 0xFF)
             .setMetadata(Map.of("note", "txn-" + fillValue))
             .build();
-    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final byte[] encodedPayload;
     try {
       encodedPayload = codec.encodeTransaction(payload);

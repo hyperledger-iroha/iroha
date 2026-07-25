@@ -7,6 +7,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
@@ -573,7 +574,12 @@ public final class SumeragiDiagnosticsModels {
     public List<AutonomousLaneExecution> rows() { return rows; }
   }
 
-  /** Complete public model for {@code /v1/sumeragi/diagnostics}. */
+  /**
+   * Complete public model for {@code /v1/sumeragi/diagnostics}.
+   *
+   * <p>Native-bearing settlement commitments, including relay-contained commitments, are
+   * validated by the strict Native AMX V2 parser before this model is constructed.
+   */
   public static final class SumeragiDiagnosticsStatus {
     private final PipelineExecutionStatus pipelineExecution;
     private final BigInteger txQueueDepth;
@@ -668,6 +674,8 @@ public final class SumeragiDiagnosticsModels {
           boundedCopy(laneBlockSessions, "laneBlockSessions", DIAGNOSTIC_LANES_MAX);
       final List<?> copiedLaneGovernance =
           boundedCopy(laneGovernance, "laneGovernance", DIAGNOSTIC_LANES_MAX);
+      validateNativeAmxDiagnosticsEvidence(
+          copiedLaneSettlementCommitments, copiedLaneRelayEnvelopes);
       final List<String> copiedAliases =
           boundedCopy(
               laneGovernanceSealedAliases,
@@ -742,6 +750,44 @@ public final class SumeragiDiagnosticsModels {
     public List<AutonomousLaneExecution> autonomousLaneExecutions() {
       return autonomousLaneExecutions;
     }
+  }
+
+  private static void validateNativeAmxDiagnosticsEvidence(
+      final List<?> settlements, final List<?> relays) {
+    for (int index = 0; index < settlements.size(); index++) {
+      validateNativeAmxSettlementEvidence(
+          settlements.get(index), "lane_settlement_commitments[" + index + "]");
+    }
+    for (int index = 0; index < relays.size(); index++) {
+      final String field = "lane_relay_envelopes[" + index + "]";
+      final Map<String, Object> relay = jsonObject(relays.get(index), field);
+      validateNativeAmxSettlementEvidence(
+          relay.get("settlement_commitment"), field + ".settlement_commitment");
+    }
+  }
+
+  private static void validateNativeAmxSettlementEvidence(
+      final Object value, final String field) {
+    final Map<String, Object> settlement = jsonObject(value, field);
+    final Object nativeReceipts = settlement.get("native_amx_receipts");
+    require(
+        nativeReceipts instanceof List,
+        field + ".native_amx_receipts must be a JSON array");
+    if (((List<?>) nativeReceipts).isEmpty()) {
+      return;
+    }
+    try {
+      NativeAmxV2Models.parseReceiptGroup(settlement);
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalArgumentException(
+          field + " contains invalid Native AMX V2 evidence", error);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> jsonObject(final Object value, final String field) {
+    require(value instanceof Map, field + " must be a JSON object");
+    return (Map<String, Object>) value;
   }
 
   private static <T> List<T> boundedCopy(

@@ -225,9 +225,9 @@ substitute.
   A terminal failure uses the exact-chain durable native repair-transaction
   forwarder and reconciles the finalized task cursor before storage execution.
   The retained coordinator snapshot and repair-history store are rebuildable
-  local projections only; the residual public repair manager/checkpoint
-  consumers must be removed before promotion, and cross-peer duplicate
-  submissions must prove one terminal outcome.
+  PoR projections only. The competing local repair manager/checkpoint and its
+  GC/reconciliation consumers are removed; cross-peer duplicate submissions
+  must still prove one native terminal outcome before promotion.
 - Export files currently contain the raw Norito `PorStatusExportV1` payload.
   Parquet/manifest packaging and SoraFS pinning are production archive tasks.
 - Governance meetings can reference `PorWeeklyReportV1` to decide on penalties,

@@ -170,6 +170,8 @@ pub struct OrderRequestV1 {
     pub remaining_gib: u64,
     /// Canonical owner account bytes.
     pub owner_account: Vec<u8>,
+    /// Exact provider registry identity sold by an ask; absent for bids.
+    pub provider_id: Option<[u8; 32]>,
     /// Unix timestamp (seconds) after which the order expires.
     pub expiry_unix: u64,
     /// Owner nonce used to prevent replay.
@@ -201,6 +203,18 @@ impl OrderRequestV1 {
                 order_id: self.order_id,
                 expected_order_id,
             });
+        }
+        match (self.side, self.provider_id) {
+            (OrderSideV1::Bid, None) => {}
+            (OrderSideV1::Bid, Some(_)) => {
+                return Err(OrderbookValidationError::BidProviderBindingForbidden);
+            }
+            (OrderSideV1::Ask, None) => {
+                return Err(OrderbookValidationError::AskProviderBindingRequired);
+            }
+            (OrderSideV1::Ask, Some(provider_id)) => {
+                validate_digest(provider_id, OrderbookValidationError::InvalidProviderId)?;
+            }
         }
         if self.price_per_gib.is_zero() {
             return Err(OrderbookValidationError::ZeroPrice);
@@ -628,15 +642,39 @@ impl OrderbookRuntimeSnapshotV1 {
                 SnapshotChannelReplayV1 {
                     trade_id: channel.trade_id,
                     total_bytes: channel.total_bytes,
-                    remaining_bytes: channel.remaining_bytes,
-                    xor_locked: channel.xor_locked.clone(),
+                    stored_remaining_bytes: channel.remaining_bytes,
+                    stored_xor_locked: channel.xor_locked.clone(),
+                    stored_remaining_fee_xor_locked: channel
+                        .remaining_fee_xor_locked
+                        .clone(),
                     opened_at_unix: channel.opened_at_unix,
                     updated_at_unix: channel.updated_at_unix,
                     initial_escrow: trade_escrow_requirement_v1(trade)?,
-                    delivered_bytes: 0,
-                    debited: XorQuantity::zero(),
+                    initial_fee: trade_fee_requirement_v1(trade)?,
+                    remaining_bytes: channel.total_bytes,
+                    remaining_escrow: channel.initial_xor_locked.clone(),
+                    remaining_fee: channel.initial_fee_xor_locked.clone(),
                 },
             );
+            let replay = channel_replay
+                .get(&channel.channel_id)
+                .expect("channel replay was inserted");
+            if channel.initial_xor_locked != replay.initial_escrow {
+                return Err(
+                    OrderbookValidationError::SnapshotChannelInitialEscrowMismatch {
+                        channel_id: channel.channel_id,
+                        escrow: channel.initial_xor_locked.clone(),
+                        expected_escrow: replay.initial_escrow.clone(),
+                    },
+                );
+            }
+            if channel.initial_fee_xor_locked != replay.initial_fee {
+                return Err(OrderbookValidationError::SnapshotChannelInitialFeeMismatch {
+                    channel_id: channel.channel_id,
+                    fee: channel.initial_fee_xor_locked.clone(),
+                    expected_fee: replay.initial_fee.clone(),
+                });
+            }
         }
 
         let mut receipt_ids = BTreeSet::new();
@@ -688,45 +726,55 @@ impl OrderbookRuntimeSnapshotV1 {
                 receipt.range.end,
                 receipt.receipt_id,
             ));
-            replay.delivered_bytes = replay
-                .delivered_bytes
-                .checked_add(delivered)
-                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
-            replay.debited = replay
-                .debited
-                .checked_add(&receipt.xor_debited)
-                .map_err(OrderbookValidationError::Amount)?;
-            if replay.debited > replay.initial_escrow {
-                return Err(OrderbookValidationError::ReceiptExceedsEscrow {
-                    debited: replay.debited.clone(),
-                    escrow: replay.initial_escrow.clone(),
+            let expected_split = deterministic_settlement_split_v1(
+                &replay.remaining_escrow,
+                &replay.remaining_fee,
+                delivered,
+                replay.remaining_bytes,
+            )?;
+            if receipt.xor_debited != expected_split.xor_debited
+                || receipt.provider_credit != expected_split.provider_credit
+                || receipt.fee_amount != expected_split.fee_amount
+            {
+                return Err(OrderbookValidationError::SettlementSplitMismatch {
+                    expected_debit: expected_split.xor_debited,
+                    expected_provider_credit: expected_split.provider_credit,
+                    expected_fee: expected_split.fee_amount,
                 });
             }
+            replay.remaining_bytes -= delivered;
+            replay.remaining_escrow = replay
+                .remaining_escrow
+                .checked_sub(&receipt.xor_debited)
+                .map_err(OrderbookValidationError::Amount)?;
+            replay.remaining_fee = replay
+                .remaining_fee
+                .checked_sub(&receipt.fee_amount)
+                .map_err(OrderbookValidationError::Amount)?;
         }
 
         for (channel_id, replay) in channel_replay {
-            let expected_remaining_bytes = replay
-                .total_bytes
-                .checked_sub(replay.delivered_bytes)
-                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
-            if replay.remaining_bytes != expected_remaining_bytes {
+            if replay.stored_remaining_bytes != replay.remaining_bytes {
                 return Err(
                     OrderbookValidationError::SnapshotChannelReceiptBytesMismatch {
                         channel_id,
-                        remaining_bytes: replay.remaining_bytes,
-                        expected_remaining_bytes,
+                        remaining_bytes: replay.stored_remaining_bytes,
+                        expected_remaining_bytes: replay.remaining_bytes,
                     },
                 );
             }
-            let expected_xor_locked = replay
-                .initial_escrow
-                .checked_sub(&replay.debited)
-                .map_err(OrderbookValidationError::Amount)?;
-            if replay.xor_locked != expected_xor_locked {
+            if replay.stored_xor_locked != replay.remaining_escrow {
                 return Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
                     channel_id,
-                    escrow: replay.xor_locked,
-                    expected_escrow: expected_xor_locked,
+                    escrow: replay.stored_xor_locked,
+                    expected_escrow: replay.remaining_escrow,
+                });
+            }
+            if replay.stored_remaining_fee_xor_locked != replay.remaining_fee {
+                return Err(OrderbookValidationError::SnapshotChannelFeeEscrowMismatch {
+                    channel_id,
+                    fee: replay.stored_remaining_fee_xor_locked,
+                    expected_fee: replay.remaining_fee,
                 });
             }
         }
@@ -833,13 +881,16 @@ where
 struct SnapshotChannelReplayV1 {
     trade_id: [u8; 32],
     total_bytes: u64,
+    stored_remaining_bytes: u64,
+    stored_xor_locked: XorQuantity,
+    stored_remaining_fee_xor_locked: XorQuantity,
     remaining_bytes: u64,
-    xor_locked: XorQuantity,
     opened_at_unix: u64,
     updated_at_unix: u64,
     initial_escrow: XorQuantity,
-    delivered_bytes: u64,
-    debited: XorQuantity,
+    initial_fee: XorQuantity,
+    remaining_escrow: XorQuantity,
+    remaining_fee: XorQuantity,
 }
 
 #[derive(Debug, Clone)]
@@ -1143,6 +1194,55 @@ pub fn trade_escrow_requirement_v1(
         .map_err(OrderbookValidationError::Amount)
 }
 
+/// Return the immutable maker-plus-taker fee custody for a trade.
+pub fn trade_fee_requirement_v1(
+    trade: &TradeEventV1,
+) -> Result<XorQuantity, OrderbookValidationError> {
+    trade.validate()?;
+    trade
+        .maker_fee
+        .checked_add(&trade.taker_fee)
+        .map_err(OrderbookValidationError::Amount)
+}
+
+/// Return the conservative native custody required to admit one full bid.
+///
+/// The buyer can become either maker or taker. The counterparty's applicable
+/// fee is not known at bid admission, so the bound combines the signed bid fee
+/// for each role with the governed maximum for the opposite role, then selects
+/// the larger exact basis-point charge. The entire signed quantity is priced
+/// at the bid's limit price; execution at any lower crossing price therefore
+/// cannot exceed this lock.
+pub fn bid_order_escrow_requirement_v1(
+    bid: &OrderRequestV1,
+    governed_max_maker_fee_bps: u16,
+    governed_max_taker_fee_bps: u16,
+) -> Result<XorQuantity, OrderbookValidationError> {
+    bid.validate()?;
+    if bid.side != OrderSideV1::Bid {
+        return Err(OrderbookValidationError::BidEscrowRequiresBid {
+            side: bid.side,
+        });
+    }
+    validate_fee_bps(governed_max_maker_fee_bps)?;
+    validate_fee_bps(governed_max_taker_fee_bps)?;
+
+    let gross = bid
+        .price_per_gib
+        .checked_mul_u64(bid.quantity_gib)
+        .map_err(OrderbookValidationError::Amount)?;
+    let bid_as_maker_bps =
+        u32::from(bid.maker_fee_bps) + u32::from(governed_max_taker_fee_bps);
+    let bid_as_taker_bps =
+        u32::from(bid.taker_fee_bps) + u32::from(governed_max_maker_fee_bps);
+    let maximum_fee = gross
+        .checked_mul_basis_points_u32(bid_as_maker_bps.max(bid_as_taker_bps))
+        .map_err(OrderbookValidationError::Amount)?;
+    gross
+        .checked_add(&maximum_fee)
+        .map_err(OrderbookValidationError::Amount)
+}
+
 /// Half-open byte range `[start, end)` covered by a settlement receipt.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ByteRangeV1 {
@@ -1190,6 +1290,12 @@ pub struct SettlementChannelV1 {
     pub remaining_bytes: u64,
     /// XOR locked in escrow for the channel.
     pub xor_locked: XorQuantity,
+    /// Initial total XOR partitioned for the channel.
+    pub initial_xor_locked: XorQuantity,
+    /// Initial immutable maker-plus-taker fee custody.
+    pub initial_fee_xor_locked: XorQuantity,
+    /// Maker-plus-taker fee custody not yet settled.
+    pub remaining_fee_xor_locked: XorQuantity,
     /// Channel status.
     pub status: SettlementChannelStatusV1,
     /// Unix timestamp (seconds) when the channel opened.
@@ -1237,6 +1343,20 @@ impl SettlementChannelV1 {
         {
             return Err(OrderbookValidationError::ZeroEscrow);
         }
+        if self.xor_locked > self.initial_xor_locked
+            || self.initial_fee_xor_locked > self.initial_xor_locked
+            || self.remaining_fee_xor_locked > self.initial_fee_xor_locked
+            || self.remaining_fee_xor_locked > self.xor_locked
+        {
+            return Err(OrderbookValidationError::InvalidChannelFeeCustody);
+        }
+        if matches!(
+            self.status,
+            SettlementChannelStatusV1::Closed | SettlementChannelStatusV1::Refunded
+        ) && (!self.xor_locked.is_zero() || !self.remaining_fee_xor_locked.is_zero())
+        {
+            return Err(OrderbookValidationError::TerminalChannelHasCustody);
+        }
         if self.opened_at_unix == 0 || self.updated_at_unix < self.opened_at_unix {
             return Err(OrderbookValidationError::InvalidTimestamp);
         }
@@ -1260,6 +1380,8 @@ pub fn open_settlement_channel_for_trade_v1(
         .filled_gib
         .checked_mul(BYTES_PER_GIB)
         .ok_or(OrderbookValidationError::ByteCountOverflow)?;
+    let initial_xor_locked = trade_escrow_requirement_v1(trade)?;
+    let initial_fee_xor_locked = trade_fee_requirement_v1(trade)?;
     let channel = SettlementChannelV1 {
         version: SETTLEMENT_CHANNEL_VERSION_V1,
         channel_id,
@@ -1268,13 +1390,65 @@ pub fn open_settlement_channel_for_trade_v1(
         provider_id,
         total_bytes,
         remaining_bytes: total_bytes,
-        xor_locked: trade_escrow_requirement_v1(trade)?,
+        xor_locked: initial_xor_locked.clone(),
+        initial_xor_locked,
+        initial_fee_xor_locked: initial_fee_xor_locked.clone(),
+        remaining_fee_xor_locked: initial_fee_xor_locked,
         status: SettlementChannelStatusV1::Open,
         opened_at_unix,
         updated_at_unix: opened_at_unix,
     };
     channel.validate()?;
     Ok(channel)
+}
+
+/// Ledger-derived economic split for one streaming receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementSplitV1 {
+    /// Total custody debited for the delivered bytes.
+    pub xor_debited: XorQuantity,
+    /// Amount credited to the provider.
+    pub provider_credit: XorQuantity,
+    /// Immutable trade-fee portion credited to treasury.
+    pub fee_amount: XorQuantity,
+}
+
+/// Prorate remaining total and fee custody toward zero for delivered bytes.
+///
+/// Both ratios use the same remaining-byte denominator. A final receipt
+/// (`bytes_delivered == remaining_bytes`) therefore consumes all residual
+/// custody exactly, including rounding dust from earlier chunks.
+pub fn deterministic_settlement_split_v1(
+    remaining_xor_locked: &XorQuantity,
+    remaining_fee_xor_locked: &XorQuantity,
+    bytes_delivered: u64,
+    remaining_bytes: u64,
+) -> Result<SettlementSplitV1, OrderbookValidationError> {
+    let denominator =
+        core::num::NonZeroU64::new(remaining_bytes).ok_or(OrderbookValidationError::ZeroBytes)?;
+    if bytes_delivered == 0 || bytes_delivered > remaining_bytes {
+        return Err(OrderbookValidationError::ReceiptExceedsRemainingBytes {
+            delivered: bytes_delivered,
+            remaining_bytes,
+        });
+    }
+    if remaining_fee_xor_locked > remaining_xor_locked {
+        return Err(OrderbookValidationError::InvalidChannelFeeCustody);
+    }
+    let xor_debited = remaining_xor_locked
+        .checked_mul_ratio(bytes_delivered, denominator)
+        .map_err(OrderbookValidationError::Amount)?;
+    let fee_amount = remaining_fee_xor_locked
+        .checked_mul_ratio(bytes_delivered, denominator)
+        .map_err(OrderbookValidationError::Amount)?;
+    let provider_credit = xor_debited
+        .checked_sub(&fee_amount)
+        .map_err(OrderbookValidationError::Amount)?;
+    Ok(SettlementSplitV1 {
+        xor_debited,
+        provider_credit,
+        fee_amount,
+    })
 }
 
 /// Signed streaming-settlement receipt for delivered bytes.
@@ -1427,6 +1601,22 @@ pub fn apply_settlement_receipt_v1(
             escrow: channel.xor_locked.clone(),
         });
     }
+    let expected_split = deterministic_settlement_split_v1(
+        &channel.xor_locked,
+        &channel.remaining_fee_xor_locked,
+        delivered,
+        channel.remaining_bytes,
+    )?;
+    if receipt.xor_debited != expected_split.xor_debited
+        || receipt.provider_credit != expected_split.provider_credit
+        || receipt.fee_amount != expected_split.fee_amount
+    {
+        return Err(OrderbookValidationError::SettlementSplitMismatch {
+            expected_debit: expected_split.xor_debited,
+            expected_provider_credit: expected_split.provider_credit,
+            expected_fee: expected_split.fee_amount,
+        });
+    }
 
     let remaining_bytes = channel.remaining_bytes - delivered;
     let status = if remaining_bytes == 0 {
@@ -1439,6 +1629,10 @@ pub fn apply_settlement_receipt_v1(
         xor_locked: channel
             .xor_locked
             .checked_sub(&receipt.xor_debited)
+            .map_err(OrderbookValidationError::Amount)?,
+        remaining_fee_xor_locked: channel
+            .remaining_fee_xor_locked
+            .checked_sub(&receipt.fee_amount)
             .map_err(OrderbookValidationError::Amount)?,
         status,
         updated_at_unix: receipt.issued_at_unix,
@@ -1641,6 +1835,12 @@ pub enum OrderbookValidationError {
     /// Provider identifier is all zeroes.
     #[error("provider id must not be zero")]
     InvalidProviderId,
+    /// A bid carried an ask-only provider binding.
+    #[error("bid orders must not carry a provider id")]
+    BidProviderBindingForbidden,
+    /// An ask omitted its exact provider binding.
+    #[error("ask orders must carry an exact non-zero provider id")]
+    AskProviderBindingRequired,
     /// Price is zero.
     #[error("price must be positive")]
     ZeroPrice,
@@ -1723,6 +1923,12 @@ pub enum OrderbookValidationError {
     /// Maker and taker order ids are identical.
     #[error("maker and taker order ids must differ")]
     SelfTrade,
+    /// Bid custody was requested for a non-bid order.
+    #[error("native order escrow requires a bid order, found {side:?}")]
+    BidEscrowRequiresBid {
+        /// Supplied order side.
+        side: OrderSideV1,
+    },
     /// Order expired before the match timestamp.
     #[error("order expired at {expiry_unix}, match timestamp {now_unix}")]
     ExpiredOrder {
@@ -1870,6 +2076,42 @@ pub enum OrderbookValidationError {
         /// Exact locked escrow after replaying accepted receipts.
         expected_escrow: XorQuantity,
     },
+    /// Snapshot channel initial escrow differs from its immutable trade.
+    #[error(
+        "snapshot channel {channel_id:02x?} initial escrow {escrow} differs from trade escrow {expected_escrow}"
+    )]
+    SnapshotChannelInitialEscrowMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored initial escrow.
+        escrow: XorQuantity,
+        /// Initial escrow derived from the immutable trade.
+        expected_escrow: XorQuantity,
+    },
+    /// Snapshot channel initial fee custody differs from its immutable trade.
+    #[error(
+        "snapshot channel {channel_id:02x?} initial fee {fee} differs from trade fee {expected_fee}"
+    )]
+    SnapshotChannelInitialFeeMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored initial fee custody.
+        fee: XorQuantity,
+        /// Fee custody derived from the immutable trade.
+        expected_fee: XorQuantity,
+    },
+    /// Snapshot channel remaining fee custody differs from receipt replay.
+    #[error(
+        "snapshot channel {channel_id:02x?} remaining fee {fee} differs from receipt replay {expected_fee}"
+    )]
+    SnapshotChannelFeeEscrowMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored remaining fee custody.
+        fee: XorQuantity,
+        /// Fee custody remaining after replaying accepted receipts.
+        expected_fee: XorQuantity,
+    },
     /// Snapshot receipt references a channel absent from the snapshot.
     #[error("snapshot receipt {receipt_id:02x?} references missing channel {channel_id:02x?}")]
     SnapshotReceiptChannelMissing {
@@ -1927,6 +2169,24 @@ pub enum OrderbookValidationError {
         debited: XorQuantity,
         /// Exact remaining escrow.
         escrow: XorQuantity,
+    },
+    /// Channel total or fee custody violates immutable accounting bounds.
+    #[error("settlement channel fee custody is outside total-custody bounds")]
+    InvalidChannelFeeCustody,
+    /// A closed or refunded channel retained total or fee custody.
+    #[error("terminal settlement channel retains custody")]
+    TerminalChannelHasCustody,
+    /// Receipt split differs from the deterministic trade-derived split.
+    #[error(
+        "settlement split mismatch: expected debit {expected_debit}, provider credit {expected_provider_credit}, fee {expected_fee}"
+    )]
+    SettlementSplitMismatch {
+        /// Expected total debit.
+        expected_debit: XorQuantity,
+        /// Expected provider credit.
+        expected_provider_credit: XorQuantity,
+        /// Expected fee amount.
+        expected_fee: XorQuantity,
     },
     /// Byte count is zero.
     #[error("byte count must be positive")]
@@ -2076,6 +2336,7 @@ mod tests {
             quantity_gib: 10,
             remaining_gib: 10,
             owner_account,
+            provider_id: None,
             expiry_unix: 1_800_000_000,
             nonce,
             maker_fee_bps: 5,
@@ -2097,6 +2358,7 @@ mod tests {
         order.quantity_gib = quantity_gib;
         order.remaining_gib = quantity_gib;
         order.owner_account = account(seed);
+        order.provider_id = (side == OrderSideV1::Ask).then_some([seed.max(1); 32]);
         order.nonce = u64::from(seed);
         refresh_order_id(&mut order);
         order
@@ -2142,6 +2404,16 @@ mod tests {
         accepted_receipt.channel_id = opened_channel.channel_id;
         accepted_receipt.trade_id = opened_channel.trade_id;
         accepted_receipt.issued_at_unix = 1_800_000_200;
+        let split = deterministic_settlement_split_v1(
+            &opened_channel.xor_locked,
+            &opened_channel.remaining_fee_xor_locked,
+            accepted_receipt.bytes_delivered,
+            opened_channel.remaining_bytes,
+        )
+        .expect("snapshot receipt split should derive");
+        accepted_receipt.xor_debited = split.xor_debited;
+        accepted_receipt.provider_credit = split.provider_credit;
+        accepted_receipt.fee_amount = split.fee_amount;
         accepted_receipt = sign_receipt(accepted_receipt, 0x55);
         let channel = apply_settlement_receipt_v1(&opened_channel, &accepted_receipt)
             .expect("snapshot receipt should apply");
@@ -2389,6 +2661,32 @@ mod tests {
     #[test]
     fn order_accepts_valid_payload() {
         assert_eq!(order().validate(), Ok(()));
+    }
+
+    #[test]
+    fn order_requires_exact_provider_binding_only_for_asks() {
+        let mut bid_with_provider = order();
+        bid_with_provider.provider_id = Some(id(9));
+        assert_eq!(
+            bid_with_provider.validate(),
+            Err(OrderbookValidationError::BidProviderBindingForbidden),
+        );
+
+        let mut ask_without_provider = order();
+        ask_without_provider.side = OrderSideV1::Ask;
+        assert_eq!(
+            ask_without_provider.validate(),
+            Err(OrderbookValidationError::AskProviderBindingRequired),
+        );
+
+        ask_without_provider.provider_id = Some([0; 32]);
+        assert_eq!(
+            ask_without_provider.validate(),
+            Err(OrderbookValidationError::InvalidProviderId),
+        );
+
+        ask_without_provider.provider_id = Some(id(9));
+        assert_eq!(ask_without_provider.validate(), Ok(()));
     }
 
     #[test]
@@ -2688,9 +2986,31 @@ mod tests {
     }
 
     #[test]
+    fn bid_order_escrow_covers_full_limit_value_and_worst_role_fee() {
+        let bid = order();
+        let required = bid_order_escrow_requirement_v1(&bid, 100, 200)
+            .expect("derive conservative bid custody");
+        assert_eq!(
+            required,
+            XorQuantity::try_from_micro(15_307_500).expect("expected custody"),
+        );
+
+        let mut ask = bid;
+        ask.side = OrderSideV1::Ask;
+        ask.provider_id = Some(id(9));
+        assert_eq!(
+            bid_order_escrow_requirement_v1(&ask, 100, 200),
+            Err(OrderbookValidationError::BidEscrowRequiresBid {
+                side: OrderSideV1::Ask,
+            }),
+        );
+    }
+
+    #[test]
     fn match_orders_creates_trade_and_remaining_quantities() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -2736,6 +3056,7 @@ mod tests {
     fn match_orders_rejects_non_crossing_prices() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -2764,6 +3085,7 @@ mod tests {
         let bid_price: XorQuantity = "0.0000001".parse().expect("canonical sub-micro XOR price");
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(21));
         maker.owner_account = account(21);
         maker.price_per_gib = ask_price.clone();
         refresh_order_id(&mut maker);
@@ -2872,6 +3194,8 @@ mod tests {
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
+                    provider_id: (side == OrderSideV1::Ask)
+                        .then_some([index_u8.wrapping_add(1); 32]),
                     expiry_unix: now_unix + 1 + rng.range(600),
                     nonce,
                     maker_fee_bps: rng.range(40) as u16,
@@ -2921,6 +3245,8 @@ mod tests {
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
+                    provider_id: (side == OrderSideV1::Ask)
+                        .then_some([index_u8.wrapping_add(1); 32]),
                     expiry_unix: now_unix + 10 + rng.range(900),
                     nonce,
                     maker_fee_bps: rng.range(60) as u16,
@@ -3000,6 +3326,7 @@ mod tests {
     fn open_settlement_channel_for_trade_locks_trade_value_and_fees() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -3078,6 +3405,10 @@ mod tests {
             remaining_bytes: 1_025,
             xor_locked: XorQuantity::try_from_micro(3_000_000)
                 .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(3_000_000)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::zero(),
+            remaining_fee_xor_locked: XorQuantity::zero(),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3153,6 +3484,9 @@ mod tests {
         let trade = snapshot_trade();
         let mut channel = snapshot_channel(&trade);
         channel.xor_locked = two.clone();
+        channel.initial_xor_locked = two.clone();
+        channel.initial_fee_xor_locked = XorQuantity::zero();
+        channel.remaining_fee_xor_locked = XorQuantity::zero();
         let mut overdraw = receipt();
         overdraw.xor_debited = three.clone();
         overdraw.provider_credit = two;
@@ -3324,17 +3658,21 @@ mod tests {
     #[test]
     fn orderbook_runtime_snapshot_rejects_receipt_escrow_drift() {
         let mut snapshot = runtime_snapshot();
-        snapshot.settlement_channels[0].xor_locked = XorQuantity::try_from_micro(2_841_901)
-            .expect("legacy micro-XOR value is representable");
+        let expected_escrow = snapshot.settlement_channels[0].xor_locked.clone();
+        let escrow = expected_escrow
+            .checked_add(
+                &XorQuantity::try_from_micro(1)
+                    .expect("legacy micro-XOR value is representable"),
+            )
+            .expect("snapshot escrow drift should fit");
+        snapshot.settlement_channels[0].xor_locked = escrow.clone();
 
         assert_eq!(
             snapshot.validate(),
             Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
                 channel_id: id(5),
-                escrow: XorQuantity::try_from_micro(2_841_901)
-                    .expect("legacy micro-XOR value is representable"),
-                expected_escrow: XorQuantity::try_from_micro(2_841_900)
-                    .expect("legacy micro-XOR value is representable"),
+                escrow,
+                expected_escrow,
             })
         );
     }
@@ -3386,6 +3724,12 @@ mod tests {
             remaining_bytes: 32,
             xor_locked: XorQuantity::try_from_micro(100)
                 .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3419,6 +3763,153 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_settlement_split_preserves_zero_fee_channels() {
+        let total = XorQuantity::try_from_micro(101).expect("channel total");
+        let split = deterministic_settlement_split_v1(
+            &total,
+            &XorQuantity::zero(),
+            3,
+            10,
+        )
+        .expect("zero-fee split");
+
+        assert_eq!(split.fee_amount, XorQuantity::zero());
+        assert_eq!(split.provider_credit, split.xor_debited);
+        assert!(split.xor_debited < total);
+    }
+
+    #[test]
+    fn chunked_settlement_prorates_fee_and_consumes_final_rounding_dust_exactly() {
+        let initial_total = XorQuantity::try_from_micro(101).expect("channel total");
+        let initial_fee = XorQuantity::try_from_micro(10).expect("channel fee");
+        let mut channel = SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: id(5),
+            trade_id: id(4),
+            buyer_account: account(8),
+            provider_id: id(6),
+            total_bytes: 3,
+            remaining_bytes: 3,
+            xor_locked: initial_total.clone(),
+            initial_xor_locked: initial_total.clone(),
+            initial_fee_xor_locked: initial_fee.clone(),
+            remaining_fee_xor_locked: initial_fee.clone(),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_100,
+            updated_at_unix: 1_800_000_100,
+        };
+        let mut total_debited = XorQuantity::zero();
+        let mut total_provider_credit = XorQuantity::zero();
+        let mut total_fees = XorQuantity::zero();
+
+        for index in 0_u64..3 {
+            let split = deterministic_settlement_split_v1(
+                &channel.xor_locked,
+                &channel.remaining_fee_xor_locked,
+                1,
+                channel.remaining_bytes,
+            )
+            .expect("derive sequential split");
+            let receipt = SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: id(u8::try_from(20 + index).expect("receipt id seed")),
+                channel_id: channel.channel_id,
+                trade_id: channel.trade_id,
+                range: ByteRangeV1 {
+                    start: index,
+                    end: index + 1,
+                },
+                chunk_hash: id(u8::try_from(30 + index).expect("chunk id seed")),
+                bytes_delivered: 1,
+                xor_debited: split.xor_debited.clone(),
+                provider_credit: split.provider_credit.clone(),
+                fee_amount: split.fee_amount.clone(),
+                issued_at_unix: 1_800_000_200 + index,
+                settlement_signature: signature(),
+            };
+            total_debited = total_debited
+                .checked_add(&split.xor_debited)
+                .expect("sum debits");
+            total_provider_credit = total_provider_credit
+                .checked_add(&split.provider_credit)
+                .expect("sum provider credits");
+            total_fees = total_fees
+                .checked_add(&split.fee_amount)
+                .expect("sum fees");
+            channel =
+                apply_settlement_receipt_v1(&channel, &receipt).expect("apply sequential receipt");
+        }
+
+        assert_eq!(total_debited, initial_total);
+        assert_eq!(total_fees, initial_fee);
+        assert_eq!(
+            total_provider_credit
+                .checked_add(&total_fees)
+                .expect("provider plus fees"),
+            total_debited,
+        );
+        assert_eq!(channel.remaining_bytes, 0);
+        assert_eq!(channel.xor_locked, XorQuantity::zero());
+        assert_eq!(channel.remaining_fee_xor_locked, XorQuantity::zero());
+        assert_eq!(channel.status, SettlementChannelStatusV1::Closed);
+    }
+
+    #[test]
+    fn settlement_rejects_balanced_but_inflated_receipt_amounts() {
+        let channel = SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: id(5),
+            trade_id: id(4),
+            buyer_account: account(8),
+            provider_id: id(6),
+            total_bytes: 10,
+            remaining_bytes: 10,
+            xor_locked: XorQuantity::try_from_micro(100).expect("channel total"),
+            initial_xor_locked: XorQuantity::try_from_micro(100).expect("channel total"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10).expect("channel fee"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10).expect("channel fee"),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_100,
+            updated_at_unix: 1_800_000_100,
+        };
+        let expected = deterministic_settlement_split_v1(
+            &channel.xor_locked,
+            &channel.remaining_fee_xor_locked,
+            5,
+            channel.remaining_bytes,
+        )
+        .expect("expected split");
+        let inflation = XorQuantity::try_from_micro(1).expect("inflation");
+        let inflated_debit = expected
+            .xor_debited
+            .checked_add(&inflation)
+            .expect("inflated debit");
+        let inflated_provider_credit = expected
+            .provider_credit
+            .checked_add(&inflation)
+            .expect("inflated provider credit");
+        let receipt = SettlementReceiptV1 {
+            version: SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: id(7),
+            channel_id: channel.channel_id,
+            trade_id: channel.trade_id,
+            range: ByteRangeV1 { start: 0, end: 5 },
+            chunk_hash: id(8),
+            bytes_delivered: 5,
+            xor_debited: inflated_debit,
+            provider_credit: inflated_provider_credit,
+            fee_amount: expected.fee_amount,
+            issued_at_unix: 1_800_000_200,
+            settlement_signature: signature(),
+        };
+
+        assert!(matches!(
+            apply_settlement_receipt_v1(&channel, &receipt),
+            Err(OrderbookValidationError::SettlementSplitMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn apply_settlement_receipt_rejects_channel_mismatch() {
         let channel = SettlementChannelV1 {
             version: SETTLEMENT_CHANNEL_VERSION_V1,
@@ -3429,6 +3920,12 @@ mod tests {
             total_bytes: 32,
             remaining_bytes: 32,
             xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10)
                 .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,

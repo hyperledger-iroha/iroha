@@ -163,8 +163,10 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     unsigned long* out_projection_json_len);
 
 // ---------------- Chain discriminant helpers ----------------
-uint16_t connect_norito_get_chain_discriminant(void);
-uint16_t connect_norito_set_chain_discriminant(uint16_t discriminant);
+// Thread-scoped overrides must be exited on the same thread and in LIFO order.
+// enter returns zero on failure; exit returns zero on success and -1 on misuse.
+uint64_t connect_norito_chain_discriminant_scope_enter(uint16_t discriminant);
+int32_t connect_norito_chain_discriminant_scope_exit(uint64_t token);
 
 // ---------------- Account address helpers ----------------
 int32_t connect_norito_account_address_parse(
@@ -434,6 +436,7 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
 int32_t connect_norito_kagemusha_recipient_lineage_query_create_v2(
     const uint8_t* chain_id_ptr,
     unsigned long chain_id_len,
+    uint16_t chain_discriminant,
     const uint8_t* recipient_ptr,
     unsigned long recipient_len,
     const uint8_t* receiver_device_id_ptr,
@@ -443,19 +446,6 @@ int32_t connect_norito_kagemusha_recipient_lineage_query_create_v2(
     uint64_t trusted_checkpoint_height,
     uint8_t** out_query_ptr,
     unsigned long* out_query_len);
-
-// Retired request-bound ABI retained for link compatibility; always fails.
-int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* lineage_norito_ptr,
-    unsigned long lineage_norito_len,
-    uint64_t verified_at_ms,
-    uint64_t expected_evaluated_block_height,
-    const uint8_t* expected_evaluated_block_hash_ptr,
-    unsigned long expected_evaluated_block_hash_len,
-    uint8_t** out_lineage_ptr,
-    unsigned long* out_lineage_len);
 
 // Verify the reusable lineage against the later signed payment request and a
 // caller-owned durable checkpoint. The second output is exactly 40 bytes:
@@ -528,14 +518,6 @@ int32_t connect_norito_kagemusha_request_authorization_signing_bytes_v2(
     unsigned long preparation_norito_len,
     uint8_t** out_signing_bytes_ptr,
     unsigned long* out_signing_bytes_len);
-
-int32_t connect_norito_kagemusha_request_authorization_create_v2(
-    const uint8_t* template_norito_ptr,
-    unsigned long template_norito_len,
-    const uint8_t* signature_ptr,
-    unsigned long signature_len,
-    uint8_t** out_authorization_ptr,
-    unsigned long* out_authorization_len);
 
 int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(
     const uint8_t* preparation_norito_ptr,
@@ -1062,6 +1044,8 @@ int32_t connect_norito_sorafs_reference_build_signed_orderbook_order_request(
     uint64_t remaining_gib,
     const uint8_t* owner_account_ptr,
     unsigned long owner_account_len,
+    const uint8_t* provider_id_ptr,
+    unsigned long provider_id_len,
     uint64_t expiry_unix,
     uint64_t nonce,
     uint32_t maker_fee_bps,

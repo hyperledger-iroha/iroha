@@ -4432,7 +4432,7 @@ mod tests_overlay_manifest {
                 .expect_err("state-free execution must apply the generic syscall profile");
             assert_eq!(
                 error,
-                OverlayBuildError::IvmRun(ivm::VMError::GenericSyscallNotAllowed { syscall })
+                OverlayBuildError::IvmLoad(ivm::VMError::GenericSyscallNotAllowed { syscall })
             );
         }
     }

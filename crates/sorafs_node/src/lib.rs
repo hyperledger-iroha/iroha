@@ -16,6 +16,7 @@ mod governance;
 pub mod metering;
 mod moderation;
 pub mod moderation_orchestrator;
+mod native_repair_singleflight;
 pub mod native_repair_worker;
 mod orderbook;
 pub mod orderbook_transaction_forwarder;
@@ -25,7 +26,7 @@ pub mod por;
 pub mod potr;
 pub mod proof_outcome_forwarder;
 mod reconciliation;
-pub mod repair;
+pub mod repair_ledger_projection;
 pub mod repair_transaction_forwarder;
 mod reserve;
 pub mod reserve_transaction_forwarder;
@@ -45,16 +46,11 @@ pub use governance::FilesystemGovernancePublisher;
 pub use moderation::{
     MODERATION_FINALIZED_CHAIN_PROJECTION_VERSION_V1,
     MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
-    MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1, ModerationAppealDeposit,
+    MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
     ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
     ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
-    ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
-    ModerationBallotChallengeInput, ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
-    ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
-    ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
-    ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotSnapshot,
-    ModerationBallotTally, ModerationCorpusRegistryRecord,
-    ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerAccessInput,
+    ModerationCorpusRegistryRecord, ModerationEvidenceViewerAccessEventRecord,
+    ModerationEvidenceViewerAccessInput,
     ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
     ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
     ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
@@ -70,8 +66,17 @@ pub use moderation::{
     ModerationScreeningAdmissionReceiptV1, ModerationScreeningAuthenticationError,
     ModerationScreeningAuthorityBundleV1, ModerationScreeningAuthorityV1, ModerationScreeningError,
     ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
-    ModerationScreeningSnapshot, ModerationScreeningVerdict, ModerationVoteCounts,
-    local_moderation_panel_roster_hash, verify_authenticated_moderation_screening_v1,
+    ModerationScreeningSnapshot, ModerationScreeningVerdict,
+    verify_authenticated_moderation_screening_v1,
+};
+#[cfg(test)]
+pub use moderation::{
+    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
+    ModerationBallotChallengeInput, ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
+    ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
+    ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
+    ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotSnapshot,
+    ModerationBallotTally, ModerationVoteCounts, local_moderation_panel_roster_hash,
 };
 pub use orderbook::{
     OrderbookBuyerSettlementLedgerEntry, OrderbookCancelOutcome, OrderbookEvent,
@@ -103,6 +108,7 @@ pub use proof_outcome_forwarder::{
     ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
     ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1,
 };
+use repair_ledger_projection::RepairLedgerTaskProjectionV1;
 pub use reserve::{
     ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord, ReserveAppealRequest,
     ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
@@ -231,12 +237,6 @@ pub struct ModerationEvidenceViewerAuditReportOutcome {
     pub source_entry: TransparencyLedgerSourceEntry,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum GcEvictionPolicy {
-    RetentionEpoch,
-    LruExpired,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GcIntentDisposition {
     DiscardedPreDomain,
@@ -267,20 +267,20 @@ const MODERATION_QUARANTINE_OBJECT_INDEX_FILE: &str = "object-index.to";
 const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
+#[cfg(test)]
 const MODERATION_BALLOT_DIR: &str = "moderation-ballots";
+#[cfg(test)]
 const MODERATION_BALLOT_SNAPSHOT_FILE: &str = "ballots-snapshot.to";
 const AUX_RUNTIME_STATE_DIR: &str = "runtime-state";
-const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot.to";
-const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v1";
-const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v1\n";
-const AUX_RUNTIME_STATE_VERSION_V1: u8 = 1;
+const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot-v2.to";
+const RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1: &str = "auxiliary-snapshot.to";
+const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v2";
+const RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1: &str = "initialized-v1";
+const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v2\n";
+const AUX_RUNTIME_STATE_VERSION_V2: u8 = 2;
 const ADMITTED_REPUTATION_SNAPSHOT_VERSION_V1: u8 = 1;
-const GOVERNANCE_OUTBOX_VERSION_V1: u8 = 1;
-const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.governance_outbox.binding.v1";
-const REPAIR_MUTATION_INTENT_VERSION_V1: u8 = 1;
-const REPAIR_MUTATION_OPERATION_MAX_BYTES: usize = 64;
-const REPAIR_MUTATION_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.repair.mutation.binding.v1";
-const REPAIR_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.repair.snapshot.digest.v1";
+const GOVERNANCE_OUTBOX_VERSION_V2: u8 = 2;
+const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V2: &[u8] = b"sorafs.node.governance_outbox.binding.v2";
 const GC_EVICTION_INTENT_VERSION_V1: u8 = 1;
 const GC_EVICTION_AUDIT_LINK_VERSION_V1: u8 = 1;
 const GC_EVICTION_RESERVED_OUTBOX_SLOTS: u8 = 1;
@@ -298,8 +298,6 @@ const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
-#[cfg(test)]
-use std::collections::{HashSet, hash_map::Entry};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
@@ -318,6 +316,8 @@ use capacity::{
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
 use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
+#[cfg(test)]
+use iroha_data_model::sorafs::repair::GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1;
 use iroha_data_model::{
     account::AccountId,
     da::ingest::DaStripeLayout,
@@ -329,9 +329,11 @@ use iroha_data_model::{
             AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
             SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
-        moderation_ledger::RepairFinalizedCursorV1,
+        moderation_ledger::{
+            REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1, RepairFinalizedCursorV1,
+        },
         orderbook::OrderbookFinalizedCursorV1,
-        reserve::ReserveLifecycleStage,
+        reserve::{ReserveFinalizedCursorV1, ReserveLifecycleStage},
         transparency::{
             MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, ModerationLedgerCyclePublicationV1,
             ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
@@ -353,12 +355,6 @@ use orderbook_transaction_forwarder::{
     OrderbookTransactionPendingV1, OrderbookTransactionSigningRequestV1,
 };
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-#[cfg(test)]
-pub use repair::RepairWorkerReport;
-pub use repair::{
-    RepairManager, RepairSchedulerError, RepairSlashProposalStage, RepairTaskFilters,
-    RepairTaskSnapshot, RepairWatchdogReport,
-};
 use repair_transaction_forwarder::{
     REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1, RepairOperationV1, RepairTransactionContextV1,
     RepairTransactionDeadLetterV1, RepairTransactionEnqueueResultV1, RepairTransactionForwarder,
@@ -366,6 +362,13 @@ use repair_transaction_forwarder::{
     RepairTransactionPendingV1, RepairTransactionSigningRequestV1,
 };
 use reserve::ReserveLifecycleRuntime;
+use reserve_transaction_forwarder::{
+    RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1, ReserveOperationV1, ReserveTransactionContextV1,
+    ReserveTransactionDeadLetterV1, ReserveTransactionEnqueueResultV1, ReserveTransactionForwarder,
+    ReserveTransactionForwarderError, ReserveTransactionForwarderPolicyV1,
+    ReserveTransactionPendingV1, ReserveTransactionReconciliationV1,
+    ReserveTransactionSigningRequestV1,
+};
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::reputation::signed::{
     MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES, decode_reputation_trust_policy,
@@ -393,12 +396,8 @@ use sorafs_manifest::{
     repair::{
         GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1, GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1,
         GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1, GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1,
-        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
         GC_AUDIT_REASON_RETENTION_EXPIRED_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1, GcAuditPayloadV1,
-        REPAIR_AUDIT_DEFAULT_SIGNER_V1, REPAIR_AUDIT_EVENT_VERSION_V1, RepairAuditEventV1,
-        RepairReportV1, RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1,
-        RepairTaskStateV1, RepairTicketId, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
-        repair_audit_payload_digest_v1,
+        RepairReportV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     },
     validate_reputation_snapshot_transition,
 };
@@ -429,13 +428,13 @@ pub use transparency::{
     TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
     TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
     appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
-    moderation_ballot_governance_event_source_entry,
     moderation_evidence_viewer_audit_report_source_entry, privacy_aggregate_cycle_id,
     privacy_metric_schema_digest, privacy_population_inventory_digest,
     proof_token_issuance_from_base64, proof_token_issuance_from_frame, reserve_appeal_source_entry,
     reserve_lifecycle_event_source_entry, reserve_lifecycle_policy_source_entry,
     reserve_movement_source_entry,
 };
+pub use transparency::moderation_ballot_governance_event_source_entry;
 
 use crate::{
     capacity::CapacityRuntimeCheckpointV1,
@@ -447,8 +446,8 @@ use crate::{
     },
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
     moderation::{
-        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationBallotRuntime,
-        ModerationEvidenceViewerRuntime, ModerationModelRegistry,
+        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationEvidenceViewerRuntime,
+        ModerationModelRegistry,
         ModerationQuarantineObjectEnvelopeV1, ModerationQuarantineObjectRuntime,
         ModerationScreeningRuntime, moderation_quarantine_object_relative_path,
         normalize_moderation_quarantine_object_input, open_moderation_quarantine_object,
@@ -466,58 +465,8 @@ use crate::{
     },
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
-
-/// Stage for a repair slash proposal within the governance pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RepairSlashStage {
-    /// Proposal drafted by the scheduler for review.
-    Drafted,
-    /// Proposal submitted by an auditor for governance action.
-    Submitted,
-}
-
-impl RepairSlashStage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Drafted => "drafted",
-            Self::Submitted => "submitted",
-        }
-    }
-}
-
 #[cfg(test)]
-fn repair_idempotency_key(
-    action: &str,
-    worker_id: &str,
-    ticket_id: &RepairTicketId,
-    now_unix: u64,
-) -> String {
-    let raw = format!("{action}:{worker_id}:{ticket_id}:{now_unix}");
-    let digest_hex = blake3::hash(raw.as_bytes()).to_hex().to_string();
-    format!("{action}-{digest_hex}")
-}
-
-#[cfg(test)]
-fn repair_mutation_operation_digest(
-    operation: &str,
-    ticket_ids: &[RepairTicketId],
-    material: &[u8],
-) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(REPAIR_MUTATION_BINDING_DOMAIN_V1);
-    hash_length_prefixed(&mut hasher, operation.as_bytes());
-    for ticket_id in ticket_ids {
-        hash_length_prefixed(&mut hasher, ticket_id.0.as_bytes());
-    }
-    hash_length_prefixed(&mut hasher, material);
-    *hasher.finalize().as_bytes()
-}
-
-#[cfg(test)]
-fn hash_length_prefixed_material(material: &mut Vec<u8>, bytes: &[u8]) {
-    material.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    material.extend_from_slice(bytes);
-}
+use crate::moderation::ModerationBallotRuntime;
 
 fn privacy_aggregate_entry_id(
     cycle_id: [u8; 16],
@@ -662,30 +611,6 @@ fn validate_orderbook_admission_policy(
     Ok(())
 }
 
-fn validate_orderbook_reserve_lifecycle_admission(
-    reserve_lifecycle: &RwLock<ReserveLifecycleRuntime>,
-    order: &OrderRequestV1,
-) -> Result<(), OrderbookRuntimeError> {
-    if order.side != OrderSideV1::Ask {
-        return Ok(());
-    }
-    let provider_id = local_orderbook_provider_id_for_owner_account(&order.owner_account);
-    let Some(summary) = reserve_lifecycle
-        .read()
-        .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
-        .provider_summary(provider_id)
-    else {
-        return Ok(());
-    };
-    if summary.lifecycle.disable_adverts {
-        return Err(OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
-            provider_id_hex: hex::encode(provider_id),
-            stage: reserve_lifecycle_stage_metric_label(summary.lifecycle.stage).to_owned(),
-        });
-    }
-    Ok(())
-}
-
 fn orderbook_runtime_snapshot_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(ORDERBOOK_STATE_DIR)
@@ -730,6 +655,7 @@ fn moderation_evidence_viewer_checkpoint_path(data_dir: &Path) -> PathBuf {
         .join(MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE)
 }
 
+#[cfg(test)]
 fn moderation_ballot_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_BALLOT_DIR)
@@ -748,7 +674,19 @@ fn runtime_state_initialization_path(data_dir: &Path) -> PathBuf {
         .join(RUNTIME_STATE_INITIALIZATION_FILE)
 }
 
-fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 9] {
+fn retired_runtime_state_initialization_path_v1(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1)
+}
+
+fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(AUX_RUNTIME_STATE_DIR)
+        .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1)
+}
+
+fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 8] {
     [
         (
             "orderbook runtime",
@@ -779,10 +717,6 @@ fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf
             moderation_evidence_viewer_checkpoint_path(data_dir),
         ),
         (
-            "moderation ballot",
-            moderation_ballot_checkpoint_path(data_dir),
-        ),
-        (
             "auxiliary runtime",
             auxiliary_runtime_checkpoint_path(data_dir),
         ),
@@ -800,6 +734,43 @@ fn inspect_runtime_checkpoint_initialization(
     checkpoint_max_bytes: u64,
 ) -> Result<RuntimeCheckpointInitialization, NodeInitError> {
     let marker_path = runtime_state_initialization_path(data_dir);
+    let retired_marker_path = retired_runtime_state_initialization_path_v1(data_dir);
+    let retired_checkpoint_path = retired_auxiliary_runtime_checkpoint_path_v1(data_dir);
+    if read_local_checkpoint_bounded(
+        &retired_marker_path,
+        u64::try_from(b"sorafs.node.runtime-state.initialized.v1\n".len()).unwrap_or(u64::MAX),
+    )
+    .map_err(|err| {
+        NodeInitError::checkpoint(
+            "retired runtime initialization marker",
+            &retired_marker_path,
+            err,
+        )
+    })?
+    .is_some()
+    {
+        return Err(NodeInitError::checkpoint(
+            "retired runtime initialization marker",
+            &retired_marker_path,
+            "SoraFS development runtime-state v1 is not supported; discard and reseed the local state directory",
+        ));
+    }
+    if read_local_checkpoint_bounded(&retired_checkpoint_path, checkpoint_max_bytes)
+        .map_err(|err| {
+            NodeInitError::checkpoint(
+                "retired auxiliary runtime checkpoint",
+                &retired_checkpoint_path,
+                err,
+            )
+        })?
+        .is_some()
+    {
+        return Err(NodeInitError::checkpoint(
+            "retired auxiliary runtime checkpoint",
+            &retired_checkpoint_path,
+            "SoraFS development runtime-state v1 is not supported; discard and reseed the local state directory",
+        ));
+    }
     let marker = read_local_checkpoint_bounded(
         &marker_path,
         u64::try_from(RUNTIME_STATE_INITIALIZATION_BYTES.len()).unwrap_or(u64::MAX),
@@ -811,7 +782,7 @@ fn inspect_runtime_checkpoint_initialization(
                 return Err(NodeInitError::checkpoint(
                     "runtime initialization marker",
                     &marker_path,
-                    "marker contents are not canonical for runtime-state v1",
+                    "marker contents are not canonical for runtime-state v2",
                 ));
             }
             for (component, path) in required_runtime_checkpoint_paths(data_dir) {
@@ -1482,29 +1453,13 @@ fn local_checkpoint_tmp_path(path: &Path) -> io::Result<PathBuf> {
     })
 }
 
-const REPAIR_EVENT_CHANNEL_CAPACITY: usize = 128;
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_EVENT_CHANNEL_CAPACITY: usize = 128;
 const RESERVE_LIFECYCLE_EVENT_CHANNEL_CAPACITY: usize = 128;
 const RESERVE_MOVEMENT_EVENT_CHANNEL_CAPACITY: usize = 128;
+#[cfg(test)]
 const MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_METRIC_CLUSTER_LOCAL: &str = "local";
-
-fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
-    matches!(
-        task.state,
-        RepairTaskStateV1::Completed(_) | RepairTaskStateV1::Escalated(_)
-    )
-}
-
-#[cfg(test)]
-#[derive(Debug, Default)]
-struct RepairRehydrateOutcome {
-    missing_before: usize,
-    missing_after: usize,
-    rehydrated: usize,
-    errors: usize,
-}
 
 fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {
     let mut divergence_count = 0_u32;
@@ -1657,6 +1612,7 @@ fn required_json_xor_quantity(
         })
 }
 
+#[cfg(test)]
 fn moderation_appeal_finance_report(
     record: &ModerationBallotRecord,
     tally: &ModerationBallotTally,
@@ -1771,6 +1727,7 @@ fn moderation_appeal_finance_report(
     Ok(Some(report))
 }
 
+#[cfg(test)]
 fn moderation_tally_finance_outcome(tally: &ModerationBallotTally) -> SoraFsAppealFinanceOutcomeV1 {
     match tally.winning_choice {
         Some(SoraFsModerationVoteChoice::Uphold) => SoraFsAppealFinanceOutcomeV1::Uphold,
@@ -1782,6 +1739,7 @@ fn moderation_tally_finance_outcome(tally: &ModerationBallotTally) -> SoraFsAppe
     }
 }
 
+#[cfg(test)]
 fn appeal_finance_deposit_flows(
     deposit: &XorQuantity,
     outcome: SoraFsAppealFinanceOutcomeV1,
@@ -1821,6 +1779,7 @@ fn appeal_finance_deposit_flows(
     Ok((refund, treasury, held))
 }
 
+#[cfg(test)]
 fn moderation_appeal_finance_report_id(
     record: &ModerationBallotRecord,
     tally: &ModerationBallotTally,
@@ -1878,19 +1837,6 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         &self,
         archive: &PdpGovernanceArchiveV1,
         encoded: &[u8],
-    ) -> Result<(), GovernancePublishError>;
-    /// Persist a repair audit event to the governance pipeline.
-    fn publish_repair_audit_event(
-        &self,
-        event: &sorafs_manifest::repair::RepairAuditEventV1,
-        encoded: &[u8],
-    ) -> Result<(), GovernancePublishError>;
-    /// Persist a repair slash proposal to the governance pipeline.
-    fn publish_repair_slash_proposal(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        encoded: &[u8],
-        stage: RepairSlashStage,
     ) -> Result<(), GovernancePublishError>;
     /// Persist a GC audit event to the governance pipeline.
     fn publish_gc_audit_event(
@@ -2269,6 +2215,7 @@ pub enum ModerationEvidenceViewerAuditScheduleOutcome {
 }
 
 /// Inputs used to publish a local moderation ballot lifecycle event.
+#[cfg(test)]
 struct ModerationBallotEventInput {
     /// Event kind to publish.
     kind: ModerationBallotEventKind,
@@ -2295,15 +2242,6 @@ pub struct RepairChunkPayload {
     pub bytes: Vec<u8>,
     /// Optional source label (provider id, URL, or orchestrator hint).
     pub source: Option<String>,
-}
-
-/// Sequenced local repair event used for replay and live Torii streams.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct RepairEvent {
-    /// Monotonic local stream sequence.
-    pub sequence: u64,
-    /// Canonical repair task transition payload.
-    pub event: RepairTaskEventV1,
 }
 
 /// Bounded replay result for a monotonic local event stream.
@@ -2571,21 +2509,16 @@ pub struct NodeHandle {
     potr: PotrTracker,
     proof_outcome_outbox: ProofOutcomeOutbox,
     repair_transaction_forwarder: RepairTransactionForwarder,
+    native_repair_singleflight: native_repair_singleflight::NativeRepairSingleflightV1,
     orderbook_transaction_forwarder: OrderbookTransactionForwarder,
+    reserve_transaction_forwarder: ReserveTransactionForwarder,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
     deal_engine: DealEngine,
-    repair: RepairManager,
-    repair_mutation_lock: Arc<Mutex<()>>,
-    repair_mutation_intents: Arc<RwLock<RepairMutationIntentRuntime>>,
-    repair_events: Arc<RwLock<BoundedEventHistory<RepairEvent>>>,
-    repair_event_audit_links: Arc<RwLock<BTreeMap<u64, RepairEventAuditLinkV1>>>,
-    repair_slash_publication_links: Arc<RwLock<BTreeMap<u64, RepairSlashPublicationLinkV1>>>,
     gc_mutation_lock: Arc<Mutex<()>>,
     gc_eviction_intents: Arc<RwLock<GcEvictionIntentRuntime>>,
     gc_eviction_audit_links: Arc<RwLock<BTreeMap<u64, GcEvictionAuditLinkV1>>>,
-    repair_event_sender: broadcast::Sender<RepairEvent>,
     repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
     governance_outbox: Arc<RwLock<GovernanceOutboxRuntime>>,
@@ -2623,10 +2556,14 @@ pub struct NodeHandle {
     moderation_quarantine_objects: Arc<RwLock<ModerationQuarantineObjectRuntime>>,
     moderation_evidence_viewer_checkpoint_path: Option<PathBuf>,
     moderation_evidence_viewer: Arc<RwLock<ModerationEvidenceViewerRuntime>>,
+    #[cfg(test)]
     moderation_checkpoint_path: Option<PathBuf>,
+    #[cfg(test)]
     moderation: Arc<RwLock<ModerationBallotRuntime>>,
     moderation_finalized_chain_projection: Arc<RwLock<ModerationFinalizedChainProjectionV1>>,
+    #[cfg(test)]
     moderation_events: Arc<RwLock<BoundedEventHistory<ModerationBallotEvent>>>,
+    #[cfg(test)]
     moderation_event_sender: broadcast::Sender<ModerationBallotEvent>,
     transparency_ledger_source_entries:
         Arc<RwLock<BTreeMap<String, TransparencyLedgerSourceEntry>>>,
@@ -2666,12 +2603,10 @@ struct PorHistoryCheckpointEntryV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum GovernanceOutboxKindV1 {
     DealSettlement,
-    RepairAudit,
-    RepairSlashDrafted,
-    RepairSlashSubmitted,
     GcAudit,
     ReconciliationReport,
     SignedReputationSnapshot,
+    #[cfg(test)]
     ModerationBallotEvent,
     TransparencyLedgerPublication,
     ProofTokenIssuance,
@@ -2686,20 +2621,18 @@ impl GovernanceOutboxKindV1 {
     const fn tag(self) -> u8 {
         match self {
             Self::DealSettlement => 0,
-            Self::RepairAudit => 1,
-            Self::RepairSlashDrafted => 2,
-            Self::RepairSlashSubmitted => 3,
-            Self::GcAudit => 4,
-            Self::ReconciliationReport => 5,
-            Self::SignedReputationSnapshot => 6,
-            Self::ModerationBallotEvent => 7,
-            Self::TransparencyLedgerPublication => 8,
-            Self::ProofTokenIssuance => 9,
-            Self::AppealFinanceReport => 10,
-            Self::AppealFinanceWeeklyRollup => 11,
-            Self::AppealFinanceSettlementReceipt => 12,
-            Self::OrderbookSettlementReceipt => 13,
-            Self::PdpArchive => 14,
+            Self::GcAudit => 1,
+            Self::ReconciliationReport => 2,
+            Self::SignedReputationSnapshot => 3,
+            #[cfg(test)]
+            Self::ModerationBallotEvent => 4,
+            Self::TransparencyLedgerPublication => 5,
+            Self::ProofTokenIssuance => 6,
+            Self::AppealFinanceReport => 7,
+            Self::AppealFinanceWeeklyRollup => 8,
+            Self::AppealFinanceSettlementReceipt => 9,
+            Self::OrderbookSettlementReceipt => 10,
+            Self::PdpArchive => 11,
         }
     }
 }
@@ -2723,7 +2656,6 @@ struct GovernanceOutboxRuntime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GovernanceOutboxReservationUse {
     None,
-    Repair,
     GcEviction,
 }
 
@@ -2734,60 +2666,6 @@ impl Default for GovernanceOutboxRuntime {
             entries: BTreeMap::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct RepairMutationCursorV1 {
-    ticket_id: String,
-    snapshot_digest: Option<[u8; 32]>,
-    event_count: u64,
-    slash_proposal_digest: Option<[u8; 32]>,
-    slash_proposal_stage: Option<RepairSlashProposalStage>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct RepairMutationIntentV1 {
-    version: u8,
-    sequence: u64,
-    operation: String,
-    operation_digest: [u8; 32],
-    reserved_outbox_slots: u8,
-    cursor: RepairMutationCursorV1,
-    binding_digest: [u8; 32],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RepairMutationIntentRuntime {
-    next_sequence: u64,
-    entries: BTreeMap<u64, RepairMutationIntentV1>,
-}
-
-impl Default for RepairMutationIntentRuntime {
-    fn default() -> Self {
-        Self {
-            next_sequence: 1,
-            entries: BTreeMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct RepairEventAuditLinkV1 {
-    global_event_sequence: u64,
-    ticket_id: String,
-    task_event_count: u64,
-    event_digest: [u8; 32],
-    audit_outbox_sequence: u64,
-    audit_payload_digest: [u8; 32],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct RepairSlashPublicationLinkV1 {
-    ticket_id: String,
-    proposal_digest: [u8; 32],
-    stage: RepairSlashProposalStage,
-    outbox_sequence: u64,
-    payload_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -2847,84 +2725,6 @@ struct GcEvictionAuditLinkV1 {
     payload_digest: [u8; 32],
     outbox_payload_digest: [u8; 32],
     binding_digest: [u8; 32],
-}
-
-const fn repair_slash_proposal_stage_tag(stage: RepairSlashProposalStage) -> u8 {
-    match stage {
-        RepairSlashProposalStage::Drafted => 0,
-        RepairSlashProposalStage::Submitted => 1,
-    }
-}
-
-fn repair_mutation_binding_digest(
-    version: u8,
-    sequence: u64,
-    operation: &str,
-    operation_digest: [u8; 32],
-    reserved_outbox_slots: u8,
-    cursor: &RepairMutationCursorV1,
-) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(REPAIR_MUTATION_BINDING_DOMAIN_V1);
-    hasher.update(&[version]);
-    hasher.update(&sequence.to_le_bytes());
-    hasher.update(&(operation.len() as u64).to_le_bytes());
-    hasher.update(operation.as_bytes());
-    hasher.update(&operation_digest);
-    hasher.update(&[reserved_outbox_slots]);
-    hasher.update(&(cursor.ticket_id.len() as u64).to_le_bytes());
-    hasher.update(cursor.ticket_id.as_bytes());
-    match cursor.snapshot_digest {
-        Some(digest) => {
-            hasher.update(&[1]);
-            hasher.update(&digest);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-    hasher.update(&cursor.event_count.to_le_bytes());
-    match cursor.slash_proposal_digest {
-        Some(digest) => {
-            hasher.update(&[1]);
-            hasher.update(&digest);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-    match cursor.slash_proposal_stage {
-        Some(stage) => hasher.update(&[1, repair_slash_proposal_stage_tag(stage)]),
-        None => hasher.update(&[0]),
-    };
-    *hasher.finalize().as_bytes()
-}
-
-fn repair_mutation_required_outbox_slots(operation: &str) -> Option<u8> {
-    match operation {
-        "heartbeat_ticket" => Some(0),
-        "enqueue_report"
-        | "enqueue_report_idempotent"
-        | "mark_in_progress"
-        | "mark_completed"
-        | "claim_ticket"
-        | "complete_ticket" => Some(1),
-        "submit_slash" | "mark_failed" | "fail_ticket" | "run_watchdog" => Some(2),
-        _ => None,
-    }
-}
-
-fn repair_mutation_reserved_outbox_slots(
-    runtime: &RepairMutationIntentRuntime,
-) -> Result<usize, GovernancePublishError> {
-    runtime.entries.values().try_fold(0usize, |total, intent| {
-        validate_repair_mutation_intent(intent)?;
-        total
-            .checked_add(usize::from(intent.reserved_outbox_slots))
-            .ok_or_else(|| {
-                GovernancePublishError::other("repair outbox reservation count overflow")
-            })
-    })
 }
 
 #[derive(Debug)]
@@ -3350,254 +3150,6 @@ fn hash_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-type RepairSnapshotProposalState = (
-    Option<[u8; 32]>,
-    Option<Vec<u8>>,
-    Option<RepairSlashProposalStage>,
-);
-
-fn repair_snapshot_proposal_state(
-    snapshot: &RepairTaskSnapshot,
-) -> Result<RepairSnapshotProposalState, GovernancePublishError> {
-    match (&snapshot.slash_proposal, snapshot.slash_proposal_stage) {
-        (None, None) => {
-            if snapshot.record.slash_proposal_digest.is_some() {
-                return Err(GovernancePublishError::other(format!(
-                    "repair task {} exposes a proposal digest without canonical proposal state",
-                    snapshot.record.ticket_id
-                )));
-            }
-            Ok((None, None, None))
-        }
-        (Some(proposal), Some(stage)) => {
-            proposal
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            if proposal.approval.is_some() {
-                return Err(GovernancePublishError::other(format!(
-                    "repair task {} proposal contains a retired embedded approval summary",
-                    snapshot.record.ticket_id
-                )));
-            }
-            if proposal.ticket_id != snapshot.record.ticket_id
-                || proposal.manifest_digest != snapshot.record.manifest_digest
-                || proposal.provider_id != snapshot.record.provider_id
-            {
-                return Err(GovernancePublishError::other(format!(
-                    "repair task {} proposal does not match its authoritative record",
-                    snapshot.record.ticket_id
-                )));
-            }
-            let bytes = norito::to_bytes(proposal).map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "encode repair task {} slash proposal: {err}",
-                    snapshot.record.ticket_id
-                ))
-            })?;
-            let digest = *blake3::hash(&bytes).as_bytes();
-            if snapshot.record.slash_proposal_digest != Some(digest) {
-                return Err(GovernancePublishError::other(format!(
-                    "repair task {} proposal digest does not match canonical bytes",
-                    snapshot.record.ticket_id
-                )));
-            }
-            Ok((Some(digest), Some(bytes), Some(stage)))
-        }
-        (None, Some(_)) | (Some(_), None) => Err(GovernancePublishError::other(format!(
-            "repair task {} has incomplete slash proposal publication state",
-            snapshot.record.ticket_id
-        ))),
-    }
-}
-
-fn repair_snapshot_event_count(
-    snapshot: &RepairTaskSnapshot,
-) -> Result<u64, GovernancePublishError> {
-    snapshot
-        .events_dropped
-        .checked_add(
-            u64::try_from(snapshot.events.len()).map_err(|_| {
-                GovernancePublishError::other("repair task event count exceeds u64")
-            })?,
-        )
-        .ok_or_else(|| GovernancePublishError::other("repair task event count overflow"))
-}
-
-fn repair_event_link_digest(event: &RepairTaskEventV1) -> Result<[u8; 32], GovernancePublishError> {
-    repair_audit_payload_digest_v1(event)
-        .map_err(|err| GovernancePublishError::other(err.to_string()))
-}
-
-fn repair_task_snapshot_digest(
-    snapshot: &RepairTaskSnapshot,
-) -> Result<[u8; 32], GovernancePublishError> {
-    snapshot
-        .record
-        .validate()
-        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-    let record_bytes = norito::to_bytes(&snapshot.record).map_err(|err| {
-        GovernancePublishError::other(format!("encode repair task record: {err}"))
-    })?;
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(REPAIR_SNAPSHOT_DIGEST_DOMAIN_V1);
-    hash_length_prefixed(&mut hasher, &record_bytes);
-    hasher.update(&snapshot.events_dropped.to_le_bytes());
-    hasher.update(&repair_snapshot_event_count(snapshot)?.to_le_bytes());
-    for event in &snapshot.events {
-        event
-            .validate()
-            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-        if event.ticket_id != snapshot.record.ticket_id
-            || event.manifest_digest != snapshot.record.manifest_digest
-            || event.provider_id != snapshot.record.provider_id
-        {
-            return Err(GovernancePublishError::other(format!(
-                "repair task {} retains an event for different task metadata",
-                snapshot.record.ticket_id
-            )));
-        }
-        let event_bytes = norito::to_bytes(event).map_err(|err| {
-            GovernancePublishError::other(format!("encode repair task event: {err}"))
-        })?;
-        hash_length_prefixed(&mut hasher, &event_bytes);
-    }
-    let (_, proposal_bytes, stage) = repair_snapshot_proposal_state(snapshot)?;
-    match proposal_bytes {
-        Some(bytes) => {
-            hasher.update(&[1]);
-            hash_length_prefixed(&mut hasher, &bytes);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-    match stage {
-        Some(stage) => hasher.update(&[1, repair_slash_proposal_stage_tag(stage)]),
-        None => hasher.update(&[0]),
-    };
-    Ok(*hasher.finalize().as_bytes())
-}
-
-fn repair_mutation_cursor(
-    ticket_id: &RepairTicketId,
-    snapshot: Option<&RepairTaskSnapshot>,
-) -> Result<RepairMutationCursorV1, GovernancePublishError> {
-    ticket_id
-        .validate()
-        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-    let Some(snapshot) = snapshot else {
-        return Ok(RepairMutationCursorV1 {
-            ticket_id: ticket_id.to_string(),
-            snapshot_digest: None,
-            event_count: 0,
-            slash_proposal_digest: None,
-            slash_proposal_stage: None,
-        });
-    };
-    if &snapshot.record.ticket_id != ticket_id {
-        return Err(GovernancePublishError::other(format!(
-            "repair snapshot ticket {} does not match requested ticket {ticket_id}",
-            snapshot.record.ticket_id
-        )));
-    }
-    let (proposal_digest, _, proposal_stage) = repair_snapshot_proposal_state(snapshot)?;
-    Ok(RepairMutationCursorV1 {
-        ticket_id: ticket_id.to_string(),
-        snapshot_digest: Some(repair_task_snapshot_digest(snapshot)?),
-        event_count: repair_snapshot_event_count(snapshot)?,
-        slash_proposal_digest: proposal_digest,
-        slash_proposal_stage: proposal_stage,
-    })
-}
-
-fn validate_repair_mutation_intent(
-    intent: &RepairMutationIntentV1,
-) -> Result<(), GovernancePublishError> {
-    if intent.version != REPAIR_MUTATION_INTENT_VERSION_V1 || intent.sequence == 0 {
-        return Err(GovernancePublishError::other(
-            "unsupported or zero-sequence repair mutation intent",
-        ));
-    }
-    if intent.operation.trim().is_empty()
-        || intent.operation.len() > REPAIR_MUTATION_OPERATION_MAX_BYTES
-    {
-        return Err(GovernancePublishError::other(
-            "repair mutation operation label is empty or oversized",
-        ));
-    }
-    let expected_reserved_slots = repair_mutation_required_outbox_slots(&intent.operation)
-        .ok_or_else(|| GovernancePublishError::other("unknown repair mutation operation label"))?;
-    if intent.reserved_outbox_slots != expected_reserved_slots {
-        return Err(GovernancePublishError::other(
-            "repair mutation outbox reservation does not match its operation",
-        ));
-    }
-    RepairTicketId(intent.cursor.ticket_id.clone())
-        .validate()
-        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-    if intent.cursor.snapshot_digest.is_none()
-        && (intent.cursor.event_count != 0
-            || intent.cursor.slash_proposal_digest.is_some()
-            || intent.cursor.slash_proposal_stage.is_some())
-    {
-        return Err(GovernancePublishError::other(
-            "absent repair mutation cursor carries retained task state",
-        ));
-    }
-    if intent.cursor.slash_proposal_digest.is_some() != intent.cursor.slash_proposal_stage.is_some()
-    {
-        return Err(GovernancePublishError::other(
-            "repair mutation cursor proposal digest/stage pairing is incomplete",
-        ));
-    }
-    let expected = repair_mutation_binding_digest(
-        intent.version,
-        intent.sequence,
-        &intent.operation,
-        intent.operation_digest,
-        intent.reserved_outbox_slots,
-        &intent.cursor,
-    );
-    if intent.binding_digest != expected {
-        return Err(GovernancePublishError::other(
-            "repair mutation intent binding digest mismatch",
-        ));
-    }
-    Ok(())
-}
-
-fn restore_repair_mutation_intents(
-    next_sequence: u64,
-    entries: Vec<RepairMutationIntentV1>,
-    entry_limit: usize,
-) -> Result<RepairMutationIntentRuntime, GovernancePublishError> {
-    if next_sequence == 0 || entries.len() > entry_limit {
-        return Err(GovernancePublishError::other(
-            "repair mutation intent checkpoint has an invalid sequence or count",
-        ));
-    }
-    let mut restored = BTreeMap::new();
-    let mut tickets = BTreeSet::new();
-    let mut previous_sequence = None;
-    for intent in entries {
-        validate_repair_mutation_intent(&intent)?;
-        if intent.sequence >= next_sequence
-            || previous_sequence.is_some_and(|previous| previous >= intent.sequence)
-            || !tickets.insert(intent.cursor.ticket_id.clone())
-        {
-            return Err(GovernancePublishError::other(
-                "repair mutation intents must be ordered, unique by ticket, and below next sequence",
-            ));
-        }
-        previous_sequence = Some(intent.sequence);
-        restored.insert(intent.sequence, intent);
-    }
-    Ok(RepairMutationIntentRuntime {
-        next_sequence,
-        entries: restored,
-    })
-}
-
 fn governance_outbox_binding_digest(
     version: u8,
     sequence: u64,
@@ -3605,7 +3157,7 @@ fn governance_outbox_binding_digest(
     payload_digest: [u8; 32],
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(GOVERNANCE_OUTBOX_BINDING_DOMAIN_V1);
+    hasher.update(GOVERNANCE_OUTBOX_BINDING_DOMAIN_V2);
     hasher.update(&[version]);
     hasher.update(&sequence.to_le_bytes());
     hasher.update(&[kind.tag()]);
@@ -3642,21 +3194,6 @@ fn decode_canonical_signed_reputation_payload(
     })
 }
 
-fn validate_repair_audit_event(
-    entry_sequence: u64,
-    event: &RepairAuditEventV1,
-) -> Result<(), GovernancePublishError> {
-    event
-        .validate()
-        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-    if event.header.sequence != entry_sequence {
-        return Err(GovernancePublishError::other(
-            "repair audit header sequence does not match its outbox entry",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_gc_audit_event(
     entry_sequence: u64,
     event: &GcAuditEventV1,
@@ -3675,7 +3212,7 @@ fn validate_gc_audit_event(
 fn validate_governance_outbox_entry(
     entry: &GovernanceOutboxEntryV1,
 ) -> Result<(), GovernancePublishError> {
-    if entry.version != GOVERNANCE_OUTBOX_VERSION_V1 {
+    if entry.version != GOVERNANCE_OUTBOX_VERSION_V2 {
         return Err(GovernancePublishError::other(format!(
             "unsupported governance outbox entry version {}",
             entry.version
@@ -3709,24 +3246,6 @@ fn validate_governance_outbox_entry(
                 .validate()
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
-        GovernanceOutboxKindV1::RepairAudit => {
-            let event =
-                decode_canonical_governance_payload::<RepairAuditEventV1>(&entry.payload_bytes)?;
-            validate_repair_audit_event(entry.sequence, &event)?;
-        }
-        GovernanceOutboxKindV1::RepairSlashDrafted
-        | GovernanceOutboxKindV1::RepairSlashSubmitted => {
-            let proposal =
-                decode_canonical_governance_payload::<RepairSlashProposalV1>(&entry.payload_bytes)?;
-            proposal
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            if proposal.approval.is_some() {
-                return Err(GovernancePublishError::other(
-                    "repair slash outbox payload contains a retired embedded approval summary",
-                ));
-            }
-        }
         GovernanceOutboxKindV1::GcAudit => {
             let event =
                 decode_canonical_governance_payload::<GcAuditEventV1>(&entry.payload_bytes)?;
@@ -3742,6 +3261,7 @@ fn validate_governance_outbox_entry(
         GovernanceOutboxKindV1::SignedReputationSnapshot => {
             decode_canonical_signed_reputation_payload(&entry.payload_bytes)?;
         }
+        #[cfg(test)]
         GovernanceOutboxKindV1::ModerationBallotEvent => {
             decode_canonical_governance_payload::<SoraFsModerationBallotGovernanceEventV1>(
                 &entry.payload_bytes,
@@ -3826,12 +3346,12 @@ fn insert_governance_outbox_entry(
         .checked_add(1)
         .ok_or_else(|| GovernancePublishError::other("governance outbox sequence exhausted"))?;
     let entry = GovernanceOutboxEntryV1 {
-        version: GOVERNANCE_OUTBOX_VERSION_V1,
+        version: GOVERNANCE_OUTBOX_VERSION_V2,
         sequence,
         kind,
         payload_digest,
         binding_digest: governance_outbox_binding_digest(
-            GOVERNANCE_OUTBOX_VERSION_V1,
+            GOVERNANCE_OUTBOX_VERSION_V2,
             sequence,
             kind,
             payload_digest,
@@ -4061,22 +3581,6 @@ fn publish_governance_outbox_entry(
                 decode_canonical_governance_payload::<DealSettlementV1>(&entry.payload_bytes)?;
             publisher.publish_deal_settlement(&payload, &entry.payload_bytes)
         }
-        GovernanceOutboxKindV1::RepairAudit => {
-            let payload =
-                decode_canonical_governance_payload::<RepairAuditEventV1>(&entry.payload_bytes)?;
-            publisher.publish_repair_audit_event(&payload, &entry.payload_bytes)
-        }
-        GovernanceOutboxKindV1::RepairSlashDrafted
-        | GovernanceOutboxKindV1::RepairSlashSubmitted => {
-            let payload =
-                decode_canonical_governance_payload::<RepairSlashProposalV1>(&entry.payload_bytes)?;
-            let stage = if matches!(entry.kind, GovernanceOutboxKindV1::RepairSlashDrafted) {
-                RepairSlashStage::Drafted
-            } else {
-                RepairSlashStage::Submitted
-            };
-            publisher.publish_repair_slash_proposal(&payload, &entry.payload_bytes, stage)
-        }
         GovernanceOutboxKindV1::GcAudit => {
             let payload =
                 decode_canonical_governance_payload::<GcAuditEventV1>(&entry.payload_bytes)?;
@@ -4092,6 +3596,7 @@ fn publish_governance_outbox_entry(
             let payload = decode_canonical_signed_reputation_payload(&entry.payload_bytes)?;
             publisher.publish_reputation_snapshot(&payload, &entry.payload_bytes)
         }
+        #[cfg(test)]
         GovernanceOutboxKindV1::ModerationBallotEvent => {
             let payload = decode_canonical_governance_payload::<
                 SoraFsModerationBallotGovernanceEventV1,
@@ -4151,18 +3656,13 @@ struct AdmittedReputationSnapshotV1 {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV1 {
+struct AuxiliaryRuntimeCheckpointV2 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,
     deal_runtime: DealRuntimeCheckpointV1,
     por_tracker: por::PorTrackerCheckpointV1,
     por_history: Vec<PorHistoryCheckpointEntryV1>,
     reserve_runtime: ReserveRuntimeCheckpointV1,
-    repair_events: Vec<RepairEvent>,
-    repair_mutation_next_sequence: u64,
-    repair_mutation_intents: Vec<RepairMutationIntentV1>,
-    repair_event_audit_links: Vec<RepairEventAuditLinkV1>,
-    repair_slash_publication_links: Vec<RepairSlashPublicationLinkV1>,
     gc_eviction_intent_next_sequence: u64,
     gc_eviction_intents: Vec<GcEvictionIntentV1>,
     gc_eviction_audit_links: Vec<GcEvictionAuditLinkV1>,
@@ -4300,6 +3800,12 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// Native repair worker controls are invalid for the consensus lease contract.
+    #[error("invalid SoraFS native repair configuration: {message}")]
+    NativeRepairConfig {
+        /// Stable configuration diagnostic.
+        message: String,
+    },
     /// The durable native orderbook-transaction forwarder could not be opened or validated.
     #[error(
         "failed to initialise SoraFS orderbook transaction forwarder `{path}`: {message}",
@@ -4307,6 +3813,23 @@ pub enum NodeInitError {
     )]
     OrderbookTransactionForwarder {
         /// Configured storage root containing the orderbook delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// Native reserve/rent worker controls are outside supported resource bounds.
+    #[error("invalid SoraFS native reserve worker configuration: {message}")]
+    ReserveWorkerConfig {
+        /// Stable configuration diagnostic.
+        message: String,
+    },
+    /// The durable native reserve-transaction forwarder could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS reserve transaction forwarder `{path}`: {message}",
+        path = path.display()
+    )]
+    ReserveTransactionForwarder {
+        /// Configured storage root containing the reserve delivery checkpoint.
         path: PathBuf,
         /// Validation or I/O diagnostic.
         message: String,
@@ -4406,6 +3929,55 @@ impl NodeInitError {
             message: error.to_string(),
         }
     }
+}
+
+fn validate_native_repair_config(config: &RepairConfig) -> Result<(), NodeInitError> {
+    let lease_duration_ms = config.claim_ttl_secs().checked_mul(1_000).ok_or_else(|| {
+        NodeInitError::NativeRepairConfig {
+            message: "claim_ttl_secs overflows milliseconds".to_owned(),
+        }
+    })?;
+    if !(REPAIR_LEDGER_MIN_LEASE_MS_V1..=REPAIR_LEDGER_MAX_LEASE_MS_V1).contains(&lease_duration_ms)
+    {
+        return Err(NodeInitError::NativeRepairConfig {
+            message: format!(
+                "claim_ttl_secs must resolve within {REPAIR_LEDGER_MIN_LEASE_MS_V1}..={REPAIR_LEDGER_MAX_LEASE_MS_V1} milliseconds"
+            ),
+        });
+    }
+    let renewal_lead_ms = config
+        .heartbeat_interval_secs()
+        .checked_mul(1_000)
+        .ok_or_else(|| NodeInitError::NativeRepairConfig {
+            message: "heartbeat_interval_secs overflows milliseconds".to_owned(),
+        })?;
+    if renewal_lead_ms == 0 || renewal_lead_ms >= lease_duration_ms {
+        return Err(NodeInitError::NativeRepairConfig {
+            message: "heartbeat_interval_secs must be non-zero and strictly below claim_ttl_secs"
+                .to_owned(),
+        });
+    }
+    if !(1..=iroha_config::parameters::defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT)
+        .contains(&config.max_attempts())
+    {
+        return Err(NodeInitError::NativeRepairConfig {
+            message: format!(
+                "max_attempts must be within 1..={}",
+                iroha_config::parameters::defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT
+            ),
+        });
+    }
+    if !(1..=iroha_config::parameters::defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT)
+        .contains(&config.worker_concurrency())
+    {
+        return Err(NodeInitError::NativeRepairConfig {
+            message: format!(
+                "worker_concurrency must be within 1..={}",
+                iroha_config::parameters::defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn load_reputation_trust_policy(
@@ -4510,15 +4082,15 @@ pub enum ReconciliationError {
     /// Storage backend is required for reconciliation.
     #[error("SoraFS storage backend is disabled")]
     StorageDisabled,
+    /// Local provider identity is required to bind the published report.
+    #[error("SoraFS provider identity is unavailable for reconciliation")]
+    ProviderBindingUnavailable,
     /// Failed to encode reconciliation snapshot data.
     #[error(transparent)]
     Norito(#[from] norito::Error),
     /// Local appeal-finance Governance DAG data could not be reconciled.
     #[error("appeal finance reconciliation failed: {0}")]
     AppealFinance(String),
-    /// Durable repair state could not be read for reconciliation.
-    #[error("repair reconciliation state unavailable: {0}")]
-    RepairStore(String),
     /// Reconciliation report failed validation.
     #[error(transparent)]
     Validation(#[from] ReconciliationValidationError),
@@ -4587,26 +4159,10 @@ impl PdpTerminalHandoff for NodeHandle {
         idempotency_key: [u8; 32],
         report: &RepairReportV1,
     ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
-        #[cfg(test)]
-        {
-            let bytes = norito::to_bytes(report).map_err(|error| {
-                pdp_provider::PdpExternalHandoffError(format!("encode PDP repair handoff: {error}"))
-            })?;
-            self.enqueue_repair_report_idempotent(idempotency_key, report)
-                .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
-            return Ok(pdp_handoff_receipt(
-                b"repair",
-                idempotency_key,
-                *blake3::hash(&bytes).as_bytes(),
-            ));
-        }
-        #[cfg(not(test))]
-        {
-            let _ = (idempotency_key, report);
-            Err(pdp_provider::PdpExternalHandoffError(
-                "chain-authoritative repair transaction handoff is required".to_owned(),
-            ))
-        }
+        let _ = (idempotency_key, report);
+        Err(pdp_provider::PdpExternalHandoffError(
+            "chain-authoritative repair transaction handoff is required".to_owned(),
+        ))
     }
 }
 
@@ -4661,23 +4217,10 @@ impl potr::PotrLatencyRepairHandoff for NodeHandle {
         source_identity: [u8; 32],
         report: &RepairReportV1,
     ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
-        #[cfg(test)]
-        {
-            self.enqueue_repair_report_idempotent(source_identity, report)
-                .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))?;
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(b"sorafs.potr.repair-acceptance.v1\0");
-            hasher.update(&source_identity);
-            hasher.update(report.ticket_id.0.as_bytes());
-            return Ok(*hasher.finalize().as_bytes());
-        }
-        #[cfg(not(test))]
-        {
-            let _ = (source_identity, report);
-            Err(potr::PotrRepairHandoffError(
-                "chain-authoritative repair transaction handoff is required".to_owned(),
-            ))
-        }
+        let _ = (source_identity, report);
+        Err(potr::PotrRepairHandoffError(
+            "chain-authoritative repair transaction handoff is required".to_owned(),
+        ))
     }
 }
 
@@ -4842,6 +4385,7 @@ impl NodeHandle {
         gc_config: GcConfig,
         runtime_deps: NodeRuntimeDeps,
     ) -> Result<Self, NodeInitError> {
+        validate_native_repair_config(&repair_config)?;
         let NodeRuntimeDeps {
             moderation_quarantine_key_wrapper,
             privacy_cycle_prf_provider,
@@ -4940,7 +4484,6 @@ impl NodeHandle {
             })?),
             None => None,
         };
-        let repair_config = repair_config.with_default_state_dir(config.data_dir());
         let gc_config = gc_config.with_default_state_dir(config.data_dir());
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
         let schedulers = StorageSchedulersRuntime::new(scheduler_config);
@@ -5060,6 +4603,30 @@ impl NodeHandle {
             path: orderbook_transaction_state_dir.clone(),
             message: error.to_string(),
         })?;
+        let reserve_worker_policy = config.reserve_worker_policy();
+        reserve_worker_policy
+            .validate()
+            .map_err(|message| NodeInitError::ReserveWorkerConfig { message })?;
+        let reserve_transaction_state_dir = config.data_dir().join("reserve-transaction-forwarder");
+        let reserve_transaction_policy = ReserveTransactionForwarderPolicyV1 {
+            max_pending: reserve_worker_policy.max_pending(),
+            max_completed: reserve_worker_policy.max_completed(),
+            max_dead_letters: reserve_worker_policy.max_dead_letters(),
+            max_attempts: reserve_worker_policy.max_attempts(),
+            max_transaction_bytes: RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+            checkpoint_max_bytes: reserve_worker_policy.checkpoint_max_bytes(),
+        };
+        // This durability boundary is independent of both provider storage and
+        // supervised scanning. `enabled` gates only the worker loop; any
+        // operation admitted through this handle is always persisted.
+        let reserve_transaction_forwarder = ReserveTransactionForwarder::open(
+            &reserve_transaction_state_dir,
+            reserve_transaction_policy,
+        )
+        .map_err(|error| NodeInitError::ReserveTransactionForwarder {
+            path: reserve_transaction_state_dir.clone(),
+            message: error.to_string(),
+        })?;
         let runtime_checkpoint_initialization = if storage.is_some() {
             Some(inspect_runtime_checkpoint_initialization(
                 config.data_dir(),
@@ -5096,31 +4663,27 @@ impl NodeHandle {
         let moderation_evidence_viewer_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_evidence_viewer_checkpoint_path(config.data_dir()));
+        #[cfg(test)]
         let moderation_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_ballot_checkpoint_path(config.data_dir()));
         let auxiliary_runtime_checkpoint_path = storage
             .as_ref()
             .map(|_| auxiliary_runtime_checkpoint_path(config.data_dir()));
-        let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
         let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
         let (reserve_lifecycle_event_sender, _) =
             broadcast::channel(RESERVE_LIFECYCLE_EVENT_CHANNEL_CAPACITY);
         let (reserve_movement_event_sender, _) =
             broadcast::channel(RESERVE_MOVEMENT_EVENT_CHANNEL_CAPACITY);
+        #[cfg(test)]
         let (moderation_event_sender, _) =
             broadcast::channel(MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY);
 
-        let repair_checkpoint_path = repair::repair_store_checkpoint_path(&repair_config)
-            .unwrap_or_else(|| PathBuf::from("<unconfigured-repair-state>"));
-        let repair = RepairManager::try_new_with_config_policy_and_limits(
-            repair_config.clone(),
-            repair_config.escalation_policy().clone(),
-            state_entry_limit,
-            config.runtime_retention().checkpoint_max_bytes(),
-        )
-        .map_err(|err| NodeInitError::checkpoint("repair", &repair_checkpoint_path, err))?;
+        let native_repair_singleflight =
+            native_repair_singleflight::NativeRepairSingleflightV1::new(
+                repair_config.worker_concurrency(),
+            );
         let node = Self {
             config,
             repair_config,
@@ -5133,21 +4696,16 @@ impl NodeHandle {
             potr,
             proof_outcome_outbox,
             repair_transaction_forwarder,
+            native_repair_singleflight,
             orderbook_transaction_forwarder,
+            reserve_transaction_forwarder,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
             deal_engine,
-            repair,
-            repair_mutation_lock: Arc::new(Mutex::new(())),
-            repair_mutation_intents: Arc::new(RwLock::new(RepairMutationIntentRuntime::default())),
-            repair_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
-            repair_event_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
-            repair_slash_publication_links: Arc::new(RwLock::new(BTreeMap::new())),
             gc_mutation_lock: Arc::new(Mutex::new(())),
             gc_eviction_intents: Arc::new(RwLock::new(GcEvictionIntentRuntime::default())),
             gc_eviction_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
-            repair_event_sender,
             repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
             governance_outbox: Arc::new(RwLock::new(GovernanceOutboxRuntime::default())),
@@ -5199,14 +4757,18 @@ impl NodeHandle {
             moderation_evidence_viewer: Arc::new(RwLock::new(
                 ModerationEvidenceViewerRuntime::with_entry_limit(state_entry_limit),
             )),
+            #[cfg(test)]
             moderation_checkpoint_path,
+            #[cfg(test)]
             moderation: Arc::new(RwLock::new(ModerationBallotRuntime::with_entry_limit(
                 state_entry_limit,
             ))),
             moderation_finalized_chain_projection: Arc::new(RwLock::new(
                 ModerationFinalizedChainProjectionV1::with_entry_limit(state_entry_limit),
             )),
+            #[cfg(test)]
             moderation_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
+            #[cfg(test)]
             moderation_event_sender,
             transparency_ledger_source_entries: Arc::new(RwLock::new(BTreeMap::new())),
             privacy_aggregate_source_events: Arc::new(RwLock::new(BTreeMap::new())),
@@ -5239,22 +4801,13 @@ impl NodeHandle {
                     node.load_moderation_quarantine_object_index_checkpoint()?;
                     node.audit_moderation_quarantine_object_store()?;
                     node.load_moderation_evidence_viewer_checkpoint()?;
+                    #[cfg(test)]
                     node.load_moderation_ballot_checkpoint()?;
                     node.load_auxiliary_runtime_checkpoint()?;
                 }
                 None => unreachable!("storage-backed node must inspect runtime checkpoints"),
             }
             node.reconcile_orderbook_settlement_outbox_on_startup()
-                .map_err(|err| {
-                    NodeInitError::checkpoint(
-                        "auxiliary runtime",
-                        node.auxiliary_runtime_checkpoint_path
-                            .as_ref()
-                            .expect("storage-backed node has an auxiliary checkpoint path"),
-                        err,
-                    )
-                })?;
-            node.reconcile_repair_publication_intents_on_startup()
                 .map_err(|err| {
                     NodeInitError::checkpoint(
                         "auxiliary runtime",
@@ -5274,24 +4827,11 @@ impl NodeHandle {
                         err,
                     )
                 })?;
-            // Resume PDP and PoTR ledger-delivery/repair effects only after
-            // their durable protocol checkpoints, outboxes, and auxiliary
-            // state have been restored. Canonical source identities remain
-            // stable across every replay.
-            if let Some(pdp_provider) = node.pdp_provider.as_ref() {
-                pdp_provider
-                    .resume_handoffs(&node, state_entry_limit)
-                    .map_err(|error| NodeInitError::PdpProvider {
-                        path: pdp_provider_state_dir.clone(),
-                        message: error.to_string(),
-                    })?;
-            }
-            node.potr
-                .resume_terminal_handoffs(&node)
-                .map_err(|error| NodeInitError::Potr {
-                    path: potr_state_dir.clone(),
-                    message: error.to_string(),
-                })?;
+            // PDP and PoTR handoffs intentionally remain durable here. Repair-required
+            // records need Torii's chain-authoritative transaction adapter; NodeHandle
+            // must not fabricate a local receipt or make restart depend on that adapter.
+            // The supervised Torii repair forwarder resumes each protocol on its first
+            // immediate scan and once per subsequent scan.
             if let Some(dir) = governance_dir.clone() {
                 let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
@@ -5344,6 +4884,28 @@ impl NodeHandle {
     #[must_use]
     pub fn pdp_provider_protocol(&self) -> Option<&PdpProviderProtocol> {
         self.pdp_provider.as_ref()
+    }
+
+    /// Resume durable PDP terminal handoffs through an explicit production adapter.
+    pub fn resume_pdp_terminal_handoffs(
+        &self,
+        handoff: &dyn PdpTerminalHandoff,
+        limit: usize,
+    ) -> Result<usize, PdpProviderProtocolError> {
+        let Some(pdp_provider) = self.pdp_provider.as_ref() else {
+            return Ok(0);
+        };
+        pdp_provider
+            .resume_handoffs(handoff, limit)
+            .map(|outcomes| outcomes.len())
+    }
+
+    /// Resume durable PoTR proof-ledger and repair handoffs through an explicit adapter.
+    pub fn resume_potr_terminal_handoffs(
+        &self,
+        handoff: &dyn potr::PotrLatencyRepairHandoff,
+    ) -> Result<usize, PotrTrackerError> {
+        self.potr.resume_terminal_handoffs(handoff)
     }
 
     /// Return pending proof-outcome deliveries in stable sequence order.
@@ -5547,6 +5109,20 @@ impl NodeHandle {
     ) -> Result<(), RepairTransactionForwarderError> {
         self.repair_transaction_forwarder
             .mark_submitted(operation_id)
+    }
+
+    /// Reconcile exact finalized repair-transaction bytes.
+    pub fn mark_repair_transaction_finalized(
+        &self,
+        operation_id: [u8; 32],
+        expected_transaction_digest: [u8; 32],
+        finalized_cursor: RepairFinalizedCursorV1,
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder.mark_finalized(
+            operation_id,
+            expected_transaction_digest,
+            finalized_cursor,
+        )
     }
 
     /// Record a repair queue failure proven to precede submission.
@@ -5765,6 +5341,173 @@ impl NodeHandle {
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
 
+    /// Durably enqueue one native reserve/rent operation bound to finalized governance state.
+    pub fn enqueue_reserve_transaction(
+        &self,
+        operation: ReserveOperationV1,
+        context: &ReserveTransactionContextV1,
+    ) -> Result<ReserveTransactionEnqueueResultV1, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .enqueue_unsigned_operation(operation, context)
+    }
+
+    /// Durably enqueue one canonical signed native reserve/rent transaction.
+    ///
+    /// The forwarder binds both the exact governed authority and active chain
+    /// identity from the finalized context before persisting any bytes.
+    pub fn enqueue_signed_reserve_transaction(
+        &self,
+        signed_transaction_bytes: &[u8],
+        context: &ReserveTransactionContextV1,
+    ) -> Result<ReserveTransactionEnqueueResultV1, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .enqueue_signed_transaction(signed_transaction_bytes, context)
+    }
+
+    /// Return the oldest bounded page of pending native reserve/rent transactions.
+    pub fn pending_reserve_transactions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ReserveTransactionPendingV1>, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder.pending(limit)
+    }
+
+    /// Return a fair circular page of pending native reserve/rent transactions.
+    pub fn pending_reserve_transactions_after(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<ReserveTransactionPendingV1>, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .pending_after(after_sequence, limit)
+    }
+
+    /// Read exact reserve/rent semantics for finalized reconciliation without claiming an attempt.
+    pub fn reserve_transaction_operation_for_reconciliation(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<ReserveTransactionReconciliationV1, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .operation_for_reconciliation(operation_id)
+    }
+
+    /// Return payload-free terminal reserve-transaction dead letters.
+    pub fn reserve_transaction_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ReserveTransactionDeadLetterV1>, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder.dead_letters(limit)
+    }
+
+    /// Claim one native reserve/rent operation for isolated runtime signing.
+    pub fn claim_reserve_transaction_for_signing(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<ReserveTransactionSigningRequestV1, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .claim_for_signing(operation_id)
+    }
+
+    /// Persist exact signed reserve/rent transaction bytes before submitter exposure.
+    pub fn store_signed_reserve_transaction(
+        &self,
+        operation_id: [u8; 32],
+        signed_transaction_bytes: &[u8],
+    ) -> Result<[u8; 32], ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .store_signed_transaction(operation_id, signed_transaction_bytes)
+    }
+
+    /// Release an interrupted reserve-transaction signing claim.
+    pub fn release_reserve_transaction_signing_claim(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .release_signing_claim(operation_id)
+    }
+
+    /// Mark exact signed reserve/rent bytes ambiguous before transaction ingress.
+    pub fn begin_reserve_transaction_submission(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<Vec<u8>, ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .begin_submission(operation_id)
+    }
+
+    /// Record that an exact reserve/rent transaction is pending or applied.
+    pub fn mark_reserve_transaction_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_submitted(operation_id)
+    }
+
+    /// Record a reserve/rent queue failure proven to precede submission.
+    pub fn mark_reserve_transaction_not_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_not_submitted(operation_id)
+    }
+
+    /// Permit exact-byte retry after finalized absence of a reserve/rent transaction.
+    pub fn mark_reserve_transaction_finalized_absent(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: ReserveFinalizedCursorV1,
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_finalized_absent(operation_id, observed_finalized_cursor)
+    }
+
+    /// Reconcile exact finalized reserve/rent success by retained transaction digest.
+    pub fn mark_reserve_transaction_finalized(
+        &self,
+        operation_id: [u8; 32],
+        expected_transaction_digest: [u8; 32],
+        finalized_cursor: ReserveFinalizedCursorV1,
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder.mark_finalized(
+            operation_id,
+            expected_transaction_digest,
+            finalized_cursor,
+        )
+    }
+
+    /// Reconcile exact reserve/rent semantics committed through another ingress.
+    pub fn mark_reserve_transaction_semantic_finalized(
+        &self,
+        operation_id: [u8; 32],
+        finalized_cursor: ReserveFinalizedCursorV1,
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_semantic_finalized(operation_id, finalized_cursor)
+    }
+
+    /// Dead-letter a reserve/rent operation that conflicts with finalized state.
+    pub fn mark_reserve_transaction_finalized_conflict(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: ReserveFinalizedCursorV1,
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_finalized_conflict(operation_id, observed_finalized_cursor)
+    }
+
+    /// Clear a rejected reserve/rent envelope for bounded replacement signing.
+    pub fn mark_reserve_transaction_rejected(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: ReserveFinalizedCursorV1,
+    ) -> Result<(), ReserveTransactionForwarderError> {
+        self.reserve_transaction_forwarder
+            .mark_transaction_rejected(operation_id, observed_finalized_cursor)
+    }
+
     /// Returns a reference to the repair scheduler configuration.
     #[must_use]
     pub fn repair_config(&self) -> &RepairConfig {
@@ -5924,10 +5667,12 @@ impl NodeHandle {
         )
         .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", viewer_path, err))?;
 
+        #[cfg(test)]
         let ballot_path = self
             .moderation_checkpoint_path
             .as_ref()
             .expect("storage-backed node has a ballot checkpoint path");
+        #[cfg(test)]
         self.persist_moderation_ballot_snapshot(&ModerationBallotSnapshot::default())
             .map_err(|err| NodeInitError::checkpoint("moderation ballot", ballot_path, err))?;
 
@@ -6376,28 +6121,6 @@ impl NodeHandle {
         )
     }
 
-    fn enqueue_repair_governance_outbox_unlocked(
-        &self,
-        kind: GovernanceOutboxKindV1,
-        payload_bytes: Vec<u8>,
-    ) -> Result<(u64, bool), GovernancePublishError> {
-        if !matches!(
-            kind,
-            GovernanceOutboxKindV1::RepairAudit
-                | GovernanceOutboxKindV1::RepairSlashDrafted
-                | GovernanceOutboxKindV1::RepairSlashSubmitted
-        ) {
-            return Err(GovernancePublishError::other(
-                "only repair publications may consume reserved repair outbox capacity",
-            ));
-        }
-        self.enqueue_governance_outbox_unlocked_with_reservation(
-            kind,
-            payload_bytes,
-            GovernanceOutboxReservationUse::Repair,
-        )
-    }
-
     fn enqueue_gc_eviction_governance_outbox_unlocked(
         &self,
         payload_bytes: Vec<u8>,
@@ -6415,12 +6138,6 @@ impl NodeHandle {
         payload_bytes: Vec<u8>,
         reservation_use: GovernanceOutboxReservationUse,
     ) -> Result<(u64, bool), GovernancePublishError> {
-        let repair_reserved_slots = {
-            let intents = self.repair_mutation_intents.read().map_err(|_| {
-                GovernancePublishError::other("repair mutation intent lock poisoned")
-            })?;
-            repair_mutation_reserved_outbox_slots(&intents)?
-        };
         let gc_reserved_slots = {
             let intents = self
                 .gc_eviction_intents
@@ -6429,26 +6146,14 @@ impl NodeHandle {
             gc_eviction_reserved_outbox_slots(&intents)?
         };
         let reserved_slots = match reservation_use {
-            GovernanceOutboxReservationUse::None => repair_reserved_slots
-                .checked_add(gc_reserved_slots)
-                .ok_or_else(|| {
-                    GovernancePublishError::other("governance outbox reservation count overflow")
-                })?,
-            GovernanceOutboxReservationUse::Repair => {
-                if repair_reserved_slots == 0 {
-                    return Err(GovernancePublishError::other(
-                        "repair publication has no active outbox reservation",
-                    ));
-                }
-                gc_reserved_slots
-            }
+            GovernanceOutboxReservationUse::None => gc_reserved_slots,
             GovernanceOutboxReservationUse::GcEviction => {
                 if gc_reserved_slots == 0 {
                     return Err(GovernancePublishError::other(
                         "GC eviction publication has no active outbox reservation",
                     ));
                 }
-                repair_reserved_slots
+                0
             }
         };
         let mut outbox = self
@@ -6707,31 +6412,6 @@ impl NodeHandle {
             return Err(GovernancePublishError::other(err.to_string()));
         }
         Ok(())
-    }
-
-    fn reconcile_repair_publication_intents_on_startup(
-        &self,
-    ) -> Result<(), GovernancePublishError> {
-        let mutation_guard = self
-            .repair_mutation_lock
-            .lock()
-            .map_err(|_| GovernancePublishError::other("repair mutation lock poisoned"))?;
-        let drain_guard = self
-            .governance_outbox_drain_lock
-            .lock()
-            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
-        let intents = self
-            .repair_mutation_intents
-            .read()
-            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))?
-            .entries
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        self.finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, false)
-            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-        self.validate_repair_publication_state_against_store()
-            .map_err(|err| GovernancePublishError::other(err.to_string()))
     }
 
     fn reconcile_gc_eviction_intents_on_startup(&self) -> Result<(), GovernancePublishError> {
@@ -7529,6 +7209,7 @@ impl NodeHandle {
     }
 
     /// Derive and record a transparency source entry from a moderation governance event.
+    #[cfg(test)]
     pub fn record_moderation_ballot_governance_transparency_entry(
         &self,
         event: &SoraFsModerationBallotGovernanceEventV1,
@@ -8689,12 +8370,6 @@ impl NodeHandle {
                 "privacy publish-request receipt retention exhausted or duplicated",
             ));
         }
-        let repair_reserved_slots = {
-            let intents = self.repair_mutation_intents.read().map_err(|_| {
-                GovernancePublishError::other("repair mutation intent lock poisoned")
-            })?;
-            repair_mutation_reserved_outbox_slots(&intents)?
-        };
         let gc_reserved_slots = {
             let intents = self
                 .gc_eviction_intents
@@ -8702,18 +8377,13 @@ impl NodeHandle {
                 .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?;
             gc_eviction_reserved_outbox_slots(&intents)?
         };
-        let reserved_slots = repair_reserved_slots
-            .checked_add(gc_reserved_slots)
-            .ok_or_else(|| {
-                GovernancePublishError::other("governance outbox reservation count overflow")
-            })?;
         let mut next_outbox = previous_outbox.clone();
         insert_governance_outbox_entry(
             &mut next_outbox,
             GovernanceOutboxKindV1::TransparencyLedgerPublication,
             encoded,
             self.config.runtime_retention().state_entry_limit(),
-            reserved_slots,
+            gc_reserved_slots,
         )?;
         self.install_privacy_publication_state(
             next_budget,
@@ -9125,53 +8795,6 @@ impl NodeHandle {
     #[must_use]
     pub fn subscribe_reputation_events(&self) -> broadcast::Receiver<ReputationSnapshotEventV1> {
         self.reputation_event_sender.subscribe()
-    }
-
-    /// Return local repair events after `since_sequence`, capped by `limit`.
-    #[cfg(test)]
-    #[must_use]
-    pub fn repair_events_since(
-        &self,
-        since_sequence: Option<u64>,
-        limit: usize,
-    ) -> Vec<RepairEvent> {
-        self.repair_events_replay(since_sequence, limit).events
-    }
-
-    /// Return a gap-aware bounded replay of local repair events.
-    #[cfg(test)]
-    #[must_use]
-    pub fn repair_events_replay(
-        &self,
-        since_sequence: Option<u64>,
-        limit: usize,
-    ) -> EventReplay<RepairEvent> {
-        self.repair_events.read().map_or_else(
-            |_| EventReplay {
-                oldest_available_sequence: None,
-                latest_sequence: None,
-                gap: false,
-                events: Vec::new(),
-            },
-            |guard| guard.replay(since_sequence, limit, |event| event.sequence),
-        )
-    }
-
-    /// Return the latest local repair event sequence accepted by this node.
-    #[cfg(test)]
-    #[must_use]
-    pub fn latest_repair_event_sequence(&self) -> Option<u64> {
-        self.repair_events
-            .read()
-            .ok()
-            .and_then(|guard| (guard.latest_sequence != 0).then_some(guard.latest_sequence))
-    }
-
-    /// Subscribe to live local repair events.
-    #[cfg(test)]
-    #[must_use]
-    pub fn subscribe_repair_events(&self) -> broadcast::Receiver<RepairEvent> {
-        self.repair_event_sender.subscribe()
     }
 
     /// Return local orderbook events after `since_sequence`, capped by `limit`.
@@ -11190,6 +10813,7 @@ impl NodeHandle {
 
     /// Return local moderation ballot events after `since_sequence`, capped by `limit`.
     #[must_use]
+    #[cfg(test)]
     pub fn moderation_ballot_events_since(
         &self,
         since_sequence: Option<u64>,
@@ -11201,6 +10825,7 @@ impl NodeHandle {
 
     /// Return a gap-aware bounded replay of local moderation ballot events.
     #[must_use]
+    #[cfg(test)]
     pub fn moderation_ballot_events_replay(
         &self,
         since_sequence: Option<u64>,
@@ -11219,6 +10844,7 @@ impl NodeHandle {
 
     /// Return the latest local moderation ballot event sequence accepted by this node.
     #[must_use]
+    #[cfg(test)]
     pub fn latest_moderation_ballot_event_sequence(&self) -> Option<u64> {
         self.moderation_events
             .read()
@@ -11228,10 +10854,12 @@ impl NodeHandle {
 
     /// Subscribe to live local moderation ballot events.
     #[must_use]
+    #[cfg(test)]
     pub fn subscribe_moderation_ballot_events(&self) -> broadcast::Receiver<ModerationBallotEvent> {
         self.moderation_event_sender.subscribe()
     }
 
+    #[cfg(test)]
     fn mutate_moderation_ballot_durably<T>(
         &self,
         mutate: impl FnOnce(
@@ -11339,6 +10967,7 @@ impl NodeHandle {
         Ok((outcome, event))
     }
 
+    #[cfg(test)]
     fn publish_committed_moderation_ballot_event(&self, event: ModerationBallotEvent) {
         let _ = self.moderation_event_sender.send(event.clone());
         self.publish_moderation_ballot_governance_event(&event);
@@ -11350,6 +10979,7 @@ impl NodeHandle {
     /// quorum, and commit/challenge/reveal windows, commits ballot plus event
     /// state atomically, then publishes the typed Governance DAG/transparency
     /// event. It does not submit an on-chain transaction.
+    #[cfg(test)]
     pub fn announce_moderation_ballot(
         &self,
         announcement: ModerationBallotAnnouncement,
@@ -11377,6 +11007,7 @@ impl NodeHandle {
     }
 
     /// Accept a local SoraFS moderation ballot commitment from an eligible juror.
+    #[cfg(test)]
     pub fn submit_moderation_ballot_commit(
         &self,
         commit: SoraFsModerationBallotCommitV1,
@@ -11405,6 +11036,7 @@ impl NodeHandle {
     }
 
     /// Raise a local SoraFS moderation ballot challenge during the challenge window.
+    #[cfg(test)]
     pub fn submit_moderation_ballot_challenge(
         &self,
         input: ModerationBallotChallengeInput,
@@ -11428,6 +11060,7 @@ impl NodeHandle {
     }
 
     /// Resolve a local SoraFS moderation ballot challenge before reveal progress.
+    #[cfg(test)]
     pub fn resolve_moderation_ballot_challenge(
         &self,
         input: ModerationBallotChallengeResolution,
@@ -11451,6 +11084,7 @@ impl NodeHandle {
     }
 
     /// Accept a local SoraFS moderation ballot reveal after the challenge buffer.
+    #[cfg(test)]
     pub fn submit_moderation_ballot_reveal(
         &self,
         reveal: SoraFsModerationBallotRevealV1,
@@ -11479,6 +11113,7 @@ impl NodeHandle {
     }
 
     /// Finalize a local SoraFS moderation ballot tally.
+    #[cfg(test)]
     pub fn tally_moderation_ballot(
         &self,
         case_id: &str,
@@ -11515,6 +11150,7 @@ impl NodeHandle {
     /// reveals, separates missing commits from committed no-shows, and binds the
     /// result to a deterministic digest without applying reputation or asset
     /// penalties.
+    #[cfg(test)]
     pub fn moderation_ballot_no_show_plan(
         &self,
         case_id: &str,
@@ -11529,6 +11165,7 @@ impl NodeHandle {
 
     /// Return one local SoraFS moderation ballot record.
     #[must_use]
+    #[cfg(test)]
     pub fn moderation_ballot(
         &self,
         case_id: &str,
@@ -11542,6 +11179,7 @@ impl NodeHandle {
 
     /// Return all local SoraFS moderation ballot records.
     #[must_use]
+    #[cfg(test)]
     pub fn moderation_ballots(&self) -> Vec<ModerationBallotRecord> {
         self.moderation
             .read()
@@ -11592,6 +11230,7 @@ impl NodeHandle {
 
     /// Return a deterministic local SoraFS moderation ballot snapshot.
     #[must_use]
+    #[cfg(test)]
     pub fn moderation_ballot_snapshot(&self) -> ModerationBallotSnapshot {
         self.export_moderation_ballot_snapshot()
             .unwrap_or_else(|_| ModerationBallotSnapshot::default())
@@ -11605,6 +11244,7 @@ impl NodeHandle {
     /// # Errors
     ///
     /// Returns an error if the moderation ballot runtime lock is poisoned.
+    #[cfg(test)]
     pub fn export_moderation_ballot_snapshot(
         &self,
     ) -> Result<ModerationBallotSnapshot, ModerationBallotRuntimeError> {
@@ -11627,6 +11267,7 @@ impl NodeHandle {
     ///
     /// Returns an error if the snapshot is internally inconsistent or the
     /// moderation ballot runtime lock is poisoned.
+    #[cfg(test)]
     pub fn restore_moderation_ballot_snapshot(
         &self,
         snapshot: ModerationBallotSnapshot,
@@ -11672,13 +11313,6 @@ impl NodeHandle {
             validate_orderbook_admission_policy(self.config.orderbook_admission_policy(), &order)
                 .and_then(|()| {
                     self.mutate_orderbook_durably(now_unix, |runtime| {
-                        // Reserve lifecycle changes use the same outer mutation lock. Keep this
-                        // check inside the transaction so an ask cannot race an advert-disable
-                        // transition between admission and the durable orderbook commit.
-                        validate_orderbook_reserve_lifecycle_admission(
-                            &self.reserve_lifecycle,
-                            &order,
-                        )?;
                         let outcome = runtime.submit_order(order, now_unix)?;
                         let input = OrderbookEventInput {
                             kind: OrderbookEventKind::OrderAccepted,
@@ -11718,12 +11352,12 @@ impl NodeHandle {
                     | OrderbookRuntimeError::OrderBelowMinimum { .. }
                     | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
                     | OrderbookRuntimeError::InvalidPriceTick { .. }
-                    | OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. }
                     | OrderbookRuntimeError::ResourceExhausted { .. } => "rejected",
                     OrderbookRuntimeError::SequenceOverflow
                     | OrderbookRuntimeError::EventSequenceOverflow
                     | OrderbookRuntimeError::MissingMatchedOrder
                     | OrderbookRuntimeError::InvalidMatchedSides
+                    | OrderbookRuntimeError::MissingMatchedProviderBinding
                     | OrderbookRuntimeError::StateLockPoisoned
                     | OrderbookRuntimeError::SettlementChannelNotFound { .. }
                     | OrderbookRuntimeError::DuplicateReceiptId { .. }
@@ -12499,6 +12133,7 @@ impl NodeHandle {
         )
     }
 
+    #[cfg(test)]
     fn restore_moderation_ballot_snapshot_in_memory(
         &self,
         snapshot: ModerationBallotSnapshot,
@@ -12537,7 +12172,7 @@ impl NodeHandle {
 
     fn export_auxiliary_runtime_checkpoint(
         &self,
-    ) -> Result<AuxiliaryRuntimeCheckpointV1, GovernancePublishError> {
+    ) -> Result<AuxiliaryRuntimeCheckpointV2, GovernancePublishError> {
         let capacity_runtime = self.capacity.checkpoint().map_err(|err| {
             GovernancePublishError::other(format!("export capacity runtime checkpoint: {err}"))
         })?;
@@ -12562,33 +12197,6 @@ impl NodeHandle {
             )
             .collect::<Vec<_>>();
         por_history.sort_by_key(|entry| (entry.manifest_digest, entry.provider_id));
-        let repair_events = self
-            .repair_events
-            .read()
-            .map_err(|_| GovernancePublishError::other("repair event history lock poisoned"))?
-            .retained();
-        let repair_mutation_intents = self
-            .repair_mutation_intents
-            .read()
-            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))?;
-        let repair_mutation_next_sequence = repair_mutation_intents.next_sequence;
-        let repair_mutation_intents = repair_mutation_intents.entries.values().cloned().collect();
-        let repair_event_audit_links = self
-            .repair_event_audit_links
-            .read()
-            .map_err(|_| GovernancePublishError::other("repair event audit link lock poisoned"))?
-            .values()
-            .cloned()
-            .collect();
-        let repair_slash_publication_links = self
-            .repair_slash_publication_links
-            .read()
-            .map_err(|_| {
-                GovernancePublishError::other("repair slash publication link lock poisoned")
-            })?
-            .values()
-            .cloned()
-            .collect();
         let gc_eviction_intents = self
             .gc_eviction_intents
             .read()
@@ -12692,18 +12300,13 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
         let governance_outbox_next_sequence = governance_outbox.next_sequence;
         let governance_outbox_entries = governance_outbox.entries.values().cloned().collect();
-        Ok(AuxiliaryRuntimeCheckpointV1 {
-            version: AUX_RUNTIME_STATE_VERSION_V1,
+        Ok(AuxiliaryRuntimeCheckpointV2 {
+            version: AUX_RUNTIME_STATE_VERSION_V2,
             capacity_runtime,
             deal_runtime,
             por_tracker: self.por.checkpoint(),
             por_history,
             reserve_runtime,
-            repair_events,
-            repair_mutation_next_sequence,
-            repair_mutation_intents,
-            repair_event_audit_links,
-            repair_slash_publication_links,
             gc_eviction_intent_next_sequence,
             gc_eviction_intents,
             gc_eviction_audit_links,
@@ -13010,7 +12613,7 @@ impl NodeHandle {
             // for those sequences; domain restore validation still enforces
             // the configured state and event limits.
             .max(bytes.len());
-        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV1>(
+        let checkpoint = decode_local_checkpoint_canonical::<AuxiliaryRuntimeCheckpointV2>(
             &bytes,
             retention.checkpoint_max_bytes(),
             maximum_sequence_elements,
@@ -13023,9 +12626,9 @@ impl NodeHandle {
 
     fn restore_auxiliary_runtime_checkpoint(
         &self,
-        checkpoint: AuxiliaryRuntimeCheckpointV1,
+        checkpoint: AuxiliaryRuntimeCheckpointV2,
     ) -> Result<(), GovernancePublishError> {
-        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V1 {
+        if checkpoint.version != AUX_RUNTIME_STATE_VERSION_V2 {
             return Err(GovernancePublishError::other(format!(
                 "unsupported auxiliary runtime checkpoint version {}",
                 checkpoint.version
@@ -13082,21 +12685,6 @@ impl NodeHandle {
                 state_limit,
             ),
             (
-                "repair mutation intents",
-                checkpoint.repair_mutation_intents.len(),
-                state_limit,
-            ),
-            (
-                "repair event audit links",
-                checkpoint.repair_event_audit_links.len(),
-                state_limit.saturating_mul(2).saturating_add(event_limit),
-            ),
-            (
-                "repair slash publication links",
-                checkpoint.repair_slash_publication_links.len(),
-                state_limit.saturating_mul(2),
-            ),
-            (
                 "GC eviction intents",
                 checkpoint.gc_eviction_intents.len(),
                 1,
@@ -13106,7 +12694,6 @@ impl NodeHandle {
                 checkpoint.gc_eviction_audit_links.len(),
                 state_limit,
             ),
-            ("repair events", checkpoint.repair_events.len(), event_limit),
             (
                 "reputation events",
                 checkpoint.reputation_events.len(),
@@ -13251,50 +12838,6 @@ impl NodeHandle {
             ));
         }
         drop(reputation_chain);
-        let repair_mutation_intents = restore_repair_mutation_intents(
-            checkpoint.repair_mutation_next_sequence,
-            checkpoint.repair_mutation_intents,
-            state_limit,
-        )?;
-        let mut repair_event_audit_links = BTreeMap::new();
-        let mut previous_link_sequence = None;
-        for link in checkpoint.repair_event_audit_links {
-            RepairTicketId(link.ticket_id.clone())
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            if link.global_event_sequence == 0
-                || link.task_event_count == 0
-                || link.audit_outbox_sequence == 0
-                || link.event_digest == [0; 32]
-                || link.audit_payload_digest == [0; 32]
-                || previous_link_sequence
-                    .is_some_and(|previous| previous >= link.global_event_sequence)
-            {
-                return Err(GovernancePublishError::other(
-                    "repair event audit links must have non-zero increasing sequences",
-                ));
-            }
-            previous_link_sequence = Some(link.global_event_sequence);
-            repair_event_audit_links.insert(link.global_event_sequence, link);
-        }
-        let mut repair_slash_publication_links = BTreeMap::new();
-        let mut previous_slash_sequence = None;
-        for link in checkpoint.repair_slash_publication_links {
-            RepairTicketId(link.ticket_id.clone())
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            if link.outbox_sequence == 0
-                || link.proposal_digest == [0; 32]
-                || link.payload_digest == [0; 32]
-                || previous_slash_sequence.is_some_and(|previous| previous >= link.outbox_sequence)
-            {
-                return Err(GovernancePublishError::other(
-                    "repair slash publication links must have increasing non-zero outbox sequences",
-                ));
-            }
-            previous_slash_sequence = Some(link.outbox_sequence);
-            repair_slash_publication_links.insert(link.outbox_sequence, link);
-        }
         let gc_eviction_intents = restore_gc_eviction_intents(
             checkpoint.gc_eviction_intent_next_sequence,
             checkpoint.gc_eviction_intents,
@@ -13319,15 +12862,6 @@ impl NodeHandle {
             previous_gc_intent_sequence = Some(link.intent_sequence);
             gc_eviction_audit_links.insert(link.intent_sequence, link);
         }
-        let retained_repair_events = checkpoint.repair_events;
-        for event in &retained_repair_events {
-            event
-                .event
-                .validate()
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-        }
-        let mut repair_events = BoundedEventHistory::new(event_limit);
-        repair_events.restore(retained_repair_events, |event| event.sequence)?;
         let mut reputation_events = BoundedEventHistory::new(event_limit);
         let mut previous_reputation_event: Option<&ReputationSnapshotEventV1> = None;
         for event in &checkpoint.reputation_events {
@@ -13618,129 +13152,16 @@ impl NodeHandle {
                 "GC eviction audit link references an outbox sequence beyond its high-water mark",
             ));
         }
-        let reserved_repair_slots =
-            repair_mutation_reserved_outbox_slots(&repair_mutation_intents)?;
         let reserved_gc_slots = gc_eviction_reserved_outbox_slots(&gc_eviction_intents)?;
-        let reserved_outbox_slots = reserved_repair_slots
-            .checked_add(reserved_gc_slots)
-            .ok_or_else(|| GovernancePublishError::other("outbox reservation count overflow"))?;
         if governance_outbox
             .entries
             .len()
-            .checked_add(reserved_outbox_slots)
+            .checked_add(reserved_gc_slots)
             .is_none_or(|required| required > state_limit)
         {
             return Err(GovernancePublishError::other(format!(
-                "auxiliary checkpoint intents reserve {reserved_outbox_slots} outbox slots beyond retention limit {state_limit}"
+                "auxiliary checkpoint intents reserve {reserved_gc_slots} outbox slots beyond retention limit {state_limit}"
             )));
-        }
-
-        let retained_repair_events = repair_events.retained();
-        for event in &retained_repair_events {
-            let link = repair_event_audit_links
-                .get(&event.sequence)
-                .ok_or_else(|| {
-                    GovernancePublishError::other(format!(
-                        "retained global repair event {} is missing its persisted audit linkage",
-                        event.sequence
-                    ))
-                })?;
-            if link.ticket_id != event.event.ticket_id.to_string()
-                || link.event_digest != repair_event_link_digest(&event.event)?
-            {
-                return Err(GovernancePublishError::other(format!(
-                    "retained global repair event {} audit linkage digest mismatch",
-                    event.sequence
-                )));
-            }
-        }
-        let mut linked_audit_sequences = BTreeSet::new();
-        for link in repair_event_audit_links.values() {
-            if !linked_audit_sequences.insert(link.audit_outbox_sequence) {
-                return Err(GovernancePublishError::other(
-                    "duplicate repair audit outbox sequence linkage",
-                ));
-            }
-            if let Some(entry) = governance_outbox.entries.get(&link.audit_outbox_sequence) {
-                if entry.kind != GovernanceOutboxKindV1::RepairAudit
-                    || entry.payload_digest != link.audit_payload_digest
-                {
-                    return Err(GovernancePublishError::other(format!(
-                        "repair audit linkage {} conflicts with its pending outbox entry",
-                        link.global_event_sequence
-                    )));
-                }
-                let audit = decode_canonical_governance_payload::<RepairAuditEventV1>(
-                    &entry.payload_bytes,
-                )?;
-                if repair_event_link_digest(&audit.payload)? != link.event_digest {
-                    return Err(GovernancePublishError::other(format!(
-                        "repair audit linkage {} payload digest mismatch",
-                        link.global_event_sequence
-                    )));
-                }
-            }
-        }
-        for entry in governance_outbox
-            .entries
-            .values()
-            .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairAudit)
-        {
-            if !linked_audit_sequences.contains(&entry.sequence) {
-                return Err(GovernancePublishError::other(format!(
-                    "pending repair audit outbox entry {} has no persisted event linkage",
-                    entry.sequence
-                )));
-            }
-        }
-
-        let mut linked_slash_sequences = BTreeSet::new();
-        for link in repair_slash_publication_links.values() {
-            if !linked_slash_sequences.insert(link.outbox_sequence) {
-                return Err(GovernancePublishError::other(
-                    "duplicate repair slash outbox sequence linkage",
-                ));
-            }
-            if let Some(entry) = governance_outbox.entries.get(&link.outbox_sequence) {
-                let expected_kind = match link.stage {
-                    RepairSlashProposalStage::Drafted => GovernanceOutboxKindV1::RepairSlashDrafted,
-                    RepairSlashProposalStage::Submitted => {
-                        GovernanceOutboxKindV1::RepairSlashSubmitted
-                    }
-                };
-                if entry.kind != expected_kind || entry.payload_digest != link.payload_digest {
-                    return Err(GovernancePublishError::other(format!(
-                        "repair slash linkage for ticket {} conflicts with its pending outbox entry",
-                        link.ticket_id
-                    )));
-                }
-                let proposal = decode_canonical_governance_payload::<RepairSlashProposalV1>(
-                    &entry.payload_bytes,
-                )?;
-                if proposal.ticket_id.to_string() != link.ticket_id
-                    || *blake3::hash(&entry.payload_bytes).as_bytes() != link.proposal_digest
-                    || proposal.approval.is_some()
-                {
-                    return Err(GovernancePublishError::other(format!(
-                        "repair slash linkage for ticket {} does not match canonical proposal state",
-                        link.ticket_id
-                    )));
-                }
-            }
-        }
-        for entry in governance_outbox.entries.values().filter(|entry| {
-            matches!(
-                entry.kind,
-                GovernanceOutboxKindV1::RepairSlashDrafted
-                    | GovernanceOutboxKindV1::RepairSlashSubmitted
-            )
-        }) {
-            if !linked_slash_sequences.contains(&entry.sequence) {
-                return Err(GovernancePublishError::other(format!(
-                    "pending repair slash outbox entry {} has no persisted proposal linkage",
-                    entry.sequence
-                )));
-            }
         }
 
         let mut pending_linked_gc_sequences = BTreeSet::new();
@@ -13798,22 +13219,6 @@ impl NodeHandle {
             .por_history
             .write()
             .map_err(|_| GovernancePublishError::other("PoR history lock poisoned"))? = por_history;
-        *self
-            .repair_events
-            .write()
-            .map_err(|_| GovernancePublishError::other("repair event history lock poisoned"))? =
-            repair_events;
-        *self
-            .repair_mutation_intents
-            .write()
-            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))? =
-            repair_mutation_intents;
-        *self.repair_event_audit_links.write().map_err(|_| {
-            GovernancePublishError::other("repair event audit link lock poisoned")
-        })? = repair_event_audit_links;
-        *self.repair_slash_publication_links.write().map_err(|_| {
-            GovernancePublishError::other("repair slash publication link lock poisoned")
-        })? = repair_slash_publication_links;
         *self
             .gc_eviction_intents
             .write()
@@ -13919,6 +13324,7 @@ impl NodeHandle {
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_moderation_ballot_event_backlog(
         snapshot: &ModerationBallotSnapshot,
     ) -> Result<(), ModerationBallotRuntimeError> {
@@ -14791,6 +14197,7 @@ impl NodeHandle {
         Ok(())
     }
 
+    #[cfg(test)]
     fn load_moderation_ballot_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_checkpoint_path.as_ref() else {
             return Ok(());
@@ -14825,6 +14232,7 @@ impl NodeHandle {
         Ok(())
     }
 
+    #[cfg(test)]
     fn persist_moderation_ballot_snapshot(
         &self,
         snapshot: &ModerationBallotSnapshot,
@@ -15718,6 +15126,7 @@ impl NodeHandle {
             .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
     }
 
+    #[cfg(test)]
     fn publish_moderation_ballot_governance_event(&self, event: &ModerationBallotEvent) {
         let governance_event = event.to_governance_event_v1();
         let source_entry = match transparency::moderation_ballot_governance_event_source_entry(
@@ -15801,6 +15210,7 @@ impl NodeHandle {
         }
     }
 
+    #[cfg(test)]
     fn publish_moderation_appeal_finance_report(
         &self,
         record: &ModerationBallotRecord,
@@ -15939,874 +15349,6 @@ impl NodeHandle {
         Ok(outcome)
     }
 
-    fn repair_durability_error(message: impl Into<String>) -> RepairSchedulerError {
-        RepairSchedulerError::Store(repair::RepairStoreError::Other(message.into()))
-    }
-
-    fn ensure_repair_durability_healthy(&self) -> Result<(), RepairSchedulerError> {
-        self.ensure_durability_healthy()
-            .map_err(Self::repair_durability_error)
-    }
-
-    fn repair_task_snapshot_for_transaction(
-        &self,
-        ticket_id: &RepairTicketId,
-    ) -> Result<Option<RepairTaskSnapshot>, RepairSchedulerError> {
-        self.repair
-            .task_snapshot(ticket_id)
-            .map_err(RepairSchedulerError::Store)
-    }
-
-    #[cfg(test)]
-    fn prepare_repair_mutation_intents(
-        &self,
-        _mutation_guard: &std::sync::MutexGuard<'_, ()>,
-        _drain_guard: &std::sync::MutexGuard<'_, ()>,
-        ticket_ids: &[RepairTicketId],
-        operation: &str,
-        operation_digest: [u8; 32],
-    ) -> Result<Vec<RepairMutationIntentV1>, RepairSchedulerError> {
-        if operation.trim().is_empty() || operation.len() > REPAIR_MUTATION_OPERATION_MAX_BYTES {
-            return Err(Self::repair_durability_error(
-                "repair mutation operation label is empty or oversized",
-            ));
-        }
-        let reserved_outbox_slots = repair_mutation_required_outbox_slots(operation)
-            .ok_or_else(|| Self::repair_durability_error("unknown repair mutation operation"))?;
-        let mut tickets = ticket_ids.to_vec();
-        tickets.sort_by(|left, right| left.0.cmp(&right.0));
-        tickets.dedup();
-        let mut cursors = Vec::with_capacity(tickets.len());
-        for ticket_id in &tickets {
-            let snapshot = self.repair_task_snapshot_for_transaction(ticket_id)?;
-            let cursor = repair_mutation_cursor(ticket_id, snapshot.as_ref())
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            cursors.push(cursor);
-        }
-
-        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            Self::repair_durability_error("auxiliary checkpoint transaction lock poisoned")
-        })?;
-        self.ensure_repair_durability_healthy()?;
-        let previous = self
-            .repair_mutation_intents
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
-            .clone();
-        if !previous.entries.is_empty() {
-            return Err(Self::repair_durability_error(
-                "unreconciled repair mutation intent blocks new task mutations",
-            ));
-        }
-        let limit = self.config.runtime_retention().state_entry_limit();
-        if cursors.len() > limit {
-            return Err(Self::repair_durability_error(format!(
-                "repair mutation intent count {} exceeds configured limit {limit}",
-                cursors.len()
-            )));
-        }
-        let mut runtime = previous.clone();
-        let mut intents = Vec::with_capacity(cursors.len());
-        for cursor in cursors {
-            let sequence = runtime.next_sequence;
-            runtime.next_sequence = sequence.checked_add(1).ok_or_else(|| {
-                Self::repair_durability_error("repair mutation intent sequence exhausted")
-            })?;
-            let mut intent = RepairMutationIntentV1 {
-                version: REPAIR_MUTATION_INTENT_VERSION_V1,
-                sequence,
-                operation: operation.to_owned(),
-                operation_digest,
-                reserved_outbox_slots,
-                cursor,
-                binding_digest: [0; 32],
-            };
-            intent.binding_digest = repair_mutation_binding_digest(
-                intent.version,
-                intent.sequence,
-                &intent.operation,
-                intent.operation_digest,
-                intent.reserved_outbox_slots,
-                &intent.cursor,
-            );
-            validate_repair_mutation_intent(&intent)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            runtime.entries.insert(sequence, intent.clone());
-            intents.push(intent);
-        }
-        let reserved_slots = repair_mutation_reserved_outbox_slots(&runtime)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        let gc_reserved_slots = {
-            let gc_intents = self
-                .gc_eviction_intents
-                .read()
-                .map_err(|_| Self::repair_durability_error("GC eviction intent lock poisoned"))?;
-            gc_eviction_reserved_outbox_slots(&gc_intents)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?
-        };
-        let pending_outbox_entries = self
-            .governance_outbox
-            .read()
-            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
-            .entries
-            .len();
-        if pending_outbox_entries
-            .checked_add(reserved_slots)
-            .and_then(|required| required.checked_add(gc_reserved_slots))
-            .is_none_or(|required| required > limit)
-        {
-            return Err(Self::repair_durability_error(format!(
-                "repair mutation requires {reserved_slots} reserved governance outbox slots, but {pending_outbox_entries} entries and {gc_reserved_slots} GC reservations already consume limit {limit}"
-            )));
-        }
-        *self
-            .repair_mutation_intents
-            .write()
-            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))? =
-            runtime;
-        if !intents.is_empty()
-            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
-        {
-            if err.committed {
-                return Err(Self::repair_durability_error(err.to_string()));
-            }
-            *self.repair_mutation_intents.write().map_err(|_| {
-                Self::repair_durability_error("repair mutation intent rollback lock poisoned")
-            })? = previous;
-            return Err(Self::repair_durability_error(err.to_string()));
-        }
-        Ok(intents)
-    }
-
-    fn append_repair_event_publication_unlocked(
-        &self,
-        event: RepairTaskEventV1,
-        task_event_count: u64,
-    ) -> Result<Option<RepairEvent>, RepairSchedulerError> {
-        let event_digest = repair_event_link_digest(&event)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        if let Some(existing) = self
-            .repair_event_audit_links
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
-            .values()
-            .find(|link| link.event_digest == event_digest)
-        {
-            if existing.ticket_id == event.ticket_id.to_string()
-                && existing.task_event_count == task_event_count
-            {
-                return Ok(None);
-            }
-            return Err(Self::repair_durability_error(
-                "repair event stable identity conflicts with persisted audit linkage",
-            ));
-        }
-        if self
-            .repair_events
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
-            .events
-            .iter()
-            .any(|retained| retained.event == event)
-        {
-            return Err(Self::repair_durability_error(
-                "retained global repair event is missing its stable audit linkage",
-            ));
-        }
-
-        let expected_outbox_sequence = self
-            .governance_outbox
-            .read()
-            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
-            .next_sequence;
-        let payload_digest = repair_audit_payload_digest_v1(&event)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        let audit = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header: SorafsAuditHeaderV1 {
-                sequence: expected_outbox_sequence,
-                occurred_at_unix: event.occurred_at_unix,
-                signer: event
-                    .actor
-                    .clone()
-                    .unwrap_or_else(|| REPAIR_AUDIT_DEFAULT_SIGNER_V1.to_owned()),
-                payload_digest,
-            },
-            payload: event.clone(),
-        };
-        audit
-            .validate()
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        let audit_bytes = norito::to_bytes(&audit).map_err(|err| {
-            Self::repair_durability_error(format!("encode repair audit event: {err}"))
-        })?;
-        let audit_payload_digest = *blake3::hash(&audit_bytes).as_bytes();
-        let (audit_outbox_sequence, inserted) = self
-            .enqueue_repair_governance_outbox_unlocked(
-                GovernanceOutboxKindV1::RepairAudit,
-                audit_bytes,
-            )
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        if !inserted || audit_outbox_sequence != expected_outbox_sequence {
-            return Err(Self::repair_durability_error(
-                "repair audit stable identity collided with an existing outbox entry",
-            ));
-        }
-
-        let mut events = self
-            .repair_events
-            .write()
-            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?;
-        let expected_global_sequence = events
-            .latest_sequence
-            .checked_add(1)
-            .ok_or_else(|| Self::repair_durability_error("repair event sequence exhausted"))?;
-        let global = events
-            .append(|sequence| RepairEvent { sequence, event })
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        if global.sequence != expected_global_sequence {
-            return Err(Self::repair_durability_error(
-                "repair global event sequence changed during publication transaction",
-            ));
-        }
-        let retained_sequences = events
-            .events
-            .iter()
-            .map(|event| event.sequence)
-            .collect::<BTreeSet<_>>();
-        drop(events);
-
-        let pending_audit_sequences = self
-            .governance_outbox
-            .read()
-            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
-            .entries
-            .values()
-            .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairAudit)
-            .map(|entry| entry.sequence)
-            .collect::<BTreeSet<_>>();
-        let mut links = self
-            .repair_event_audit_links
-            .write()
-            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?;
-        links.insert(
-            global.sequence,
-            RepairEventAuditLinkV1 {
-                global_event_sequence: global.sequence,
-                ticket_id: global.event.ticket_id.to_string(),
-                task_event_count,
-                event_digest,
-                audit_outbox_sequence,
-                audit_payload_digest,
-            },
-        );
-        let link_limit = self
-            .config
-            .runtime_retention()
-            .state_entry_limit()
-            .saturating_mul(2)
-            .saturating_add(self.config.runtime_retention().event_history_limit());
-        while links.len() > link_limit {
-            let candidate = links.iter().find_map(|(sequence, link)| {
-                let has_newer_for_ticket = links.values().any(|candidate| {
-                    candidate.ticket_id == link.ticket_id
-                        && candidate.task_event_count > link.task_event_count
-                });
-                (!retained_sequences.contains(sequence)
-                    && !pending_audit_sequences.contains(&link.audit_outbox_sequence)
-                    && has_newer_for_ticket)
-                    .then_some(*sequence)
-            });
-            let Some(sequence) = candidate else {
-                return Err(Self::repair_durability_error(format!(
-                    "repair event audit linkage retention exhausted (limit {link_limit})"
-                )));
-            };
-            links.remove(&sequence);
-        }
-        Ok(Some(global))
-    }
-
-    fn append_repair_slash_publication_unlocked(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        stage: RepairSlashProposalStage,
-    ) -> Result<(), RepairSchedulerError> {
-        proposal
-            .validate()
-            .map_err(RepairSchedulerError::InvalidSlashProposal)?;
-        if proposal.approval.is_some() {
-            return Err(Self::repair_durability_error(
-                "repair slash proposal contains a retired embedded approval summary",
-            ));
-        }
-        let bytes = norito::to_bytes(proposal).map_err(|err| {
-            Self::repair_durability_error(format!("encode repair slash proposal: {err}"))
-        })?;
-        let digest = *blake3::hash(&bytes).as_bytes();
-        if self
-            .repair_slash_publication_links
-            .read()
-            .map_err(|_| {
-                Self::repair_durability_error("repair slash publication link lock poisoned")
-            })?
-            .values()
-            .any(|link| {
-                link.ticket_id == proposal.ticket_id.to_string()
-                    && link.proposal_digest == digest
-                    && link.stage == stage
-            })
-        {
-            return Ok(());
-        }
-        let kind = match stage {
-            RepairSlashProposalStage::Drafted => GovernanceOutboxKindV1::RepairSlashDrafted,
-            RepairSlashProposalStage::Submitted => GovernanceOutboxKindV1::RepairSlashSubmitted,
-        };
-        let (outbox_sequence, inserted) = self
-            .enqueue_repair_governance_outbox_unlocked(kind, bytes)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        if !inserted {
-            return Err(Self::repair_durability_error(
-                "repair slash proposal outbox entry is missing its stable publication linkage",
-            ));
-        }
-        let pending_sequences = self
-            .governance_outbox
-            .read()
-            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
-            .entries
-            .keys()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let mut links = self.repair_slash_publication_links.write().map_err(|_| {
-            Self::repair_durability_error("repair slash publication link lock poisoned")
-        })?;
-        links.insert(
-            outbox_sequence,
-            RepairSlashPublicationLinkV1 {
-                ticket_id: proposal.ticket_id.to_string(),
-                proposal_digest: digest,
-                stage,
-                outbox_sequence,
-                payload_digest: digest,
-            },
-        );
-        let link_limit = self
-            .config
-            .runtime_retention()
-            .state_entry_limit()
-            .saturating_mul(2);
-        while links.len() > link_limit {
-            let candidate = links.iter().find_map(|(sequence, link)| {
-                let superseded = links.values().any(|candidate| {
-                    candidate.ticket_id == link.ticket_id
-                        && candidate.proposal_digest == link.proposal_digest
-                        && link.stage == RepairSlashProposalStage::Drafted
-                        && candidate.stage == RepairSlashProposalStage::Submitted
-                });
-                (!pending_sequences.contains(sequence) && superseded).then_some(*sequence)
-            });
-            let Some(sequence) = candidate else {
-                return Err(Self::repair_durability_error(format!(
-                    "repair slash publication linkage retention exhausted (limit {link_limit})"
-                )));
-            };
-            links.remove(&sequence);
-        }
-        Ok(())
-    }
-
-    fn apply_repair_mutation_intent_unlocked(
-        &self,
-        intent: &RepairMutationIntentV1,
-        current: Option<&RepairTaskSnapshot>,
-    ) -> Result<Vec<RepairEvent>, RepairSchedulerError> {
-        validate_repair_mutation_intent(intent)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        let ticket_id = RepairTicketId(intent.cursor.ticket_id.clone());
-        let current_cursor = repair_mutation_cursor(&ticket_id, current)
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        let mut broadcasts = Vec::new();
-        if current_cursor.snapshot_digest != intent.cursor.snapshot_digest {
-            let current = current.ok_or_else(|| {
-                Self::repair_durability_error(format!(
-                    "repair task {} disappeared during a durable mutation",
-                    intent.cursor.ticket_id
-                ))
-            })?;
-            if current_cursor.event_count < intent.cursor.event_count {
-                return Err(Self::repair_durability_error(format!(
-                    "repair task {} event history rewound during mutation",
-                    intent.cursor.ticket_id
-                )));
-            }
-            if current_cursor.event_count > intent.cursor.event_count {
-                if intent.cursor.event_count < current.events_dropped {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} dropped an unlinked event during mutation reconciliation",
-                        intent.cursor.ticket_id
-                    )));
-                }
-                let first_retained = current.events_dropped.checked_add(1).ok_or_else(|| {
-                    Self::repair_durability_error("repair task event ordinal exhausted")
-                })?;
-                let mut expected = intent.cursor.event_count.checked_add(1).ok_or_else(|| {
-                    Self::repair_durability_error("repair task event ordinal exhausted")
-                })?;
-                for (index, event) in current.events.iter().enumerate() {
-                    let ordinal = first_retained
-                        .checked_add(u64::try_from(index).map_err(|_| {
-                            Self::repair_durability_error("repair task event index exceeds u64")
-                        })?)
-                        .ok_or_else(|| {
-                            Self::repair_durability_error("repair task event ordinal exhausted")
-                        })?;
-                    if ordinal <= intent.cursor.event_count {
-                        continue;
-                    }
-                    if ordinal != expected {
-                        return Err(Self::repair_durability_error(format!(
-                            "repair task {} new event suffix is not consecutive",
-                            intent.cursor.ticket_id
-                        )));
-                    }
-                    if let Some(global) =
-                        self.append_repair_event_publication_unlocked(event.clone(), ordinal)?
-                    {
-                        broadcasts.push(global);
-                    }
-                    expected = expected.checked_add(1).ok_or_else(|| {
-                        Self::repair_durability_error("repair task event ordinal exhausted")
-                    })?;
-                }
-                if expected.checked_sub(1) != Some(current_cursor.event_count) {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} current event suffix cannot prove every committed transition",
-                        intent.cursor.ticket_id
-                    )));
-                }
-            }
-
-            let (current_proposal_digest, _, current_stage) =
-                repair_snapshot_proposal_state(current)
-                    .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            match (
-                intent.cursor.slash_proposal_digest,
-                intent.cursor.slash_proposal_stage,
-                current_proposal_digest,
-                current_stage,
-            ) {
-                (None, None, None, None) => {}
-                (None, None, Some(_), Some(stage)) => {
-                    let proposal = current.slash_proposal.as_ref().ok_or_else(|| {
-                        Self::repair_durability_error(
-                            "repair proposal stage exists without canonical proposal",
-                        )
-                    })?;
-                    self.append_repair_slash_publication_unlocked(proposal, stage)?;
-                }
-                (
-                    Some(before_digest),
-                    Some(before_stage),
-                    Some(after_digest),
-                    Some(after_stage),
-                ) => {
-                    if before_digest != after_digest {
-                        return Err(Self::repair_durability_error(format!(
-                            "repair task {} slash proposal changed canonical identity",
-                            intent.cursor.ticket_id
-                        )));
-                    }
-                    match (before_stage, after_stage) {
-                        (
-                            RepairSlashProposalStage::Drafted,
-                            RepairSlashProposalStage::Submitted,
-                        ) => {
-                            let proposal = current.slash_proposal.as_ref().ok_or_else(|| {
-                                Self::repair_durability_error(
-                                    "submitted repair proposal is missing canonical bytes",
-                                )
-                            })?;
-                            self.append_repair_slash_publication_unlocked(
-                                proposal,
-                                RepairSlashProposalStage::Submitted,
-                            )?;
-                        }
-                        (
-                            RepairSlashProposalStage::Submitted,
-                            RepairSlashProposalStage::Drafted,
-                        ) => {
-                            return Err(Self::repair_durability_error(format!(
-                                "repair task {} slash proposal stage downgraded after submission",
-                                intent.cursor.ticket_id
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-                (Some(_), Some(_), None, None) => {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} removed its persisted slash proposal",
-                        intent.cursor.ticket_id
-                    )));
-                }
-                _ => {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} has incomplete slash proposal transition state",
-                        intent.cursor.ticket_id
-                    )));
-                }
-            }
-        }
-
-        let removed = self
-            .repair_mutation_intents
-            .write()
-            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
-            .entries
-            .remove(&intent.sequence);
-        if removed.as_ref() != Some(intent) {
-            return Err(Self::repair_durability_error(format!(
-                "repair mutation intent {} changed during finalization",
-                intent.sequence
-            )));
-        }
-        Ok(broadcasts)
-    }
-
-    fn restore_repair_publication_runtime(
-        &self,
-        intents: RepairMutationIntentRuntime,
-        events: BoundedEventHistory<RepairEvent>,
-        outbox: GovernanceOutboxRuntime,
-        event_links: BTreeMap<u64, RepairEventAuditLinkV1>,
-        slash_links: BTreeMap<u64, RepairSlashPublicationLinkV1>,
-    ) -> Result<(), RepairSchedulerError> {
-        *self.repair_mutation_intents.write().map_err(|_| {
-            Self::repair_durability_error("repair mutation intent rollback lock poisoned")
-        })? = intents;
-        *self.repair_events.write().map_err(|_| {
-            Self::repair_durability_error("repair event history rollback lock poisoned")
-        })? = events;
-        *self.governance_outbox.write().map_err(|_| {
-            Self::repair_durability_error("governance outbox rollback lock poisoned")
-        })? = outbox;
-        *self.repair_event_audit_links.write().map_err(|_| {
-            Self::repair_durability_error("repair event audit link rollback lock poisoned")
-        })? = event_links;
-        *self.repair_slash_publication_links.write().map_err(|_| {
-            Self::repair_durability_error("repair slash publication link rollback lock poisoned")
-        })? = slash_links;
-        Ok(())
-    }
-
-    fn finalize_repair_mutation_intents(
-        &self,
-        _mutation_guard: &std::sync::MutexGuard<'_, ()>,
-        _drain_guard: &std::sync::MutexGuard<'_, ()>,
-        intents: &[RepairMutationIntentV1],
-        fail_closed_on_error: bool,
-    ) -> Result<Vec<RepairEvent>, RepairSchedulerError> {
-        let mut current = BTreeMap::new();
-        for intent in intents {
-            let ticket_id = RepairTicketId(intent.cursor.ticket_id.clone());
-            let snapshot = match self.repair_task_snapshot_for_transaction(&ticket_id) {
-                Ok(snapshot) => snapshot,
-                Err(err) => {
-                    if fail_closed_on_error {
-                        self.mark_durability_unhealthy(format!(
-                            "cannot reconcile committed repair task {} with its publication intent: {err}",
-                            intent.cursor.ticket_id
-                        ));
-                    }
-                    return Err(err);
-                }
-            };
-            current.insert(intent.sequence, snapshot);
-        }
-        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            Self::repair_durability_error("auxiliary checkpoint transaction lock poisoned")
-        })?;
-        if fail_closed_on_error {
-            self.ensure_repair_durability_healthy()?;
-        }
-        let previous_intents = self
-            .repair_mutation_intents
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
-            .clone();
-        let previous_events = self
-            .repair_events
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
-            .clone();
-        let previous_outbox = self
-            .governance_outbox
-            .read()
-            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
-            .clone();
-        let previous_event_links = self
-            .repair_event_audit_links
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
-            .clone();
-        let previous_slash_links = self
-            .repair_slash_publication_links
-            .read()
-            .map_err(|_| {
-                Self::repair_durability_error("repair slash publication link lock poisoned")
-            })?
-            .clone();
-
-        let mut broadcasts = Vec::new();
-        for intent in intents {
-            let result = self.apply_repair_mutation_intent_unlocked(
-                intent,
-                current.get(&intent.sequence).and_then(Option::as_ref),
-            );
-            match result {
-                Ok(mut events) => broadcasts.append(&mut events),
-                Err(err) => {
-                    if let Err(rollback) = self.restore_repair_publication_runtime(
-                        previous_intents,
-                        previous_events,
-                        previous_outbox,
-                        previous_event_links,
-                        previous_slash_links,
-                    ) {
-                        let reason = self.record_unrecoverable_rollback(
-                            "failed to roll back repair publication finalization",
-                            rollback,
-                        );
-                        return Err(Self::repair_durability_error(reason));
-                    }
-                    if fail_closed_on_error {
-                        self.mark_durability_unhealthy(err.to_string());
-                    }
-                    return Err(err);
-                }
-            }
-        }
-        if !intents.is_empty()
-            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
-        {
-            if err.committed {
-                return Err(Self::repair_durability_error(err.to_string()));
-            }
-            if let Err(rollback) = self.restore_repair_publication_runtime(
-                previous_intents,
-                previous_events,
-                previous_outbox,
-                previous_event_links,
-                previous_slash_links,
-            ) {
-                let reason = self.record_unrecoverable_rollback(
-                    "failed to roll back repair publication checkpoint failure",
-                    rollback,
-                );
-                return Err(Self::repair_durability_error(reason));
-            }
-            let message = format!(
-                "repair task state may have committed without its publication transaction: {err}"
-            );
-            if fail_closed_on_error {
-                self.mark_durability_unhealthy(message.clone());
-            }
-            return Err(Self::repair_durability_error(message));
-        }
-        drop(_checkpoint_guard);
-        for event in &broadcasts {
-            let _ = self.repair_event_sender.send(event.clone());
-        }
-        Ok(broadcasts)
-    }
-
-    #[cfg(test)]
-    fn run_repair_task_mutation<T>(
-        &self,
-        ticket_ids: &[RepairTicketId],
-        operation: &str,
-        material: &[u8],
-        mutate: impl FnOnce(&RepairManager) -> Result<T, RepairSchedulerError>,
-    ) -> Result<T, RepairSchedulerError> {
-        let mutation_guard = self
-            .repair_mutation_lock
-            .lock()
-            .map_err(|_| Self::repair_durability_error("repair mutation lock poisoned"))?;
-        let drain_guard = self
-            .governance_outbox_drain_lock
-            .lock()
-            .map_err(|_| Self::repair_durability_error("governance outbox drain lock poisoned"))?;
-        self.ensure_repair_durability_healthy()?;
-        let operation_digest = repair_mutation_operation_digest(operation, ticket_ids, material);
-        let intents = self.prepare_repair_mutation_intents(
-            &mutation_guard,
-            &drain_guard,
-            ticket_ids,
-            operation,
-            operation_digest,
-        )?;
-        let result = mutate(&self.repair);
-        self.finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, true)?;
-        drop(drain_guard);
-        drop(mutation_guard);
-        self.flush_governance_outbox()
-            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        result
-    }
-
-    fn validate_repair_publication_state_against_store(&self) -> Result<(), RepairSchedulerError> {
-        let has_local_publication_state = !self
-            .repair_event_audit_links
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
-            .is_empty()
-            || !self
-                .repair_slash_publication_links
-                .read()
-                .map_err(|_| {
-                    Self::repair_durability_error("repair slash publication link lock poisoned")
-                })?
-                .is_empty()
-            || !self
-                .repair_events
-                .read()
-                .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
-                .events
-                .is_empty();
-        if !has_local_publication_state && !self.repair_config.enabled() {
-            return Ok(());
-        }
-        let snapshots = self
-            .repair
-            .list_task_snapshots(RepairTaskFilters::default())
-            .map_err(RepairSchedulerError::Store)?;
-        let snapshots_by_ticket = snapshots
-            .iter()
-            .map(|snapshot| (snapshot.record.ticket_id.to_string(), snapshot))
-            .collect::<BTreeMap<_, _>>();
-        let event_links = self
-            .repair_event_audit_links
-            .read()
-            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?;
-        for snapshot in &snapshots {
-            let event_count = repair_snapshot_event_count(snapshot)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            if event_count > 0 {
-                let latest = snapshot.events.last().ok_or_else(|| {
-                    Self::repair_durability_error(format!(
-                        "repair task {} has an event high-water without a retained final event",
-                        snapshot.record.ticket_id
-                    ))
-                })?;
-                let digest = repair_event_link_digest(latest)
-                    .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-                if !event_links.values().any(|link| {
-                    link.ticket_id == snapshot.record.ticket_id.to_string()
-                        && link.task_event_count == event_count
-                        && link.event_digest == digest
-                }) {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} latest event lacks durable global/audit linkage",
-                        snapshot.record.ticket_id
-                    )));
-                }
-            }
-        }
-        for link in event_links.values() {
-            let snapshot = snapshots_by_ticket.get(&link.ticket_id).ok_or_else(|| {
-                Self::repair_durability_error(format!(
-                    "repair event linkage references absent task {}",
-                    link.ticket_id
-                ))
-            })?;
-            let event_count = repair_snapshot_event_count(snapshot)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            if link.task_event_count > event_count {
-                return Err(Self::repair_durability_error(format!(
-                    "repair event linkage for task {} exceeds authoritative event high-water",
-                    link.ticket_id
-                )));
-            }
-            let first_retained = snapshot.events_dropped.saturating_add(1);
-            if link.task_event_count >= first_retained {
-                let index =
-                    usize::try_from(link.task_event_count - first_retained).map_err(|_| {
-                        Self::repair_durability_error("repair event linkage index exceeds usize")
-                    })?;
-                let event = snapshot.events.get(index).ok_or_else(|| {
-                    Self::repair_durability_error(format!(
-                        "repair event linkage for task {} is outside retained history",
-                        link.ticket_id
-                    ))
-                })?;
-                if repair_event_link_digest(event)
-                    .map_err(|err| Self::repair_durability_error(err.to_string()))?
-                    != link.event_digest
-                {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair event linkage for task {} conflicts with authoritative history",
-                        link.ticket_id
-                    )));
-                }
-            }
-        }
-        drop(event_links);
-
-        let slash_links = self.repair_slash_publication_links.read().map_err(|_| {
-            Self::repair_durability_error("repair slash publication link lock poisoned")
-        })?;
-        for snapshot in &snapshots {
-            let (proposal_digest, _, stage) = repair_snapshot_proposal_state(snapshot)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            if let (Some(proposal_digest), Some(stage)) = (proposal_digest, stage)
-                && !slash_links.values().any(|link| {
-                    link.ticket_id == snapshot.record.ticket_id.to_string()
-                        && link.proposal_digest == proposal_digest
-                        && link.stage == stage
-                })
-            {
-                return Err(Self::repair_durability_error(format!(
-                    "repair task {} slash proposal stage lacks durable publication linkage",
-                    snapshot.record.ticket_id
-                )));
-            }
-        }
-        for link in slash_links.values() {
-            let snapshot = snapshots_by_ticket.get(&link.ticket_id).ok_or_else(|| {
-                Self::repair_durability_error(format!(
-                    "repair slash linkage references absent task {}",
-                    link.ticket_id
-                ))
-            })?;
-            let (proposal_digest, _, stage) = repair_snapshot_proposal_state(snapshot)
-                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-            if proposal_digest != Some(link.proposal_digest) {
-                return Err(Self::repair_durability_error(format!(
-                    "repair slash linkage for task {} conflicts with canonical proposal",
-                    link.ticket_id
-                )));
-            }
-            match (link.stage, stage) {
-                (RepairSlashProposalStage::Submitted, Some(RepairSlashProposalStage::Drafted)) => {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair task {} slash proposal publication stage downgraded",
-                        link.ticket_id
-                    )));
-                }
-                (_, Some(_)) => {}
-                (_, None) => {
-                    return Err(Self::repair_durability_error(format!(
-                        "repair slash linkage for task {} has no authoritative stage",
-                        link.ticket_id
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn prepare_gc_eviction_intent(
         &self,
         _lock_guards: (
@@ -16894,12 +15436,6 @@ impl NodeHandle {
         intent.binding_digest = gc_eviction_intent_binding_digest(&intent)?;
         validate_gc_eviction_intent(&intent)?;
 
-        let repair_reserved_slots = {
-            let repair = self.repair_mutation_intents.read().map_err(|_| {
-                GovernancePublishError::other("repair mutation intent lock poisoned")
-            })?;
-            repair_mutation_reserved_outbox_slots(&repair)?
-        };
         let pending_outbox_entries = self
             .governance_outbox
             .read()
@@ -16908,12 +15444,11 @@ impl NodeHandle {
             .len();
         let limit = self.config.runtime_retention().state_entry_limit();
         let required = pending_outbox_entries
-            .checked_add(repair_reserved_slots)
-            .and_then(|count| count.checked_add(usize::from(intent.reserved_outbox_slots)))
+            .checked_add(usize::from(intent.reserved_outbox_slots))
             .ok_or_else(|| GovernancePublishError::other("outbox reservation count overflow"))?;
         if required > limit {
             return Err(GovernancePublishError::other(format!(
-                "GC eviction requires one reserved governance outbox slot, but {pending_outbox_entries} entries and {repair_reserved_slots} repair reservations already consume limit {limit}"
+                "GC eviction requires one reserved governance outbox slot, but {pending_outbox_entries} entries already consume limit {limit}"
             )));
         }
 
@@ -17427,890 +15962,17 @@ impl NodeHandle {
         self.deal_engine.deal_snapshot(deal_id)
     }
 
-    #[cfg(test)]
-    fn repair_manager(&self) -> RepairManager {
-        self.repair.clone()
-    }
-
-    /// Enqueue a repair report submitted by an auditor.
-    #[cfg(test)]
-    pub fn enqueue_repair_report(
-        &self,
-        report: &RepairReportV1,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let material = norito::to_bytes(report).map_err(|err| {
-            Self::repair_durability_error(format!("encode repair report mutation: {err}"))
-        })?;
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(&report.ticket_id),
-            "enqueue_report",
-            &material,
-            |repair| repair.enqueue_report_with_event(report.clone()),
-        )?;
-        Ok(update.record)
-    }
-
-    /// Enqueue one subsystem-authenticated repair report with a stable source identity.
+    /// Run a GC sweep against expired manifests using one complete finalized
+    /// native repair-ledger projection.
     ///
-    /// Exact replays return the original task. Reusing `source_identity` for a
-    /// different canonical report fails closed.
-    #[cfg(test)]
-    pub fn enqueue_repair_report_idempotent(
-        &self,
-        source_identity: [u8; 32],
-        report: &RepairReportV1,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = Vec::from(source_identity);
-        material.extend(norito::to_bytes(report).map_err(|err| {
-            Self::repair_durability_error(format!(
-                "encode idempotent repair report mutation: {err}"
-            ))
-        })?);
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(&report.ticket_id),
-            "enqueue_report_idempotent",
-            &material,
-            |repair| {
-                repair.enqueue_repair_report_idempotent_with_event(source_identity, report.clone())
-            },
-        )?;
-        Ok(update.record)
-    }
-
-    /// Record a signed repair auditor request nonce for replay protection.
-    #[cfg(test)]
-    pub fn record_repair_auditor_nonce(
-        &self,
-        auditor_account: &str,
-        nonce: u64,
-    ) -> Result<(), RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair.record_auditor_nonce(auditor_account, nonce)
-    }
-
-    /// Fetch repair tasks with optional filters applied.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_tasks(
-        &self,
-        filters: RepairTaskFilters,
-    ) -> Result<Vec<RepairTaskRecordV1>, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair.list_tasks(filters).map_err(Into::into)
-    }
-
-    /// Fetch repair task snapshots with optional filters applied.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_task_snapshots(
-        &self,
-        filters: RepairTaskFilters,
-    ) -> Result<Vec<RepairTaskSnapshot>, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair.list_task_snapshots(filters).map_err(Into::into)
-    }
-
-    /// Fetch repair tasks associated with the supplied manifest digest.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_tasks_for_manifest(
-        &self,
-        manifest_digest: &[u8; 32],
-    ) -> Result<Vec<RepairTaskRecordV1>, RepairSchedulerError> {
-        self.repair_tasks(RepairTaskFilters::for_manifest(*manifest_digest))
-    }
-
-    /// Fetch repair task snapshots associated with the supplied manifest digest.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_task_snapshots_for_manifest(
-        &self,
-        manifest_digest: &[u8; 32],
-    ) -> Result<Vec<RepairTaskSnapshot>, RepairSchedulerError> {
-        self.repair_task_snapshots(RepairTaskFilters::for_manifest(*manifest_digest))
-    }
-
-    /// Fetch a repair task record by ticket id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_task_record(
-        &self,
-        ticket_id: &RepairTicketId,
-    ) -> Result<Option<RepairTaskRecordV1>, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair.task_record(ticket_id).map_err(Into::into)
-    }
-
-    /// Fetch a repair task snapshot by ticket id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the durable repair store is unavailable or cannot
-    /// prove that its checkpoint state is trustworthy.
-    #[cfg(test)]
-    pub fn repair_task_snapshot(
-        &self,
-        ticket_id: &RepairTicketId,
-    ) -> Result<Option<RepairTaskSnapshot>, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair.task_snapshot(ticket_id).map_err(Into::into)
-    }
-
-    /// Submit a slash proposal tied to an escalated repair ticket.
-    #[cfg(test)]
-    pub fn submit_repair_slash_proposal(
-        &self,
-        proposal: &RepairSlashProposalV1,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let material = norito::to_bytes(proposal).map_err(|err| {
-            Self::repair_durability_error(format!("encode repair slash mutation: {err}"))
-        })?;
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(&proposal.ticket_id),
-            "submit_slash",
-            &material,
-            |repair| repair.submit_slash_proposal_with_event(proposal.clone()),
-        )?;
-        Ok(update.record)
-    }
-
-    /// Mark the specified repair ticket as in progress.
-    #[cfg(test)]
-    pub fn mark_repair_in_progress(
-        &self,
-        ticket_id: &RepairTicketId,
-        started_at_unix: u64,
-        repair_agent: Option<String>,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = started_at_unix.to_le_bytes().to_vec();
-        if let Some(agent) = repair_agent.as_ref() {
-            hash_length_prefixed_material(&mut material, agent.as_bytes());
-        }
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "mark_in_progress",
-            &material,
-            |repair| repair.mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent),
-        )?;
-        Ok(update.record)
-    }
-
-    /// Mark the specified repair ticket as completed.
-    #[cfg(test)]
-    pub fn mark_repair_completed(
-        &self,
-        ticket_id: &RepairTicketId,
-        completed_at_unix: u64,
-        resolution_notes: Option<String>,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = completed_at_unix.to_le_bytes().to_vec();
-        if let Some(notes) = resolution_notes.as_ref() {
-            hash_length_prefixed_material(&mut material, notes.as_bytes());
-        }
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "mark_completed",
-            &material,
-            |repair| {
-                repair.mark_completed_with_event(ticket_id, completed_at_unix, resolution_notes)
-            },
-        )?;
-        Ok(update.record)
-    }
-
-    /// Mark the specified repair ticket as failed.
-    #[cfg(test)]
-    pub fn mark_repair_failed(
-        &self,
-        ticket_id: &RepairTicketId,
-        failed_at_unix: u64,
-        reason: String,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = failed_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, reason.as_bytes());
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "mark_failed",
-            &material,
-            |repair| repair.mark_failed_with_event(ticket_id, failed_at_unix, reason),
-        )?;
-        Ok(update.record)
-    }
-
-    /// Claim a repair ticket for a worker.
-    #[cfg(test)]
-    pub fn claim_repair_ticket(
-        &self,
-        ticket_id: &RepairTicketId,
-        worker_id: &str,
-        claimed_at_unix: u64,
-        idempotency_key: &str,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = claimed_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
-        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "claim_ticket",
-            &material,
-            |repair| {
-                repair.claim_ticket_with_event(
-                    ticket_id,
-                    worker_id,
-                    claimed_at_unix,
-                    idempotency_key,
-                )
-            },
-        )?;
-        Ok(update.record)
-    }
-
-    /// Record a heartbeat for an active repair lease.
-    #[cfg(test)]
-    pub fn heartbeat_repair_ticket(
-        &self,
-        ticket_id: &RepairTicketId,
-        worker_id: &str,
-        heartbeat_at_unix: u64,
-        idempotency_key: &str,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = heartbeat_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
-        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
-        self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "heartbeat_ticket",
-            &material,
-            |repair| {
-                repair.heartbeat_ticket(ticket_id, worker_id, heartbeat_at_unix, idempotency_key)
-            },
-        )
-    }
-
-    /// Mark a claimed repair ticket as completed.
-    #[cfg(test)]
-    pub fn complete_repair_ticket(
-        &self,
-        ticket_id: &RepairTicketId,
-        worker_id: &str,
-        completed_at_unix: u64,
-        resolution_notes: Option<String>,
-        idempotency_key: &str,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = completed_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
-        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
-        if let Some(notes) = resolution_notes.as_ref() {
-            hash_length_prefixed_material(&mut material, notes.as_bytes());
-        }
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "complete_ticket",
-            &material,
-            |repair| {
-                repair.complete_ticket_with_event(
-                    ticket_id,
-                    worker_id,
-                    completed_at_unix,
-                    resolution_notes,
-                    idempotency_key,
-                )
-            },
-        )?;
-        Ok(update.record)
-    }
-
-    /// Mark a claimed repair ticket as failed.
-    #[cfg(test)]
-    pub fn fail_repair_ticket(
-        &self,
-        ticket_id: &RepairTicketId,
-        worker_id: &str,
-        failed_at_unix: u64,
-        reason: String,
-        idempotency_key: &str,
-    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let mut material = failed_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
-        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
-        hash_length_prefixed_material(&mut material, reason.as_bytes());
-        let update = self.run_repair_task_mutation(
-            std::slice::from_ref(ticket_id),
-            "fail_ticket",
-            &material,
-            |repair| {
-                repair.fail_ticket_with_event(
-                    ticket_id,
-                    worker_id,
-                    failed_at_unix,
-                    reason,
-                    idempotency_key,
-                )
-            },
-        )?;
-        Ok(update.record)
-    }
-
-    /// Run a repair watchdog sweep to requeue leases and escalate SLA breaches.
-    #[cfg(test)]
-    pub fn run_repair_watchdog_once(
+    /// The caller must collect `repair_projection` from one immutable query
+    /// view. A partial or provider-filtered task page cannot be constructed as
+    /// this projection and therefore cannot authorize local deletion.
+    pub fn run_gc_once(
         &self,
         now_unix: u64,
-    ) -> Result<RepairWatchdogReport, RepairSchedulerError> {
-        if !self.repair_config.enabled() || now_unix == 0 {
-            return Ok(RepairWatchdogReport::default());
-        }
-        self.ensure_repair_durability_healthy()?;
-        let ticket_ids = self
-            .repair
-            .list_task_snapshots(RepairTaskFilters::default())
-            .map_err(RepairSchedulerError::Store)?
-            .into_iter()
-            .map(|snapshot| snapshot.record.ticket_id)
-            .collect::<Vec<_>>();
-        self.run_repair_task_mutation(
-            &ticket_ids,
-            "run_watchdog",
-            &now_unix.to_le_bytes(),
-            |repair| repair.run_watchdog(now_unix),
-        )
-    }
-
-    #[cfg(test)]
-    fn missing_chunk_records(manifest: &StoredManifest) -> Vec<ChunkFileRecord> {
-        let total = manifest.chunk_count();
-        let mut missing = Vec::new();
-        for idx in 0..total {
-            let Some(chunk) = manifest.chunk(idx) else {
-                continue;
-            };
-            if !chunk.path.exists() {
-                missing.push(chunk.clone());
-            }
-        }
-        missing
-    }
-
-    #[cfg(test)]
-    fn rehydrate_missing_chunks_from_local_replicas(
-        &self,
-        storage: &StorageBackend,
-        missing_chunks: &[ChunkFileRecord],
-    ) -> RepairRehydrateOutcome {
-        let mut outcome = RepairRehydrateOutcome {
-            missing_before: missing_chunks.len(),
-            ..RepairRehydrateOutcome::default()
-        };
-        if missing_chunks.is_empty() {
-            return outcome;
-        }
-
-        let missing_digests: HashSet<[u8; 32]> =
-            missing_chunks.iter().map(|chunk| chunk.digest).collect();
-        let root_dir = storage.root_dir();
-        let mut sources: HashMap<[u8; 32], (String, ChunkFileRecord)> = HashMap::new();
-
-        for manifest in storage.manifests() {
-            for idx in 0..manifest.chunk_count() {
-                let Some(chunk) = manifest.chunk(idx) else {
-                    continue;
-                };
-                if !missing_digests.contains(&chunk.digest) {
-                    continue;
-                }
-                if !chunk.path.exists() {
-                    continue;
-                }
-                let key = chunk
-                    .path
-                    .strip_prefix(root_dir)
-                    .unwrap_or(&chunk.path)
-                    .to_string_lossy()
-                    .to_string();
-                match sources.entry(chunk.digest) {
-                    Entry::Vacant(entry) => {
-                        entry.insert((key, chunk.clone()));
-                    }
-                    Entry::Occupied(mut entry) => {
-                        if key < entry.get().0 {
-                            entry.insert((key, chunk.clone()));
-                        }
-                    }
-                }
-            }
-        }
-
-        for chunk in missing_chunks {
-            if chunk.path.exists() {
-                continue;
-            }
-            let Some((_, source)) = sources.get(&chunk.digest) else {
-                continue;
-            };
-            if source.length != chunk.length {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    digest = %hex::encode(chunk.digest),
-                    expected = chunk.length,
-                    actual = source.length,
-                    "rehydration source length mismatch"
-                );
-                continue;
-            }
-            let bytes = match fs::read(&source.path) {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    outcome.errors = outcome.errors.saturating_add(1);
-                    iroha_logger::warn!(
-                        %err,
-                        digest = %hex::encode(chunk.digest),
-                        path = %source.path.display(),
-                        "failed to read rehydration source chunk"
-                    );
-                    continue;
-                }
-            };
-            if bytes.len() != chunk.length as usize {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    digest = %hex::encode(chunk.digest),
-                    expected = chunk.length,
-                    actual = bytes.len(),
-                    path = %source.path.display(),
-                    "rehydration source length mismatch"
-                );
-                continue;
-            }
-            let digest = blake3::hash(&bytes);
-            if digest.as_bytes() != &chunk.digest {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    digest = %hex::encode(chunk.digest),
-                    actual = %digest.to_hex(),
-                    path = %source.path.display(),
-                    "rehydration source digest mismatch"
-                );
-                continue;
-            }
-            if let Err(err) = crate::store::write_atomic(&chunk.path, &bytes) {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    %err,
-                    digest = %hex::encode(chunk.digest),
-                    path = %chunk.path.display(),
-                    "failed to write rehydrated chunk"
-                );
-                continue;
-            }
-            outcome.rehydrated = outcome.rehydrated.saturating_add(1);
-        }
-
-        outcome.missing_after = missing_chunks
-            .iter()
-            .filter(|chunk| !chunk.path.exists())
-            .count();
-        outcome
-    }
-
-    #[cfg(test)]
-    fn rehydrate_missing_chunks_from_orchestrator(
-        &self,
-        task: &RepairTaskRecordV1,
-        worker_id: &str,
-        manifest: &StoredManifest,
-        missing_chunks: &[ChunkFileRecord],
-    ) -> RepairRehydrateOutcome {
-        let remaining = missing_chunks
-            .iter()
-            .filter(|chunk| !chunk.path.exists())
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut outcome = RepairRehydrateOutcome {
-            missing_before: remaining.len(),
-            ..RepairRehydrateOutcome::default()
-        };
-        if remaining.is_empty() {
-            return outcome;
-        }
-
-        let Some(orchestrator) = self.repair_orchestrator() else {
-            outcome.missing_after = outcome.missing_before;
-            return outcome;
-        };
-
-        let mut task_id_hasher = blake3::Hasher::new();
-        task_id_hasher.update(b"sorafs.repair.test-only-local-task.v1\0");
-        task_id_hasher.update(task.ticket_id.0.as_bytes());
-        let context = native_repair_worker::NativeRepairExecutionContextV1 {
-            chain_id: iroha_data_model::ChainId::from("test-only-local-repair"),
-            finalized_cursor: RepairFinalizedCursorV1 {
-                height: 1,
-                block_hash: [1; 32],
-            },
-            task_id: *task_id_hasher.finalize().as_bytes(),
-            ticket_id: task.ticket_id.0.clone(),
-            manifest_digest: task.manifest_digest,
-            provider_id: task.provider_id,
-            lease_owner_account: worker_id.to_owned(),
-            task_revision: 1,
-            lease_generation: 1,
-        };
-        let payloads = match orchestrator.rehydrate_missing_chunks(&context, manifest, &remaining) {
-            Ok(payloads) => payloads,
-            Err(err) => {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    %err,
-                    ticket = %task.ticket_id,
-                    manifest = %hex::encode(task.manifest_digest),
-                    provider = %hex::encode(task.provider_id),
-                    "repair orchestrator rehydration failed"
-                );
-                outcome.missing_after = outcome.missing_before;
-                return outcome;
-            }
-        };
-
-        let mut missing_by_digest: HashMap<[u8; 32], Vec<&ChunkFileRecord>> = HashMap::new();
-        for chunk in &remaining {
-            missing_by_digest
-                .entry(chunk.digest)
-                .or_default()
-                .push(chunk);
-        }
-
-        for payload in payloads {
-            let source = payload.source.as_deref();
-            let payload_len = match u32::try_from(payload.bytes.len()) {
-                Ok(length) => length,
-                Err(_) => {
-                    outcome.errors = outcome.errors.saturating_add(1);
-                    iroha_logger::warn!(
-                        digest = %hex::encode(payload.digest),
-                        actual = payload.bytes.len(),
-                        source,
-                        "orchestrator chunk length exceeds supported size"
-                    );
-                    continue;
-                }
-            };
-            let digest = blake3::hash(&payload.bytes);
-            if digest.as_bytes() != &payload.digest {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    digest = %hex::encode(payload.digest),
-                    actual = %digest.to_hex(),
-                    source,
-                    "orchestrator chunk digest mismatch"
-                );
-                continue;
-            }
-            let Some(targets) = missing_by_digest.get(&payload.digest) else {
-                outcome.errors = outcome.errors.saturating_add(1);
-                iroha_logger::warn!(
-                    digest = %hex::encode(payload.digest),
-                    source,
-                    "orchestrator returned unexpected chunk digest"
-                );
-                continue;
-            };
-            for &chunk in targets {
-                if chunk.path.exists() {
-                    continue;
-                }
-                if payload_len != chunk.length {
-                    outcome.errors = outcome.errors.saturating_add(1);
-                    iroha_logger::warn!(
-                        digest = %hex::encode(chunk.digest),
-                        expected = chunk.length,
-                        actual = payload_len,
-                        source,
-                        "orchestrator chunk length mismatch"
-                    );
-                    continue;
-                }
-                if let Err(err) = crate::store::write_atomic(&chunk.path, &payload.bytes) {
-                    outcome.errors = outcome.errors.saturating_add(1);
-                    iroha_logger::warn!(
-                        %err,
-                        digest = %hex::encode(chunk.digest),
-                        path = %chunk.path.display(),
-                        source,
-                        "failed to write rehydrated chunk from orchestrator"
-                    );
-                    continue;
-                }
-                outcome.rehydrated = outcome.rehydrated.saturating_add(1);
-            }
-        }
-
-        outcome.missing_after = remaining
-            .iter()
-            .filter(|chunk| !chunk.path.exists())
-            .count();
-        outcome
-    }
-
-    /// Run a single repair worker tick for the supplied worker identifier.
-    #[cfg(test)]
-    pub fn run_repair_worker_once(&self, worker_id: &str, now_unix: u64) -> RepairWorkerReport {
-        let mut report = RepairWorkerReport::default();
-        if !self.repair_config.enabled() || now_unix == 0 {
-            return report;
-        }
-        let Some(storage) = self.storage.as_ref() else {
-            report.record_error();
-            iroha_logger::warn!("repair worker skipped: storage backend disabled");
-            return report;
-        };
-        if let Err(err) = storage.ensure_durability_healthy() {
-            report.record_error();
-            iroha_logger::error!(%err, "repair worker skipped: storage backend fail-stopped");
-            return report;
-        }
-        if let Err(err) = self.ensure_repair_durability_healthy() {
-            report.record_error();
-            iroha_logger::error!(%err, "repair worker skipped: node runtime fail-stopped");
-            return report;
-        }
-
-        let candidates = match self.repair.claimable_tasks(now_unix) {
-            Ok(candidates) => candidates,
-            Err(err) => {
-                report.record_error();
-                iroha_logger::error!(%err, "repair worker skipped: task store unavailable");
-                return report;
-            }
-        };
-        if candidates.is_empty() {
-            report.record_skipped();
-            return report;
-        }
-
-        for task in candidates {
-            let ticket_id = task.ticket_id.clone();
-            let claim_key = repair_idempotency_key("claim", worker_id, &ticket_id, now_unix);
-            match self.claim_repair_ticket(&ticket_id, worker_id, now_unix, &claim_key) {
-                Ok(_) => {}
-                Err(RepairSchedulerError::LeaseHeld { .. })
-                | Err(RepairSchedulerError::BackoffActive { .. })
-                | Err(RepairSchedulerError::StoreConflict { .. }) => {
-                    report.record_skipped();
-                    continue;
-                }
-                Err(err) => {
-                    report.record_error();
-                    iroha_logger::warn!(
-                        %err,
-                        ticket = %ticket_id,
-                        "repair worker claim failed"
-                    );
-                    continue;
-                }
-            }
-            report.record_claim();
-
-            let manifest = storage.manifest_by_digest(&task.manifest_digest);
-            let updated_record = match manifest {
-                Some(manifest) => {
-                    let total = manifest.chunk_count();
-                    let missing_chunks = match self
-                        .schedulers
-                        .try_with_pin(|| Self::missing_chunk_records(&manifest))
-                    {
-                        Ok(chunks) => chunks,
-                        Err(err) => {
-                            report.record_skipped();
-                            iroha_logger::warn!(
-                                %err,
-                                ticket = %ticket_id,
-                                "repair worker deferred: storage scheduler saturated"
-                            );
-                            break;
-                        }
-                    };
-                    let missing = missing_chunks.len();
-                    if missing == 0 {
-                        let complete_key =
-                            repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
-                        match self.complete_repair_ticket(
-                            &ticket_id,
-                            worker_id,
-                            now_unix,
-                            Some("verified local chunks".into()),
-                            &complete_key,
-                        ) {
-                            Ok(record) => record,
-                            Err(err) => {
-                                iroha_logger::warn!(
-                                    %err,
-                                    ticket = %ticket_id,
-                                    "repair completion failed"
-                                );
-                                report.record_error();
-                                break;
-                            }
-                        }
-                    } else {
-                        let mut outcome = match self.schedulers.try_with_pin(|| {
-                            self.rehydrate_missing_chunks_from_local_replicas(
-                                storage,
-                                &missing_chunks,
-                            )
-                        }) {
-                            Ok(outcome) => outcome,
-                            Err(err) => {
-                                report.record_skipped();
-                                iroha_logger::warn!(
-                                    %err,
-                                    ticket = %ticket_id,
-                                    "repair worker deferred: storage scheduler saturated"
-                                );
-                                break;
-                            }
-                        };
-                        if outcome.missing_after > 0 {
-                            let orchestrator_outcome = self
-                                .rehydrate_missing_chunks_from_orchestrator(
-                                    &task,
-                                    worker_id,
-                                    &manifest,
-                                    &missing_chunks,
-                                );
-                            outcome.rehydrated = outcome
-                                .rehydrated
-                                .saturating_add(orchestrator_outcome.rehydrated);
-                            outcome.errors =
-                                outcome.errors.saturating_add(orchestrator_outcome.errors);
-                            outcome.missing_after = orchestrator_outcome.missing_after;
-                        }
-                        if outcome.errors > 0 {
-                            iroha_logger::warn!(
-                                ticket = %ticket_id,
-                                missing_before = outcome.missing_before,
-                                missing_after = outcome.missing_after,
-                                errors = outcome.errors,
-                                "repair rehydration encountered errors"
-                            );
-                        }
-                        if outcome.missing_after == 0 {
-                            let mut resolution = if outcome.rehydrated > 0 {
-                                format!(
-                                    "rehydrated {} missing chunks from local replicas",
-                                    outcome.rehydrated
-                                )
-                            } else {
-                                "verified local chunks after rehydration attempt".to_string()
-                            };
-                            if outcome.errors > 0 {
-                                resolution
-                                    .push_str(&format!("; {} rehydration errors", outcome.errors));
-                            }
-                            let complete_key =
-                                repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
-                            match self.complete_repair_ticket(
-                                &ticket_id,
-                                worker_id,
-                                now_unix,
-                                Some(resolution),
-                                &complete_key,
-                            ) {
-                                Ok(record) => record,
-                                Err(err) => {
-                                    iroha_logger::warn!(
-                                        %err,
-                                        ticket = %ticket_id,
-                                        "repair completion failed"
-                                    );
-                                    report.record_error();
-                                    break;
-                                }
-                            }
-                        } else {
-                            let reason = format!(
-                                "missing {} of {} chunks after rehydrating {}",
-                                outcome.missing_after, total, outcome.rehydrated
-                            );
-                            let fail_key =
-                                repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
-                            match self.fail_repair_ticket(
-                                &ticket_id, worker_id, now_unix, reason, &fail_key,
-                            ) {
-                                Ok(record) => record,
-                                Err(err) => {
-                                    iroha_logger::warn!(
-                                        %err,
-                                        ticket = %ticket_id,
-                                        "repair failure update rejected"
-                                    );
-                                    report.record_error();
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                None => {
-                    let fail_key = repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
-                    match self.fail_repair_ticket(
-                        &ticket_id,
-                        worker_id,
-                        now_unix,
-                        "manifest missing from local storage".into(),
-                        &fail_key,
-                    ) {
-                        Ok(record) => record,
-                        Err(err) => {
-                            iroha_logger::warn!(
-                                %err,
-                                ticket = %ticket_id,
-                                "repair failure update rejected"
-                            );
-                            report.record_error();
-                            break;
-                        }
-                    }
-                }
-            };
-
-            report.record_state(&updated_record.state);
-            break;
-        }
-
-        report
-    }
-
-    /// Run a GC sweep against expired manifests.
-    pub fn run_gc_once(&self, now_unix: u64) -> GcSweepReport {
-        self.run_gc_with_policy(now_unix, GcEvictionPolicy::RetentionEpoch)
-    }
-
-    /// Run a GC sweep using LRU ordering for capacity pressure.
-    pub fn run_gc_for_capacity(&self, now_unix: u64, _required_bytes: u64) -> GcSweepReport {
-        self.run_gc_with_policy(now_unix, GcEvictionPolicy::LruExpired)
-    }
-
-    fn run_gc_with_policy(&self, now_unix: u64, policy: GcEvictionPolicy) -> GcSweepReport {
+        repair_projection: &RepairLedgerTaskProjectionV1,
+    ) -> GcSweepReport {
         const REASON_LIMIT_REACHED: &str = "limit_reached";
         const RESULT_SUCCESS: &str = "success";
         const RESULT_ERROR: &str = "error";
@@ -18343,21 +16005,6 @@ impl NodeHandle {
                 return report;
             }
         };
-        let repair_tasks = if self.repair_config.enabled() {
-            match self.repair.list_tasks(RepairTaskFilters::default()) {
-                Ok(tasks) => tasks,
-                Err(err) => {
-                    report.errors = report.errors.saturating_add(1);
-                    iroha_logger::error!(%err, "GC sweep skipped: repair state unavailable");
-                    global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
-                    global_sorafs_gc_otel().record_run(RESULT_ERROR);
-                    return report;
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
         let grace_secs = self.gc_config.retention_grace_secs();
         let max_deletions = self.gc_config.max_deletions_per_run() as usize;
         if max_deletions == 0 {
@@ -18366,9 +16013,18 @@ impl NodeHandle {
             return report;
         }
 
-        let usage = self.capacity_usage();
-        let provider_id = usage.provider_id.unwrap_or([0_u8; 32]);
-        let provider_known = usage.provider_id.is_some();
+        let Some(provider_id) = self.capacity_usage().provider_id else {
+            report.errors = report.errors.saturating_add(1);
+            iroha_logger::error!(
+                "GC sweep skipped: provider identity is unavailable for repair-ledger filtering"
+            );
+            global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
+            global_sorafs_gc_otel().record_run(RESULT_ERROR);
+            return report;
+        };
+        let active_repair_tasks = repair_projection
+            .active_tasks_for_provider(provider_id)
+            .collect::<Vec<_>>();
 
         let mut expired = Vec::new();
         let mut expired_count = 0u64;
@@ -18390,22 +16046,11 @@ impl NodeHandle {
             expired.push(manifest);
         }
 
-        match policy {
-            GcEvictionPolicy::RetentionEpoch => {
-                expired.sort_by(|left, right| {
-                    left.retention_epoch()
-                        .cmp(&right.retention_epoch())
-                        .then(left.manifest_id().cmp(right.manifest_id()))
-                });
-            }
-            GcEvictionPolicy::LruExpired => {
-                expired.sort_by(|left, right| {
-                    left.last_access()
-                        .cmp(&right.last_access())
-                        .then(left.manifest_id().cmp(right.manifest_id()))
-                });
-            }
-        }
+        expired.sort_by(|left, right| {
+            left.retention_epoch()
+                .cmp(&right.retention_epoch())
+                .then(left.manifest_id().cmp(right.manifest_id()))
+        });
 
         let mut evicted_count = 0usize;
 
@@ -18419,9 +16064,9 @@ impl NodeHandle {
             }
 
             let digest = *manifest.manifest_digest();
-            if repair_tasks
+            if active_repair_tasks
                 .iter()
-                .any(|task| task.manifest_digest == digest && !repair_task_terminal(task))
+                .any(|task| task.manifest_digest == digest)
             {
                 report.skipped.push(GcSkip {
                     manifest_id: manifest.manifest_id().to_owned(),
@@ -18439,11 +16084,7 @@ impl NodeHandle {
                     provider_id,
                     evicted_at_unix: now_unix,
                     freed_bytes: 0,
-                    reason: if provider_known {
-                        GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
-                    } else {
-                        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
-                    },
+                    reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string(),
                     blocked_reason: Some(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1.to_string()),
                 };
                 if let Err(err) = self.publish_gc_audit_event(payload) {
@@ -18479,11 +16120,7 @@ impl NodeHandle {
                     provider_id,
                     evicted_at_unix: now_unix,
                     freed_bytes: 0,
-                    reason: if provider_known {
-                        GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
-                    } else {
-                        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
-                    },
+                    reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string(),
                     blocked_reason: Some(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1.to_string()),
                 };
                 if let Err(err) = self.publish_gc_audit_event(payload) {
@@ -18516,11 +16153,7 @@ impl NodeHandle {
                         provider_id,
                         evicted_at_unix: now_unix,
                         freed_bytes: 0,
-                        reason: if provider_known {
-                            GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
-                        } else {
-                            GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
-                        },
+                        reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string(),
                         blocked_reason: Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1.to_string()),
                     };
                     if let Err(err) = self.publish_gc_audit_event(payload) {
@@ -18546,11 +16179,7 @@ impl NodeHandle {
                 }
             }
 
-            let reason = if provider_known {
-                GC_AUDIT_REASON_RETENTION_EXPIRED_V1
-            } else {
-                GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1
-            };
+            let reason = GC_AUDIT_REASON_RETENTION_EXPIRED_V1;
             let transaction = match self.evict_manifest_with_gc_audit(
                 &gc_guard,
                 storage,
@@ -18615,8 +16244,9 @@ impl NodeHandle {
     pub fn run_reconciliation_once(
         &self,
         now_unix: u64,
+        repair_projection: &RepairLedgerTaskProjectionV1,
     ) -> Result<SorafsReconciliationReportV1, ReconciliationError> {
-        let result = self.compute_reconciliation_report(now_unix);
+        let result = self.compute_reconciliation_report(now_unix, repair_projection);
         match &result {
             Ok(report) => {
                 self.publish_reconciliation_report(report);
@@ -18638,6 +16268,7 @@ impl NodeHandle {
     fn compute_reconciliation_report(
         &self,
         now_unix: u64,
+        repair_projection: &RepairLedgerTaskProjectionV1,
     ) -> Result<SorafsReconciliationReportV1, ReconciliationError> {
         if now_unix == 0 {
             return Err(ReconciliationError::InvalidTimestamp);
@@ -18646,30 +16277,15 @@ impl NodeHandle {
             return Err(ReconciliationError::StorageDisabled);
         };
 
-        let provider_id = match self.capacity_usage().provider_id {
-            Some(provider_id) => provider_id,
-            None => {
-                iroha_logger::warn!("reconciliation report provider_id missing; using zeros");
-                [0_u8; 32]
-            }
-        };
+        let provider_id = self
+            .capacity_usage()
+            .provider_id
+            .ok_or(ReconciliationError::ProviderBindingUnavailable)?;
 
-        let repair_records = self
-            .repair
-            .list_tasks(RepairTaskFilters::default())
-            .map_err(|err| ReconciliationError::RepairStore(err.to_string()))?;
-        let repair_entries = repair_records
-            .iter()
-            .map(|record| reconciliation::RepairReconciliationEntry {
-                ticket_id: record.ticket_id.0.clone(),
-                manifest_digest: record.manifest_digest,
-                provider_id: record.provider_id,
-                state: record.state.clone(),
-            })
-            .collect::<Vec<_>>();
         let repair_snapshot = reconciliation::RepairReconciliationSnapshot {
             version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
-            tasks: repair_entries,
+            finalized_cursor: repair_projection.finalized_cursor(),
+            tasks: repair_projection.tasks().to_vec(),
         };
         let repair_snapshot_hash = reconciliation::hash_snapshot(&repair_snapshot)?;
 
@@ -18715,7 +16331,7 @@ impl NodeHandle {
             repair_snapshot_hash,
             retention_snapshot_hash,
             gc_snapshot_hash,
-            repair_task_count: u32::try_from(repair_records.len()).unwrap_or(u32::MAX),
+            repair_task_count: u32::try_from(repair_projection.len()).unwrap_or(u32::MAX),
             retention_manifest_count: u32::try_from(manifests.len()).unwrap_or(u32::MAX),
             gc_evictions_total,
             gc_freed_bytes_total,
@@ -19253,7 +16869,6 @@ impl NodeHandle {
         chunk_roles: Option<Vec<ChunkRoleMetadata>>,
     ) -> Result<String, NodeStorageError> {
         let storage = self.storage_backend()?;
-        let chunk_roles_retry = chunk_roles.clone();
         let result = self.schedulers.try_with_pin(|| {
             storage.ingest_manifest_with_layout(manifest, plan, reader, stripe_layout, chunk_roles)
         })?;
@@ -19264,36 +16879,6 @@ impl NodeHandle {
                     self.config.max_capacity_bytes().0,
                 );
                 Ok(manifest_id)
-            }
-            Err(StorageError::CapacityExceeded { .. })
-                if self.gc_config.enabled() && self.gc_config.pre_admission_sweep() =>
-            {
-                let gc_report = self.run_gc_for_capacity(unix_now_secs(), plan.content_length);
-                if gc_report.errors > 0 {
-                    iroha_logger::warn!(
-                        errors = gc_report.errors,
-                        "GC pre-admission sweep reported errors"
-                    );
-                }
-                let retry = self.schedulers.try_with_pin(|| {
-                    storage.ingest_manifest_with_layout(
-                        manifest,
-                        plan,
-                        reader,
-                        stripe_layout,
-                        chunk_roles_retry,
-                    )
-                })?;
-                match retry {
-                    Ok(manifest_id) => {
-                        self.schedulers.update_storage_bytes(
-                            storage.total_bytes(),
-                            self.config.max_capacity_bytes().0,
-                        );
-                        Ok(manifest_id)
-                    }
-                    Err(err) => Err(NodeStorageError::from(err)),
-                }
             }
             Err(err) => Err(NodeStorageError::from(err)),
         }
@@ -19896,6 +17481,11 @@ mod tests {
                 SoraFsModerationBallotContextV1, SoraFsModerationBallotError,
                 SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
             },
+            moderation_ledger::{
+                REPAIR_LEDGER_TASK_VERSION_V1, RepairFinalizedCursorV1, RepairFinalizedStatusV1,
+                RepairLedgerStatusV1, RepairLedgerTaskPageV1, RepairLedgerTaskV1,
+                RepairLedgerTerminalKindV1, sorafs_repair_task_id_v1,
+            },
             pin_registry::StorageClass,
             reserve::{ReserveDuration, ReserveLifecycleStage, ReservePolicyV1, ReserveTier},
         },
@@ -19934,13 +17524,9 @@ mod tests {
         order_request_signature_digest_v1,
         provider_advert::SignatureAlgorithm,
         repair::{
-            CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
-            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
-            RepairManualCauseV1, RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1,
-            RepairTaskStatusV1, RepairTicketId,
+            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
+            RepairManualCauseV1, RepairReportV1, RepairTicketId,
         },
         settlement_receipt_signature_digest_v1,
     };
@@ -19954,6 +17540,7 @@ mod tests {
         sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
         sample_verdict as por_sample_verdict,
     };
+    use crate::repair_ledger_projection::RepairLedgerTaskProjectionBuilderV1;
 
     #[derive(Debug)]
     struct SuccessfulPorRepairHandoff;
@@ -20112,6 +17699,161 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation_id, operation_id);
         assert_eq!(pending[0].expected_book_revision, Some(7));
+    }
+
+    #[test]
+    fn reserve_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
+        use iroha_data_model::{
+            ChainId,
+            asset::AssetDefinitionId,
+            domain::DomainId,
+            isi::sorafs::RegisterSorafsReserveAccount,
+            sorafs::reserve::{
+                RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyRecordV1,
+                ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1, ReserveProviderTermsV1,
+            },
+        };
+
+        let temp_dir = tempfile::tempdir().expect("create reserve forwarder temp dir");
+        let data_dir = temp_dir.path().join("validator-state");
+        let config = StorageConfig::builder()
+            .enabled(false)
+            .data_dir(data_dir.clone())
+            .build();
+        assert!(!config.reserve_worker_policy().enabled());
+
+        let operations =
+            KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).expect("operations key");
+        let decision =
+            KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).expect("decision key");
+        let provider =
+            KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).expect("provider key");
+        let operations_authority = AccountId::new(operations.public_key().clone());
+        let provider_authority = AccountId::new(provider.public_key().clone());
+        let policy = ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: ReservePolicyV1::default(),
+            asset_definition: AssetDefinitionId::new(
+                DomainId::try_new("reserve", "universal").expect("reserve domain"),
+                "xor".parse().expect("reserve asset name"),
+            ),
+            custody_account: AccountId::new(
+                KeyPair::try_from_seed(vec![0x74; 32], Algorithm::Ed25519)
+                    .expect("custody key")
+                    .public_key()
+                    .clone(),
+            ),
+            treasury_account: AccountId::new(
+                KeyPair::try_from_seed(vec![0x75; 32], Algorithm::Ed25519)
+                    .expect("treasury key")
+                    .public_key()
+                    .clone(),
+            ),
+            operations_authority: operations_authority.clone(),
+            decision_authority: AccountId::new(decision.public_key().clone()),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("valid reserve debt cap"),
+            max_pending_movements_per_provider: 8,
+            max_open_appeals_per_provider: 4,
+        };
+        let policy_digest = policy.digest().expect("digest reserve policy");
+        let context = ReserveTransactionContextV1 {
+            chain_id: ChainId::from("reserve-forwarder-restart-test"),
+            policy_record: ReserveAuthorityPolicyRecordV1 {
+                policy,
+                policy_digest,
+                activated_by: operations_authority,
+                activated_at_unix: 1,
+            },
+            projection:
+                crate::reserve_transaction_forwarder::ReserveTransactionProjectionV1::Registration {
+                    provider_owner: provider_authority.clone(),
+                },
+            finalized_cursor: ReserveFinalizedCursorV1 {
+                height: 11,
+                block_hash: [0x76; 32],
+            },
+        };
+        let operation = ReserveOperationV1::RegisterProvider(RegisterSorafsReserveAccount::new(
+            ReserveProviderTermsV1 {
+                provider_id: ProviderId::new([0x77; 32]),
+                provider_account: provider_authority,
+                tier: ReserveTier::TierA,
+                storage_class: StorageClass::Hot,
+                duration: ReserveDuration::Monthly,
+                capacity_gib: 64,
+            },
+            policy_digest,
+        ));
+
+        let operation_id = {
+            let node = NodeHandle::try_new(config.clone()).expect("start validator-only node");
+            assert!(node.storage.is_none());
+            let operation_id = node
+                .enqueue_reserve_transaction(operation, &context)
+                .expect("persist reserve operation")
+                .operation_id();
+            assert_eq!(
+                node.pending_reserve_transactions(1)
+                    .expect("read pending operation")[0]
+                    .operation_id,
+                operation_id
+            );
+            let claimed = node
+                .claim_reserve_transaction_for_signing(operation_id)
+                .expect("persist signer-only claim before restart");
+            assert_eq!(claimed.operation_id, operation_id);
+            let signing = node
+                .pending_reserve_transactions(1)
+                .expect("read signing handoff");
+            assert_eq!(
+                signing[0].state,
+                crate::reserve_transaction_forwarder::ReserveTransactionDeliveryStateV1::Signing
+            );
+            operation_id
+        };
+
+        assert!(
+            data_dir
+                .join("reserve-transaction-forwarder")
+                .join(
+                    crate::reserve_transaction_forwarder::RESERVE_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1,
+                )
+                .is_file()
+        );
+        let recovered = NodeHandle::try_new(config).expect("restart validator-only node");
+        assert!(recovered.storage.is_none());
+        let pending = recovered
+            .pending_reserve_transactions(1)
+            .expect("recover pending reserve operation");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation_id, operation_id);
+        assert_eq!(
+            pending[0].state,
+            crate::reserve_transaction_forwarder::ReserveTransactionDeliveryStateV1::Ready,
+            "restart must recover an interrupted signer-only claim for handoff"
+        );
+        assert_eq!(
+            pending[0].attempts, 1,
+            "restart recovery must not refund the consumed signing attempt"
+        );
+    }
+
+    #[test]
+    fn node_startup_rejects_unsafe_programmatic_reserve_worker_policy() {
+        let temp_dir = tempfile::tempdir().expect("create invalid reserve policy temp dir");
+        let mut actual = iroha_config::parameters::actual::SorafsStorage::default();
+        actual.enabled = false;
+        actual.data_dir = temp_dir.path().join("validator-state");
+        actual.reserve_worker.scan_batch_limit = 0;
+
+        let error = NodeHandle::try_new(StorageConfig::from(actual))
+            .expect_err("unsafe programmatic reserve worker policy must fail closed");
+        assert!(matches!(error, NodeInitError::ReserveWorkerConfig { .. }));
     }
 
     #[derive(Debug)]
@@ -20396,29 +18138,148 @@ mod tests {
         })
     }
 
-    fn repair_report_fixture(
-        ticket_id: &str,
-        manifest_byte: u8,
-        provider_byte: u8,
-        submitted_at_unix: u64,
-    ) -> RepairReportV1 {
-        RepairReportV1 {
+    fn ensure_test_capacity_provider(handle: &NodeHandle) -> [u8; 32] {
+        if let Some(provider_id) = handle.capacity_usage().provider_id {
+            return provider_id;
+        }
+        let provider_id = [0xAB; 32];
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id,
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [0xAC; 32],
+                stake_amount: xor("1"),
+            },
+            committed_capacity_gib: 100,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".to_owned(),
+                profile_aliases: None,
+                committed_gib: 100,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".to_owned(),
+                max_gib: 100,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: u64::MAX,
+            metadata: Vec::new(),
+        };
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(provider_id),
+            norito::to_bytes(&declaration).expect("encode capacity declaration"),
+            declaration.committed_capacity_gib,
+            1,
+            declaration.valid_from,
+            declaration.valid_until,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("record test capacity declaration");
+        provider_id
+    }
+
+    fn run_test_gc(
+        handle: &NodeHandle,
+        now_unix: u64,
+        repair_projection: &RepairLedgerTaskProjectionV1,
+    ) -> GcSweepReport {
+        ensure_test_capacity_provider(handle);
+        handle.run_gc_once(now_unix, repair_projection)
+    }
+
+    fn finalized_repair_projection(tasks: Vec<RepairLedgerTaskV1>) -> RepairLedgerTaskProjectionV1 {
+        let finalized_cursor = RepairFinalizedCursorV1 {
+            height: 42,
+            block_hash: [0xA5; 32],
+        };
+        let mut status = RepairLedgerStatusV1::default();
+        status.tasks = u64::try_from(tasks.len()).expect("test task count fits u64");
+        if !tasks.is_empty() {
+            status.updated_at_unix_ms = 1_700_000_000_000;
+        }
+        for task in &tasks {
+            status.leased_tasks += u64::from(task.lease.is_some());
+            status.slash_proposals += u64::from(task.slash.is_some());
+            status.appeals += u64::from(task.appeal.is_some());
+            let Some(terminal) = task.terminal_outcome.as_ref() else {
+                continue;
+            };
+            status.terminal_outcomes += 1;
+            match &terminal.kind {
+                RepairLedgerTerminalKindV1::Completed(_) => status.completed += 1,
+                RepairLedgerTerminalKindV1::Failed(_) => status.failed += 1,
+                RepairLedgerTerminalKindV1::Escalated(_) => status.escalated += 1,
+            }
+        }
+        let mut builder = RepairLedgerTaskProjectionBuilderV1::new(RepairFinalizedStatusV1 {
+            finalized_cursor,
+            status,
+        })
+        .expect("initialize finalized repair projection");
+        builder
+            .push_page(RepairLedgerTaskPageV1 {
+                finalized_cursor,
+                tasks,
+                has_more: false,
+                next_after_task_id: None,
+            })
+            .expect("append finalized repair projection page");
+        builder.finish().expect("finish repair projection")
+    }
+
+    fn empty_finalized_repair_projection() -> RepairLedgerTaskProjectionV1 {
+        finalized_repair_projection(Vec::new())
+    }
+
+    fn active_native_repair_task(
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+    ) -> RepairLedgerTaskV1 {
+        let source_identity = [0x61; 32];
+        let auditor = AccountId::new(
+            KeyPair::try_from_seed(vec![0x60; 32], Algorithm::Ed25519)
+                .expect("repair auditor key")
+                .public_key()
+                .clone(),
+        );
+        let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId(ticket_id.to_owned()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
-            submitted_at_unix,
+            ticket_id: RepairTicketId("REP-GC-NATIVE-001".to_owned()),
+            auditor_account: auditor.to_string(),
+            submitted_at_unix: 1_700_000_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [manifest_byte; 32],
-                provider_id: [provider_byte; 32],
+                manifest_digest,
+                provider_id,
                 por_history_id: None,
                 cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "adversarial transaction fixture".to_owned(),
+                    reason: "native finalized GC exclusion".to_owned(),
                 }),
                 evidence_json: None,
                 notes: None,
             },
             notes: None,
+        };
+        RepairLedgerTaskV1 {
+            version: REPAIR_LEDGER_TASK_VERSION_V1,
+            task_id: sorafs_repair_task_id_v1(source_identity),
+            source_identity,
+            ticket_id: report.ticket_id.0.clone(),
+            canonical_report: norito::to_bytes(&report).expect("encode repair report"),
+            manifest_digest,
+            provider_id,
+            submitted_by: auditor,
+            submitted_at_unix_ms: report.submitted_at_unix * 1_000,
+            revision: 1,
+            lease: None,
+            terminal_outcome: None,
+            slash: None,
+            appeal: None,
+            action_receipts: Vec::new(),
+            updated_at_unix_ms: report.submitted_at_unix * 1_000,
         }
     }
 
@@ -20708,6 +18569,121 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn runtime_initialization_rejects_retired_v1_marker_and_checkpoint() {
+        for (retired_path, component) in [
+            (
+                retired_runtime_state_initialization_path_v1 as fn(&Path) -> PathBuf,
+                "retired runtime initialization marker",
+            ),
+            (
+                retired_auxiliary_runtime_checkpoint_path_v1 as fn(&Path) -> PathBuf,
+                "retired auxiliary runtime checkpoint",
+            ),
+        ] {
+            let (cfg, _dir) = storage_config_with_temp_dir();
+            drop(NodeHandle::new(cfg.clone()));
+            let path = retired_path(cfg.data_dir());
+            write_local_checkpoint_atomic(&path, b"retired-v1")
+                .expect("write retired runtime-state artifact");
+
+            let error =
+                NodeHandle::try_new(cfg).expect_err("retired runtime-state artifact must fail");
+            assert!(
+                matches!(
+                    error,
+                    NodeInitError::Checkpoint {
+                        component: actual_component,
+                        ..
+                    } if actual_component == component
+                ),
+                "unexpected startup error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_initialization_rejects_noncanonical_v2_marker() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        drop(NodeHandle::new(cfg.clone()));
+        let marker = runtime_state_initialization_path(cfg.data_dir());
+        write_local_private_checkpoint_atomic(
+            &marker,
+            b"sorafs.node.runtime-state.initialized.v1\n",
+        )
+        .expect("replace runtime-state marker");
+
+        let error = NodeHandle::try_new(cfg)
+            .expect_err("noncanonical runtime-state v2 marker must fail startup");
+        assert!(
+            matches!(
+                error,
+                NodeInitError::Checkpoint {
+                    component: "runtime initialization marker",
+                    ref message,
+                    ..
+                } if message.contains("runtime-state v2")
+            ),
+            "unexpected startup error: {error}"
+        );
+    }
+
+    #[test]
+    fn auxiliary_runtime_checkpoint_rejects_retired_version() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        drop(NodeHandle::new(cfg.clone()));
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read initialized auxiliary checkpoint");
+        let mut checkpoint = norito::decode_from_bytes::<AuxiliaryRuntimeCheckpointV2>(&bytes)
+            .expect("decode initialized auxiliary checkpoint");
+        checkpoint.version = 1;
+        let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
+        write_local_checkpoint_atomic(&path, &retired)
+            .expect("replace auxiliary checkpoint with retired version");
+
+        let error =
+            NodeHandle::try_new(cfg).expect_err("retired auxiliary version must fail startup");
+        assert!(
+            matches!(
+                error,
+                NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ref message,
+                    ..
+                } if message.contains("unsupported auxiliary runtime checkpoint version 1")
+            ),
+            "unexpected startup error: {error}"
+        );
+    }
+
+    #[test]
+    fn governance_outbox_rejects_retired_entry_version_before_kind_dispatch() {
+        let payload_bytes = b"retired-governance-outbox-entry".to_vec();
+        let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
+        let entry = GovernanceOutboxEntryV1 {
+            version: 1,
+            sequence: 1,
+            kind: GovernanceOutboxKindV1::DealSettlement,
+            payload_digest,
+            binding_digest: governance_outbox_binding_digest(
+                1,
+                1,
+                GovernanceOutboxKindV1::DealSettlement,
+                payload_digest,
+            ),
+            payload_bytes,
+        };
+
+        let error =
+            validate_governance_outbox_entry(&entry).expect_err("retired outbox version must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported governance outbox entry version 1"),
+            "unexpected validation error: {error}"
+        );
     }
 
     #[test]
@@ -23741,11 +21717,14 @@ mod tests {
     ) -> OrderRequestV1 {
         let owner_account = owner.to_vec();
         let nonce = u64::from(id);
+        let provider_id = (side == OrderSideV1::Ask)
+            .then(|| local_orderbook_provider_id_for_owner_account(&owner_account));
         sign_orderbook_order(
             OrderRequestV1 {
                 version: ORDERBOOK_ORDER_VERSION_V1,
                 order_id: derive_orderbook_order_id_v1(&owner_account, nonce),
                 side,
+                provider_id,
                 tier: OrderTierV1::Hot,
                 price_per_gib: XorQuantity::try_from_micro(price_micro)
                     .expect("legacy micro-XOR value is representable"),
@@ -24463,91 +22442,6 @@ mod tests {
     }
 
     #[test]
-    fn node_handle_orderbook_rejects_ask_when_reserve_lifecycle_disables_adverts() {
-        let cfg = StorageConfig::builder().enabled(false).build();
-        let handle = NodeHandle::new(cfg);
-        let now = 1_800_000_000_u64;
-        let provider_account = b"provider".to_vec();
-        let provider_id = local_orderbook_provider_id_for_owner_account(&provider_account);
-        handle
-            .record_reserve_lifecycle_update(reserve_lifecycle_update_for_provider(
-                provider_id,
-                provider_account.clone(),
-                31,
-                XorQuantity::zero(),
-                now.saturating_sub(1),
-            ))
-            .expect("record defaulted reserve lifecycle");
-
-        let err = handle
-            .submit_orderbook_order(
-                orderbook_order(63, OrderSideV1::Ask, 1_500_000, &provider_account),
-                now,
-            )
-            .expect_err("defaulted provider ask should be rejected");
-
-        assert_eq!(
-            err,
-            OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
-                provider_id_hex: hex::encode(provider_id),
-                stage: "default".to_owned(),
-            }
-        );
-        assert!(
-            handle
-                .orderbook_snapshot(now)
-                .expect("orderbook snapshot")
-                .open_orders
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn node_handle_orderbook_accepts_ask_after_reserve_appeal_reenables_adverts() {
-        let cfg = StorageConfig::builder().enabled(false).build();
-        let handle = NodeHandle::new(cfg);
-        let now = 1_800_000_000_u64;
-        let provider_account = b"provider".to_vec();
-        let provider_id = local_orderbook_provider_id_for_owner_account(&provider_account);
-        handle
-            .record_reserve_lifecycle_update(reserve_lifecycle_update_for_provider(
-                provider_id,
-                provider_account.clone(),
-                31,
-                XorQuantity::zero(),
-                now.saturating_sub(1),
-            ))
-            .expect("record defaulted reserve lifecycle");
-        handle
-            .record_reserve_appeal(reserve_appeal_request_for_provider(
-                0x49,
-                provider_id,
-                provider_account.clone(),
-            ))
-            .expect("record reserve appeal");
-        handle
-            .record_reserve_appeal_decision(reserve_appeal_decision(
-                0x49,
-                ReserveAppealStatus::Accepted,
-            ))
-            .expect("accept reserve appeal");
-
-        let outcome = handle
-            .submit_orderbook_order(
-                orderbook_order(64, OrderSideV1::Ask, 1_500_000, &provider_account),
-                now,
-            )
-            .expect("appeal override should restore ask admission");
-
-        assert_eq!(outcome.open_order_count, 1);
-        let summary = handle
-            .reserve_provider_lifecycle_summary(provider_id)
-            .expect("reserve summary");
-        assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
-        assert!(!summary.lifecycle.disable_adverts);
-    }
-
-    #[test]
     fn node_handle_orderbook_cancels_owner_order_only() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
@@ -25015,7 +22909,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -28382,7 +26276,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for tamper in 0..3 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             let entry = checkpoint
                 .governance_outbox_entries
@@ -28431,7 +26325,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         let entry = checkpoint
             .governance_outbox_entries
@@ -28474,7 +26368,7 @@ mod tests {
 
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
             norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
         checkpoint.reputation_events[0].snapshot_id = [0x99; 16];
         write_local_checkpoint_atomic(
@@ -28504,7 +26398,7 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for case in 0..7_u8 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
                 norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
             match case {
                 0 => {
@@ -29843,7 +27737,7 @@ mod tests {
 
         let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
         for tamper in 0..2 {
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
                 norito::decode_from_bytes(&original).expect("decode privacy receipt checkpoint");
             let receipt = checkpoint
                 .privacy_publish_request_receipts
@@ -29922,7 +27816,7 @@ mod tests {
         drop(source);
 
         let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
             norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
         assert!(checkpoint.privacy_source_events.is_empty());
         checkpoint
@@ -30613,1649 +28507,6 @@ mod tests {
     }
 
     #[test]
-    fn node_handle_manages_repair_queue() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            ..Default::default()
-        };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::default(),
-        );
-
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_100_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [0x44; 32],
-                provider_id: [0x77; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "operator-verified repair trigger".into(),
-                }),
-                evidence_json: None,
-                notes: Some("PoR sample failed twice".into()),
-            },
-            notes: Some("auto-generated".into()),
-        };
-
-        let queued = handle
-            .enqueue_repair_report(&report)
-            .expect("queue repair report");
-        assert!(matches!(
-            queued.state,
-            RepairTaskStateV1::Queued(QueuedRepairStateV1 { .. })
-        ));
-
-        let in_progress = handle
-            .mark_repair_in_progress(
-                &report.ticket_id,
-                report.submitted_at_unix + 45,
-                Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
-            )
-            .expect("mark repair in progress");
-        assert!(matches!(
-            in_progress.state,
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 { .. })
-        ));
-
-        let completed = handle
-            .mark_repair_completed(
-                &report.ticket_id,
-                report.submitted_at_unix + 600,
-                Some("reseeded manifest".into()),
-            )
-            .expect("mark repair completed");
-        assert!(matches!(
-            completed.state,
-            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
-        ));
-
-        let events = handle.repair_events_since(None, 10);
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0].sequence, 1);
-        assert_eq!(events[0].event.status, RepairTaskStatusV1::Queued);
-        assert_eq!(events[1].event.status, RepairTaskStatusV1::InProgress);
-        assert_eq!(events[2].event.status, RepairTaskStatusV1::Completed);
-        assert_eq!(events[2].event.ticket_id, report.ticket_id);
-        assert_eq!(handle.latest_repair_event_sequence(), Some(3));
-        let after_first = handle.repair_events_since(Some(1), 10);
-        assert_eq!(after_first.len(), 2);
-
-        let tasks = handle
-            .repair_tasks_for_manifest(&report.evidence.manifest_digest)
-            .expect("repair task store");
-        assert_eq!(tasks.len(), 1);
-        let provider_tasks = handle
-            .repair_tasks(RepairTaskFilters {
-                provider_id: Some(report.evidence.provider_id),
-                ..RepairTaskFilters::default()
-            })
-            .expect("repair task store");
-        assert_eq!(provider_tasks.len(), 1);
-
-        let mut live_events = handle.subscribe_repair_events();
-        let escalated_report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-352".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_200_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [0x45; 32],
-                provider_id: [0x88; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "operator-verified escalation trigger".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        handle
-            .enqueue_repair_report(&escalated_report)
-            .expect("queue second report");
-        let live_queued = live_events.try_recv().expect("live queued repair event");
-        assert_eq!(live_queued.sequence, 4);
-        assert_eq!(live_queued.event.ticket_id, escalated_report.ticket_id);
-        assert_eq!(live_queued.event.status, RepairTaskStatusV1::Queued);
-
-        let proposal = RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: escalated_report.ticket_id.clone(),
-            provider_id: escalated_report.evidence.provider_id,
-            manifest_digest: escalated_report.evidence.manifest_digest,
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty: "0.5".parse().expect("valid quantity"),
-            submitted_at_unix: escalated_report.submitted_at_unix + 1_200,
-            rationale: "Repeated PoR failures without acknowledgement".into(),
-            approval: None,
-        };
-
-        let escalated = handle
-            .submit_repair_slash_proposal(&proposal)
-            .expect("submit slash proposal");
-        assert!(matches!(
-            escalated.state,
-            RepairTaskStateV1::Escalated(EscalatedRepairStateV1 { .. })
-        ));
-        let live_escalated = live_events.try_recv().expect("live escalated repair event");
-        assert_eq!(live_escalated.sequence, 5);
-        assert_eq!(live_escalated.event.ticket_id, escalated_report.ticket_id);
-        assert_eq!(live_escalated.event.status, RepairTaskStatusV1::Escalated);
-    }
-
-    #[test]
-    fn repair_publication_transaction_persists_event_audit_and_acknowledged_linkage() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-001", 0x31, 0x41, 1_701_000_000);
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-
-        handle
-            .enqueue_repair_report(&report)
-            .expect("commit repair report transaction");
-        assert_eq!(handle.pending_governance_publication_count(), 1);
-        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
-        assert_eq!(
-            handle
-                .repair_mutation_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .len(),
-            0
-        );
-        let outbox_entry = handle
-            .governance_outbox
-            .read()
-            .expect("outbox lock")
-            .entries
-            .values()
-            .next()
-            .cloned()
-            .expect("repair audit outbox entry");
-        assert_eq!(outbox_entry.kind, GovernanceOutboxKindV1::RepairAudit);
-        let audit: RepairAuditEventV1 =
-            norito::decode_from_bytes(&outbox_entry.payload_bytes).expect("decode repair audit");
-        audit.validate().expect("canonical repair audit validates");
-        assert_eq!(audit.header.sequence, outbox_entry.sequence);
-        assert_eq!(audit.payload.ticket_id, report.ticket_id);
-        assert_eq!(
-            audit.header.payload_digest,
-            repair_audit_payload_digest_v1(&audit.payload).expect("repair payload digest")
-        );
-        assert_eq!(
-            handle
-                .repair_event_audit_links
-                .read()
-                .expect("link lock")
-                .len(),
-            1
-        );
-        drop(handle);
-
-        let restored = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        assert_eq!(restored.pending_governance_publication_count(), 1);
-        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
-        assert_eq!(
-            restored
-                .repair_event_audit_links
-                .read()
-                .expect("restored link lock")
-                .len(),
-            1
-        );
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        restored
-            .try_set_governance_publisher(publisher.clone())
-            .expect("acknowledge restored repair audit");
-        assert_eq!(publisher.take(), vec![outbox_entry.payload_bytes]);
-        assert_eq!(restored.pending_governance_publication_count(), 0);
-        assert_eq!(
-            restored
-                .repair_event_audit_links
-                .read()
-                .expect("acknowledged link lock")
-                .len(),
-            1
-        );
-        drop(restored);
-
-        let acknowledged =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
-        assert_eq!(acknowledged.repair_events_since(None, 10).len(), 1);
-        assert_eq!(
-            acknowledged
-                .repair_event_audit_links
-                .read()
-                .expect("durable link lock")
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn idempotent_repair_report_reserves_one_publication_and_rejects_source_rebinding() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        let report = repair_report_fixture("REP-IDEMPOTENT-001", 0x71, 0x81, 1_701_100_000);
-        let source_identity = [0x91; 32];
-
-        let first = handle
-            .enqueue_repair_report_idempotent(source_identity, &report)
-            .expect("first subsystem-authenticated report commits");
-        assert_eq!(first.ticket_id, report.ticket_id);
-        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
-        assert_eq!(handle.pending_governance_publication_count(), 1);
-
-        let replay = handle
-            .enqueue_repair_report_idempotent(source_identity, &report)
-            .expect("exact subsystem report replay is idempotent");
-        assert_eq!(replay.ticket_id, first.ticket_id);
-        assert_eq!(replay.state, first.state);
-        assert_eq!(
-            handle.repair_events_since(None, 10).len(),
-            1,
-            "exact replay must not append another repair event"
-        );
-        assert_eq!(
-            handle.pending_governance_publication_count(),
-            1,
-            "exact replay must not reserve or publish a second audit row"
-        );
-
-        let mut rebound = report.clone();
-        rebound.notes = Some("different canonical report for the same source".to_owned());
-        let error = handle
-            .enqueue_repair_report_idempotent(source_identity, &rebound)
-            .expect_err("source identity rebinding must fail closed");
-        assert!(
-            error.to_string().contains("idempotency")
-                || error.to_string().contains("already bound"),
-            "unexpected source-rebinding error: {error}"
-        );
-        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
-        assert_eq!(handle.pending_governance_publication_count(), 1);
-    }
-
-    #[test]
-    fn repair_publication_transaction_discards_crash_before_domain_commit() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-002", 0x32, 0x42, 1_701_000_100);
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        let material = norito::to_bytes(&report).expect("encode repair report");
-        {
-            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-            let drain_guard = handle
-                .governance_outbox_drain_lock
-                .lock()
-                .expect("drain lock");
-            let intents = handle
-                .prepare_repair_mutation_intents(
-                    &mutation_guard,
-                    &drain_guard,
-                    std::slice::from_ref(&report.ticket_id),
-                    "enqueue_report",
-                    repair_mutation_operation_digest(
-                        "enqueue_report",
-                        std::slice::from_ref(&report.ticket_id),
-                        &material,
-                    ),
-                )
-                .expect("persist repair mutation intent");
-            assert_eq!(intents.len(), 1);
-        }
-        assert_eq!(
-            handle
-                .repair_mutation_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .len(),
-            1
-        );
-        assert!(
-            handle
-                .repair_task_record(&report.ticket_id)
-                .expect("repair store")
-                .is_none()
-        );
-        drop(handle);
-
-        let restored =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        assert!(
-            restored
-                .repair_task_record(&report.ticket_id)
-                .expect("restored repair store")
-                .is_none()
-        );
-        assert!(restored.repair_events_since(None, 10).is_empty());
-        assert_eq!(restored.pending_governance_publication_count(), 0);
-        assert!(
-            restored
-                .repair_mutation_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn repair_publication_transaction_recovers_crash_after_domain_commit() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-003", 0x33, 0x43, 1_701_000_200);
-        let material = norito::to_bytes(&report).expect("encode repair report");
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        {
-            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-            let drain_guard = handle
-                .governance_outbox_drain_lock
-                .lock()
-                .expect("drain lock");
-            handle
-                .prepare_repair_mutation_intents(
-                    &mutation_guard,
-                    &drain_guard,
-                    std::slice::from_ref(&report.ticket_id),
-                    "enqueue_report",
-                    repair_mutation_operation_digest(
-                        "enqueue_report",
-                        std::slice::from_ref(&report.ticket_id),
-                        &material,
-                    ),
-                )
-                .expect("persist repair mutation intent");
-            handle
-                .repair
-                .enqueue_report_with_event(report.clone())
-                .expect("commit authoritative repair state");
-        }
-        assert!(
-            handle
-                .repair_task_record(&report.ticket_id)
-                .expect("repair store")
-                .is_some()
-        );
-        assert!(handle.repair_events_since(None, 10).is_empty());
-        assert_eq!(handle.pending_governance_publication_count(), 0);
-        drop(handle);
-
-        let restored =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        assert!(
-            restored
-                .repair_task_record(&report.ticket_id)
-                .expect("restored repair store")
-                .is_some()
-        );
-        let events = restored.repair_events_since(None, 10);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.ticket_id, report.ticket_id);
-        assert_eq!(events[0].event.status, RepairTaskStatusV1::Queued);
-        assert_eq!(restored.pending_governance_publication_count(), 1);
-        assert_eq!(
-            restored
-                .repair_event_audit_links
-                .read()
-                .expect("restored link lock")
-                .len(),
-            1
-        );
-        assert!(
-            restored
-                .repair_mutation_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn repair_publication_precommit_failure_rolls_back_and_fail_stops_until_restart() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-004", 0x34, 0x44, 1_701_000_300);
-        let material = norito::to_bytes(&report).expect("encode repair report");
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-        let drain_guard = handle
-            .governance_outbox_drain_lock
-            .lock()
-            .expect("drain lock");
-        let intents = handle
-            .prepare_repair_mutation_intents(
-                &mutation_guard,
-                &drain_guard,
-                std::slice::from_ref(&report.ticket_id),
-                "enqueue_report",
-                repair_mutation_operation_digest(
-                    "enqueue_report",
-                    std::slice::from_ref(&report.ticket_id),
-                    &material,
-                ),
-            )
-            .expect("persist repair mutation intent");
-        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
-        let prepared = fs::read(&checkpoint_path).expect("read prepared checkpoint");
-        handle
-            .repair
-            .enqueue_report_with_event(report.clone())
-            .expect("commit authoritative repair state");
-        fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
-        fs::create_dir(&checkpoint_path).expect("inject checkpoint directory");
-        let mut receiver = handle.subscribe_repair_events();
-
-        let error = handle
-            .finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, true)
-            .expect_err("publication checkpoint failure must surface");
-        assert!(
-            error
-                .to_string()
-                .contains("task state may have committed without its publication transaction")
-        );
-        assert!(handle.durability_failure_reason().is_some());
-        assert!(handle.repair_events_since(None, 10).is_empty());
-        assert_eq!(handle.pending_governance_publication_count(), 0);
-        assert_eq!(
-            handle
-                .repair_mutation_intents
-                .read()
-                .expect("rolled-back intent lock")
-                .entries
-                .len(),
-            1
-        );
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
-        drop(drain_guard);
-        drop(mutation_guard);
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        assert!(
-            handle
-                .try_set_governance_publisher(publisher.clone())
-                .is_err()
-        );
-        assert!(publisher.take().is_empty());
-        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
-        write_local_checkpoint_atomic(&checkpoint_path, &prepared)
-            .expect("restore prepared checkpoint");
-        drop(handle);
-
-        let restored =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
-        assert_eq!(restored.pending_governance_publication_count(), 1);
-        assert!(
-            restored
-                .repair_mutation_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn repair_publication_committed_unknown_restart_is_exactly_once() {
-        fn fail_parent_sync(_: &Path) -> io::Result<()> {
-            Err(io::Error::other("injected parent sync failure"))
-        }
-
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-005", 0x35, 0x45, 1_701_000_400);
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        handle
-            .enqueue_repair_report(&report)
-            .expect("commit repair publication transaction");
-        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
-        let committed = fs::read(&checkpoint_path).expect("read committed checkpoint");
-        let visible_error = write_local_checkpoint_atomic_with_mode_and_parent_sync(
-            &checkpoint_path,
-            &committed,
-            false,
-            fail_parent_sync,
-        )
-        .expect_err("parent sync failure follows visible rename");
-        assert!(visible_error.committed);
-        let persist_error = handle
-            .finish_local_checkpoint_write(
-                "auxiliary runtime",
-                &checkpoint_path,
-                Err(visible_error),
-            )
-            .expect_err("committed-unknown state must fail stop");
-        assert!(persist_error.committed);
-        assert!(handle.durability_failure_reason().is_some());
-        drop(handle);
-
-        let restored =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
-        assert_eq!(restored.pending_governance_publication_count(), 1);
-        assert_eq!(
-            restored
-                .repair_event_audit_links
-                .read()
-                .expect("link lock")
-                .len(),
-            1
-        );
-        assert!(
-            restored
-                .repair_mutation_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn repair_publication_reservation_rejects_before_domain_commit_when_headroom_is_insufficient() {
-        let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
-            .runtime_retention(RuntimeRetentionPolicy::new(4, 4, 2 * 1024 * 1024))
-            .build();
-        let report = repair_report_fixture("REP-TX-010", 0x3A, 0x4A, 1_701_000_900);
-        let handle =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-        for index in 0_u8..2 {
-            let mut issuance = proof_token_issuance_fixture();
-            issuance.token_id = [0xA0 + index; 16];
-            issuance.token_blake3 = [0xB0 + index; 32];
-            handle
-                .publish_proof_token_issuance(issuance)
-                .expect("occupy governance outbox slot");
-        }
-        assert_eq!(handle.pending_governance_publication_count(), 3);
-
-        let error = handle
-            .mark_repair_failed(
-                &report.ticket_id,
-                report.submitted_at_unix + 10,
-                "must reserve audit and draft slots".to_owned(),
-            )
-            .expect_err("insufficient headroom must precede the repair store mutation");
-        assert!(error.to_string().contains("requires 2 reserved"));
-        let snapshot = handle
-            .repair_task_snapshot(&report.ticket_id)
-            .expect("repair snapshot")
-            .expect("repair task");
-        assert!(matches!(
-            snapshot.record.state,
-            RepairTaskStateV1::Queued(_)
-        ));
-        assert!(snapshot.slash_proposal.is_none());
-        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
-        assert_eq!(handle.pending_governance_publication_count(), 3);
-        assert!(
-            handle
-                .repair_mutation_intents
-                .read()
-                .expect("intent lock")
-                .entries
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn repair_publication_reservation_blocks_competing_enqueue_and_recovers_at_full_limit() {
-        let (base, _dir) = storage_config_with_temp_dir();
-        let cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(base.data_dir().clone())
-            .runtime_retention(RuntimeRetentionPolicy::new(4, 4, 2 * 1024 * 1024))
-            .build();
-        let report = repair_report_fixture("REP-TX-011", 0x3B, 0x4B, 1_701_001_000);
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(1),
-            GcConfig::default(),
-        );
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-        let mut issuance = proof_token_issuance_fixture();
-        issuance.token_id = [0xC1; 16];
-        issuance.token_blake3 = [0xC2; 32];
-        handle
-            .publish_proof_token_issuance(issuance)
-            .expect("occupy one non-repair outbox slot");
-        assert_eq!(handle.pending_governance_publication_count(), 2);
-
-        let failed_at_unix = report.submitted_at_unix + 10;
-        let reason = "reserve restart finalization headroom".to_owned();
-        let mut material = failed_at_unix.to_le_bytes().to_vec();
-        hash_length_prefixed_material(&mut material, reason.as_bytes());
-        let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-        let drain_guard = handle
-            .governance_outbox_drain_lock
-            .lock()
-            .expect("drain lock");
-        let intents = handle
-            .prepare_repair_mutation_intents(
-                &mutation_guard,
-                &drain_guard,
-                std::slice::from_ref(&report.ticket_id),
-                "mark_failed",
-                repair_mutation_operation_digest(
-                    "mark_failed",
-                    std::slice::from_ref(&report.ticket_id),
-                    &material,
-                ),
-            )
-            .expect("persist two-slot repair reservation");
-        assert_eq!(intents.len(), 1);
-        assert_eq!(intents[0].reserved_outbox_slots, 2);
-
-        let mut competing = proof_token_issuance_fixture();
-        competing.token_id = [0xC3; 16];
-        competing.token_blake3 = [0xC4; 32];
-        let competing_bytes = norito::to_bytes(&competing).expect("encode competing issuance");
-        let error = handle
-            .enqueue_governance_outbox(GovernanceOutboxKindV1::ProofTokenIssuance, competing_bytes)
-            .expect_err("non-repair publication must not consume reserved headroom");
-        assert!(error.to_string().contains("slots are reserved"));
-        assert_eq!(handle.pending_governance_publication_count(), 2);
-
-        let update = handle
-            .repair
-            .mark_failed_with_event(&report.ticket_id, failed_at_unix, reason)
-            .expect("commit authoritative repair escalation");
-        assert!(update.event.is_some());
-        assert!(update.slash_proposal.is_some());
-        assert_eq!(
-            handle
-                .repair
-                .task_snapshot(&report.ticket_id)
-                .expect("repair store")
-                .expect("repair task")
-                .slash_proposal_stage,
-            Some(RepairSlashProposalStage::Drafted)
-        );
-        drop(drain_guard);
-        drop(mutation_guard);
-        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
-        assert_eq!(handle.pending_governance_publication_count(), 2);
-        drop(handle);
-
-        let restored = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(1),
-            GcConfig::default(),
-        );
-        assert_eq!(restored.pending_governance_publication_count(), 4);
-        let events = restored.repair_events_since(None, 10);
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events.last().expect("recovered escalation").event.status,
-            RepairTaskStatusV1::Escalated
-        );
-        assert!(
-            restored
-                .repair_mutation_intents
-                .read()
-                .expect("restored intent lock")
-                .entries
-                .is_empty()
-        );
-        assert_eq!(
-            restored
-                .repair_slash_publication_links
-                .read()
-                .expect("slash link lock")
-                .len(),
-            1
-        );
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        restored
-            .try_set_governance_publisher(publisher.clone())
-            .expect("drain exactly-full recovered outbox");
-        assert_eq!(publisher.take().len(), 4);
-        assert_eq!(restored.pending_governance_publication_count(), 0);
-        drop(restored);
-
-        let acknowledged =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
-        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
-        assert_eq!(acknowledged.repair_events_since(None, 10).len(), 2);
-    }
-
-    #[test]
-    fn repair_publication_startup_rejects_forged_reservation_budget() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-012", 0x3C, 0x4C, 1_701_001_100);
-        let material = norito::to_bytes(&report).expect("encode repair report");
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        {
-            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-            let drain_guard = handle
-                .governance_outbox_drain_lock
-                .lock()
-                .expect("drain lock");
-            handle
-                .prepare_repair_mutation_intents(
-                    &mutation_guard,
-                    &drain_guard,
-                    std::slice::from_ref(&report.ticket_id),
-                    "enqueue_report",
-                    repair_mutation_operation_digest(
-                        "enqueue_report",
-                        std::slice::from_ref(&report.ticket_id),
-                        &material,
-                    ),
-                )
-                .expect("persist repair reservation");
-        }
-
-        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
-        let bytes = fs::read(&path).expect("read reservation checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
-            norito::decode_from_bytes(&bytes).expect("decode reservation checkpoint");
-        let intent = checkpoint
-            .repair_mutation_intents
-            .first_mut()
-            .expect("repair mutation intent");
-        intent.reserved_outbox_slots = 0;
-        intent.binding_digest = repair_mutation_binding_digest(
-            intent.version,
-            intent.sequence,
-            &intent.operation,
-            intent.operation_digest,
-            intent.reserved_outbox_slots,
-            &intent.cursor,
-        );
-        write_local_checkpoint_atomic(
-            &path,
-            &norito::to_bytes(&checkpoint).expect("encode forged reservation checkpoint"),
-        )
-        .expect("write forged reservation checkpoint");
-        drop(handle);
-
-        let error =
-            NodeHandle::try_new_with_policies(cfg, enabled_repair_config(3), GcConfig::default())
-                .expect_err("operation-specific reservation downgrade must fail startup");
-        assert!(
-            error
-                .to_string()
-                .contains("outbox reservation does not match its operation")
-        );
-    }
-
-    #[test]
-    fn repair_slash_drafted_and_submitted_publications_are_exactly_once() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-006", 0x36, 0x46, 1_701_000_500);
-        let handle =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-        handle
-            .claim_repair_ticket(
-                &report.ticket_id,
-                "worker-exact",
-                report.submitted_at_unix + 10,
-                "claim-exact",
-            )
-            .expect("claim repair ticket");
-        let failed_at = report.submitted_at_unix + 20;
-        handle
-            .fail_repair_ticket(
-                &report.ticket_id,
-                "worker-exact",
-                failed_at,
-                "forced escalation".to_owned(),
-                "fail-exact",
-            )
-            .expect("draft slash proposal");
-        let drafted = handle
-            .repair_task_snapshot(&report.ticket_id)
-            .expect("repair snapshot")
-            .expect("repair task");
-        assert_eq!(
-            drafted.slash_proposal_stage,
-            Some(RepairSlashProposalStage::Drafted)
-        );
-        let proposal = drafted.slash_proposal.expect("drafted proposal");
-        let event_count = handle.repair_events_since(None, 10).len();
-        let outbox_count = handle.pending_governance_publication_count();
-        let slash_link_count = handle
-            .repair_slash_publication_links
-            .read()
-            .expect("slash link lock")
-            .len();
-
-        handle
-            .fail_repair_ticket(
-                &report.ticket_id,
-                "worker-exact",
-                failed_at,
-                "forced escalation".to_owned(),
-                "fail-exact",
-            )
-            .expect("exact fail retry");
-        assert_eq!(handle.repair_events_since(None, 10).len(), event_count);
-        assert_eq!(handle.pending_governance_publication_count(), outbox_count);
-        assert_eq!(
-            handle
-                .repair_slash_publication_links
-                .read()
-                .expect("slash link lock")
-                .len(),
-            slash_link_count
-        );
-
-        let mut embedded_approval = proposal.clone();
-        embedded_approval.approval = Some(RepairEscalationApprovalV1 {
-            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-            approve_votes: 1,
-            reject_votes: 0,
-            abstain_votes: 0,
-            approved_at_unix: failed_at + 1,
-            finalized_at_unix: failed_at + 2,
-        });
-        let error = handle
-            .submit_repair_slash_proposal(&embedded_approval)
-            .expect_err("embedded approval is never authoritative");
-        assert!(error.to_string().contains("embedded approval"));
-        assert_eq!(handle.pending_governance_publication_count(), outbox_count);
-        assert_eq!(
-            handle
-                .repair_task_snapshot(&report.ticket_id)
-                .expect("repair snapshot")
-                .expect("repair task")
-                .slash_proposal_stage,
-            Some(RepairSlashProposalStage::Drafted)
-        );
-
-        handle
-            .submit_repair_slash_proposal(&proposal)
-            .expect("submit exact drafted proposal");
-        let submitted_outbox_count = handle.pending_governance_publication_count();
-        let submitted_link_count = handle
-            .repair_slash_publication_links
-            .read()
-            .expect("submitted slash link lock")
-            .len();
-        assert_eq!(submitted_outbox_count, outbox_count + 1);
-        assert_eq!(submitted_link_count, slash_link_count + 1);
-        assert_eq!(
-            handle
-                .repair_task_snapshot(&report.ticket_id)
-                .expect("repair snapshot")
-                .expect("repair task")
-                .slash_proposal_stage,
-            Some(RepairSlashProposalStage::Submitted)
-        );
-        handle
-            .submit_repair_slash_proposal(&proposal)
-            .expect("exact submitted retry");
-        assert_eq!(
-            handle.pending_governance_publication_count(),
-            submitted_outbox_count
-        );
-        assert_eq!(
-            handle
-                .repair_slash_publication_links
-                .read()
-                .expect("submitted slash link lock")
-                .len(),
-            submitted_link_count
-        );
-        assert_eq!(handle.repair_events_since(None, 10).len(), event_count);
-        let outbox = handle.governance_outbox.read().expect("outbox lock");
-        assert_eq!(
-            outbox
-                .entries
-                .values()
-                .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairSlashDrafted)
-                .count(),
-            1
-        );
-        assert_eq!(
-            outbox
-                .entries
-                .values()
-                .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairSlashSubmitted)
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn repair_publication_startup_rejects_tampered_intent_and_acknowledged_event_link() {
-        let (intent_cfg, _intent_dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-007", 0x37, 0x47, 1_701_000_600);
-        let handle = NodeHandle::new_with_policies(
-            intent_cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        let material = norito::to_bytes(&report).expect("encode repair report");
-        {
-            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
-            let drain_guard = handle
-                .governance_outbox_drain_lock
-                .lock()
-                .expect("drain lock");
-            handle
-                .prepare_repair_mutation_intents(
-                    &mutation_guard,
-                    &drain_guard,
-                    std::slice::from_ref(&report.ticket_id),
-                    "enqueue_report",
-                    repair_mutation_operation_digest(
-                        "enqueue_report",
-                        std::slice::from_ref(&report.ticket_id),
-                        &material,
-                    ),
-                )
-                .expect("persist repair mutation intent");
-        }
-        let intent_path = auxiliary_runtime_checkpoint_path(intent_cfg.data_dir());
-        let intent_bytes = fs::read(&intent_path).expect("read intent checkpoint");
-        let mut intent_checkpoint: AuxiliaryRuntimeCheckpointV1 =
-            norito::decode_from_bytes(&intent_bytes).expect("decode intent checkpoint");
-        intent_checkpoint.repair_mutation_intents[0].operation_digest[0] ^= 0x80;
-        write_local_checkpoint_atomic(
-            &intent_path,
-            &norito::to_bytes(&intent_checkpoint).expect("encode tampered intent checkpoint"),
-        )
-        .expect("write tampered intent checkpoint");
-        drop(handle);
-        let error = NodeHandle::try_new_with_policies(
-            intent_cfg,
-            enabled_repair_config(3),
-            GcConfig::default(),
-        )
-        .expect_err("tampered repair intent must fail startup");
-        assert!(error.to_string().contains("binding digest mismatch"));
-
-        let (link_cfg, _link_dir) = storage_config_with_temp_dir();
-        let link_report = repair_report_fixture("REP-TX-008", 0x38, 0x48, 1_701_000_700);
-        let link_handle = NodeHandle::new_with_policies(
-            link_cfg.clone(),
-            enabled_repair_config(3),
-            GcConfig::default(),
-        );
-        link_handle
-            .enqueue_repair_report(&link_report)
-            .expect("enqueue linked repair report");
-        let publisher = Arc::new(RecordingPublisher::default());
-        link_handle
-            .try_set_governance_publisher(publisher)
-            .expect("acknowledge repair audit");
-        assert_eq!(link_handle.pending_governance_publication_count(), 0);
-        let link_path = auxiliary_runtime_checkpoint_path(link_cfg.data_dir());
-        let link_bytes = fs::read(&link_path).expect("read link checkpoint");
-        let mut link_checkpoint: AuxiliaryRuntimeCheckpointV1 =
-            norito::decode_from_bytes(&link_bytes).expect("decode link checkpoint");
-        link_checkpoint.repair_event_audit_links[0].event_digest[0] ^= 0x40;
-        write_local_checkpoint_atomic(
-            &link_path,
-            &norito::to_bytes(&link_checkpoint).expect("encode tampered link checkpoint"),
-        )
-        .expect("write tampered link checkpoint");
-        drop(link_handle);
-        let error = NodeHandle::try_new_with_policies(
-            link_cfg,
-            enabled_repair_config(3),
-            GcConfig::default(),
-        )
-        .expect_err("tampered acknowledged repair link must fail startup");
-        assert!(error.to_string().contains("audit linkage digest mismatch"));
-    }
-
-    #[test]
-    fn repair_publication_startup_rejects_submitted_stage_downgrade() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let report = repair_report_fixture("REP-TX-009", 0x39, 0x49, 1_701_000_800);
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            enabled_repair_config(1),
-            GcConfig::default(),
-        );
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-        handle
-            .claim_repair_ticket(
-                &report.ticket_id,
-                "worker-downgrade",
-                report.submitted_at_unix + 10,
-                "claim-downgrade",
-            )
-            .expect("claim repair ticket");
-        handle
-            .fail_repair_ticket(
-                &report.ticket_id,
-                "worker-downgrade",
-                report.submitted_at_unix + 20,
-                "force escalation".to_owned(),
-                "fail-downgrade",
-            )
-            .expect("draft slash proposal");
-        let proposal = handle
-            .repair_task_snapshot(&report.ticket_id)
-            .expect("repair snapshot")
-            .expect("repair task")
-            .slash_proposal
-            .expect("drafted proposal");
-        handle
-            .submit_repair_slash_proposal(&proposal)
-            .expect("submit slash proposal");
-        let publisher = Arc::new(RecordingPublisher::default());
-        handle
-            .try_set_governance_publisher(publisher)
-            .expect("acknowledge all repair publications");
-        assert_eq!(handle.pending_governance_publication_count(), 0);
-
-        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
-        let bytes = fs::read(&path).expect("read submitted checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
-            norito::decode_from_bytes(&bytes).expect("decode submitted checkpoint");
-        let submitted = checkpoint
-            .repair_slash_publication_links
-            .iter_mut()
-            .find(|link| link.stage == RepairSlashProposalStage::Submitted)
-            .expect("submitted publication link");
-        submitted.stage = RepairSlashProposalStage::Drafted;
-        write_local_checkpoint_atomic(
-            &path,
-            &norito::to_bytes(&checkpoint).expect("encode downgraded checkpoint"),
-        )
-        .expect("write downgraded checkpoint");
-        drop(handle);
-
-        let error =
-            NodeHandle::try_new_with_policies(cfg, enabled_repair_config(1), GcConfig::default())
-                .expect_err("submitted slash stage downgrade must fail startup");
-        assert!(
-            error
-                .to_string()
-                .contains("slash proposal stage lacks durable publication linkage")
-        );
-    }
-
-    #[test]
-    fn node_handle_tracks_repair_worker_actions() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle =
-            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
-
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-451".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_300_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [0x10; 32],
-                provider_id: [0x20; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "manual".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-
-        handle
-            .enqueue_repair_report(&report)
-            .expect("queue repair report");
-        let claimed = handle
-            .claim_repair_ticket(
-                &report.ticket_id,
-                "worker-1",
-                report.submitted_at_unix + 10,
-                "claim-1",
-            )
-            .expect("claim repair ticket");
-        assert!(matches!(
-            claimed.state,
-            RepairTaskStateV1::InProgress(InProgressRepairStateV1 { .. })
-        ));
-
-        handle
-            .heartbeat_repair_ticket(
-                &report.ticket_id,
-                "worker-1",
-                report.submitted_at_unix + 20,
-                "hb-1",
-            )
-            .expect("heartbeat repair ticket");
-
-        let completed = handle
-            .complete_repair_ticket(
-                &report.ticket_id,
-                "worker-1",
-                report.submitted_at_unix + 30,
-                Some("repaired".into()),
-                "complete-1",
-            )
-            .expect("complete repair ticket");
-        assert!(matches!(
-            completed.state,
-            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
-        ));
-
-        let failed_report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-452".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_400_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [0x11; 32],
-                provider_id: [0x21; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "manual".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        handle
-            .enqueue_repair_report(&failed_report)
-            .expect("queue second report");
-        handle
-            .claim_repair_ticket(
-                &failed_report.ticket_id,
-                "worker-2",
-                failed_report.submitted_at_unix + 5,
-                "claim-2",
-            )
-            .expect("claim second ticket");
-
-        let failed = handle
-            .fail_repair_ticket(
-                &failed_report.ticket_id,
-                "worker-2",
-                failed_report.submitted_at_unix + 15,
-                "retry later".into(),
-                "fail-1",
-            )
-            .expect("fail repair ticket");
-        assert!(matches!(
-            failed.state,
-            RepairTaskStateV1::Failed(FailedRepairStateV1 { .. })
-        ));
-    }
-
-    #[test]
-    fn node_handle_watchdog_publishes_audit_and_slash() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            default_slash_penalty: "0.000008".parse().expect("valid quantity"),
-            ..Default::default()
-        };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::default(),
-        );
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
-
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-460".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_500_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: [0x44; 32],
-                provider_id: [0x77; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "manual".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        handle
-            .enqueue_repair_report(&report)
-            .expect("queue repair report");
-        let _ = publisher.take();
-
-        let now_unix = report.submitted_at_unix + 86_400;
-        let outcome = handle
-            .run_repair_watchdog_once(now_unix)
-            .expect("watchdog run");
-        assert_eq!(outcome.escalated.len(), 1);
-
-        let payloads = publisher.take();
-        let mut audits = Vec::new();
-        let mut slashes = Vec::new();
-        for payload in payloads {
-            if let Ok(event) = norito::decode_from_bytes::<RepairAuditEventV1>(&payload) {
-                audits.push(event);
-                continue;
-            }
-            if let Ok(proposal) = norito::decode_from_bytes::<RepairSlashProposalV1>(&payload) {
-                slashes.push(proposal);
-            }
-        }
-
-        assert!(audits.iter().any(|event| {
-            event.payload.ticket_id == report.ticket_id
-                && event.payload.status == RepairTaskStatusV1::Escalated
-        }));
-        assert!(
-            slashes
-                .iter()
-                .any(|proposal| proposal.ticket_id == report.ticket_id)
-        );
-    }
-
-    #[test]
-    fn node_handle_repair_worker_completes_and_escalates() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            max_attempts: 1,
-            default_slash_penalty: "0.000009".parse().expect("valid quantity"),
-            ..Default::default()
-        };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::default(),
-        );
-
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
-
-        let payload = b"repair-worker-fixture";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xEA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let mut reader = payload.as_slice();
-        handle
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-        let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
-        let mut missing_digest = manifest_digest;
-        missing_digest[0] ^= 0xFF;
-
-        let report_complete = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-470".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_600_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id: [0x01; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "manual".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        let report_missing = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-471".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_600_100,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: missing_digest,
-                provider_id: [0x02; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "manual".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-
-        handle
-            .enqueue_repair_report(&report_complete)
-            .expect("enqueue repair report");
-        handle
-            .enqueue_repair_report(&report_missing)
-            .expect("enqueue repair report");
-        let _ = publisher.take();
-
-        let now_unix = report_complete.submitted_at_unix + 120;
-        let report = handle.run_repair_worker_once("worker-1", now_unix);
-        assert_eq!(report.claimed, 1);
-        let report = handle.run_repair_worker_once("worker-2", now_unix + 60);
-        assert_eq!(report.claimed, 1);
-
-        let completed = handle
-            .repair_task_record(&report_complete.ticket_id)
-            .expect("repair task store")
-            .expect("completed task");
-        assert!(matches!(
-            completed.state,
-            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
-        ));
-        let escalated = handle
-            .repair_task_record(&report_missing.ticket_id)
-            .expect("repair task store")
-            .expect("escalated task");
-        assert!(matches!(
-            escalated.state,
-            RepairTaskStateV1::Escalated(EscalatedRepairStateV1 { .. })
-        ));
-
-        let payloads = publisher.take();
-        let mut audits = Vec::new();
-        let mut slashes = Vec::new();
-        for payload in payloads {
-            if let Ok(event) = norito::decode_from_bytes::<RepairAuditEventV1>(&payload) {
-                audits.push(event);
-                continue;
-            }
-            if let Ok(proposal) = norito::decode_from_bytes::<RepairSlashProposalV1>(&payload) {
-                slashes.push(proposal);
-            }
-        }
-
-        assert!(audits.iter().any(|event| {
-            event.payload.ticket_id == report_complete.ticket_id
-                && event.payload.status == RepairTaskStatusV1::Completed
-        }));
-        assert!(audits.iter().any(|event| {
-            event.payload.ticket_id == report_missing.ticket_id
-                && event.payload.status == RepairTaskStatusV1::Escalated
-        }));
-        assert!(
-            slashes
-                .iter()
-                .any(|proposal| proposal.ticket_id == report_missing.ticket_id)
-        );
-    }
-
-    #[test]
-    fn node_handle_repair_worker_rehydrates_missing_chunks_from_local_replicas() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            max_attempts: 1,
-            ..Default::default()
-        };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::default(),
-        );
-
-        let payload = b"repair-worker-rehydrate";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest_a = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xA1; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-        let manifest_b = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xB2; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let mut reader = payload.as_slice();
-        handle
-            .ingest_manifest(&manifest_a, &plan, &mut reader)
-            .expect("ingest manifest a");
-        let mut reader = payload.as_slice();
-        handle
-            .ingest_manifest(&manifest_b, &plan, &mut reader)
-            .expect("ingest manifest b");
-
-        let digest_a: [u8; 32] = manifest_a.digest().expect("digest").into();
-        let digest_b: [u8; 32] = manifest_b.digest().expect("digest").into();
-
-        let stored_a = handle
-            .manifest_metadata_by_digest(&digest_a)
-            .expect("stored manifest a");
-        let stored_b = handle
-            .manifest_metadata_by_digest(&digest_b)
-            .expect("stored manifest b");
-
-        let missing_chunk = stored_a.chunk(0).expect("chunk").clone();
-        let source_chunk = stored_b.chunk(0).expect("chunk").clone();
-        assert_eq!(missing_chunk.digest, source_chunk.digest);
-
-        std::fs::remove_file(&missing_chunk.path).expect("remove missing chunk");
-        assert!(!missing_chunk.path.exists());
-
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-472".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_700_000,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: digest_a,
-                provider_id: [0x03; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "local-rehydrate".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-
-        let now_unix = report.submitted_at_unix + 120;
-        let worker_report = handle.run_repair_worker_once("worker-1", now_unix);
-        assert_eq!(worker_report.claimed, 1);
-
-        let task = handle
-            .repair_task_record(&report.ticket_id)
-            .expect("repair task store")
-            .expect("repair task");
-        assert!(matches!(
-            task.state,
-            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
-        ));
-
-        let bytes = std::fs::read(&missing_chunk.path).expect("rehydrated bytes");
-        assert_eq!(bytes.len(), missing_chunk.length as usize);
-        assert_eq!(blake3::hash(&bytes).as_bytes(), &missing_chunk.digest);
-    }
-
-    #[test]
-    fn node_handle_repair_worker_rehydrates_missing_chunks_from_orchestrator() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            max_attempts: 1,
-            ..Default::default()
-        };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::default(),
-        );
-
-        let payload = b"repair-worker-orchestrator";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xC3; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let mut reader = payload.as_slice();
-        handle
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-
-        let digest: [u8; 32] = manifest.digest().expect("digest").into();
-        let stored = handle
-            .manifest_metadata_by_digest(&digest)
-            .expect("stored manifest");
-        let missing_chunk = stored.chunk(0).expect("chunk").clone();
-        std::fs::remove_file(&missing_chunk.path).expect("remove missing chunk");
-        assert!(!missing_chunk.path.exists());
-
-        let start = missing_chunk.offset as usize;
-        let end = start + missing_chunk.length as usize;
-        let chunk_bytes = payload[start..end].to_vec();
-        let payloads = vec![RepairChunkPayload {
-            digest: missing_chunk.digest,
-            bytes: chunk_bytes,
-            source: Some("orchestrator#test".into()),
-        }];
-        let calls = Arc::new(AtomicUsize::new(0));
-        let orchestrator = Arc::new(StaticRepairOrchestrator {
-            payloads,
-            calls: calls.clone(),
-        });
-        handle.set_repair_orchestrator(orchestrator);
-
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-473".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_700_300,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest: digest,
-                provider_id: [0x04; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "orchestrator-rehydrate".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue repair report");
-
-        let now_unix = report.submitted_at_unix + 120;
-        let worker_report = handle.run_repair_worker_once("worker-1", now_unix);
-        assert_eq!(worker_report.claimed, 1);
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-
-        let task = handle
-            .repair_task_record(&report.ticket_id)
-            .expect("repair task store")
-            .expect("repair task");
-        assert!(matches!(
-            task.state,
-            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
-        ));
-
-        let bytes = std::fs::read(&missing_chunk.path).expect("rehydrated bytes");
-        assert_eq!(bytes.len(), missing_chunk.length as usize);
-        assert_eq!(blake3::hash(&bytes).as_bytes(), &missing_chunk.digest);
-    }
-
-    #[test]
     fn node_handle_gc_evicts_expired_manifest_and_publishes_audit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let gc_actual = iroha_config::parameters::actual::SorafsGc {
@@ -32334,7 +28585,7 @@ mod tests {
             .expect("ingest manifest");
         let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.evictions.len(), 1);
         assert_eq!(report.freed_bytes, plan.content_length);
         assert!(handle.manifest_metadata(&manifest_id).is_err());
@@ -32377,7 +28628,7 @@ mod tests {
         fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
         fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert!(report.evictions.is_empty());
         assert_eq!(report.errors, 1);
         assert!(handle.manifest_metadata(&manifest_id).is_ok());
@@ -32890,7 +29141,7 @@ mod tests {
             }
             let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
             let bytes = fs::read(&path).expect("read GC intent checkpoint");
-            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
                 norito::decode_from_bytes(&bytes).expect("decode GC intent checkpoint");
             let intent = checkpoint
                 .gc_eviction_intents
@@ -32946,12 +29197,12 @@ mod tests {
         handle
             .try_set_governance_publisher(publisher)
             .expect("install publisher");
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.evictions.len(), 1);
         assert_eq!(handle.pending_governance_publication_count(), 0);
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read linked GC checkpoint");
-        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV2 =
             norito::decode_from_bytes(&bytes).expect("decode linked GC checkpoint");
         let link = checkpoint
             .gc_eviction_audit_links
@@ -32982,7 +29233,7 @@ mod tests {
         build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
         build_manifest_with_retention(vec![0x77; 8], now_unix - 1, payload, &handle);
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.errors, 0);
         assert!(report.evictions.is_empty());
         assert_eq!(report.freed_bytes, 0);
@@ -33020,7 +29271,7 @@ mod tests {
             .try_set_governance_publisher(failing.clone())
             .expect("install initially idle failing publisher");
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.evictions.len(), 1);
         assert_eq!(report.errors, 1);
         assert!(failing.attempts() >= 1);
@@ -33064,7 +29315,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    handle.run_gc_once(now_unix)
+                    run_test_gc(&handle, now_unix, &empty_finalized_repair_projection())
                 })
             })
             .collect::<Vec<_>>();
@@ -33112,7 +29363,7 @@ mod tests {
         let first = build_manifest_with_retention(vec![0x91; 8], now_unix - 1, payload, &handle);
         let second = build_manifest_with_retention(vec![0x92; 8], now_unix - 1, payload, &handle);
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert!(report.evictions.is_empty());
         assert_eq!(report.errors, 1);
         assert!(
@@ -33197,32 +29448,15 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
 
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-601".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: 1_700_000_100,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id: declaration.provider_id,
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "reconciliation".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        handle
-            .enqueue_repair_report(&report)
-            .expect("queue repair report");
+        let repair_projection = finalized_repair_projection(vec![active_native_repair_task(
+            manifest_digest,
+            declaration.provider_id,
+        )]);
         publisher.take();
 
         let now_unix = 1_700_000_200;
         let reconciliation = handle
-            .run_reconciliation_once(now_unix)
+            .run_reconciliation_once(now_unix, &repair_projection)
             .expect("reconciliation report");
         assert_eq!(
             reconciliation.version,
@@ -33247,7 +29481,7 @@ mod tests {
         assert_eq!(decoded, reconciliation);
 
         let reconciliation_again = handle
-            .run_reconciliation_once(now_unix)
+            .run_reconciliation_once(now_unix, &repair_projection)
             .expect("reconciliation report");
         assert_eq!(
             reconciliation_again.repair_snapshot_hash,
@@ -33274,6 +29508,7 @@ mod tests {
             .build();
         let handle =
             NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
+        ensure_test_capacity_provider(&handle);
         assert!(handle.has_governance_publisher());
 
         let rollup = appeal_finance_weekly_rollup_fixture();
@@ -33282,7 +29517,7 @@ mod tests {
             .expect("publish appeal finance weekly rollup");
 
         let reconciliation = handle
-            .run_reconciliation_once(1_700_000_300)
+            .run_reconciliation_once(1_700_000_300, &empty_finalized_repair_projection())
             .expect("reconciliation report");
         let appeal_finance = reconciliation
             .appeal_finance
@@ -33300,6 +29535,26 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_without_provider_binding_fails_without_publication() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::default());
+        let publisher = Arc::new(RecordingPublisher::default());
+        handle.set_governance_publisher(publisher.clone());
+
+        let error = handle
+            .run_reconciliation_once(1_700_000_301, &empty_finalized_repair_projection())
+            .expect_err("unbound reconciliation must fail closed");
+
+        assert!(matches!(
+            error,
+            ReconciliationError::ProviderBindingUnavailable
+        ));
+        assert!(publisher.take().is_empty());
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
     fn appeal_finance_exact_addition_normalizes_scale() {
         let sum = xor("420")
             .checked_add(&xor("80.2500"))
@@ -33311,21 +29566,15 @@ mod tests {
     #[test]
     fn node_handle_gc_skips_manifest_with_active_repair_task() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
-            enabled: true,
-            ..Default::default()
-        };
         let gc_actual = iroha_config::parameters::actual::SorafsGc {
             enabled: true,
             retention_grace_secs: 0,
             max_deletions_per_run: 10,
             ..Default::default()
         };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::from(&repair_actual),
-            GcConfig::from(&gc_actual),
-        );
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+        let provider_id = ensure_test_capacity_provider(&handle);
 
         let payload = b"gc-repair-blocked";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
@@ -33353,29 +29602,11 @@ mod tests {
             .expect("ingest manifest");
         let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
 
-        let report = RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-GC-001".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix: retention_epoch,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id: [0x44; 32],
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "missing shard".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        };
-        handle
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let report = handle.run_gc_once(now_unix);
+        let repair_projection = finalized_repair_projection(vec![active_native_repair_task(
+            manifest_digest,
+            provider_id,
+        )]);
+        let report = run_test_gc(&handle, now_unix, &repair_projection);
         assert!(report.evictions.is_empty());
         assert!(
             report
@@ -33447,7 +29678,7 @@ mod tests {
             .with_label_values(&["shared_chunks"])
             .get();
 
-        let report = handle.run_gc_once(now_unix);
+        let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert!(report.evictions.is_empty());
         assert!(
             report
@@ -33461,143 +29692,6 @@ mod tests {
             .with_label_values(&["shared_chunks"])
             .get();
         assert!(after >= before.saturating_add(1));
-    }
-
-    #[test]
-    fn node_handle_gc_capacity_prefers_least_recently_used_expired() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let gc_actual = iroha_config::parameters::actual::SorafsGc {
-            enabled: true,
-            retention_grace_secs: 0,
-            max_deletions_per_run: 1,
-            ..Default::default()
-        };
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
-
-        let retention_epoch = 1_700_000_000;
-        let now_unix = retention_epoch + 10;
-
-        let payload_a = b"lru-expired-a";
-        let plan_a = CarBuildPlan::single_file(payload_a).expect("plan");
-        let mut policy_a = PinPolicy::default();
-        policy_a.retention_epoch = retention_epoch;
-        let manifest_a = manifest_builder_for_plan(payload_a, &plan_a)
-            .root_cid(vec![0x01; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan_a.content_length)
-            .car_digest(blake3::hash(payload_a).into())
-            .car_size(plan_a.content_length)
-            .pin_policy(policy_a)
-            .build()
-            .expect("manifest");
-
-        let mut reader_a = payload_a.as_slice();
-        let manifest_id_a = handle
-            .ingest_manifest(&manifest_a, &plan_a, &mut reader_a)
-            .expect("ingest a");
-
-        let payload_b = b"lru-expired-b";
-        let plan_b = CarBuildPlan::single_file(payload_b).expect("plan");
-        let mut policy_b = PinPolicy::default();
-        policy_b.retention_epoch = retention_epoch;
-        let manifest_b = manifest_builder_for_plan(payload_b, &plan_b)
-            .root_cid(vec![0x02; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan_b.content_length)
-            .car_digest(blake3::hash(payload_b).into())
-            .car_size(plan_b.content_length)
-            .pin_policy(policy_b)
-            .build()
-            .expect("manifest");
-
-        let mut reader_b = payload_b.as_slice();
-        let manifest_id_b = handle
-            .ingest_manifest(&manifest_b, &plan_b, &mut reader_b)
-            .expect("ingest b");
-
-        let _ = handle
-            .read_payload_range(&manifest_id_a, 0, 4)
-            .expect("read a");
-
-        let report = handle.run_gc_for_capacity(now_unix, plan_a.content_length);
-        assert_eq!(report.evictions.len(), 1);
-        assert_eq!(report.evictions[0].manifest_id, manifest_id_b);
-        assert!(handle.manifest_metadata(&manifest_id_a).is_ok());
-        assert!(handle.manifest_metadata(&manifest_id_b).is_err());
-    }
-
-    #[test]
-    fn pre_admission_sweep_allows_ingest() {
-        let (mut cfg, _dir) = storage_config_with_temp_dir();
-        cfg = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(cfg.data_dir().clone())
-            .max_capacity_bytes(iroha_config::base::util::Bytes(32))
-            .build();
-
-        let gc_actual = iroha_config::parameters::actual::SorafsGc {
-            enabled: true,
-            pre_admission_sweep: true,
-            retention_grace_secs: 0,
-            max_deletions_per_run: 1,
-            ..Default::default()
-        };
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
-
-        let expired_payload = vec![0xAA; 16];
-        let expired_plan = CarBuildPlan::single_file(&expired_payload).expect("plan");
-        let mut expired_policy = PinPolicy::default();
-        expired_policy.retention_epoch = unix_now_secs().saturating_sub(10);
-        let expired_manifest = manifest_builder_for_plan(&expired_payload, &expired_plan)
-            .root_cid(vec![0x33; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(expired_plan.content_length)
-            .car_digest(blake3::hash(&expired_payload).into())
-            .car_size(expired_plan.content_length)
-            .pin_policy(expired_policy)
-            .build()
-            .expect("manifest");
-        let mut expired_reader = expired_payload.as_slice();
-        let expired_id = handle
-            .ingest_manifest(&expired_manifest, &expired_plan, &mut expired_reader)
-            .expect("ingest expired");
-
-        let new_payload = vec![0xBB; 24];
-        let new_plan = CarBuildPlan::single_file(&new_payload).expect("plan");
-        let new_manifest = manifest_builder_for_plan(&new_payload, &new_plan)
-            .root_cid(vec![0x44; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(new_plan.content_length)
-            .car_digest(blake3::hash(&new_payload).into())
-            .car_size(new_plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-        let mut new_reader = new_payload.as_slice();
-        let new_id = handle
-            .ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
-            .expect("ingest new");
-
-        assert!(handle.manifest_metadata(&expired_id).is_err());
-        assert!(handle.manifest_metadata(&new_id).is_ok());
     }
 
     #[test]
@@ -33641,7 +29735,6 @@ mod tests {
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 9,
-            default_slash_penalty: "0.000042".parse().expect("valid quantity"),
             ..Default::default()
         };
 
@@ -33650,7 +29743,6 @@ mod tests {
             interval_secs: 300,
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
-            pre_admission_sweep: false,
             ..Default::default()
         };
 
@@ -33663,23 +29755,78 @@ mod tests {
         assert_eq!(handle.repair_config().heartbeat_interval_secs(), 45);
         assert_eq!(handle.repair_config().max_attempts(), 6);
         assert_eq!(handle.repair_config().worker_concurrency(), 9);
-        assert_eq!(
-            handle.repair_config().default_slash_penalty(),
-            &"0.000042".parse().expect("valid quantity")
-        );
 
         assert!(handle.gc_config().enabled());
         assert_eq!(handle.gc_config().interval_secs(), 300);
         assert_eq!(handle.gc_config().max_deletions_per_run(), 2_000);
         assert_eq!(handle.gc_config().retention_grace_secs(), 86_400);
-        assert!(!handle.gc_config().pre_admission_sweep());
+    }
 
-        let manager = handle.repair_manager();
-        assert_eq!(manager.claim_ttl_secs(), repair_cfg.claim_ttl_secs());
-        assert_eq!(
-            manager.heartbeat_interval_secs(),
-            repair_cfg.heartbeat_interval_secs()
-        );
+    #[test]
+    fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
+        let baseline = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            claim_ttl_secs: 2,
+            heartbeat_interval_secs: 1,
+            max_attempts: 1,
+            worker_concurrency: 1,
+        };
+        let mut invalid = Vec::new();
+
+        let mut lease_too_small = baseline;
+        lease_too_small.claim_ttl_secs = 0;
+        invalid.push(("claim_ttl_secs", lease_too_small));
+        let mut lease_overflow = baseline;
+        lease_overflow.claim_ttl_secs = u64::MAX;
+        invalid.push(("overflows", lease_overflow));
+        let mut renewal_zero = baseline;
+        renewal_zero.heartbeat_interval_secs = 0;
+        invalid.push(("heartbeat_interval_secs", renewal_zero));
+        let mut renewal_not_below = baseline;
+        renewal_not_below.heartbeat_interval_secs = renewal_not_below.claim_ttl_secs;
+        invalid.push(("strictly below", renewal_not_below));
+        let mut attempts_zero = baseline;
+        attempts_zero.max_attempts = 0;
+        invalid.push(("max_attempts", attempts_zero));
+        let mut attempts_large = baseline;
+        attempts_large.max_attempts =
+            iroha_config::parameters::defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT + 1;
+        invalid.push(("max_attempts", attempts_large));
+        let mut concurrency_zero = baseline;
+        concurrency_zero.worker_concurrency = 0;
+        invalid.push(("worker_concurrency", concurrency_zero));
+        let mut concurrency_large = baseline;
+        concurrency_large.worker_concurrency =
+            iroha_config::parameters::defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT + 1;
+        invalid.push(("worker_concurrency", concurrency_large));
+        let mut disabled_but_consumed = baseline;
+        disabled_but_consumed.enabled = false;
+        disabled_but_consumed.max_attempts = 0;
+        invalid.push(("max_attempts", disabled_but_consumed));
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        for (expected, repair) in invalid {
+            let config = StorageConfig::builder()
+                .enabled(false)
+                .data_dir(temp.path().join(expected))
+                .build();
+            let error = NodeHandle::try_new_with_policies(
+                config,
+                RepairConfig::from(repair),
+                GcConfig::default(),
+            )
+            .expect_err("invalid enabled native repair config must fail startup");
+            assert!(matches!(error, NodeInitError::NativeRepairConfig { .. }));
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+
+        let maximum = iroha_config::parameters::actual::SorafsRepair {
+            claim_ttl_secs: REPAIR_LEDGER_MAX_LEASE_MS_V1 / 1_000,
+            heartbeat_interval_secs: REPAIR_LEDGER_MAX_LEASE_MS_V1 / 1_000 - 1,
+            ..baseline
+        };
+        validate_native_repair_config(&RepairConfig::from(maximum))
+            .expect("maximum bounded native lease config is accepted");
     }
 
     #[test]
@@ -34910,7 +31057,8 @@ mod tests {
             isi::sorafs::SorafsRepairTaskActionV1,
             sorafs::moderation_ledger::{
                 REPAIR_LEDGER_TASK_VERSION_V1, RepairFinalizedCursorV1, RepairFinalizedTaskV1,
-                RepairLedgerLeaseV1, RepairLedgerTaskV1, sorafs_repair_task_id_v1,
+                RepairLedgerActionReceiptV1, RepairLedgerLeaseV1, RepairLedgerTaskV1,
+                sorafs_repair_task_id_v1,
             },
         };
 
@@ -35058,7 +31206,11 @@ mod tests {
                 terminal_outcome: None,
                 slash: None,
                 appeal: None,
-                action_receipts: Vec::new(),
+                action_receipts: vec![RepairLedgerActionReceiptV1 {
+                    idempotency_digest: [0xD1; 32],
+                    action_digest: [0xD2; 32],
+                    resulting_revision: 2,
+                }],
                 updated_at_unix_ms: 1_000,
             },
         };
@@ -35100,6 +31252,39 @@ mod tests {
             std::fs::read(&target.path).expect("read corrupt target"),
             corrupt
         );
+        let mut malformed_task = finalized_task.clone();
+        malformed_task.task.action_receipts[0].resulting_revision = 3;
+        assert!(matches!(
+            handle.execute_finalized_native_repair(&malformed_task, &authority, &context, 2_000,),
+            Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask)
+        ));
+        assert_eq!(
+            std::fs::read(&target.path).expect("malformed task performs no storage I/O"),
+            corrupt
+        );
+
+        std::fs::write(&source.path, &corrupt).expect("make every local replica invalid");
+        let orchestrator_calls = Arc::new(AtomicUsize::new(0));
+        handle.set_repair_orchestrator(Arc::new(FailingRepairOrchestrator {
+            calls: Arc::clone(&orchestrator_calls),
+        }));
+        assert!(matches!(
+            handle.execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000,),
+            Err(NativeRepairExecutionErrorV1::Orchestrator(_))
+        ));
+        assert_eq!(orchestrator_calls.load(Ordering::Relaxed), 1);
+        assert!(
+            handle
+                .pending_repair_transactions_after(None, 8)
+                .expect("transient orchestrator failure enqueues no terminal action")
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read(&target.path).expect("orchestrator failure leaves target retryable"),
+            corrupt
+        );
+        handle.clear_repair_orchestrator();
+        std::fs::write(&source.path, payload).expect("restore a valid local source replica");
 
         let first = handle
             .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000)
@@ -35181,12 +31366,11 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct StaticRepairOrchestrator {
-        payloads: Vec<RepairChunkPayload>,
+    struct FailingRepairOrchestrator {
         calls: Arc<AtomicUsize>,
     }
 
-    impl RepairOrchestrator for StaticRepairOrchestrator {
+    impl RepairOrchestrator for FailingRepairOrchestrator {
         fn rehydrate_missing_chunks(
             &self,
             _context: &native_repair_worker::NativeRepairExecutionContextV1,
@@ -35194,7 +31378,9 @@ mod tests {
             _missing_chunks: &[ChunkFileRecord],
         ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Ok(self.payloads.clone())
+            Err(RepairOrchestratorError::other(
+                "simulated transient remote provider outage",
+            ))
         }
     }
 
@@ -35225,27 +31411,6 @@ mod tests {
             &self,
             _archive: &PdpGovernanceArchiveV1,
             encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_repair_audit_event(
-            &self,
-            _event: &RepairAuditEventV1,
-            encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
-            guard.push(encoded.to_vec());
-            Ok(())
-        }
-
-        fn publish_repair_slash_proposal(
-            &self,
-            _proposal: &RepairSlashProposalV1,
-            encoded: &[u8],
-            _stage: RepairSlashStage,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.payloads.lock().expect("publisher lock poisoned");
             guard.push(encoded.to_vec());
@@ -35379,27 +31544,6 @@ mod tests {
             &self,
             _archive: &PdpGovernanceArchiveV1,
             _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_repair_audit_event(
-            &self,
-            _event: &RepairAuditEventV1,
-            _encoded: &[u8],
-        ) -> Result<(), GovernancePublishError> {
-            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
-            *guard += 1;
-            Err(GovernancePublishError::other("simulated publish failure"))
-        }
-
-        fn publish_repair_slash_proposal(
-            &self,
-            _proposal: &RepairSlashProposalV1,
-            _encoded: &[u8],
-            _stage: RepairSlashStage,
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");
             *guard += 1;

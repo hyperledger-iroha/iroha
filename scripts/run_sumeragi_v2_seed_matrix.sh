@@ -383,6 +383,10 @@ if [[ "$localnet_manifest_count" != "$expected_runs" ]]; then
   exit 1
 fi
 require_source_manifest "before completion attestation" || exit 1
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed before seed-matrix completion" >&2
+  exit 1
+fi
 summary_sha256="$(sha256_file "$summary")"
 if [[ ! "$summary_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "failed to hash the seed-matrix summary" >&2
@@ -393,8 +397,14 @@ if [[ ! "$localnet_manifests_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "failed to hash the retained-localnet manifest index" >&2
   exit 1
 fi
-completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
-{
+if ! require_source_manifest "immediately before completion publication"; then
+  exit 1
+fi
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed while publishing seed-matrix completion" >&2
+  exit 1
+fi
+completion_body="$(
   printf '%s\t%s\n' \
     schema_version 2 \
     profile "$profile" \
@@ -418,16 +428,18 @@ completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
     printf 'localnet_manifest_%03d_path\t%s\n' "$manifest_index" "$manifest_path"
     printf 'localnet_manifest_%03d_sha256\t%s\n' "$manifest_index" "$manifest_sha256"
   done <"$localnet_manifests"
-} >"$completion_tmp"
-mv -- "$completion_tmp" "$completion_attestation"
-if ! require_source_manifest "after completion attestation"; then
-  rm -f -- "$completion_attestation"
-  exit 1
-fi
+)"
+marker_publish_args=(
+  --output "$completion_attestation"
+  --maximum-bytes 131072
+)
 if [[ -n "${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE:-}" ]]; then
-  completion_path_tmp="${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE}.$$"
-  printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
-  mv -- "$completion_path_tmp" "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
+  marker_publish_args+=(
+    --pointer "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
+  )
 fi
+printf '%s\n' "$completion_body" |
+  python3 -I -S "${repo_root}/scripts/publish_release_marker.py" \
+    "${marker_publish_args[@]}"
 
 echo "seed-matrix completed ${run_index} command runs; evidence: ${summary}; completion: ${completion_attestation}" >&2

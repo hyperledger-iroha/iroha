@@ -319,7 +319,12 @@ fn validate_status(status: RepairLedgerStatusV1) -> Result<(), RepairLedgerProje
 }
 
 #[allow(clippy::too_many_lines)]
-fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjectionErrorV1> {
+/// Validate one finalized native repair task and all embedded provenance.
+///
+/// This is shared by destructive storage execution and Torii finality
+/// reconciliation so malformed task/receipt/slash/appeal records are rejected
+/// before either consumer performs a side effect.
+pub fn validate_task(task: &RepairLedgerTaskV1) -> Result<(), RepairLedgerProjectionErrorV1> {
     let report = decode_repair_report(&task.canonical_report)
         .map_err(|_| RepairLedgerProjectionErrorV1::InvalidTask)?;
     let expected_revision = u64::try_from(task.action_receipts.len())

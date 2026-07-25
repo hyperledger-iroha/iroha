@@ -5,11 +5,23 @@ import org.junit.jupiter.api.Test
 
 class ValidationFeeConsensusProofBridgeTest {
     @Test
-    fun `hash validation accepts a nonzero even-ending hash`() {
-        ValidationFeeConsensusProofBridge.requireNonzeroHash(
-            ByteArray(32) { 2 },
-            "evenEndingHash",
+    fun `hash validation requires the canonical Iroha marker`() {
+        ValidationFeeConsensusProofBridge.requireIrohaHash(
+            ByteArray(32) { 3 },
+            "markedHash",
         )
+        assertThrows(IllegalArgumentException::class.java) {
+            ValidationFeeConsensusProofBridge.requireIrohaHash(
+                ByteArray(32),
+                "zeroHash",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ValidationFeeConsensusProofBridge.requireIrohaHash(
+                ByteArray(32) { 2 },
+                "unmarkedHash",
+            )
+        }
     }
 
     @Test

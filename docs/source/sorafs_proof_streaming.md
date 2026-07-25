@@ -197,7 +197,7 @@ names listed above and can be imported directly with the Prometheus exporter ena
   CI.
 - **Promotion boundary.** Finalized proof-outcome queries, retry-safe
   terminal-outcome forwarding, and exact-chain native repair handoff do not by
-  themselves close the readiness lane. Promotion still requires removal of the
-  residual local repair manager/checkpoint consumers, cross-peer restart
-  reconciliation with one terminal outcome, and genuine multi-provider
-  deployment evidence.
+  themselves close the readiness lane. The competing local repair
+  manager/checkpoint consumers are removed; promotion still requires
+  cross-peer restart reconciliation with one terminal outcome and genuine
+  multi-provider deployment evidence.

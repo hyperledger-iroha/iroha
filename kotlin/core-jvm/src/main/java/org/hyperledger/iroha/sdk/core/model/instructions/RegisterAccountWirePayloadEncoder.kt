@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -43,14 +44,30 @@ object RegisterAccountWirePayloadEncoder {
 
     /** Decodes a Norito-framed `RegisterBox::Account` payload. */
     @JvmStatic
-    internal fun decodeRegisterAccountPayload(wirePayload: ByteArray): String =
-        NoritoCodec.decode(wirePayload, RegisterBoxAccountAdapter(), SCHEMA_PATH)
+    internal fun decodeRegisterAccountPayload(
+        wirePayload: ByteArray,
+        chainDiscriminant: Int,
+    ): String =
+        NoritoCodec.decode(
+            wirePayload,
+            RegisterBoxAccountAdapter(chainDiscriminant),
+            SCHEMA_PATH,
+        )
 
     private fun encodeRegisterBox(accountId: String): ByteArray {
-        return NoritoCodec.encode(accountId, SCHEMA_PATH, RegisterBoxAccountAdapter())
+        val chainDiscriminant = requireNotNull(AccountAddress.detectI105Discriminant(accountId)) {
+            "accountId must carry an explicit I105 chain discriminant"
+        }
+        return NoritoCodec.encode(
+            accountId,
+            SCHEMA_PATH,
+            RegisterBoxAccountAdapter(chainDiscriminant),
+        )
     }
 
-    private class RegisterBoxAccountAdapter : TypeAdapter<String> {
+    private class RegisterBoxAccountAdapter(
+        private val chainDiscriminant: Int,
+    ) : TypeAdapter<String> {
 
         override fun encode(encoder: NoritoEncoder, value: String) {
             // RegisterBox enum: u32 discriminant + length-prefixed variant payload
@@ -152,6 +169,7 @@ object RegisterAccountWirePayloadEncoder {
             val accountPayload = decodeSizedRawField(decoder, "NewAccount.id")
             val accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(
                 accountPayload,
+                chainDiscriminant,
                 decoder.flags,
                 decoder.flagsHint,
             )

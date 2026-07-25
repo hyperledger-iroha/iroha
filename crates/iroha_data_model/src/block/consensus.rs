@@ -5988,6 +5988,136 @@ mod tests {
         }
     }
 
+    fn apply_grouped_native_amx_fixture_mutation(
+        document: &mut norito::json::Value,
+        mutation: &norito::json::Value,
+        control_id: &str,
+    ) {
+        let operation = mutation
+            .get("op")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_else(|| panic!("control `{control_id}` mutation has an operation"));
+        let path = mutation
+            .get("path")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or_else(|| panic!("control `{control_id}` mutation has a path"));
+        match operation {
+            "replace" => {
+                let replacement = mutation
+                    .get("value")
+                    .cloned()
+                    .unwrap_or_else(|| panic!("control `{control_id}` replace has a value"));
+                *document
+                    .pointer_mut(path)
+                    .unwrap_or_else(|| panic!("control `{control_id}` replace path resolves")) =
+                    replacement;
+            }
+            "remove" => {
+                let (parent_path, token) = path
+                    .rsplit_once('/')
+                    .unwrap_or_else(|| panic!("control `{control_id}` remove path has a parent"));
+                let token = token.replace("~1", "/").replace("~0", "~");
+                match document
+                    .pointer_mut(parent_path)
+                    .unwrap_or_else(|| panic!("control `{control_id}` remove parent resolves"))
+                {
+                    norito::json::Value::Object(object) => {
+                        assert!(
+                            object.remove(&token).is_some(),
+                            "control `{control_id}` removes an existing field"
+                        );
+                    }
+                    norito::json::Value::Array(array) => {
+                        let index = token.parse::<usize>().unwrap_or_else(|_| {
+                            panic!("control `{control_id}` remove index is canonical")
+                        });
+                        assert!(
+                            index < array.len(),
+                            "control `{control_id}` removes an existing member"
+                        );
+                        array.remove(index);
+                    }
+                    _ => panic!("control `{control_id}` remove parent is a container"),
+                }
+            }
+            "swap" => {
+                let value = mutation
+                    .get("value")
+                    .and_then(norito::json::Value::as_object)
+                    .unwrap_or_else(|| panic!("control `{control_id}` swap has geometry"));
+                let left = value
+                    .get("left")
+                    .and_then(norito::json::Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .unwrap_or_else(|| panic!("control `{control_id}` swap left index is bounded"));
+                let right = value
+                    .get("right")
+                    .and_then(norito::json::Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .unwrap_or_else(|| {
+                        panic!("control `{control_id}` swap right index is bounded")
+                    });
+                let array = document
+                    .pointer_mut(path)
+                    .and_then(norito::json::Value::as_array_mut)
+                    .unwrap_or_else(|| panic!("control `{control_id}` swap path is an array"));
+                assert!(
+                    left < array.len() && right < array.len(),
+                    "control `{control_id}` swaps existing members"
+                );
+                array.swap(left, right);
+            }
+            "copy" => {
+                let source_path = mutation
+                    .get("value")
+                    .and_then(norito::json::Value::as_object)
+                    .and_then(|value| value.get("from"))
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_else(|| panic!("control `{control_id}` copy has a source path"));
+                let replacement = document
+                    .pointer(source_path)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("control `{control_id}` copy source resolves"));
+                *document
+                    .pointer_mut(path)
+                    .unwrap_or_else(|| panic!("control `{control_id}` copy target resolves")) =
+                    replacement;
+            }
+            "repeat" => {
+                let value = mutation
+                    .get("value")
+                    .and_then(norito::json::Value::as_object)
+                    .unwrap_or_else(|| panic!("control `{control_id}` repeat has geometry"));
+                let source_index = value
+                    .get("source_index")
+                    .and_then(norito::json::Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .unwrap_or_else(|| {
+                        panic!("control `{control_id}` repeat source index is bounded")
+                    });
+                let count = value
+                    .get("count")
+                    .and_then(norito::json::Value::as_u64)
+                    .and_then(|count| usize::try_from(count).ok())
+                    .unwrap_or_else(|| panic!("control `{control_id}` repeat count is bounded"));
+                assert!(
+                    count <= NATIVE_AMX_GROUP_SOURCES_MAX + 1,
+                    "control `{control_id}` repeat remains bounded"
+                );
+                let array = document
+                    .pointer_mut(path)
+                    .and_then(norito::json::Value::as_array_mut)
+                    .unwrap_or_else(|| panic!("control `{control_id}` repeat path is an array"));
+                let source = array
+                    .get(source_index)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("control `{control_id}` repeat source exists"));
+                *array = vec![source; count];
+            }
+            _ => panic!("control `{control_id}` uses supported mutation `{operation}`"),
+        }
+    }
+
     #[test]
     fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
         let document = grouped_native_amx_fixture_document();
@@ -6012,6 +6142,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn native_amx_receipt_negative_corpus_fails_closed() {
+        const EXPECTED_RECEIPT_CONTROLS: usize = 43;
+
+        let canonical = grouped_native_amx_fixture_document();
+        let controls = canonical
+            .get("negative_controls")
+            .and_then(norito::json::Value::as_array)
+            .expect("fixture contains negative controls");
+        let mut evaluated = 0_usize;
+        for control in controls {
+            if control
+                .get("validator")
+                .and_then(norito::json::Value::as_str)
+                != Some("receipt_group")
+            {
+                continue;
+            }
+            evaluated = evaluated.saturating_add(1);
+            let id = control
+                .get("id")
+                .and_then(norito::json::Value::as_str)
+                .expect("control has id");
+            let mut mutated = canonical.clone();
+            for mutation in control
+                .get("mutations")
+                .and_then(norito::json::Value::as_array)
+                .expect("control has mutations")
+            {
+                apply_grouped_native_amx_fixture_mutation(&mut mutated, mutation, id);
+            }
+            let receipt_group = mutated
+                .pointer("/golden/receipt_group")
+                .cloned()
+                .unwrap_or_else(|| panic!("control `{id}` retains the receipt group"));
+            let rejected = norito::json::from_value::<LaneBlockCommitment>(receipt_group.clone())
+                .map_or(true, |commitment| {
+                    commitment.validate_native_amx_receipts().is_err()
+                        || norito::json::to_value(&commitment)
+                            .map_or(true, |canonical| canonical != receipt_group)
+                });
+            assert!(
+                rejected,
+                "receipt-group negative control `{id}` must fail closed in Rust"
+            );
+        }
+        assert_eq!(
+            evaluated, EXPECTED_RECEIPT_CONTROLS,
+            "Rust must execute every declared receipt-group negative control"
+        );
     }
 
     #[test]

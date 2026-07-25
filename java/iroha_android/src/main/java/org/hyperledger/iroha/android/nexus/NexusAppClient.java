@@ -31,7 +31,12 @@ public final class NexusAppClient {
   private final IrohaClient toriiClient;
 
   public NexusAppClient(final NexusAppConfig config) {
-    this(config, null, new NoritoJavaCodecAdapter(), null);
+    this(
+        config,
+        null,
+        new NoritoJavaCodecAdapter(
+            java.util.Objects.requireNonNull(config, "config").chainDiscriminant()),
+        null);
   }
 
   public NexusAppClient(
@@ -41,7 +46,10 @@ public final class NexusAppClient {
       final IrohaClient toriiClient) {
     this.config = java.util.Objects.requireNonNull(config, "config");
     this.connectTransport = connectTransport;
-    this.codecAdapter = codecAdapter == null ? new NoritoJavaCodecAdapter() : codecAdapter;
+    this.codecAdapter =
+        codecAdapter == null
+            ? new NoritoJavaCodecAdapter(this.config.chainDiscriminant())
+            : codecAdapter;
     this.toriiClient = toriiClient;
   }
 

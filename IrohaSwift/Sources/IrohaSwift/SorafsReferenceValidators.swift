@@ -116,6 +116,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
     public let quantityGib: UInt64
     public let remainingGib: UInt64?
     public let ownerAccount: Data
+    public let providerId: Data?
     public let expiryUnix: UInt64
     public let nonce: UInt64
     public let makerFeeBps: UInt32
@@ -129,6 +130,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
         quantityGib: UInt64,
         remainingGib: UInt64? = nil,
         ownerAccount: Data,
+        providerId: Data? = nil,
         expiryUnix: UInt64,
         nonce: UInt64,
         makerFeeBps: UInt32,
@@ -141,6 +143,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
         self.quantityGib = quantityGib
         self.remainingGib = remainingGib
         self.ownerAccount = ownerAccount
+        self.providerId = providerId
         self.expiryUnix = expiryUnix
         self.nonce = nonce
         self.makerFeeBps = makerFeeBps
@@ -430,6 +433,28 @@ public enum SorafsReferenceValidators {
         let remainingGib = fields.remainingGib ?? fields.quantityGib
         try requirePositive(remainingGib, "remainingGib")
         try requireNonEmpty(fields.ownerAccount, "ownerAccount")
+        let providerId: Data
+        switch fields.side {
+        case .bid:
+            if let supplied = fields.providerId, !supplied.isEmpty {
+                throw SorafsReferenceValidationError.invalidOrderbookField(
+                    "providerId must be absent or empty for bid orders"
+                )
+            }
+            providerId = Data()
+        case .ask:
+            guard let supplied = fields.providerId, supplied.count == 32 else {
+                throw SorafsReferenceValidationError.invalidOrderbookField(
+                    "providerId must be exactly 32 bytes for ask orders"
+                )
+            }
+            guard supplied.contains(where: { $0 != 0 }) else {
+                throw SorafsReferenceValidationError.invalidOrderbookField(
+                    "providerId must not be all zero"
+                )
+            }
+            providerId = supplied
+        }
         try requirePositive(fields.expiryUnix, "expiryUnix")
         try requirePositive(fields.nonce, "nonce")
         let canonicalOrderId = try deriveOrderbookOrderId(
@@ -453,6 +478,7 @@ public enum SorafsReferenceValidators {
             quantityGib: fields.quantityGib,
             remainingGib: remainingGib,
             ownerAccount: fields.ownerAccount,
+            providerId: providerId,
             expiryUnix: fields.expiryUnix,
             nonce: fields.nonce,
             makerFeeBps: fields.makerFeeBps,

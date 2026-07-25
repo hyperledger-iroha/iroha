@@ -4242,10 +4242,25 @@ mod norito_rpc_fixture_tests {
         SignedTransaction::decode_all_versioned(&overlong_signed)
             .expect_err("overlong signed-transaction field length must be rejected");
 
-        assert_eq!(canonical[..6], [0, 0, 0, 0, 0xb4, 0x04]);
+        assert_eq!(
+            expected_prefix.len(),
+            6,
+            "the shared fixture must exercise a two-byte External COMPACT_LEN"
+        );
+        assert_eq!(&canonical[..6], expected_prefix.as_slice());
+        assert_ne!(
+            canonical[4] & 0x80,
+            0,
+            "the first External length byte must continue"
+        );
+        assert_eq!(
+            canonical[5] & 0x80,
+            0,
+            "the second External length byte must terminate"
+        );
         let mut overlong_entrypoint = Vec::with_capacity(canonical.len() + 1);
         overlong_entrypoint.extend_from_slice(&canonical[..5]);
-        overlong_entrypoint.extend_from_slice(&[0x84, 0x00]);
+        overlong_entrypoint.extend_from_slice(&[canonical[5] | 0x80, 0x00]);
         overlong_entrypoint.extend_from_slice(&canonical[6..]);
         assert!(
             norito::codec::decode_adaptive::<TransactionEntrypoint>(&overlong_entrypoint).is_err(),

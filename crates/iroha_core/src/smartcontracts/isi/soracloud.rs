@@ -42976,10 +42976,7 @@ mod tests {
         let error = prorated_window_fee(&Quantity::one(), 1, 0)
             .expect_err("a zero lease term must be rejected");
 
-        assert!(
-            error.to_string().contains("zero lease term"),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "zero lease term");
     }
 
     #[test]
@@ -42991,10 +42988,7 @@ mod tests {
         let error = prorated_window_fee(&maximum, u64::MAX, 1)
             .expect_err("intermediate multiplication must not saturate");
 
-        assert!(
-            error.to_string().contains("multiplication"),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "prorated fee calculation failed");
     }
 
     #[test]
@@ -43006,10 +43000,7 @@ mod tests {
         )
         .expect_err("zero members must not be accepted as a divisor");
 
-        assert!(
-            error.to_string().contains("must be greater than zero"),
-            "unexpected error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "must be greater than zero");
     }
 
     #[test]

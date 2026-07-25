@@ -15229,9 +15229,12 @@ def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
         "/v1/sorafs/storage/manifest/{manifest_id_hex}",
         "/v1/sorafs/storage/plan/{manifest_id_hex}",
     )
+    # Localized files marked `needs-translation` are traceable stubs. Their
+    # freshness is enforced by the source-hash tests below; implementation
+    # route assertions belong to the two canonical English documents.
     docs = (
-        *sorted(SORAFS_NODE_STORAGE.parent.glob("sorafs_node_storage*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-storage*.md")),
+        SORAFS_NODE_STORAGE,
+        SORAFS_NODE_PORTAL_DIR / "node-storage.md",
     )
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
@@ -19823,20 +19826,22 @@ def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_repair_chain_authority_and_live_evidence_work_stay_open_in_docs() -> None:
+def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs() -> None:
     source = read(SORAFS_REPAIR_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
         "Every command route accepts exactly one caller-signed `SignedTransaction` containing the route-specific native repair instruction and forwards it through strict durable transaction ingress. Reads return finalized ledger projections; obsolete local status-by-manifest, SSE, and WebSocket authority routes are not shipped.",
-        "Remaining local work is to remove the public competing manager/checkpoint dependencies, make every storage action depend on the exact finalized live lease, and prove cross-peer exactly-once execution and restart reconciliation.",
-        "Use the rollout gate only after the residual public `RepairManager`/filesystem checkpoint and GC/reconciliation dependencies have been removed, exact-live-lease execution and restart reconciliation have been proved",
+        "The former local `RepairManager`, `FileRepairStore`, repair checkpoint, mutation/event history, scheduler, and compatibility APIs have been deleted.",
+        "The storage executor accepts only a fully validated native task read at an exact finalized cursor and requires the current lease owner, generation, revision, provider binding, and expiry before any storage I/O.",
+        "GC and reconciliation consume one complete, bounded task projection collected from a single immutable finalized query view; a truncated, drifting, malformed, or unbound projection fails closed.",
+        "Use the rollout gate only after exact-live-lease execution and restart reconciliation have been proved in the reviewed deployment",
         "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
         "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
         "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
         "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
         "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
-        "Remaining implementation work is to remove the residual public `RepairManager`/filesystem checkpoint and GC/reconciliation dependencies so no production code can consult competing local authority.",
+        "The competing local repair authority and GC/reconciliation checkpoint dependencies are removed.",
         "Remaining rollout work is genuine four-validator evidence for a production PoR/PoTR failure, one cross-peer lease and terminal outcome, escalation/appeal, restart reconciliation, and governance handoff, followed by the SF-8b rollout evidence gate.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
@@ -20500,18 +20505,10 @@ def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
         "Implemented: the operator, metrics, and binding-generation guides "
         "below cover the local release helper"
     )
-    stale: list[str] = []
-    missing_current: list[str] = []
+    normalized = re.sub(r"\s+", " ", read(SORAFS_REFERENCE_SDK_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reference_sdk_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        if stale_phrase in normalized:
-            stale.append(str(path.relative_to(REPO_ROOT)))
-        if current_phrase not in normalized:
-            missing_current.append(str(path.relative_to(REPO_ROOT)))
-
-    assert stale == []
-    assert missing_current == []
+    assert stale_phrase not in normalized
+    assert current_phrase in normalized
 
 
 def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
@@ -20845,9 +20842,10 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "Required before production enablement:",
         "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
         "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
-        "Remove the residual public local repair manager and its filesystem, GC-protection, and reconciliation checkpoint consumers.",
+        "The former public `RepairManager` and filesystem repair authority have been deleted, and GC/reconciliation now consume one complete bounded native task projection from a single immutable finalized view.",
+        "SF-13 remains open because cross-peer exactly-once repair has not yet been proved and genuine multi-provider transport, restart, key-rotation, metrics, archive, and repair evidence remains external rollout work.",
         "Remaining production gates:",
-        "Delete the residual local repair manager/checkpoint path and prove the existing finalized native handoff across peer and process restarts.",
+        "Prove the finalized native handoff across peer and process restarts. The deleted local manager/checkpoint format has no production compatibility branch.",
         "Ship dedicated operator CLI commands and complete cross-SDK validation parity.",
     )
     missing = [
@@ -23806,11 +23804,12 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     )
     event_requirements = (
         "let tip_sequence = snapshot.events.last().map_or(0",
-        "if query.since > tip_sequence",
+        "let since = query.since.unwrap_or(0)",
+        "if since > tip_sequence",
         "StatusCode::BAD_REQUEST",
         "minimum_after_sequence",
         "StatusCode::CONFLICT",
-        ".filter(|event| event.sequence > query.since)",
+        ".filter(|event| event.sequence > since)",
         "moderation_finalized_events_etag(",
         "reputation_not_modified_response(&headers, &etag)",
         "let next_after = events.last().map(|event| event.cursor())",
@@ -25135,15 +25134,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
         "The transparency gate fail-closes when more than one valid source batch, publication cycle, or publication binding anchor appears, and clears the mixed `valid_source_batch_digests`, `valid_cycle_digests`, or `valid_publication_bindings` set before aggregate promotion can report ready.",
     )
-    missing_current: dict[str, list[str]] = {}
-
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_transparency_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        missing = [phrase for phrase in required_current if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert missing_current == {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
     checker = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_transparency_rollout_evidence_test.py"
@@ -25335,22 +25327,10 @@ def test_transparency_docs_do_not_reopen_shipped_local_ledger_layer() -> None:
         "local source-entry cycle builder, local node publication to filesystem/CAR",
         "Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped",
     )
-    stale: dict[str, list[str]] = {}
-    missing: dict[str, list[str]] = {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_transparency_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
-        missing_current = [
-            phrase for phrase in required_current if phrase not in normalized
-        ]
-        if matched_stale:
-            stale[str(path.relative_to(REPO_ROOT))] = matched_stale
-        if missing_current:
-            missing[str(path.relative_to(REPO_ROOT))] = missing_current
-
-    assert stale == {}
-    assert missing == {}
+    assert [phrase for phrase in stale_phrases if phrase in normalized] == []
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
 
 
 def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
@@ -27540,90 +27520,60 @@ def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> No
     )
 
 
-def test_reserve_rent_live_control_plane_stays_open_in_docs() -> None:
+def test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence() -> None:
     source = read(SORAFS_RESERVE_RENT_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_open = (
-        "The production reserve/rent control plane is still incomplete.",
-        "Signed local movement routes now authenticate and record transfer intents, but they do not submit reserve transfers or verify chain finality.",
-        "live chain submission, automatic finality polling, and live account mutation for credit lines are still target service work.",
-        "Broader governance source-entry effects beyond current provider denylist projection and live scheduler canary evidence remain target downstream work.",
-        "live account mutation for local credit-line state",
-        "broader downstream compliance application evidence for governance source entries",
-        "staged provider bake evidence, including live scheduled lifecycle canaries",
-        "Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.",
+    required_contract = (
+        "SoraFS V1 treats the native reserve ledger as the only authority",
+        "they do not own an independent reserve balance or lifecycle state",
+        "the supervised Torii reserve worker",
+        "Pre-release reserve state encoded without the V1 settlement anchor is not compatible.",
+        "Validator or Torii wall clocks never participate.",
+        "The former process-local reserve lifecycle scheduler, lifecycle/movement routes, local reserve checkpoint, and CLI adapters are removed from the V1 surface.",
+        "Production consumers use finalized typed queries",
+        "Reputation, orderbook, compliance, and transparency consumers must use these committed projections",
+        "The reserve lane is release-ready only when these tests, the full workspace and SDK gates, the four-validator deployment exercise, security review, disaster recovery rehearsal, and signed aggregate readiness evidence all pass.",
     )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
+    missing = [phrase for phrase in required_contract if phrase not in normalized]
 
     assert missing == []
 
 
-def test_reserve_rent_docs_do_not_reopen_shipped_local_control_plane() -> None:
+def test_reserve_rent_docs_do_not_reopen_process_local_authority() -> None:
     stale_phrases = (
         "The production reserve/rent control plane is still outstanding.",
         "no Torii REST surface for reserve lifecycle management",
         "no shipped CLI for provider status",
         "Remaining: reserve lifecycle service, signed Torii routes",
         "runtime reserve movement/authentication, persisted lifecycle-stage automation",
-    )
-    current_phrases = (
         "Signed local movement routes now authenticate and record transfer intents",
         "now a local authenticated appeal/policy handoff surface",
-        "config-backed scheduler can drive the same advancement path",
-        "signed reserve top-up/withdrawal/status/movement/custody/credit-line/appeal/policy CLI commands",
-        "Remaining: live chain custody submission and automatic finality polling for signed movement intents",
+        "live account mutation for local credit-line state",
     )
-    stale: dict[str, list[str]] = {}
-    missing_current: dict[str, list[str]] = {}
+    current_phrases = (
+        "native reserve ledger as the only authority",
+        "native reserve ISIs for policy activation, provider registration, movement request/decision, rent charge, lifecycle advancement, credit draw/repayment, and appeal submission/decision",
+        "finalized, typed policy/provider/movement/appeal/event queries",
+        "there is no second reserve record format",
+    )
+    normalized = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reserve_rent_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
-        if matched_stale:
-            stale[str(path.relative_to(REPO_ROOT))] = matched_stale
-        missing = [phrase for phrase in current_phrases if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert stale == {}
-    assert missing_current == {}
+    assert [phrase for phrase in stale_phrases if phrase in normalized] == []
+    assert [phrase for phrase in current_phrases if phrase not in normalized] == []
 
 
 def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     required_current = (
-        "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
-        "provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion",
-        "provider-bake artifacts require `bake_id` to match a reviewed lowercase `reserve-bake-*` label and `providers[].name` entries to use reviewed lowercase `provider-*` labels without non-production markers, require `rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and `scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase `reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without non-production markers, bind `provider_count`, `rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and `scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick inventories, and reject duplicate provider-bake entries before promotion can report ready",
-        "provider-bake artifacts bind `provider_count`, `rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and `scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick inventories, require `providers[].name` entries to use reviewed lowercase `provider-*` labels without non-production markers, require `rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and `scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase `reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without non-production markers, and reject duplicate provider-bake entries before promotion can report ready",
-        "quote-matrix artifacts bind `scenario_count` and `passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and `durations` inventories and reject duplicate or unknown dimension entries before promotion can report ready",
-        "ledger-digest artifacts bind `ledger_count` and `instruction_count` to the unique canonical `ledgers[].name` and `instructions[].name` inventories using reviewed `reserve-ledger-*` and `reserve-instruction-*` labels without non-production markers, and reject duplicate ledger/instruction entries before promotion can report ready",
-        "lifecycle-service artifacts bind `persisted_stage_count` to the unique canonical `persisted_stages[].name` inventory using reviewed `reserve-lifecycle-stage-*` labels without non-production markers, and reject duplicate persisted-stage entries before promotion can report ready",
-        "lifecycle-service and signed-route artifacts bind `route_count` to the unique canonical `routes[].name` inventories and reject duplicate or unknown route entries before promotion can report ready, and require every route response to carry a lowercase `body_blake3_hex` digest",
-        "reserve-movement artifacts bind `movement_count` to the unique canonical `movements[].action` inventory and reject duplicate or unknown movement-action entries before promotion can report ready",
-        "Reserve-rent payload-safety artifacts must explicitly set `policy_payload_included`, `quote_payloads_included`, `raw_ledger_included`, `raw_transfer_instructions_included`, `response_bodies_included`, `raw_transfer_included`, `raw_instruction_included`, `appeal_payloads_included`, `critical_alerts_firing`, and `payloads_included` to `false` before promotion can report ready.",
-        "Appeal-policy artifacts bind `appeal_probe_count` to the unique canonical `appeal_probes[].name` inventory and reject duplicate appeal-probe entries or unknown probe names before promotion can report ready",
-        "credit-line artifacts bind `credit_line_mutation_count` to unique canonical `credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical `accrual_cycles[].name` inventories and reject duplicate or unknown credit-line entries before promotion can report ready",
-        "metrics artifacts bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metrics before promotion can report ready",
-        "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
-        "The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready.",
-        "The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in `valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and provider-bake policy/matrix/ledger tuples must appear in `valid_policy_matrix_ledger_bindings` before final promotion can report ready. It also rechecks policy-bound, matrix-bound, and ledger-bound artifact fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and `valid_policy_matrix_ledger_bindings`.",
-        "Governance approval artifacts must carry the accepted provider-bake `bake_id`, and the rollout gate plus aggregate production-readiness gate reject governance approval evidence whose `bake_id` does not match a valid provider-bake artifact before final promotion can report ready.",
-        "Reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
-        "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
-        "governance approval artifacts also bind `downstream_compliance_consumer_count` to the unique canonical `downstream_compliance_consumers[].name` inventory using reviewed `reserve-compliance-consumer-*` labels without non-production markers, and reject duplicate downstream-compliance consumer entries before promotion can report ready",
-        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
+        "`scripts/build_sorafs_reserve_rent_canary.py` builds the payload-free evidence envelopes consumed by the reserve rollout checker.",
+        "It is evidence tooling only: it cannot create, replace, or attest native ledger state",
+        "production promotion must use observations collected from the reviewed deployment.",
+        "Reserve/rent promotion evidence must cover:",
+        "exact applied/rejected/absent transaction observation",
+        "corrupt signed bytes, digest mismatch, missing/duplicate Kura entrypoints, and stale finalized cursors",
     )
-    missing_current: dict[str, list[str]] = {}
-
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reserve_rent_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        missing = [phrase for phrase in required_current if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert missing_current == {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
     checker = read(SCRIPTS_DIR / "check_sorafs_reserve_rent_rollout_evidence.py")
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     checker_test = read(
@@ -28067,7 +28017,7 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
         / "examples"
         / "sorafs_reserve_rent_governance_approval_canary.args.example"
     )
-    docs = read(SORAFS_RESERVE_RENT_PLAN)
+    docs = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
 
     assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
     assert "TRUE_CLAIMS" in builder
@@ -28252,13 +28202,9 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
     assert "--credit-line-mutation\nmanual_approval_tier" in credit_line_example
     assert "--accrual-cycle\ncredit_shortfall" in credit_line_example
     assert "build_sorafs_reserve_rent_canary.py" in docs
-    assert "payload-free SFM-6 reserve/rent canary builder" in docs
-    assert "--route-body-blake3-hex" in docs
-    assert "Ledger-digest `--ledger-ref` and" in docs
-    assert "`--instruction-ref` inputs must use reviewed `reserve-ledger-*`" in docs
-    assert "Lifecycle-service `--persisted-stage` inputs must use reviewed" in docs
-    assert "Provider-bake `--scheduled-lifecycle-canary-tick` inputs must use reviewed" in docs
-    assert "sorafs_reserve_rent_governance_approval_canary.args.example" in docs
+    assert "payload-free evidence envelopes consumed by the reserve rollout checker" in docs
+    assert "It is evidence tooling only" in docs
+    assert "cannot create, replace, or attest native ledger state" in docs
 
 
 UNSHIPPED_RESERVE_RENT_LIVE_ROUTE_PATTERNS = (

@@ -2,7 +2,6 @@ package org.hyperledger.iroha.sdk.tx.norito
 
 import java.util.Optional
 import org.hyperledger.iroha.sdk.address.decodeCompactPublicKeyPayload
-import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -17,7 +16,6 @@ object SignedTransactionEncoder {
 
     private const val VERSION_BYTE: Byte = 0x01
     private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
-    private val PAYLOAD_ADAPTER = TransactionPayloadAdapter()
     private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
     private val SIGNATURE_ADAPTER: TypeAdapter<ByteArray> = TransactionSignatureAdapter()
     private val ATTACHMENTS_OPTION_ADAPTER: TypeAdapter<Optional<ByteArray>> =
@@ -30,18 +28,17 @@ object SignedTransactionEncoder {
         MultisigSignaturesNoritoAdapter()
     private val MULTISIG_SIGNATURES_OPTION_ADAPTER: TypeAdapter<Optional<MultisigSignatures>> =
         NoritoAdapters.option(MULTISIG_SIGNATURES_ADAPTER)
-    private val PAYLOAD_CODEC = NoritoJavaCodecAdapter()
-
     @JvmStatic
     @Throws(NoritoException::class)
     fun encode(transaction: SignedTransaction): ByteArray {
-        val payload: TransactionPayload = PAYLOAD_CODEC.decodeTransaction(transaction.encodedPayload())
-        val record = SignedRecord(
-            transaction.signature(),
-            payload,
-            transaction.multisigSignatures(),
-        )
         try {
+            val payloadBytes = transaction.encodedPayload()
+            TransactionPayloadAdapter.validateCanonicalPayloadBytes(payloadBytes)
+            val record = SignedRecord(
+                transaction.signature(),
+                payloadBytes,
+                transaction.multisigSignatures(),
+            )
             return NoritoCodec.encodeAdaptive(record, SignedTransactionAdapter).payload()
         } catch (ex: Exception) {
             throw NoritoException("Failed to encode signed transaction", ex)
@@ -63,9 +60,9 @@ object SignedTransactionEncoder {
     fun decode(encoded: ByteArray): SignedTransaction {
         try {
             val record = NoritoCodec.decodeAdaptive(encoded, SignedTransactionAdapter)
-            val payloadBytes = PAYLOAD_CODEC.encodeTransaction(record.payload)
+            TransactionPayloadAdapter.validateCanonicalPayloadBytes(record.payloadBytes)
             return SignedTransaction.builder()
-                .setEncodedPayload(payloadBytes)
+                .setEncodedPayload(record.payloadBytes)
                 .setSignature(record.signature)
                 .setPublicKey(ByteArray(0))
                 .setSchemaName(SIGNED_SCHEMA)
@@ -94,21 +91,21 @@ object SignedTransactionEncoder {
 
     private class SignedRecord(
         val signature: ByteArray,
-        val payload: TransactionPayload,
+        val payloadBytes: ByteArray,
         val multisigSignatures: Optional<MultisigSignatures>,
     )
 
     private object SignedTransactionAdapter : TypeAdapter<SignedRecord> {
         override fun encode(encoder: NoritoEncoder, value: SignedRecord) {
             encodeSizedField(encoder, SIGNATURE_ADAPTER, value.signature)
-            encodeSizedField(encoder, PAYLOAD_ADAPTER, value.payload)
+            encodeSizedRawField(encoder, value.payloadBytes)
             encodeSizedField(encoder, ATTACHMENTS_OPTION_ADAPTER, Optional.empty())
             encodeSizedField(encoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, value.multisigSignatures)
         }
 
         override fun decode(decoder: NoritoDecoder): SignedRecord {
             val signature = decodeSizedField(decoder, SIGNATURE_ADAPTER, "signature")
-            val payload = decodeSizedField(decoder, PAYLOAD_ADAPTER, "payload")
+            val payloadBytes = decodeSizedRawField(decoder, "payload")
             val attachments = decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER, "attachments")
             require(!attachments.isPresent) { "Signed transaction attachments are not supported" }
             val multisigSignatures = decodeSizedField(
@@ -116,7 +113,7 @@ object SignedTransactionEncoder {
                 MULTISIG_SIGNATURES_OPTION_ADAPTER,
                 "multisig_signatures",
             )
-            return SignedRecord(signature, payload, multisigSignatures)
+            return SignedRecord(signature, payloadBytes, multisigSignatures)
         }
     }
 
@@ -127,6 +124,18 @@ object SignedTransactionEncoder {
         val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
         encoder.writeLength(payload.size.toLong(), compact)
         encoder.writeBytes(payload)
+    }
+
+    private fun encodeSizedRawField(encoder: NoritoEncoder, payload: ByteArray) {
+        val compact = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+        encoder.writeLength(payload.size.toLong(), compact)
+        encoder.writeBytes(payload)
+    }
+
+    private fun decodeSizedRawField(decoder: NoritoDecoder, fieldName: String): ByteArray {
+        val length = decoder.readLength(decoder.compactLenActive())
+        require(length <= Int.MAX_VALUE) { "$fieldName payload too large" }
+        return decoder.readBytes(length.toInt())
     }
 
     private class TransactionSignatureAdapter : TypeAdapter<ByteArray> {

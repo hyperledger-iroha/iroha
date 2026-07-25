@@ -3705,6 +3705,27 @@ fn governance_paths() -> Map {
         Value::Object(sccp_route_governance_operation()),
     );
     paths.insert(
+        iroha_torii_shared::uri::GOV_CAPABILITIES.to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch governance capabilities.",
+            "Return the strict public governance schema, exact configured voting parameters, supported proposal kinds, and supported routes.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::GOV_CITIZEN_DRAFT.to_owned(),
+        Value::Object(json_post_operation(
+            "Governance",
+            "Draft citizenship registration.",
+            "Build the exact configured RegisterCitizen instruction for local signing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         iroha_torii_shared::uri::VALIDATION_FEE_CURRENT_POLICY_PROOF.to_owned(),
         Value::Object(validation_fee_current_policy_proof_operation()),
     );
@@ -6286,13 +6307,9 @@ fn sorafs_paths() -> Map {
             Some("uint64"),
         )],
     );
-    if let Some(Value::Object(post_operation)) = json_post_operation(
-        "SoraFS",
+    if let Some(Value::Object(post_operation)) = sorafs_moderation_signed_transaction_operation(
         "Submit an authoritative moderation appeal intake.",
-        "Submit an exact canonical base64 Norito ModerationAppealIntakeV1 plus an exact native asset-lock confirmation through the durable transaction orchestrator. The authenticated account must be the appellant, the confirmation must bind the same case, round, payer, and evidence digest, and the intake must carry the confirmed escrow digest. Pending requests return 202 and finalized replays return the committed appeal projection; no local ballot state is created.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
+        "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction chain and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
     )
     .remove("post")
     {
@@ -6334,58 +6351,66 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/moderation/ballots/eligibility".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Register moderation juror eligibility.",
+            "Submit a caller-signed transaction containing exactly one `RegisterSorafsModerationJurorEligibility` instruction. The canonical private PoP proof is bounded and validated before ingress; only its ledger-authorized eligibility result is retained.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/sortition".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Finalize moderation panel sortition.",
+            "Submit a governed-signed transaction containing exactly one `FinalizeSorafsModerationSortition` instruction. Native execution recomputes the predecessor-bound deterministic draw and rejects stale, biased, or unauthorized proposals.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/assignments/accept".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Accept a moderation juror assignment.",
+            "Submit a caller-signed transaction containing exactly one `AcceptSorafsModerationJurorAssignment` instruction. The transaction authority is the accepting juror and the native ledger binds acceptance to the exact sortition digest.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/activate".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Activate a moderation case.",
+            "Submit a governed-signed transaction containing exactly one `ActivateSorafsModerationCase` instruction. Native execution applies deterministic no-show failover and opens the committed deadlines atomically.",
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/moderation/ballots/commits".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit a moderation ballot commitment.",
-            "Submit a canonical base64 Norito SoraFsModerationBallotCommitV1 payload through the durable native transaction orchestrator. The canonical request signer must match the canonical juror account id; pending requests return 202 and finalized replays return the committed case projection.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationCommit` instruction. The embedded canonical Norito commitment is bounded, its caller timestamp is zero, and its juror account must exactly equal the transaction authority.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/challenges".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Raise an authoritative moderation challenge.",
-            "Submit a native payload-free SoraFS moderation challenge through the durable transaction orchestrator. The canonical request signer must match challenger_id, the evidence digest must be a non-zero 32-byte hex value, and the ledger enforces the challenge window and lifecycle transition.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `RaiseSorafsModerationChallenge` instruction. The transaction authority is the challenger; native validation enforces the bounded payload-free reason, non-zero evidence digest, target rules, window, and replay identity.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/challenges/resolve".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Resolve an authoritative moderation challenge.",
-            "Submit a native SoraFS moderation challenge decision through the durable transaction orchestrator. The canonical request signer must match resolved_by; local resolution notes are rejected because the authoritative record is payload-free.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a governed-signed transaction containing exactly one `ResolveSorafsModerationChallenge` instruction. The native ledger enforces governed authority and accepts only a bounded existing challenge decision; Torii never synthesizes a resolver identity.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/reveals".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit a moderation ballot reveal.",
-            "Submit a canonical base64 Norito SoraFsModerationBallotRevealV1 payload through the durable native transaction orchestrator. The canonical request signer must match the canonical juror account id; pending requests return 202 and finalized replays return the committed case projection.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationReveal` instruction. The embedded canonical Norito reveal is bounded, its caller timestamp is zero, and its juror account must exactly equal the transaction authority.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/tally".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit authoritative moderation finalization.",
-            "Submit the native FinalizeSorafsModerationCase instruction through the configured durable transaction orchestrator. Pending requests return 202; finalized replays return the committed case projection. The route fails closed when finalized-chain orchestration is unavailable and never mutates the local ballot runtime.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a governed-signed transaction containing exactly one `FinalizeSorafsModerationCase` instruction. The native ledger enforces the finalizer authority and atomically records the single terminal outcome and no-shows; Torii never signs this request for the caller.",
         )),
     );
     paths.insert(
@@ -6512,20 +6537,6 @@ fn sorafs_paths() -> Map {
             "SoraFS",
             "Build a reviewed-quarantine appeal finance handoff.",
             "For a reviewed local SFM-4a quarantine record, compute the governed appeal price and return a native OpenAssetLock instruction for an exact caller-supplied case, round, panel size, idempotency key, and canonical evidence-bundle digest. The escrow carries exactly that evidence digest so the confirmed lock can be bound by a canonical native ModerationAppealIntakeV1; no case, round, policy, roster, or timing fields are inferred.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "quarantine_id_hex",
-                "16-byte local quarantine id encoded as hexadecimal.",
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Reject the retired quarantine appeal-ballot format.",
-            "This pre-release local ballot route is retired and returns HTTP 410 after canonical request authentication. Clients must submit an exact native ModerationAppealIntakeV1 and asset-lock confirmation to POST /v1/sorafs/moderation/ballots; Torii never derives consensus fields or falls back to process-local ballot state.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -9706,6 +9717,21 @@ fn signed_transaction_submission_operation() -> Map {
 }
 
 fn sorafs_repair_signed_transaction_operation(summary: &str, description: &str) -> Map {
+    let mut methods = signed_transaction_submission_operation();
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("signed transaction submission operation contains POST");
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    methods
+}
+
+fn sorafs_moderation_signed_transaction_operation(summary: &str, description: &str) -> Map {
     let mut methods = signed_transaction_submission_operation();
     let operation = methods
         .get_mut("post")
@@ -13765,7 +13791,7 @@ fn validation_fee_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "proposal_id", "proposer", "proposal_kind", "created_height", "status",
-                "referendum", "parliament_snapshot", "finalization_evidence",
+                "pipeline", "referendum", "parliament_snapshot", "finalization_evidence",
                 "enacted_at_height"
             ],
             "additionalProperties": false,
@@ -13776,8 +13802,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/JsonValue",
                     "description": "Exact native ValidationFeePolicy or ValidationFeePayoutLifecycle ProposalKind."
                 },
-                "created_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "created_height": {
+                    "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "Canonical unsigned decimal block height."
+                },
                 "status": { "$ref": "#/components/schemas/JsonValue" },
+                "pipeline": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Ordered pipeline stages with every height encoded as a canonical unsigned decimal string."
+                },
                 "referendum": { "$ref": "#/components/schemas/JsonValue" },
                 "parliament_snapshot": { "$ref": "#/components/schemas/JsonValue" },
                 "finalization_evidence": {
@@ -13787,7 +13820,10 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     ]
                 },
                 "enacted_at_height": {
-                    "type": ["integer", "null"], "format": "uint64", "minimum": 1
+                    "oneOf": [
+                        { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" },
+                        { "type": "null" }
+                    ]
                 }
             }
         }),
@@ -13811,11 +13847,27 @@ fn validation_fee_schemas(schemas: &mut Map) {
         "ValidationFeeProposalDetailV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "proposal"],
+            "required": ["version", "proposal", "current_height", "body_progress", "tally", "locks"],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
-                "proposal": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" }
+                "proposal": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" },
+                "current_height": {
+                    "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"
+                },
+                "body_progress": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Exact Parliament counts encoded as canonical unsigned decimal strings."
+                },
+                "tally": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact u128 tally and threshold values encoded as canonical unsigned decimal strings."
+                },
+                "locks": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Retained citizen locks with expiry and duration encoded as canonical unsigned decimal strings."
+                }
             }
         }),
     );
@@ -13833,7 +13885,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 },
                 "referendum_window": {
                     "oneOf": [
-                        { "$ref": "#/components/schemas/SccpAtWindowV1" },
+                        {
+                            "type": "object",
+                            "required": ["lower", "upper"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "lower": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" },
+                                "upper": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" }
+                            }
+                        },
                         { "type": "null" }
                     ]
                 },
@@ -18782,18 +18842,20 @@ fn openapi_schemas() -> Map {
                 "payload_ownership_hash": { "$ref": "#/components/schemas/Hash" },
                 "rbc_instance_hash": { "$ref": "#/components/schemas/Hash" },
                 "accepted_candidate_indices": {
-                    "type": "array", "minItems": 1,
+                    "type": "array", "minItems": 1, "maxItems": 4_096,
+                    "uniqueItems": true,
                     "items": { "type": "integer", "format": "uint64", "minimum": 0 }
                 },
                 "accepted_transaction_hashes": {
-                    "type": "array", "minItems": 1,
+                    "type": "array", "minItems": 1, "maxItems": 4_096,
+                    "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/Hash" }
                 },
                 "validator_set_hash_version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
                 "validator_set": {
                     "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true,
-                    "items": { "type": "string" }
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" }
                 },
                 "validator_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
                 "min_quorum": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
@@ -18884,17 +18946,14 @@ fn openapi_schemas() -> Map {
                     "minItems": 1,
                     "maxItems": 128,
                     "uniqueItems": true,
-                    "items": { "type": "string" },
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" },
                     "description": "Ordered validator ids used to assemble the QC."
                 },
                 "validator_set_pops": {
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 128,
-                    "items": {
-                        "type": "array", "minItems": 96, "maxItems": 96,
-                        "items": { "type": "integer", "minimum": 0, "maximum": 255 }
-                    },
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set."
                 },
                 "signers_bitmap": {
@@ -18904,11 +18963,66 @@ fn openapi_schemas() -> Map {
                     "items": { "type": "integer", "minimum": 0, "maximum": 255 }
                 },
                 "bls_aggregate_signature": {
-                    "type": "array", "minItems": 96, "maxItems": 96,
-                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
-                    "description": "Compressed 96-byte BLS12-381 aggregate signature."
+                    "$ref": "#/components/schemas/SumeragiV2BlsProof"
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantSettlementReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source_id", "local_amount", "xor_due", "xor_after_haircut", "xor_variance", "timestamp_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Ordered Native AMX participant source id as canonical uppercase 32-byte Norito JSON hex."
+                },
+                "local_amount": { "const": "0" },
+                "xor_due": { "const": "0" },
+                "xor_after_haircut": { "const": "0" },
+                "xor_variance": { "const": "0" },
+                "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 1 }
+            },
+            "description": "One zero-effect source member in a grouped control-only Native AMX participant settlement."
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantSettlementCommitment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count", "total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
+            "additionalProperties": false,
+            "properties": {
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_count": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4_096 },
+                "total_local_amount": { "const": "0" },
+                "total_xor_due": { "const": "0" },
+                "total_xor_after_haircut": { "const": "0" },
+                "total_xor_variance": { "const": "0" },
+                "swap_metadata": { "type": "null" },
+                "receipts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4_096,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/NativeAmxParticipantSettlementReceipt" }
+                },
+                "nexus_fee_receipts": {
+                    "type": "array",
+                    "maxItems": 0
+                },
+                "native_amx_receipts": {
+                    "type": "array",
+                    "maxItems": 0
+                }
+            },
+            "description": "Exact bounded zero-effect participant settlement. Group ordering, timestamp equality, current-source membership, and tx_count equality require semantic validation."
         }),
     );
     schemas.insert(
@@ -18921,7 +19035,7 @@ fn openapi_schemas() -> Map {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "participant_proposal": { "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal" },
-                "participant_settlement": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
+                "participant_settlement": { "$ref": "#/components/schemas/NativeAmxParticipantSettlementCommitment" },
                 "participant_settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
                 "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
@@ -18994,6 +19108,7 @@ fn openapi_schemas() -> Map {
                 },
                 "native_amx_receipts": {
                     "type": "array",
+                    "maxItems": 4_096,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/NativeAmxReceipt" }
                 }
@@ -29879,6 +29994,8 @@ mod tests {
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE));
+        assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CAPABILITIES));
+        assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
         #[cfg(feature = "gov_vrf")]
@@ -30021,6 +30138,10 @@ mod tests {
         assert!(
             paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan")
         );
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/eligibility"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/sortition"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/assignments/accept"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/activate"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges/resolve"));
@@ -30038,10 +30159,6 @@ mod tests {
             paths.contains_key(
                 "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"
             )
-        );
-        assert!(
-            paths
-                .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot")
         );
         assert!(
             paths.contains_key(
@@ -33442,6 +33559,8 @@ mod tests {
             "NexusFeeReceipt",
             "NativeAmxReceipt",
             "NativeAmxLegRecord",
+            "NativeAmxParticipantSettlementCommitment",
+            "NativeAmxParticipantSettlementReceipt",
             "NativeAmxAttestationQc",
             "NativeAmxAttestationBody",
             "NativeAmxPhase",
@@ -34968,6 +35087,14 @@ mod tests {
         );
         assert_eq!(
             commitment_properties
+                .get("native_amx_receipts")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(4_096)
+        );
+        assert_eq!(
+            commitment_properties
                 .get("nexus_fee_receipts")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("items"))
@@ -35075,7 +35202,7 @@ mod tests {
             ),
             (
                 "participant_settlement",
-                "#/components/schemas/LaneSettlementCommitment",
+                "#/components/schemas/NativeAmxParticipantSettlementCommitment",
             ),
             ("participant_settlement_hash", "#/components/schemas/Hash"),
         ] {
@@ -35089,6 +35216,73 @@ mod tests {
                 "{field} should reference its exact participant-finality schema"
             );
         }
+        let participant_settlement = schemas
+            .get("NativeAmxParticipantSettlementCommitment")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant settlement schema");
+        assert_eq!(
+            participant_settlement
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let participant_settlement_properties = participant_settlement
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant settlement properties");
+        for field in [
+            "total_local_amount",
+            "total_xor_due",
+            "total_xor_after_haircut",
+            "total_xor_variance",
+        ] {
+            assert_eq!(
+                participant_settlement_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("0"),
+                "participant settlement {field} must be zero"
+            );
+        }
+        for field in ["nexus_fee_receipts", "native_amx_receipts"] {
+            assert_eq!(
+                participant_settlement_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxItems"))
+                    .and_then(Value::as_u64),
+                Some(0),
+                "participant settlement {field} must be empty"
+            );
+        }
+        let participant_receipts = participant_settlement_properties
+            .get("receipts")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant receipts schema");
+        assert_eq!(
+            participant_receipts.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            participant_receipts.get("maxItems").and_then(Value::as_u64),
+            Some(4_096)
+        );
+        assert_eq!(
+            participant_receipts
+                .get("uniqueItems")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            participant_receipts
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxParticipantSettlementReceipt")
+        );
         for qc_field in ["prepare_qc", "commit_qc"] {
             assert_eq!(
                 leg_properties
@@ -35131,6 +35325,14 @@ mod tests {
             validator_set.get("uniqueItems").and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            validator_set
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsValidatorId")
+        );
         let validator_set_pops = qc_properties
             .get("validator_set_pops")
             .and_then(Value::as_object)
@@ -35147,9 +35349,9 @@ mod tests {
             validator_set_pops
                 .get("items")
                 .and_then(Value::as_object)
-                .and_then(|items| items.get("minItems"))
-                .and_then(Value::as_u64),
-            Some(96)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsProof")
         );
         assert_eq!(
             qc_properties
@@ -35171,10 +35373,32 @@ mod tests {
             qc_properties
                 .get("bls_aggregate_signature")
                 .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxItems"))
-                .and_then(Value::as_u64),
-            Some(96)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsProof")
         );
+
+        let descriptor_properties = schemas
+            .get("NativeAmxParticipantLaneBlockDescriptor")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("Native AMX participant descriptor properties");
+        for field in ["accepted_candidate_indices", "accepted_transaction_hashes"] {
+            let accepted = descriptor_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("Native AMX descriptor {field} schema"));
+            assert_eq!(accepted.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(
+                accepted.get("maxItems").and_then(Value::as_u64),
+                Some(4_096)
+            );
+            assert_eq!(
+                accepted.get("uniqueItems").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
 
         let body_schema = schemas
             .get("NativeAmxAttestationBody")

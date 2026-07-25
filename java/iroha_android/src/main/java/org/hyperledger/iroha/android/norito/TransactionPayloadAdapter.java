@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
@@ -40,6 +41,11 @@ import org.hyperledger.iroha.norito.TypeAdapter;
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
+  // Validation never exposes rendered account text. Controller bytes are independent of the I105
+  // display prefix, so this private synthetic context permits canonical decode/re-encode checks
+  // without acquiring a public or network default.
+  private static final int CANONICAL_VALIDATION_DISCRIMINANT = 0;
+  private static final ThreadLocal<Integer> CHAIN_DISCRIMINANT = new ThreadLocal<>();
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<String> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
@@ -109,58 +115,98 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final String INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1";
   private static final String MULTISIG_PROPOSE_DTO_SCHEMA =
       "iroha_torii::routing::MultisigProposeDto";
+  private final int chainDiscriminant;
+
+  private TransactionPayloadAdapter(final int chainDiscriminant) {
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    this.chainDiscriminant = chainDiscriminant;
+  }
+
+  static TransactionPayloadAdapter forChain(final int chainDiscriminant) {
+    return new TransactionPayloadAdapter(chainDiscriminant);
+  }
+
+  static void validateCanonicalPayloadBytes(final byte[] encoded) {
+    if (encoded == null) {
+      throw new IllegalArgumentException("encoded transaction payload must not be null");
+    }
+    final TransactionPayloadAdapter validator =
+        forChain(CANONICAL_VALIDATION_DISCRIMINANT);
+    final TransactionPayload decoded = NoritoCodec.decodeAdaptive(encoded, validator);
+    final byte[] reencoded = NoritoCodec.encodeAdaptive(decoded, validator).payload();
+    if (!Arrays.equals(encoded, reencoded)) {
+      throw new IllegalArgumentException(
+          "transaction payload bytes are not the exact canonical encoding");
+    }
+  }
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
-    if (value.executable().requiresTransactionGasLimit() && value.feePayment().gasLimit() == null) {
-      throw new IllegalArgumentException(
-          "feePayment.gasLimit is required for IVM and contract-call executables");
-    }
-    encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId());
-    encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
-    encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
-    encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
-    encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
-    encodeSizedField(encoder, NONCE_ADAPTER, value.nonce());
-    encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
-    encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
+    withChainContext(
+        chainDiscriminant,
+        () -> {
+          if (value.executable().requiresTransactionGasLimit()
+              && value.feePayment().gasLimit() == null) {
+            throw new IllegalArgumentException(
+                "feePayment.gasLimit is required for IVM and contract-call executables");
+          }
+          encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+          encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
+          encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
+          encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
+          encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
+          encodeSizedField(encoder, NONCE_ADAPTER, value.nonce());
+          encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
+          encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
+          return null;
+        });
   }
 
   @Override
   public TransactionPayload decode(final NoritoDecoder decoder) {
-    final String chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER);
-    final String authority = decodeAuthorityField(decoder);
-    final long creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER);
-    final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
-    final Optional<Long> ttl = decodeSizedField(decoder, TTL_ADAPTER);
-    final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
-    final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
-    final Map<String, JsonValue> metadata =
-        new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
+    return withChainContext(
+        chainDiscriminant,
+        () -> {
+          final String chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER);
+          final String authority = decodeAuthorityField(decoder);
+          final long creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER);
+          final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
+          final Optional<Long> ttl = decodeSizedField(decoder, TTL_ADAPTER);
+          final Optional<Long> nonceRaw = decodeSizedField(decoder, NONCE_ADAPTER);
+          final FeePaymentIntent feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER);
+          final Map<String, JsonValue> metadata =
+              new LinkedHashMap<>(decodeSizedField(decoder, METADATA_ADAPTER));
 
-    final TransactionPayload.Builder builder =
-        TransactionPayload.builder()
-            .setChainId(chainId)
-            .setAuthority(authority)
-            .setCreationTimeMs(creationTimeMs)
-            .setExecutable(executable)
-            .setFeePayment(feePayment)
-            .setMetadata(metadata);
-    ttl.ifPresent(builder::setTimeToLiveMs);
-    nonceRaw.ifPresent(builder::setNonce);
-    return builder.buildDecodedForCodec();
+          final TransactionPayload.Builder builder =
+              TransactionPayload.builder()
+                  .setChainId(chainId)
+                  .setAuthority(authority)
+                  .setCreationTimeMs(creationTimeMs)
+                  .setExecutable(executable)
+                  .setFeePayment(feePayment)
+                  .setMetadata(metadata);
+          ttl.ifPresent(builder::setTimeToLiveMs);
+          nonceRaw.ifPresent(builder::setNonce);
+          return builder.buildDecodedForCodec();
+        });
   }
 
   static byte[] encodeInstructionBox(final InstructionBox instruction) {
     return NoritoCodec.encode(instruction, INSTRUCTION_BOX_SCHEMA, new InstructionAdapter());
   }
 
-  static byte[] encodeMultisigProposeRequest(final MultisigProposeRequest request) {
-    return NoritoCodec.encode(
-        request,
-        MULTISIG_PROPOSE_DTO_SCHEMA,
-        new MultisigProposeRequestAdapter(),
-        NoritoHeader.COMPACT_LEN);
+  static byte[] encodeMultisigProposeRequest(
+      final MultisigProposeRequest request, final int chainDiscriminant) {
+    return withChainContext(
+        chainDiscriminant,
+        () ->
+            NoritoCodec.encode(
+                request,
+                MULTISIG_PROPOSE_DTO_SCHEMA,
+                new MultisigProposeRequestAdapter(),
+                NoritoHeader.COMPACT_LEN));
   }
 
   static InstructionBox decodeInstructionBox(final byte[] encoded) {
@@ -603,7 +649,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
       final AccountAddress.ParseResult parsed;
       try {
-        parsed = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null);
+        parsed =
+            AccountAddress.parseEncodedIgnoringCurveSupport(
+                canonicalAuthority, requiredChainDiscriminant());
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("authority must use canonical I105 encoding", ex);
       }
@@ -775,7 +823,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       }
       try {
         final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes(), algorithm);
-        return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        return address.toI105(requiredChainDiscriminant());
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("Invalid single-key AccountController payload", ex);
       }
@@ -785,9 +833,39 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         final AccountAddress.MultisigPolicyPayload policy) {
       try {
         final AccountAddress address = AccountAddress.fromMultisigPolicy(policy);
-        return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        return address.toI105(requiredChainDiscriminant());
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("Invalid multisig policy for AccountId", ex);
+      }
+    }
+  }
+
+  private static int requiredChainDiscriminant() {
+    final Integer value = CHAIN_DISCRIMINANT.get();
+    if (value == null) {
+      throw new IllegalStateException(
+          "Account controller encoding/rendering requires an explicit chainDiscriminant");
+    }
+    return value;
+  }
+
+  private static <T> T withChainContext(
+      final int chainDiscriminant, final Supplier<T> operation) {
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    final Integer previous = CHAIN_DISCRIMINANT.get();
+    if (previous != null && previous.intValue() != chainDiscriminant) {
+      throw new IllegalStateException("Conflicting nested chainDiscriminant context");
+    }
+    CHAIN_DISCRIMINANT.set(chainDiscriminant);
+    try {
+      return operation.get();
+    } finally {
+      if (previous == null) {
+        CHAIN_DISCRIMINANT.remove();
+      } else {
+        CHAIN_DISCRIMINANT.set(previous);
       }
     }
   }

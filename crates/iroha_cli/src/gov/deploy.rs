@@ -156,46 +156,83 @@ pub struct EnactArgs {
     /// Proposal id (hex 64)
     #[arg(long, value_name = "ID_HEX")]
     pub proposal_id: String,
-    /// Optional preimage hash (hex 64)
+    /// Sign, submit, and wait for this exact server-drafted enactment instruction.
     #[arg(long)]
-    pub preimage_hash: Option<String>,
-    /// Optional window lower bound (height)
-    #[arg(long)]
-    pub window_lower: Option<u64>,
-    /// Optional window upper bound (height)
-    #[arg(long)]
-    pub window_upper: Option<u64>,
+    pub apply: bool,
+}
+
+fn build_enact_body(args: &EnactArgs) -> Result<norito::json::Value> {
+    json_object(vec![("proposal_id", json_value(&args.proposal_id)?)])
+}
+
+fn decode_enact_instructions(
+    response: &norito::json::Value,
+    expected_proposal_id: &str,
+) -> Result<Vec<InstructionBox>> {
+    let entries = response
+        .get("tx_instructions")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("governance enactment draft is missing `tx_instructions`"))?;
+    if entries.len() != 1 {
+        return Err(eyre!(
+            "governance enactment draft must contain exactly one instruction"
+        ));
+    }
+    let entry = &entries[0];
+    let wire_id = entry
+        .get("wire_id")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("governance enactment draft is missing `wire_id`"))?;
+    let payload_hex = entry
+        .get("payload_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("governance enactment draft is missing `payload_hex`"))?;
+    let payload = hex::decode(payload_hex)
+        .map_err(|error| eyre!("invalid governance enactment payload hex: {error}"))?;
+    let instruction = iroha::data_model::isi::decode_instruction_from_pair(wire_id, &payload)
+        .map_err(|error| eyre!("invalid governance enactment instruction: {error}"))?;
+    let enactment = instruction
+        .as_any()
+        .downcast_ref::<iroha::data_model::isi::governance::EnactReferendum>()
+        .ok_or_else(|| eyre!("governance enactment draft returned a different instruction"))?;
+    if hex::encode(enactment.referendum_id) != expected_proposal_id {
+        return Err(eyre!(
+            "governance enactment draft proposal id differs from the request"
+        ));
+    }
+    Ok(vec![instruction])
+}
+
+fn finish_enact<C: RunContext>(
+    context: &mut C,
+    proposal_id: &str,
+    apply: bool,
+    value: &norito::json::Value,
+) -> Result<()> {
+    if apply {
+        let instructions = decode_enact_instructions(value, proposal_id)?;
+        return context.submit(instructions);
+    }
+    let ok = value
+        .get("ok")
+        .and_then(norito::json::Value::as_bool)
+        .unwrap_or(false);
+    let n_instr = value
+        .get("tx_instructions")
+        .and_then(|v| v.as_array())
+        .map_or(0, Vec::len);
+    let summary = Some(format!(
+        "enact: proposal_id={proposal_id} ok={ok} tx_instrs={n_instr}"
+    ));
+    print_with_summary(context, summary, value)
 }
 
 impl Run for EnactArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let window = match (self.window_lower, self.window_upper) {
-            (Some(lower), Some(upper)) => json_object(vec![
-                ("lower", json_value(&lower)?),
-                ("upper", json_value(&upper)?),
-            ])?,
-            _ => norito::json::Value::Null,
-        };
-        let body = json_object(vec![
-            ("proposal_id", json_value(&self.proposal_id)?),
-            ("preimage_hash", json_value(&self.preimage_hash)?),
-            ("window", window),
-        ])?;
+        let body = build_enact_body(&self)?;
         let value = client.post_gov_enact_json(&body)?;
-        let ok = value
-            .get("ok")
-            .and_then(norito::json::Value::as_bool)
-            .unwrap_or(false);
-        let n_instr = value
-            .get("tx_instructions")
-            .and_then(|v| v.as_array())
-            .map_or(0, Vec::len);
-        let summary = Some(format!(
-            "enact: proposal_id={} ok={ok} tx_instrs={n_instr}",
-            self.proposal_id
-        ));
-        print_with_summary(context, summary, &value)
+        finish_enact(context, &self.proposal_id, self.apply, &value)
     }
 }
 
@@ -565,6 +602,83 @@ mod tests {
         let v: norito::json::Value = norito::json::from_str(&s).expect("roundtrip");
         assert_eq!(v["referendum_id"].as_str(), Some("ref-123"));
         assert_eq!(v["proposal_id"].as_str().unwrap().len(), 66);
+    }
+
+    #[test]
+    fn enact_body_matches_strict_torii_dto() {
+        let args = EnactArgs {
+            proposal_id: "ab".repeat(32),
+            apply: false,
+        };
+        let body = build_enact_body(&args).expect("build enact body");
+        let object = body.as_object().expect("enact body object");
+        assert_eq!(object.len(), 1);
+        assert_eq!(
+            object.get("proposal_id").and_then(|value| value.as_str()),
+            Some(args.proposal_id.as_str())
+        );
+        assert!(object.get("preimage_hash").is_none());
+        assert!(object.get("window").is_none());
+    }
+
+    fn enact_draft_response(proposal_id: [u8; 32]) -> norito::json::Value {
+        use iroha::data_model::isi::{Instruction, frame_instruction_payload};
+
+        let instruction: InstructionBox = iroha::data_model::isi::governance::EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: iroha::data_model::governance::types::AtWindow {
+                lower: 10,
+                upper: 20,
+            },
+        }
+        .into();
+        let wire_id = Instruction::id(&*instruction);
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = frame_instruction_payload(wire_id, &payload).expect("frame enact instruction");
+        let tx_instruction = json_object(vec![
+            ("wire_id", json_value(&wire_id).expect("encode wire id")),
+            (
+                "payload_hex",
+                json_value(&hex::encode(framed)).expect("encode framed payload"),
+            ),
+        ])
+        .expect("build enact draft instruction");
+        let tx_instructions =
+            json_array(vec![tx_instruction]).expect("build enact draft instruction list");
+        json_object(vec![
+            ("ok", json_value(&true).expect("encode draft status")),
+            ("tx_instructions", tx_instructions),
+        ])
+        .expect("build enact draft response")
+    }
+
+    #[test]
+    fn enact_defaults_to_draft_only() {
+        let proposal_id = [0xAB; 32];
+        let response = enact_draft_response(proposal_id);
+        let mut context = TestContext::new();
+        finish_enact(&mut context, &hex::encode(proposal_id), false, &response)
+            .expect("render enact draft");
+        assert!(context.submitted.is_none());
+        assert_eq!(context.printed.len(), 1);
+    }
+
+    #[test]
+    fn enact_apply_decodes_and_submits_the_exact_native_instruction() {
+        let proposal_id = [0xAC; 32];
+        let response = enact_draft_response(proposal_id);
+        let mut context = TestContext::new();
+        finish_enact(&mut context, &hex::encode(proposal_id), true, &response)
+            .expect("apply exact enact draft");
+        let submitted = context.submitted.expect("submitted instructions");
+        assert_eq!(submitted.len(), 1);
+        let enactment = submitted[0]
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::governance::EnactReferendum>()
+            .expect("submitted EnactReferendum");
+        assert_eq!(enactment.referendum_id, proposal_id);
+        assert!(context.printed.is_empty());
     }
 
     fn sample_account_string(name: &str) -> String {

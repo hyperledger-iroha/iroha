@@ -8,6 +8,7 @@ pluginManagement {
 }
 
 rootProject.name = "iroha-android"
+apply(from = "../../gradle/mobile-sdk-external-android-build.settings.gradle.kts")
 
 includeBuild("../norito_java") {
     name = "norito_java"

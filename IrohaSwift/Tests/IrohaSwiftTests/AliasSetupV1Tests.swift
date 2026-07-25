@@ -3,6 +3,29 @@ import XCTest
 @testable import IrohaSwift
 
 final class AliasSetupV1Tests: XCTestCase {
+    func testAccountAliasIntentPreservesTairaTargetAccount() throws {
+        let target = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x17, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let intent = try AliasAccountIntentV1(
+            alias: ResolvedAccountAliasV1(
+                canonicalName: "merchant@paynet",
+                dataspaceId: 7
+            ),
+            targetAccount: target,
+            provision: .existing,
+            role: .primary
+        )
+
+        XCTAssertEqual(intent.targetAccount, target)
+        XCTAssertThrowsError(try AliasAccountIntentV1(
+            alias: intent.alias,
+            targetAccount: " \(target)",
+            provision: .existing,
+            role: .primary
+        ))
+    }
+
     func testSharedCatalogFreeNameCases() throws {
         let fixture = try loadSharedFixture()
         for testCase in fixture.accountAliasCases {

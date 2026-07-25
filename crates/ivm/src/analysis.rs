@@ -59,30 +59,128 @@ pub struct StaticStateAccessAnalysis {
     pub complete: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StaticStateName {
+    Literal(u16),
+    MapChild { base: u16, key: StaticNoritoKey },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StaticNoritoKey {
+    PointerEnvelope(u16),
+    LiteralPayload(u16),
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct StaticStateFacts {
-    literal_names: [Option<u16>; 256],
+    names: [Option<StaticStateName>; 256],
+    pointer_literals: [Option<u16>; 256],
+    norito_keys: [Option<StaticNoritoKey>; 256],
+    content_may_be_mutable: [bool; 256],
+    stack_offsets: [Option<i64>; 256],
     direct: bool,
 }
 
 impl StaticStateFacts {
     fn entrypoint() -> Self {
         Self {
-            literal_names: [None; 256],
+            names: [None; 256],
+            pointer_literals: [None; 256],
+            norito_keys: [None; 256],
+            content_may_be_mutable: [false; 256],
+            stack_offsets: std::array::from_fn(|register| (register == 31).then_some(0)),
             direct: true,
         }
     }
 
     fn clear(&mut self) {
-        self.literal_names = [None; 256];
+        self.names = [None; 256];
+        self.pointer_literals = [None; 256];
+        self.norito_keys = [None; 256];
+        self.content_may_be_mutable = [false; 256];
+        self.stack_offsets = [None; 256];
+    }
+
+    fn clear_content(&mut self, register: usize) {
+        self.names[register] = None;
+        self.pointer_literals[register] = None;
+        self.norito_keys[register] = None;
+        self.content_may_be_mutable[register] = false;
+    }
+
+    fn clear_register(&mut self, register: usize) {
+        self.clear_content(register);
+        self.stack_offsets[register] = None;
+    }
+
+    fn copy_register(&mut self, destination: usize, source: usize) {
+        self.names[destination] = self.names[source];
+        self.pointer_literals[destination] = self.pointer_literals[source];
+        self.norito_keys[destination] = self.norito_keys[source];
+        self.content_may_be_mutable[destination] = self.content_may_be_mutable[source];
+        self.stack_offsets[destination] = self.stack_offsets[source];
+    }
+
+    fn mark_content_mutable(&mut self, register: usize) {
+        if self.names[register].is_some()
+            || self.pointer_literals[register].is_some()
+            || self.norito_keys[register].is_some()
+        {
+            self.content_may_be_mutable[register] = true;
+        }
+    }
+
+    fn invalidate_mutable_content(&mut self) {
+        for register in 0..self.content_may_be_mutable.len() {
+            if self.content_may_be_mutable[register] {
+                self.clear_content(register);
+            }
+        }
+    }
+
+    fn store_is_within_minimum_stack(
+        &self,
+        base_register: usize,
+        immediate: i64,
+        byte_len: i64,
+    ) -> bool {
+        let Some(start) =
+            self.stack_offsets[base_register].and_then(|offset| offset.checked_add(immediate))
+        else {
+            return false;
+        };
+        let Some(end) = start.checked_add(byte_len) else {
+            return false;
+        };
+        start >= -(crate::memory::Memory::STACK_ALIGNMENT as i64) && end <= 0
     }
 
     fn merge_from(&mut self, incoming: &Self) -> bool {
-        let mut changed = false;
-        for (current, next) in self.literal_names.iter_mut().zip(incoming.literal_names) {
-            if *current != next && current.take().is_some() {
-                changed = true;
+        fn retain_common<T: Eq>(
+            current_facts: &mut [Option<T>],
+            incoming_facts: &[Option<T>],
+        ) -> bool {
+            let mut changed = false;
+            for (current, next) in current_facts.iter_mut().zip(incoming_facts) {
+                if current.as_ref() != next.as_ref() && current.take().is_some() {
+                    changed = true;
+                }
             }
+            changed
+        }
+        let mut changed = retain_common(&mut self.names, &incoming.names);
+        changed |= retain_common(&mut self.pointer_literals, &incoming.pointer_literals);
+        changed |= retain_common(&mut self.norito_keys, &incoming.norito_keys);
+        changed |= retain_common(&mut self.stack_offsets, &incoming.stack_offsets);
+        for register in 0..self.content_may_be_mutable.len() {
+            let has_content = self.names[register].is_some()
+                || self.pointer_literals[register].is_some()
+                || self.norito_keys[register].is_some();
+            let may_be_mutable = has_content
+                && (self.content_may_be_mutable[register]
+                    || incoming.content_may_be_mutable[register]);
+            changed |= self.content_may_be_mutable[register] != may_be_mutable;
+            self.content_may_be_mutable[register] = may_be_mutable;
         }
         let direct = self.direct && incoming.direct;
         changed |= self.direct != direct;
@@ -210,9 +308,11 @@ pub fn analyze_prepared_static_state_accesses(
 
     let decoded = contract.decoded();
     let literal_names = authenticated_literal_names(contract);
+    let literal_pointer_envelopes = authenticated_literal_pointer_envelopes(contract);
+    let literal_norito_payloads = authenticated_literal_norito_payloads(contract);
     let mut incoming = BTreeMap::<u64, StaticStateFacts>::new();
     let mut pending = VecDeque::new();
-    for root in roots {
+    for &root in &roots {
         if !contract.is_instruction_boundary(root) {
             return None;
         }
@@ -233,14 +333,33 @@ pub fn analyze_prepared_static_state_accesses(
         let index = decoded.binary_search_by_key(&pc, |op| op.pc).ok()?;
         let op = decoded.get(index)?;
         let mut outgoing = incoming.get(&pc)?.clone();
-        transfer_static_state_facts(op, &literal_names, &mut outgoing, &mut result);
+        transfer_static_state_facts(
+            op,
+            &literal_names,
+            &literal_pointer_envelopes,
+            &literal_norito_payloads,
+            &mut outgoing,
+            &mut result,
+        );
 
         let successors = contract.control_flow_successors(pc)?;
         let call_edges = direct_call_edges(op);
+        // Production Kotodama entrypoints are authenticated two-instruction
+        // thunks (`call body; halt`). Crossing that compiler-owned boundary is
+        // still direct entrypoint code; calls made by the body remain
+        // conservative helper edges.
+        let entrypoint_wrapper_call = call_edges.is_some_and(|(_, return_pc)| {
+            roots.contains(&pc)
+                && decoded
+                    .binary_search_by_key(&return_pc, |candidate| candidate.pc)
+                    .ok()
+                    .and_then(|index| decoded.get(index))
+                    .is_some_and(|candidate| wide::opcode(candidate.inst) == wide::control::HALT)
+        });
         for successor in successors.iter().copied() {
             let mut successor_facts = outgoing.clone();
             if let Some((call_target, return_pc)) = call_edges {
-                if successor == call_target {
+                if successor == call_target && !entrypoint_wrapper_call {
                     // Even when a helper's path is literal, keep helper-hidden
                     // state access conservative.
                     successor_facts.direct = false;
@@ -297,7 +416,49 @@ fn authenticated_literal_names(contract: &PreparedContract) -> Vec<Option<String
         .collect()
 }
 
+fn authenticated_literal_pointer_envelopes(contract: &PreparedContract) -> Vec<Option<String>> {
+    contract
+        .literal_table()
+        .entries()
+        .iter()
+        .map(|literal| match literal {
+            crate::ivm::DecodedLiteral::Pointer(pointer) => {
+                authenticated_literal_tlv_bytes(contract, *pointer).map(hex::encode)
+            }
+            crate::ivm::DecodedLiteral::I64(_) => None,
+        })
+        .collect()
+}
+
+fn authenticated_literal_norito_payloads(contract: &PreparedContract) -> Vec<Option<String>> {
+    contract
+        .literal_table()
+        .entries()
+        .iter()
+        .map(|literal| match literal {
+            crate::ivm::DecodedLiteral::Pointer(pointer) => {
+                let bytes = authenticated_literal_tlv_bytes(contract, *pointer)?;
+                let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
+                (tlv.type_id == crate::pointer_abi::PointerType::NoritoBytes)
+                    .then(|| hex::encode(tlv.payload))
+            }
+            crate::ivm::DecodedLiteral::I64(_) => None,
+        })
+        .collect()
+}
+
 fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Option<String> {
+    let bytes = authenticated_literal_tlv_bytes(contract, pointer)?;
+    let tlv = crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
+    if tlv.type_id != crate::pointer_abi::PointerType::Name {
+        return None;
+    }
+    let name: Name = norito::decode_from_bytes(tlv.payload).ok()?;
+    crate::host::validate_state_path_name(&name).ok()?;
+    Some(name.to_string())
+}
+
+fn authenticated_literal_tlv_bytes(contract: &PreparedContract, pointer: u64) -> Option<&[u8]> {
     let start = contract
         .header_len()
         .checked_add(usize::try_from(pointer).ok()?)?;
@@ -309,18 +470,16 @@ fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Opti
     let end = fixed_end
         .checked_add(payload_len)?
         .checked_add(iroha_crypto::Hash::LENGTH)?;
-    let tlv = crate::pointer_abi::validate_tlv_bytes(artifact.get(start..end)?).ok()?;
-    if tlv.type_id != crate::pointer_abi::PointerType::Name {
-        return None;
-    }
-    let name: Name = norito::decode_from_bytes(tlv.payload).ok()?;
-    crate::host::validate_state_path_name(&name).ok()?;
-    Some(name.to_string())
+    let bytes = artifact.get(start..end)?;
+    crate::pointer_abi::validate_tlv_bytes(bytes).ok()?;
+    Some(bytes)
 }
 
 fn transfer_static_state_facts(
     op: &DecodedOp,
     literal_names: &[Option<String>],
+    literal_pointer_envelopes: &[Option<String>],
+    literal_norito_payloads: &[Option<String>],
     facts: &mut StaticStateFacts,
     result: &mut StaticStateAccessAnalysis,
 ) {
@@ -329,19 +488,56 @@ fn transfer_static_state_facts(
         wide::memory::LDLIT => {
             let destination = wide::rd(op.inst);
             let index = wide::literal_index(op.inst);
-            facts.literal_names[destination] = literal_names
+            facts.clear_register(destination);
+            facts.names[destination] = literal_names
+                .get(index)
+                .and_then(Option::as_ref)
+                .and_then(|_| u16::try_from(index).ok())
+                .map(StaticStateName::Literal);
+            facts.pointer_literals[destination] = literal_pointer_envelopes
                 .get(index)
                 .and_then(Option::as_ref)
                 .and_then(|_| u16::try_from(index).ok());
+            facts.norito_keys[destination] = literal_norito_payloads
+                .get(index)
+                .and_then(Option::as_ref)
+                .and_then(|_| u16::try_from(index).ok())
+                .map(StaticNoritoKey::LiteralPayload);
         }
         wide::memory::LDI64 => {
-            facts.literal_names[wide::rd(op.inst)] = None;
+            facts.clear_register(wide::rd(op.inst));
+        }
+        wide::memory::LOAD64 => {
+            let (_, destination, _, _) = encoding::wide::decode_mem(op.inst);
+            facts.clear_register(usize::from(destination));
+        }
+        wide::memory::STORE64 => {
+            let (_, base, _, immediate) = encoding::wide::decode_mem(op.inst);
+            if !facts.store_is_within_minimum_stack(usize::from(base), i64::from(immediate), 8) {
+                facts.invalidate_mutable_content();
+            }
+        }
+        wide::memory::STORE128 => {
+            let (_, base, _, _) = encoding::wide::decode_store128(op.inst);
+            if !facts.store_is_within_minimum_stack(usize::from(base), 0, 16) {
+                facts.invalidate_mutable_content();
+            }
+        }
+        wide::memory::LOAD128 => {
+            let (_, destination_low, _, destination_high) = encoding::wide::decode_load128(op.inst);
+            facts.clear_register(usize::from(destination_low));
+            facts.clear_register(usize::from(destination_high));
         }
         wide::arithmetic::ADDI => {
             let (_, destination, source, immediate) = encoding::wide::decode_ri(op.inst);
-            facts.literal_names[usize::from(destination)] = (immediate == 0)
-                .then_some(facts.literal_names[usize::from(source)])
-                .flatten();
+            let stack_offset = facts.stack_offsets[usize::from(source)]
+                .and_then(|offset| offset.checked_add(i64::from(immediate)));
+            if immediate == 0 {
+                facts.copy_register(usize::from(destination), usize::from(source));
+            } else {
+                facts.clear_register(usize::from(destination));
+            }
+            facts.stack_offsets[usize::from(destination)] = stack_offset;
         }
         wide::control::BEQ
         | wide::control::BNE
@@ -353,21 +549,35 @@ fn transfer_static_state_facts(
         | wide::control::JR
         | wide::control::HALT => {}
         wide::control::JAL => {
-            facts.literal_names[wide::rd(op.inst)] = None;
+            facts.clear_register(wide::rd(op.inst));
         }
         wide::control::JALS => {
-            facts.literal_names[1] = None;
+            facts.clear_register(1);
         }
         wide::control::JALR => {
-            facts.literal_names[wide::rd(op.inst)] = None;
+            facts.clear_register(wide::rd(op.inst));
         }
         wide::system::SCALL => {
             let number = u32::from(wide::imm8(op.inst) as u8);
-            transfer_static_state_syscall(number, literal_names, facts, result);
+            transfer_static_state_syscall(
+                number,
+                literal_names,
+                literal_pointer_envelopes,
+                literal_norito_payloads,
+                facts,
+                result,
+            );
         }
         wide::system::SYSTEM => {
             let number = encoding::wide::decode_syscallx(op.inst);
-            transfer_static_state_syscall(number, literal_names, facts, result);
+            transfer_static_state_syscall(
+                number,
+                literal_names,
+                literal_pointer_envelopes,
+                literal_norito_payloads,
+                facts,
+                result,
+            );
         }
         _ => {
             // A narrow whitelist is intentional. Any unmodelled register or
@@ -380,10 +590,45 @@ fn transfer_static_state_facts(
 fn transfer_static_state_syscall(
     number: u32,
     literal_names: &[Option<String>],
+    literal_pointer_envelopes: &[Option<String>],
+    literal_norito_payloads: &[Option<String>],
     facts: &mut StaticStateFacts,
     result: &mut StaticStateAccessAnalysis,
 ) {
     if number == crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV {
+        facts.mark_content_mutable(10);
+        return;
+    }
+    if number == crate::syscalls::SYSCALL_POINTER_TO_NORITO {
+        let pointer_literal = facts.pointer_literals[10];
+        facts.clear_register(10);
+        facts.norito_keys[10] = pointer_literal.map(StaticNoritoKey::PointerEnvelope);
+        facts.mark_content_mutable(10);
+        return;
+    }
+    if matches!(
+        number,
+        crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
+    ) {
+        let name = match (facts.names[10], facts.norito_keys[11]) {
+            (Some(StaticStateName::Literal(base)), Some(key)) => {
+                Some(StaticStateName::MapChild { base, key })
+            }
+            _ => None,
+        };
+        facts.clear_register(10);
+        facts.names[10] = name;
+        facts.mark_content_mutable(10);
+        return;
+    }
+    if matches!(
+        number,
+        crate::syscalls::SYSCALL_STATE_VALUE_ENCODE
+            | crate::syscalls::SYSCALL_STATE_VALUE_DECODE
+            | crate::syscalls::SYSCALL_STATE_MAP_KEY_AT
+    ) {
+        facts.clear_register(10);
         return;
     }
     let access = crate::syscalls::syscall_access(number);
@@ -396,9 +641,27 @@ fn transfer_static_state_syscall(
             crate::syscalls::SyscallAccess::StateWrite => result.has_state_writes = true,
             _ => unreachable!("state access was matched above"),
         }
-        let key = facts.literal_names[10]
-            .and_then(|index| literal_names.get(usize::from(index)))
-            .and_then(Option::as_deref)
+        let key = facts.names[10]
+            .and_then(|name| match name {
+                StaticStateName::Literal(index) => literal_names
+                    .get(usize::from(index))
+                    .and_then(Option::as_deref)
+                    .map(ToOwned::to_owned),
+                StaticStateName::MapChild { base, key } => {
+                    let base = literal_names
+                        .get(usize::from(base))
+                        .and_then(Option::as_deref)?;
+                    let key = match key {
+                        StaticNoritoKey::PointerEnvelope(index) => literal_pointer_envelopes
+                            .get(usize::from(index))
+                            .and_then(Option::as_deref)?,
+                        StaticNoritoKey::LiteralPayload(index) => literal_norito_payloads
+                            .get(usize::from(index))
+                            .and_then(Option::as_deref)?,
+                    };
+                    Some(format!("{base}/{key}"))
+                }
+            })
             .map(|name| {
                 if matches!(
                     number,
@@ -782,6 +1045,116 @@ mod tests {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn static_state_analysis_proves_compiler_literal_map_child() {
+        let source = r#"
+seiyaku StaticMapAnalysis {
+  state StateMap<int, int> Counters;
+  kotoage fn write_one() authorize("CanWrite") { Counters[1] = 10; }
+}
+"#;
+        let (program, manifest) = crate::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile literal StateMap access");
+        let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
+            .expect("prepare literal StateMap access");
+        let analysis = analyze_prepared_static_state_accesses(&prepared, Some("write_one"))
+            .expect("analyze literal StateMap access");
+        let descriptor = manifest
+            .entrypoints
+            .as_deref()
+            .and_then(|entrypoints| {
+                entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == "write_one")
+            })
+            .expect("compiled entrypoint descriptor");
+
+        assert!(analysis.complete);
+        assert!(analysis.has_state_writes);
+        assert_eq!(
+            analysis.write_keys,
+            descriptor.write_keys.iter().cloned().collect()
+        );
+    }
+
+    #[test]
+    fn static_state_analysis_keeps_user_helper_access_incomplete() {
+        let source = r#"
+seiyaku HelperMapAnalysis {
+  state StateMap<int, int> Counters;
+  fn hidden_write() { Counters[1] = 10; }
+  kotoage fn helper_write() authorize("CanWrite") { hidden_write(); }
+}
+"#;
+        let program = crate::KotodamaCompiler::new()
+            .compile_source(source)
+            .expect("compile helper-hidden StateMap access");
+        let prepared = crate::prepare_contract(std::sync::Arc::<[u8]>::from(program))
+            .expect("prepare helper-hidden StateMap access");
+        let analysis = analyze_prepared_static_state_accesses(&prepared, Some("helper_write"))
+            .expect("analyze helper-hidden StateMap access");
+
+        assert!(analysis.has_state_writes);
+        assert!(!analysis.complete);
+        assert!(analysis.write_keys.is_empty());
+    }
+
+    #[test]
+    fn static_state_analysis_invalidates_host_paths_across_unbounded_stores() {
+        let literal_names = vec![Some("Counters".to_owned())];
+        let literal_pointer_envelopes = vec![None];
+        let literal_norito_payloads = vec![Some("00".to_owned())];
+        let stores = [
+            wide_enc::encode_store(wide::memory::STORE64, 2, 3, 0),
+            wide_enc::encode_store128(wide::memory::STORE128, 2, 3, 4),
+        ];
+
+        for store in stores {
+            let mut facts = StaticStateFacts::entrypoint();
+            facts.names[10] = Some(StaticStateName::Literal(0));
+            facts.norito_keys[11] = Some(StaticNoritoKey::LiteralPayload(0));
+            let mut analysis = StaticStateAccessAnalysis {
+                complete: true,
+                ..StaticStateAccessAnalysis::default()
+            };
+            transfer_static_state_syscall(
+                crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO,
+                &literal_names,
+                &literal_pointer_envelopes,
+                &literal_norito_payloads,
+                &mut facts,
+                &mut analysis,
+            );
+            assert!(facts.content_may_be_mutable[10]);
+
+            transfer_static_state_facts(
+                &DecodedOp {
+                    pc: 0,
+                    inst: store,
+                    len: 4,
+                },
+                &literal_names,
+                &literal_pointer_envelopes,
+                &literal_norito_payloads,
+                &mut facts,
+                &mut analysis,
+            );
+            transfer_static_state_syscall(
+                crate::syscalls::SYSCALL_STATE_SET,
+                &literal_names,
+                &literal_pointer_envelopes,
+                &literal_norito_payloads,
+                &mut facts,
+                &mut analysis,
+            );
+
+            assert!(analysis.has_state_writes);
+            assert!(!analysis.complete);
+            assert!(analysis.write_keys.is_empty());
+        }
     }
 
     #[test]

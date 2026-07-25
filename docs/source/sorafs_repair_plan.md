@@ -22,15 +22,17 @@ and forwards it through strict durable transaction ingress. Reads return
 finalized ledger projections; obsolete local status-by-manifest, SSE, and
 WebSocket authority routes are not shipped.
 
-`sorafs_node` still contains a local `RepairManager`, filesystem projection,
-PoR history linkage, watchdog/GC helpers, and rehydration machinery. Those
-surfaces may support tests or rebuildable execution caches only; they must not
-authorize a production transition. Remaining local work is to remove the
-public competing manager/checkpoint dependencies, make every storage action
-depend on the exact finalized live lease, and prove cross-peer exactly-once
-execution and restart reconciliation. Operators must then archive a production
-PoR/PoTR failure, repair, escalation, appeal, and governance handoff from the
-reviewed four-validator deployment.
+The former local `RepairManager`, `FileRepairStore`, repair checkpoint,
+mutation/event history, scheduler, and compatibility APIs have been deleted.
+The storage executor accepts only a fully validated native task read at an
+exact finalized cursor and requires the current lease owner, generation,
+revision, provider binding, and expiry before any storage I/O. GC and
+reconciliation consume one complete, bounded task projection collected from a
+single immutable finalized query view; a truncated, drifting, malformed, or
+unbound projection fails closed. Remaining work is deployed four-validator
+proof of cross-peer exactly-once execution and restart reconciliation.
+Operators must archive a production PoR/PoTR failure, repair, escalation,
+appeal, and governance handoff from that reviewed deployment.
 `scripts/check_sorafs_repair_rollout_evidence.py` now provides the fail-closed
 SF-8b rollout evidence gate for deployed repair promotion packets, and
 `scripts/run_sorafs_repair_rollout_evidence.py` provides the matching reviewed
@@ -101,11 +103,11 @@ response-file examples cover auditor-roster and worker-lifecycle canaries.
 | Component | Responsibilities | Implementation Notes |
 |-----------|-----------------|----------------------|
 | Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Native repair state is authoritative; durable forwarders submit native transactions and reconcile finalized task/event queries. |
-| Repair Worker | Executes local rehydration, chunk fetch/re-seed, and orchestrator requests. | Execution is permitted only for the exact finalized live lease; any retained local state is a rebuildable cache. |
+| Repair Worker | Executes bounded local rehydration, chunk fetch/re-seed, and orchestrator requests. | Execution is permitted only for the exact finalized live lease. The bounded in-process single-flight set is ephemeral coordination, never task state or authority. |
 | Auditor API | Route-specific signed-transaction ingress for reports, escalations, appeals, and worker actions. | Torii accepts one caller-signed native transaction on each `/v1/sorafs/audit/repair/*` command route and performs exact instruction/action matching before strict durable ingress. |
 | Payload Validator | Validates canonical report, slash-proposal, policy, approval, task-event, and audit-event payloads. | Implemented in `sorafs_manifest::repair` plus `sorafs_manifest::reference::validate_repair_payload_bytes`; transaction signatures, authority, permissions, revisions, leases, and idempotency are enforced by the common transaction/native-ISI path. |
 | SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |
-| Persistence | Durable recording of tasks, events, and outcomes. | Native ledger records and finalized event queries are the V1 authority. Any filesystem projection is disposable and must not gate production transitions. |
+| Persistence | Durable recording of tasks, events, and outcomes. | Native ledger records and finalized task/event queries are the sole V1 authority. The only local durability is retry-safe signed-transaction forwarding and rebuildable consumer cursors. |
 | CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha sorafs repair *` and `iroha sorafs gc *` commands with JSON output + Norito envelopes. |
 
 ## Norito Data Model
@@ -292,21 +294,18 @@ validation. Native `RepairLedgerTaskV1` state plus the append-only
      submissions across peers still yield one lease and one terminal outcome.
 
 ## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+Repair authority and policy are not sourced from a file key or environment
+override. The obsolete `governance.sorafs_repair_escalation` configuration and
+local vote/scheduler enforcement have been removed. Native instructions enforce
+the registered provider-scoped worker authority, exact live lease, expected
+revision, canonical slash-proposal provenance, and provider-owner appeal
+authority. Any later custody slash or disbursement is a separately governed
+native transition consuming the finalized escalation/appeal record.
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
-
-- Scheduler-generated proposals are capped at `max_penalty`; auditor submissions above the cap are rejected.
-- Governance approval material remains a canonical publication/reference
-  payload; it does not turn a local vote file into repair authority. Slash and
-  appeal state that affects repair execution must be committed through native
-  transitions and reconciled from finalized queries.
+`RepairEscalationPolicyV1` and `RepairEscalationApprovalV1` remain bounded
+canonical publication/reference envelopes for governance evidence and SDK
+validation. They cannot mutate a repair task, replace the committed appeal
+record, or confer transaction authority.
 
 ## Auditor API Surface
 | Method & Path | Description | Auth | Success Response |
@@ -399,10 +398,9 @@ The rollout evidence scripts have focused Python coverage in:
   production projection must be recoverable from finalized task/event queries
   and may never advance its cursor before the corresponding local side effect
   is durable.
-- Any retained `repair_state.to` or `FileRepairStore` is a development/test
-  artifact. Production startup must reject or ignore it as an authority;
-  recovery discards and rebuilds the projection instead of migrating or
-  accepting local-only transitions.
+- The retired `repair_state.to`/`FileRepairStore` format has no loader,
+  migration, or compatibility branch. Pre-release state is discarded and
+  reseeded; recovery rebuilds from finalized native queries.
 - Durable transaction forwarders use bounded atomic checkpoints, exact
   signed-transaction bytes, retry/dead-letter state, and finalized
   reconciliation. Corrupt, truncated, trailing, unsafe-path, hard-linked,
@@ -445,29 +443,19 @@ The rollout evidence scripts have focused Python coverage in:
   - Auditor performance (response time, quality).
   - Outstanding proposals older than 7 days (must be decided or escalated).
 
-### Escalation policy (defaults)
+### Escalation policy boundary
 
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| `quorum_bps` | `6,667` (2/3) | Minimum approval ratio over approve/reject votes; ties are rejected. |
-| `minimum_voters` | `3` | Minimum distinct votes (approve + reject + abstain) required to consider a decision. |
-| `dispute_window_secs` | `86,400` (24h) | Minimum delay from escalation to approval. |
-| `appeal_window_secs` | `604,800` (7d) | Minimum delay after approval before a decision is final. |
-| `max_penalty` | `1,000,000,000` | Cap on slash penalties (nano-XOR). |
-
-`RepairEscalationApprovalV1` remains a canonical output/reference payload for a
-decision derived from stored votes; it is not accepted as proposal authority.
-Slash proposals carrying an embedded approval summary fail closed. Unapproved
-proposals remain in dispute until authenticated votes satisfy the minimum-voter,
-quorum, dispute-window, and appeal-window policy, and penalties are capped to
-the policy maximum.
+No local defaults authorize a proposal, vote, slash, refund, or disbursement.
+Slash proposals carrying an embedded approval summary fail closed. Governance
+consumers must bind their current policy/digest anchor to the finalized native
+escalation and appeal records, apply their own authority and custody checks,
+and reconcile the resulting committed transition.
 
 ## Rollout Evidence Gate
 
-Use the rollout gate only after the residual public
-`RepairManager`/filesystem checkpoint and GC/reconciliation dependencies have
-been removed, exact-live-lease execution and restart reconciliation have been
-proved, and the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture,
+Use the rollout gate only after exact-live-lease execution and restart
+reconciliation have been proved in the reviewed deployment, and the deployed
+auditor roster, SF-9 coordinator, PoR/PoTR failure capture,
 signed auditor API, repair worker lifecycle, committed repair event streams,
 governance handoff, observability, and governance packet have produced
 reviewed, payload-free JSON evidence:
@@ -583,10 +571,8 @@ Implemented engineering coverage:
   digest binding plus governance handoff digest and handoff policy digest
   binding.
 
-Remaining implementation work is to remove the residual public
-`RepairManager`/filesystem checkpoint and GC/reconciliation dependencies so no
-production code can consult competing local authority. Remaining rollout work
-is genuine four-validator evidence for a production PoR/PoTR failure, one
-cross-peer lease and terminal outcome, escalation/appeal, restart
-reconciliation, and governance handoff, followed by the SF-8b rollout evidence
-gate.
+The competing local repair authority and GC/reconciliation checkpoint
+dependencies are removed. Remaining rollout work is genuine four-validator
+evidence for a production PoR/PoTR failure, one cross-peer lease and terminal
+outcome, escalation/appeal, restart reconciliation, and governance handoff,
+followed by the SF-8b rollout evidence gate.

@@ -59,6 +59,12 @@ export function requireCanonicalAuthAccount(value, context) {
   );
 }
 
+function canonicalAuthAccountHeaderValue(accountId) {
+  // Fetch headers accept ByteString values. Use Latin-1 code units as the
+  // carrier so the emitted header bytes are the account literal's exact UTF-8.
+  return Buffer.from(accountId, "utf8").toString("latin1");
+}
+
 /**
  * Canonicalise a raw query string by decoding, sorting, and re-encoding.
  * @param {string | URLSearchParams | undefined | null} raw
@@ -162,7 +168,7 @@ export function buildCanonicalRequestHeaders({
   });
   const signature = signEd25519(message, privateKey);
   return {
-    "X-Iroha-Account": checkedAccount,
+    "X-Iroha-Account": canonicalAuthAccountHeaderValue(checkedAccount),
     "X-Iroha-Signature": Buffer.from(signature).toString("base64"),
     "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
     "X-Iroha-Nonce": checkedNonce,
@@ -331,7 +337,7 @@ export async function buildCanonicalJsonRequest({
     headers: {
       ...DEFAULT_JSON_HEADERS,
       ...normalizeHeadersInit(headers),
-      "X-Iroha-Account": checkedAccount,
+      "X-Iroha-Account": canonicalAuthAccountHeaderValue(checkedAccount),
       "X-Iroha-Signature": signatureBase64,
       "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
       "X-Iroha-Nonce": checkedNonce,

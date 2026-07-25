@@ -495,8 +495,11 @@ test("findFeeSponsorProgramById returns null and rejects mismatched lifecycle re
   );
 });
 
-test("quoteFees account-signs the exact draft and returns typed limits", async () => {
-  const authority = ToriiClient._requireAccountId(VALID_ACCOUNT_ID);
+test("quoteFees account-signs an exact non-default-network draft and returns typed limits", async () => {
+  const parsedAuthority = AccountAddress.parseEncoded(
+    ToriiClient._requireAccountId(VALID_ACCOUNT_ID),
+  );
+  const authority = parsedAuthority.address.toI105(369);
   const assetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
   const payload = {
     chain: "test-chain",

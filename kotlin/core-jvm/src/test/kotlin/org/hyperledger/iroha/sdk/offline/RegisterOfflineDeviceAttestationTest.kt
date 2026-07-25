@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
@@ -45,11 +46,17 @@ class RegisterOfflineDeviceAttestationTest {
         assertContentEquals(hexToBytes(rust[1]), wire.payloadBytes)
         assertEquals(
             registration,
-            DeviceAttestationRegistration.decodeCanonical(registration.noritoEncoded()),
+            DeviceAttestationRegistration.decodeCanonical(
+                registration.noritoEncoded(),
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            ),
         )
         assertEquals(
             registration,
-            RegisterOfflineDeviceAttestation.decodeInstructionPayloadCanonical(wire.payloadBytes),
+            RegisterOfflineDeviceAttestation.decodeInstructionPayloadCanonical(
+                wire.payloadBytes,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            ),
         )
         request.validateExactPayload(request.transactionPayload())
     }
@@ -99,7 +106,10 @@ class RegisterOfflineDeviceAttestationTest {
             it[it.lastIndex] = (it.last().toInt() xor 1).toByte()
         }
         assertFailsWith<IllegalArgumentException> {
-            DeviceAttestationRegistration.decodeCanonical(malformed)
+            DeviceAttestationRegistration.decodeCanonical(
+                malformed,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
 
         val payload = NoritoCodec.fromBytesView(
@@ -112,7 +122,10 @@ class RegisterOfflineDeviceAttestationTest {
             RawPayloadAdapter(appendUnknownField = true),
         )
         assertFailsWith<IllegalArgumentException> {
-            DeviceAttestationRegistration.decodeCanonical(unknownField)
+            DeviceAttestationRegistration.decodeCanonical(
+                unknownField,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
 
         val alternateFlags = NoritoCodec.encode(
@@ -122,7 +135,10 @@ class RegisterOfflineDeviceAttestationTest {
             0,
         )
         assertFailsWith<IllegalArgumentException> {
-            DeviceAttestationRegistration.decodeCanonical(alternateFlags)
+            DeviceAttestationRegistration.decodeCanonical(
+                alternateFlags,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
     }
 

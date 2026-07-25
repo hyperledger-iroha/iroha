@@ -163,7 +163,10 @@ enum KagemushaNearbyEnvelopeCodec {
         try encode(kind: .rejected, pairingChallenge: nil, ipmMessage: Data())
     }
 
-    static func decode(_ data: Data) throws -> Decoded {
+    static func decode(
+        _ data: Data,
+        chainDiscriminant: UInt16
+    ) throws -> Decoded {
         guard data.count >= headerBytes,
               data.count <= maximumEnvelopeBytes,
               data.prefix(magic.count) == magic,
@@ -198,7 +201,10 @@ enum KagemushaNearbyEnvelopeCodec {
                 messageBytes,
                 expectedProfile: .kagemusha
             )
-            payload = try IrohaPeerKagemushaAdapterV1.decode(message)
+            payload = try IrohaPeerKagemushaAdapterV1.decode(
+                message,
+                chainDiscriminant: chainDiscriminant
+            )
         } catch {
             throw KagemushaNearbyError.invalidMessage
         }
@@ -429,6 +435,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
 
     private let lock = NSLock()
     private let timeoutSeconds: UInt64
+    private let chainDiscriminant: UInt16
     private var peerID: MCPeerID?
     private var session: MCSession?
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -450,7 +457,11 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
     private var payment: KagemushaRecursiveSpendPeerPaymentV4?
     private lazy var platformDelegate = KagemushaNearbyPlatformDelegate(owner: self)
 
-    public init(timeoutSeconds: UInt64 = 90) {
+    public init(
+        chainDiscriminant: UInt16,
+        timeoutSeconds: UInt64 = 90
+    ) {
+        self.chainDiscriminant = chainDiscriminant
         self.timeoutSeconds = max(1, timeoutSeconds)
     }
 
@@ -887,7 +898,15 @@ extension KagemushaNearbyExchange {
     }
 
     fileprivate func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        do { handle(try KagemushaNearbyEnvelopeCodec.decode(data), from: peerID) }
+        do {
+            handle(
+                try KagemushaNearbyEnvelopeCodec.decode(
+                    data,
+                    chainDiscriminant: chainDiscriminant
+                ),
+                from: peerID
+            )
+        }
         catch { finish(.failure(KagemushaNearbyError.invalidMessage)) }
     }
 
@@ -1029,7 +1048,13 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
     public static var isAvailable: Bool {
         KagemushaNearbyAuthenticationPolicy.hasAuditedAuthenticatedTranscriptBackend
     }
-    public init(timeoutSeconds: UInt64 = 90) { _ = timeoutSeconds }
+    public init(
+        chainDiscriminant: UInt16,
+        timeoutSeconds: UInt64 = 90
+    ) {
+        _ = chainDiscriminant
+        _ = timeoutSeconds
+    }
     public func requestLocalNetworkAccess() async throws {
         throw KagemushaNearbyError.unavailable
     }

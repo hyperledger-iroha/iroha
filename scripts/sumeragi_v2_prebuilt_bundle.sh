@@ -23,7 +23,16 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
   local prebuilt_repo_root="$1"
   local prebuilt_source_manifest_sha256="$2"
   local prebuilt_helper="${prebuilt_repo_root}/scripts/sumeragi_v2_prebuilt_bundle.py"
-  local prebuilt_source_root="${prebuilt_repo_root}/target/sumeragi-v2-release/${prebuilt_source_manifest_sha256}"
+  local prebuilt_workspace_target
+  if ! prebuilt_workspace_target="$(
+    python3 -I -S -c \
+      'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))' \
+      "${prebuilt_repo_root}/target"
+  )" || [[ -z "$prebuilt_workspace_target" ]]; then
+    echo "failed to resolve the repository-authorized release target" >&2
+    return 1
+  fi
+  local prebuilt_source_root="${prebuilt_workspace_target}/sumeragi-v2-release/${prebuilt_source_manifest_sha256}"
   local prebuilt_programs_root="${prebuilt_source_root}/programs"
   local prebuilt_build_root="${prebuilt_source_root}/program-build-cache"
   local prebuilt_default_cache="${prebuilt_build_root}/default"
@@ -91,30 +100,30 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       "${prebuilt_default_cache}/release/iroha3d" \
       "${prebuilt_default_cache}/release/iroha" \
       "${prebuilt_default_cache}/release/kagami" \
-      "${prebuilt_message_control_cache}/release/iroha3d"
+      "${prebuilt_message_control_cache}/release/iroha3d" || exit $?
 
     (
       export CARGO_TARGET_DIR="$prebuilt_default_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
-      run_cargo build --locked --offline --release -p irohad --bin iroha3d
-      run_cargo build --locked --offline --release -p iroha_cli --bin iroha
-      run_cargo build --locked --offline --release -p iroha_kagami --bin kagami
-    )
+      run_cargo build --locked --offline --release -p irohad --bin iroha3d || exit $?
+      run_cargo build --locked --offline --release -p iroha_cli --bin iroha || exit $?
+      run_cargo build --locked --offline --release -p iroha_kagami --bin kagami || exit $?
+    ) || exit $?
     (
       export CARGO_TARGET_DIR="$prebuilt_message_control_cache"
       export ENABLE_RANS_BUNDLES=1
       export NORITO_SKIP_BINDINGS_SYNC=1
       run_cargo build --locked --offline --release -p irohad --bin iroha3d \
-        --features test-network-message-control
-    )
+        --features test-network-message-control || exit $?
+    ) || exit $?
 
     # Keep the mandatory process snapshot outside redirected stdout so the
     # exact version transcript contains only the tool's bytes.
-    wait_for_external_cargo
-    command cargo --version >"$prebuilt_cargo_version_file"
-    wait_for_external_cargo
-    command rustc -vV >"$prebuilt_rustc_version_file"
+    wait_for_external_cargo || exit $?
+    command cargo --version >"$prebuilt_cargo_version_file" || exit $?
+    wait_for_external_cargo || exit $?
+    command rustc -vV >"$prebuilt_rustc_version_file" || exit $?
 
     python3 -I -S "$prebuilt_helper" create \
       --repo-root "$prebuilt_repo_root" \
@@ -124,7 +133,7 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
       --programs-root "$prebuilt_programs_root" \
       --cargo-version-file "$prebuilt_cargo_version_file" \
       --rustc-version-file "$prebuilt_rustc_version_file" \
-      >"$prebuilt_publication_output"
+      >"$prebuilt_publication_output" || exit $?
   ); then
     rm -f -- "$prebuilt_publication_output"
     return 1
