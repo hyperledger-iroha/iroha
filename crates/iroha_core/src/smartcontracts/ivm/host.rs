@@ -5331,17 +5331,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
-    #[cfg(test)]
-    fn state_keys_gas(examined_count: usize, payload_len: usize) -> u64 {
-        Self::state_query_gas(payload_len)
-            .saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
-    }
-
-    #[cfg(test)]
-    fn state_count_gas(examined_count: usize) -> u64 {
-        16_u64.saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
-    }
-
     fn roots_get_response(
         &self,
         request: &ivm::zk_verify::RootsGetRequest,
@@ -5622,7 +5611,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         vm: &IVM,
         pointer: u64,
     ) -> Result<(Name, usize), ivm::VMError> {
-        if self.current_contract_runtime_context.is_some() && vm.contract_interface().is_none() {
+        // Authenticated execution must bind every state path to the loaded CNTR
+        // schema. Local-debug overlays are deliberately uncommittable, so they
+        // may inspect ad-hoc paths without fabricating a deployable interface.
+        if self.current_contract_runtime_context.is_some()
+            && vm.contract_interface().is_none()
+            && !self.local_debug_artifacts
+        {
             return Err(ivm::VMError::InvalidMetadata);
         }
         let tlv = Self::expect_tlv(vm, pointer, PointerType::Name)?;
@@ -12111,6 +12106,12 @@ mod pointer_abi_tests {
         }
     }
 
+    fn local_contract_host(authority: AccountId) -> CoreHost {
+        let mut host = CoreHost::new(authority);
+        host.set_local_contract_debug_execution();
+        host
+    }
+
     #[test]
     fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
         let authority = ALICE_ID.clone();
@@ -12268,6 +12269,12 @@ seiyaku StateBackedBinding {
             &authority,
             r#"
 seiyaku ReadOnlyBinding {
+  state int missing;
+
+  hajimari() {
+    missing = 0;
+  }
+
   view fn inspect() -> int authorize("CanInspectContract") {
     return 8;
   }
@@ -12330,6 +12337,8 @@ seiyaku ReadOnlyBinding {
         }
 
         let mut vm = IVM::new(1_000_000);
+        vm.load_prepared(&prepared)
+            .expect("load the authenticated view contract into the VM");
         let missing_path: Name = "missing".parse().expect("valid state path");
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&missing_path));
         vm.set_register(10, path_ptr);
@@ -12368,7 +12377,7 @@ seiyaku ReadOnlyBinding {
         assert_eq!(host.effect_authority(), contract_address.subject_id());
         assert_eq!(
             host.execution_class
-                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET),
             Ok(())
         );
 
@@ -12380,9 +12389,9 @@ seiyaku ReadOnlyBinding {
         assert_eq!(host.effect_authority(), authority);
         assert_eq!(
             host.execution_class
-                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET),
             Err(ivm::VMError::GenericSyscallNotAllowed {
-                syscall: ivm_sys::SYSCALL_REGISTER_DOMAIN,
+                syscall: ivm_sys::SYSCALL_STATE_SET,
             })
         );
 
@@ -12390,7 +12399,7 @@ seiyaku ReadOnlyBinding {
         assert_eq!(host.execution_class, HostExecutionClass::Contract);
         assert_eq!(
             host.execution_class
-                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_STATE_SET),
             Ok(()),
             "a prior view binding must not leave the host over-restricted"
         );
@@ -14414,7 +14423,7 @@ seiyaku PrivilegedBinding {
         let mut vm = ivm::IVM::new(1_000);
         let kp = checked_keypair();
         let authority = AccountId::of(kp.public_key().clone());
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let code_hash = IrohaHash::new(b"contract-code");
         let abi_hash = IrohaHash::new(b"contract-abi");
@@ -14458,7 +14467,7 @@ seiyaku PrivilegedBinding {
         let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let code_hash = IrohaHash::new(b"bytecode");
         let request = scode::RegisterSmartContractBytes {
@@ -14486,7 +14495,7 @@ seiyaku PrivilegedBinding {
         let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let code_hash = IrohaHash::new(b"heap-bytecode");
         let request = scode::RegisterSmartContractBytes {
@@ -14543,7 +14552,7 @@ seiyaku PrivilegedBinding {
             vm.store_bytes(pointer, &tlv)
                 .unwrap_or_else(|error| panic!("store {label} fixture: {error:?}"));
             vm.set_register(10, pointer);
-            let mut host = CoreHost::new(authority.clone());
+            let mut host = local_contract_host(authority.clone());
 
             assert!(
                 matches!(
@@ -14564,7 +14573,7 @@ seiyaku PrivilegedBinding {
         code.extend_from_slice(&tlv);
         vm.load_code(&code).expect("load arbitrary code bytes");
         vm.set_register(10, pointer);
-        let mut host = CoreHost::new(authority.clone());
+        let mut host = local_contract_host(authority.clone());
         assert!(matches!(
             host.syscall(
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
@@ -14586,7 +14595,7 @@ seiyaku PrivilegedBinding {
             .store_bytes(partial_pointer, &tlv)
             .expect("store across unowned heap boundary");
         partial_vm.set_register(10, partial_pointer);
-        let mut host = CoreHost::new(authority.clone());
+        let mut host = local_contract_host(authority.clone());
         assert!(matches!(
             host.syscall(
                 ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
@@ -14621,7 +14630,7 @@ seiyaku PrivilegedBinding {
                 .alloc_host_tlv(&envelope)
                 .unwrap_or_else(|error| panic!("allocate {label} fixture: {error:?}"));
             vm.set_register(10, pointer);
-            let mut host = CoreHost::new(authority.clone());
+            let mut host = local_contract_host(authority.clone());
             assert_eq!(
                 host.syscall(
                     ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
@@ -14640,7 +14649,7 @@ seiyaku PrivilegedBinding {
         let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -14671,7 +14680,7 @@ seiyaku PrivilegedBinding {
         let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -14829,7 +14838,7 @@ seiyaku PrivilegedBinding {
         let kp = checked_keypair();
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
 
         let code_hash = IrohaHash::new(b"bytecode-image");
         let request = scode::RemoveSmartContractBytes {
@@ -15978,12 +15987,11 @@ seiyaku PrivilegedBinding {
     fn tlv_wrong_type_id_is_rejected() {
         crate::test_alias::ensure();
         // Build a program that calls SYSCALL_NFT_SET_METADATA and pass a TLV with wrong type for key
-        let mut vm = IVM::new(1_000);
+        let mut vm = IVM::new(1_000_000);
         let owner: AccountId = fixture_account("alice");
-        vm.set_host(CoreHost::with_accounts(
-            owner.clone(),
-            Arc::new(vec![owner.clone()]),
-        ));
+        let mut host = CoreHost::with_accounts(owner.clone(), Arc::new(vec![owner.clone()]));
+        host.set_local_contract_debug_execution();
+        vm.set_host(host);
         // Minimal program: HALT, but we only exercise host.validate_tlv via manual call
         let code = [ivm::encoding::wide::encode_halt().to_le_bytes()].concat();
         let program = build_program(&code, 0);
@@ -16160,6 +16168,14 @@ mod tests {
         norito::to_bytes(val).expect("encode Norito payload")
     }
 
+    fn test_state_path_gas(path: &Name) -> u64 {
+        ivm::host::state_path_gas(norito_blob(path).len())
+    }
+
+    fn test_state_value_gas(path: &Name, value_len: usize) -> u64 {
+        ivm::host::state_value_gas(norito_blob(path).len(), value_len)
+    }
+
     fn exact_return_type(
         kind: iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1,
     ) -> iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
@@ -16276,6 +16292,74 @@ mod tests {
         }
     }
 
+    fn local_contract_host(authority: AccountId) -> CoreHost {
+        let mut host = CoreHost::new(authority);
+        host.set_local_contract_debug_execution();
+        host
+    }
+
+    fn build_authenticated_test_contract_program(
+        code: &[u8],
+        vector_length: u8,
+        zk_mode: bool,
+    ) -> Vec<u8> {
+        build_authenticated_test_contract_program_with_states(
+            code,
+            vector_length,
+            zk_mode,
+            Vec::new(),
+        )
+    }
+
+    fn build_authenticated_test_contract_program_with_states(
+        code: &[u8],
+        vector_length: u8,
+        zk_mode: bool,
+        states: Vec<ivm::EmbeddedStateDescriptor>,
+    ) -> Vec<u8> {
+        let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "CoreHostHarness".to_owned(),
+            compiler_fingerprint: "iroha-core-host-tests".to_owned(),
+            abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: if zk_mode {
+                ivm::CONTRACT_FEATURE_BIT_ZK
+            } else {
+                0
+            },
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: Some("CanRunCoreHostHarness".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states,
+            error_codes: Vec::new(),
+        };
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: if zk_mode { ivm::ivm_mode::ZK } else { 0 },
+            vector_length,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        }
+        .encode();
+        program.extend_from_slice(&contract_interface.encode_section());
+        program.extend_from_slice(code);
+        program
+    }
+
     fn fixture_account_in_domain(label: &str, domain_label: &str) -> AccountId {
         let seed: Vec<u8> = format!("{label}@{domain_label}")
             .as_bytes()
@@ -16335,7 +16419,7 @@ mod tests {
                 .expect("decode contract subject");
         assert_eq!(observed, subject);
 
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_SYSVAR_CONTRACT_SUBJECT, &mut vm),
             Err(ivm::VMError::PermissionDenied)
@@ -16395,6 +16479,13 @@ mod tests {
         let dataspace_key = crate::sns::record_storage_key(&dataspace_selector);
         if tx.world.smart_contract_state.get(&dataspace_key).is_none() {
             let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+                    .parse()
+                    .expect("dataspace metadata key"),
+                iroha_primitives::json::Json::new(alias.dataspace.as_u64()),
+            );
             let record = iroha_data_model::sns::NameRecordV1::new(
                 dataspace_selector,
                 owner.clone(),
@@ -16404,7 +16495,7 @@ mod tests {
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,
-                Metadata::default(),
+                metadata,
             );
             tx.world
                 .smart_contract_state
@@ -16524,11 +16615,23 @@ mod tests {
             authority: &AccountId,
             tx: &mut StateTransaction<'_, '_>,
         ) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
-            seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
             let resolved = resolved_test_account_alias(tx, &self.alias);
             if let Some(expected_target) = tx.world.account_aliases.get(&self.alias).cloned()
                 && expected_target != self.account
             {
+                // Alias resolution deliberately fails closed unless the SNS lease,
+                // forward binding, and rekey record agree. Model the lease transfer
+                // that accompanies this test-only cross-account rebind before
+                // applying the binding CAS.
+                let selector = crate::sns::selector_for_account_alias(
+                    &self.alias,
+                    &tx.nexus.dataspace_catalog,
+                )
+                .expect("fixture alias selector");
+                tx.world
+                    .smart_contract_state
+                    .remove(crate::sns::record_storage_key(&selector));
+                seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
                 return iroha_data_model::isi::alias_setup::RebindAccountAlias::new(
                     resolved,
                     expected_target,
@@ -16536,6 +16639,7 @@ mod tests {
                 )
                 .execute(authority, tx);
             }
+            seed_test_account_alias_lease_record(tx, &self.alias, &self.account);
             iroha_data_model::isi::alias_setup::EnsureAlias::new(
                 iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(
                     iroha_data_model::alias_setup::AliasAccountIntentV1 {
@@ -16573,20 +16677,16 @@ mod tests {
     pub(super) fn contract_test_state(authority: &AccountId) -> State {
         let domain = Domain::new(fixture_domain_id()).build(authority);
         let account = build_fixture_account(authority, authority);
-        let mut world = World::with([domain], [account], []);
-        let mut permissions = Permissions::new();
-        assert!(
-            permissions.insert(
-                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                    .into(),
-            )
-        );
-        world
-            .account_permissions_mut_for_testing()
-            .insert(authority.clone(), permissions);
+        let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
+        grant_named_permission_to_account(
+            &state,
+            authority,
+            authority.clone(),
+            "CanRegisterSmartContractCode",
+        );
         grant_named_permission_to_account(
             &state,
             authority,
@@ -16665,6 +16765,11 @@ mod tests {
             .expect("next block height must fit in u64 and be non-zero");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
+        tx.world.add_account_permission(
+            authority,
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into(),
+        );
         let code_hash =
             register_code_bytes(authority, code, &mut tx).expect("register contract bytecode");
         manifest.code_hash = Some(code_hash);
@@ -17426,7 +17531,7 @@ seiyaku AliasPayout {{
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let mut vm = IVM::new(gas_limit);
-        vm.load_program(&build_program(&code, 0))
+        vm.load_program(&build_authenticated_test_contract_program(&code, 0, false))
             .expect("load CALL_CONTRACT program");
         let target_ptr = store_tlv(
             &mut vm,
@@ -17716,15 +17821,23 @@ seiyaku OuterCaller {
         let world = World::with_assets([domain], [account], [asset_def], [asset], [nft]);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(world, kura, query);
-        let contract_address = ContractAddress::derive(0, &authority, 0, DataSpaceId::UNIVERSAL)
-            .expect("contract address");
-        let code_hash = Hash::new(b"dedicated-query-contract");
-        crate::query::insert_contract_instance_for_test(
-            &mut state,
-            contract_address.clone(),
-            code_hash,
+        let state = State::new_for_testing(world, kura, query);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku DedicatedQueryContract {
+  view fn main() -> int { return 0; }
+}
+"#,
+            0,
         );
+        let code_hash = *state
+            .view()
+            .world()
+            .contract_instances()
+            .get(&contract_address)
+            .expect("installed query contract binding");
         let alias: ContractAlias = "router::universal".parse().expect("contract alias");
         let next_height = u64::try_from(state.view().height() + 1)
             .ok()
@@ -17732,6 +17845,12 @@ seiyaku OuterCaller {
             .expect("next block height");
         let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
         let mut tx = block.transaction();
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+            }),
+        );
         iroha_data_model::isi::SetContractAlias::bind(
             contract_address.clone(),
             alias.clone(),
@@ -18114,6 +18233,7 @@ seiyaku OuterCaller {
         let view = state.view();
         let mut host = CoreHostImpl::new(authority.clone());
         host.set_query_state(&view);
+        host.enable_core_query_page_metrics();
         let mut vm = IVM::new(1_000_000);
 
         vm.set_register(10, CoreQueryEntityTagV1::Account.as_u64());
@@ -18146,33 +18266,18 @@ seiyaku OuterCaller {
             ),
         )
         .expect("measure bounded query execution");
-        let projected_account = AccountView {
-            id: expected_ids[0].clone(),
-            metadata: Json::new(Metadata::default()),
-        };
-        let encoded_page = norito::to_bytes(
-            &QueryPageV1::from_window(0, vec![projected_account.clone()], true)
-                .expect("encoded first-page fixture"),
-        )
-        .expect("encode first-page fixture");
-        let prepared_account =
-            CoreHost::prepare_account_view(projected_account).expect("prepare typed leaves");
-        let leaf_tlv_bytes =
-            CoreHost::prepared_query_leaf_bytes(std::slice::from_ref(&prepared_account));
-        let next_offset_tlv_bytes = CoreHost::prepare_optional_int_query_leaf(Some(1))
-            .expect("prepare next-offset int")
-            .encoded_bytes();
+        let metrics = host
+            .core_query_page_metrics()
+            .expect("typed page metrics enabled");
         assert_eq!(
             gas,
             CoreHost::query_gas_cost(
                 &gas_ctx,
                 expected_execution.processed_items,
-                expected_execution.processed_bytes.saturating_add(
-                    u64::try_from(encoded_page.len())
-                        .expect("payload length")
-                        .saturating_add(leaf_tlv_bytes)
-                        .saturating_add(next_offset_tlv_bytes),
-                ),
+                expected_execution
+                    .processed_bytes
+                    .saturating_add(metrics.projection_payload_bytes)
+                    .saturating_add(metrics.leaf_tlv_bytes),
             ),
             "one-item pages must charge the returned item, one lookahead, and every encoded leaf"
         );
@@ -19670,7 +19775,7 @@ seiyaku OuterCaller {
         .expect("derive SCCP test contract address");
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority,
-            "record_sccp_message".to_owned(),
+            "dispatch_sccp_message".to_owned(),
             None,
             &crate::smartcontracts::code::BoundContractIdentity {
                 contract_address: contract_address.clone(),
@@ -19738,7 +19843,7 @@ seiyaku OuterCaller {
     fn execute_instruction_syscall_rejects_sccp_without_proved_contract_scope() {
         let authority = (*ALICE_ID).clone();
         assert_sccp_record_syscall_rejected(
-            CoreHost::new(authority.clone()),
+            local_contract_host(authority.clone()),
             ivm::VMError::PermissionDenied,
         );
 
@@ -19800,7 +19905,7 @@ seiyaku OuterCaller {
             ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
             u64::MAX,
         ] {
-            let mut host = CoreHost::new(authority.clone());
+            let mut host = local_contract_host(authority.clone());
             let mut vm = ivm::IVM::new(1_000_000);
             let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
             vm.set_register(10, ptr);
@@ -19886,13 +19991,13 @@ seiyaku OuterCaller {
         ]
         .concat();
         let mut vm = IVM::new(10_000);
-        vm.load_program(&build_program(&code, 0))
+        vm.load_program(&build_authenticated_test_contract_program(&code, 0, true))
             .expect("load proof instruction program");
         let instruction_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, instruction_ptr);
         vm.set_register(11, ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         let pending_hash = [0x42; 32];
-        let mut host = CoreHost::new((*ALICE_ID).clone());
+        let mut host = local_contract_host((*ALICE_ID).clone());
         Arc::make_mut(&mut host.zk_last_env_hash_ballot).push_back(pending_hash);
 
         let error = vm
@@ -19900,7 +20005,11 @@ seiyaku OuterCaller {
             .expect_err("extreme proof gas exceeds the reserved budget");
 
         assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(vm.remaining_gas(), 0);
+        assert_eq!(
+            vm.remaining_gas(),
+            0,
+            "a state-dependent proof failure consumes its fail-closed reserve"
+        );
         assert!(host.queued.is_empty(), "no instruction may be published");
         assert_eq!(
             host.zk_last_env_hash_ballot.front(),
@@ -19938,18 +20047,26 @@ seiyaku OuterCaller {
         .concat();
         let mut escrow_vm = IVM::new(10_000);
         escrow_vm
-            .load_program(&build_program(&escrow_code, 0))
+            .load_program(&build_authenticated_test_contract_program(
+                &escrow_code,
+                0,
+                true,
+            ))
             .expect("load anonymous escrow program");
         let escrow_ptr = store_tlv(&mut escrow_vm, PointerType::NoritoBytes, &escrow_payload);
         escrow_vm.set_register(10, escrow_ptr);
-        let mut escrow_host = CoreHost::new((*ALICE_ID).clone());
+        let mut escrow_host = local_contract_host((*ALICE_ID).clone());
 
         let error = escrow_vm
             .run_with_host(&mut escrow_host)
             .expect_err("extreme proof gas exceeds the escrow reserve");
 
         assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(escrow_vm.remaining_gas(), 0);
+        assert_eq!(
+            escrow_vm.remaining_gas(),
+            0,
+            "a state-dependent escrow failure consumes its fail-closed reserve"
+        );
         assert!(
             escrow_host.queued.is_empty(),
             "unaffordable native proof instruction must not be queued"
@@ -20051,7 +20168,7 @@ seiyaku OpaqueInstructionSubmission {
 }
 "#;
         // This is intentionally the non-deployable local harness profile: the
-        // public source resolver must not expose an opaque instruction escape.
+        // retired opaque-instruction escape must remain outside the public language surface.
         let error =
             ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
                 mode: ivm::kotodama::compiler::CompilerMode::Test,
@@ -20077,9 +20194,35 @@ seiyaku OpaqueInstructionSubmission {
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "CodeLiteralSccpHarness".to_owned(),
+            compiler_fingerprint: "iroha-core-host-tests".to_owned(),
+            abi_hash: ivm_sys::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: ivm::CONTRACT_FEATURE_BIT_ZK,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "dispatch_sccp_message".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: Some("CanRecordSccpMessage".to_owned()),
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: None,
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states: Vec::new(),
+            error_codes: Vec::new(),
+        };
+        let contract_section = contract_interface.encode_section();
         let literal_descriptor_len = core::mem::size_of::<u64>();
         let literal_data_offset = 16 + literal_descriptor_len;
-        let post_pad = (4 - ((literal_data_offset + tlv.len()) % 4)) % 4;
+        let post_pad = (4 - ((contract_section.len() + literal_data_offset + tlv.len()) % 4)) % 4;
 
         let mut program = ivm::ProgramMetadata {
             max_cycles: 1_000_000,
@@ -20088,11 +20231,17 @@ seiyaku OpaqueInstructionSubmission {
             ..Default::default()
         }
         .encode();
+        program.extend_from_slice(&contract_section);
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&1u32.to_le_bytes());
         program.extend_from_slice(&(post_pad as u32).to_le_bytes());
         program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
-        program.extend_from_slice(&(literal_data_offset as u64).to_le_bytes());
+        let literal_descriptor = ivm::encode_literal_descriptor(
+            ivm::LiteralKindV1::PointerTlv,
+            u64::try_from(literal_data_offset).expect("literal offset fits u64"),
+        )
+        .expect("encode pointer literal descriptor");
+        program.extend_from_slice(&literal_descriptor.to_le_bytes());
         program.extend_from_slice(&tlv);
         program.extend(std::iter::repeat_n(0u8, post_pad));
         program.extend_from_slice(
@@ -21188,7 +21337,7 @@ seiyaku OpaqueInstructionSubmission {
         seed_test_call_hash(&mut tx, 0xF1);
         SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account_id.clone(),
             authority.clone(),
             1,
             None,
@@ -21870,14 +22019,15 @@ seiyaku Callee {
         let blob_schema = exact_return_type(
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Blob,
         );
-        assert!(matches!(
+        assert_eq!(
             CoreHost::encode_nested_contract_return(
                 &pointer_vm,
                 Some(&blob_schema),
                 iroha_data_model::smart_contract::entrypoint::MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
             ),
-            Err(ivm::VMError::PrivacyViolation)
-        ));
+            Err(ivm::VMError::NoritoInvalid),
+            "stack bytes are not an owned pointer-ABI object store"
+        );
     }
 
     #[test]
@@ -23340,7 +23490,9 @@ seiyaku Callee {
             assert!(
                 matches!(
                     error.as_unmetered(),
-                    ivm::VMError::DecodeError | ivm::VMError::NoritoInvalid
+                    ivm::VMError::DecodeError
+                        | ivm::VMError::NoritoInvalid
+                        | ivm::VMError::PermissionDenied
                 ),
                 "{label} produced unexpected error: {error:?}"
             );
@@ -24010,7 +24162,7 @@ seiyaku AliasPayout {
         tx.tx_call_hash = Some(Hash::prehashed([0xF4; Hash::LENGTH]));
         SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -25674,7 +25826,7 @@ seiyaku AliasPayout {
         tx.tx_call_hash = Some(Hash::prehashed([0xFB; Hash::LENGTH]));
         SeedTestAccountAliasLease::new(
             alias.clone(),
-            authority.clone(),
+            merchant_account.clone(),
             authority.clone(),
             1,
             None,
@@ -26739,7 +26891,7 @@ seiyaku DurableOwner {
     fn state_syscall_works_without_access_logging() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::new(authority);
+        let mut host = local_contract_host(authority);
         let mut vm = IVM::new(10_000);
 
         let path: Name = "counter".parse().unwrap();
@@ -26751,13 +26903,13 @@ seiyaku DurableOwner {
 
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_SET should succeed without access logging"
         );
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_GET should succeed without access logging"
         );
         let out_ptr = vm.register(10);
@@ -26841,6 +26993,7 @@ seiyaku DurableOwner {
             entrypoint: "attack".to_owned(),
         };
         let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
         let scoped_frontier = scope_host
             .scoped_durable_state_path(&frontier)
@@ -26860,6 +27013,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
         let interface = ivm::EmbeddedContractInterfaceV1 {
@@ -26967,7 +27121,7 @@ seiyaku DurableOwner {
 
         vm.set_register(10, path_ptr);
         vm.set_register(11, 0);
-        vm.set_register(12, 0);
+        vm.set_register(12, 1);
         host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
             .expect("opaque keys are omitted from enumeration");
         assert_eq!(vm.register(11), 0, "hidden total must exclude the marker");
@@ -26984,15 +27138,9 @@ seiyaku DurableOwner {
         );
 
         vm.set_register(10, path_ptr);
-        let path_len = vm
-            .memory
-            .validate_tlv(path_ptr)
-            .expect("frontier path TLV")
-            .payload
-            .len();
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm),
-            Ok(CoreHost::state_count_gas(path_len)),
+            Ok(test_state_path_gas(&frontier)),
             "gas must cover the caller-visible prefix without revealing hidden marker work"
         );
         assert_eq!(
@@ -27017,13 +27165,17 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(fixture_account("alice"), &state);
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
 
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(value.len())),
+            Ok(ivm::host::state_value_gas(
+                norito_blob(&path).len(),
+                value.len(),
+            )),
             "verified relay records are an intentional public contract surface"
         );
         let value_tlv = vm
@@ -27052,7 +27204,7 @@ seiyaku DurableOwner {
 
         vm.set_register(10, path_ptr);
         vm.set_register(11, 0);
-        vm.set_register(12, 0);
+        vm.set_register(12, 1);
         host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
             .expect("public verified relay keys remain enumerable");
         assert_eq!(vm.register(11), 1);
@@ -27507,6 +27659,7 @@ seiyaku DurableOwner {
             entrypoint: "write_then_read".to_owned(),
         };
         let mut host = CoreHost::new(authority).with_access_logging();
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
 
@@ -27521,7 +27674,7 @@ seiyaku DurableOwner {
             .expect("begin_tx should reset access log");
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_SET should succeed when access logging is enabled"
         );
         vm.set_register(10, path_ptr);
@@ -27558,13 +27711,14 @@ seiyaku DurableOwner {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_GET should read from the world snapshot"
         );
         let out_ptr = vm.register(10);
@@ -27593,6 +27747,7 @@ seiyaku DurableOwner {
         let view = state.view();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHostImpl::new(authority);
+        host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(10_000);
 
@@ -27600,7 +27755,7 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_GET should read from live query state without cloning the durable map"
         );
         assert!(
@@ -27642,6 +27797,7 @@ seiyaku DurableOwner {
             entrypoint: "list".to_owned(),
         };
         let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
 
         let expected = ["orders/1", "orders/10", "orders/2"]
@@ -27683,11 +27839,22 @@ seiyaku DurableOwner {
         );
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
+        host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(u64::MAX);
         let prefix: Name = "orders".parse().expect("state prefix");
         let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
+        let prefix_payload_len = norito_blob(&prefix).len();
+        let (_, _, scan_work_gas) = host
+            .collect_durable_state_keys(
+                &vm,
+                &prefix,
+                prefix_payload_len,
+                0,
+                ivm_sys::STATE_KEYS_MAX_ITEMS,
+            )
+            .expect("measure scoped state-key scan");
 
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
@@ -27705,7 +27872,9 @@ seiyaku DurableOwner {
         assert_eq!(keys, expected, "keys retain canonical Name/Norito order");
         assert_eq!(
             keys_gas,
-            CoreHost::state_keys_gas(5, keys_tlv.payload.len()),
+            ivm::host::STATE_QUERY_GAS_BASE
+                .saturating_add(scan_work_gas)
+                .saturating_add(u64::try_from(keys_tlv.payload.len()).expect("payload length")),
             "gas covers matching keys and same-text-prefix candidates, but not global state"
         );
 
@@ -27716,7 +27885,7 @@ seiyaku DurableOwner {
         assert_eq!(vm.register(10), 3);
         assert_eq!(
             count_gas,
-            CoreHost::state_count_gas(5),
+            ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas),
             "count gas covers every range candidate examined"
         );
 
@@ -27753,19 +27922,23 @@ seiyaku DurableOwner {
         let view = state.view();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHostImpl::new(authority);
+        host.set_local_contract_debug_execution();
         host.set_query_state(&view);
         let mut vm = IVM::new(u64::MAX);
         let target_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&target));
 
         vm.set_register(10, target_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm), Ok(16));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm),
+            Ok(test_state_path_gas(&target))
+        );
         assert_eq!(vm.register(10), 1);
         assert!(host.durable_state_base.is_empty());
 
         vm.set_register(10, target_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_LEN, &mut vm),
-            Ok(CoreHost::state_query_gas(target_value.len()))
+            Ok(test_state_path_gas(&target))
         );
         assert_eq!(
             vm.register(10),
@@ -27793,6 +27966,7 @@ seiyaku DurableOwner {
         );
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(u64::MAX);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         let code = [
@@ -27804,8 +27978,16 @@ seiyaku DurableOwner {
             ivm::encoding::wide::encode_halt().to_le_bytes(),
         ]
         .concat();
-        vm.load_program(&build_program(&code, 0))
-            .expect("load state query program");
+        vm.load_program(&build_authenticated_test_contract_program_with_states(
+            &code,
+            0,
+            false,
+            vec![ivm::EmbeddedStateDescriptor {
+                name: path.to_string(),
+                ty: ivm::EmbeddedStateType::Bytes,
+            }],
+        ))
+        .expect("load authenticated state query program");
         vm.set_register(10, path_ptr);
         vm.set_register(11, 0xfeed);
         vm.set_gas_limit(20);
@@ -27815,7 +27997,11 @@ seiyaku DurableOwner {
             .expect_err("world-state response cost exceeds the syscall reserve");
 
         assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(vm.remaining_gas(), 0);
+        assert_eq!(
+            vm.remaining_gas(),
+            15,
+            "an unaffordable reserve must not be partially debited"
+        );
         assert_eq!(
             vm.register(10),
             path_ptr,
@@ -27837,7 +28023,8 @@ seiyaku DurableOwner {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
-        let mut vm = IVM::new(10_000);
+        host.set_local_contract_debug_execution();
+        let mut vm = IVM::new(u64::MAX);
 
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         let filler = make_tlv(PointerType::Blob as u16, b"");
@@ -27846,7 +28033,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&expected)
                     .expect("encode state value")
                     .len()
@@ -27878,6 +28066,7 @@ seiyaku DurableOwner {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
@@ -27891,7 +28080,8 @@ seiyaku DurableOwner {
         vm.set_register(11, value_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode overlay state value")
                     .len()
@@ -27902,7 +28092,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode overlay state value")
                     .len()
@@ -27941,20 +28132,21 @@ seiyaku DurableOwner {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-            Ok(16),
+            Ok(test_state_path_gas(&path)),
             "STATE_DEL should stage an unscoped tombstone without runtime context"
         );
 
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(16),
+            Ok(test_state_path_gas(&path)),
             "unscoped tombstone should shadow the persisted base value"
         );
         assert_eq!(vm.register(10), 0);
@@ -28085,6 +28277,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
         let path: Name = "counter".parse().unwrap();
@@ -28113,7 +28306,8 @@ seiyaku DurableOwner {
         vm.set_register(11, value_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&expected)
                     .expect("encode state value")
                     .len()
@@ -28126,7 +28320,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&expected)
                     .expect("encode state value")
                     .len()
@@ -28163,6 +28358,7 @@ seiyaku DurableOwner {
             entrypoint: "read".to_owned(),
         };
         let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
         let scoped_path = scope_host
             .scoped_durable_state_path(&path)
@@ -28182,6 +28378,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
@@ -28192,7 +28389,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&11_u64)
                     .expect("encode scoped state value")
                     .len()
@@ -28229,6 +28427,7 @@ seiyaku DurableOwner {
         };
         let scoped_key: Name = "orders/2".parse().unwrap();
         let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
         let scoped_path = scope_host
             .scoped_durable_state_path(&scoped_key)
@@ -28252,13 +28451,17 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
         let mut vm = IVM::new(10_000);
 
         let unscoped_key: Name = "orders/1".parse().unwrap();
         let unscoped_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&unscoped_key));
         vm.set_register(10, unscoped_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm), Ok(16));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Ok(test_state_path_gas(&unscoped_key))
+        );
 
         let prefix: Name = "orders".parse().unwrap();
         let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
@@ -28280,26 +28483,28 @@ seiyaku DurableOwner {
         let keys: Vec<Name> = norito::decode_from_bytes(tlv.payload).expect("decode key list");
         assert_eq!(keys, vec![scoped_key.clone()]);
 
+        let (_, _, count_scan_work_gas) = host
+            .collect_durable_state_keys(&vm, &prefix, norito_blob(&prefix).len(), u64::MAX, 0)
+            .expect("measure scoped state-count scan");
         vm.set_register(10, prefix_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm),
-            Ok(CoreHost::state_count_gas(2))
+            Ok(ivm::host::STATE_QUERY_GAS_BASE.saturating_add(count_scan_work_gas))
         );
         assert_eq!(vm.register(10), 1);
 
         let scoped_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&scoped_key));
         vm.set_register(10, scoped_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm), Ok(16));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm),
+            Ok(test_state_path_gas(&scoped_key))
+        );
         assert_eq!(vm.register(10), 1);
 
         vm.set_register(10, scoped_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_LEN, &mut vm),
-            Ok(CoreHost::state_query_gas(
-                norito::to_bytes(&2_u64)
-                    .expect("encode scoped state value")
-                    .len()
-            ))
+            Ok(test_state_path_gas(&scoped_key))
         );
         assert_eq!(
             vm.register(10),
@@ -28332,6 +28537,7 @@ seiyaku DurableOwner {
             entrypoint: "write".to_owned(),
         };
         let mut scope_host = CoreHost::new(authority.clone());
+        scope_host.set_local_contract_debug_execution();
         scope_host.set_contract_runtime_context(Some(context.clone()));
         let scoped_path = scope_host
             .scoped_durable_state_path(&path)
@@ -28351,6 +28557,7 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
@@ -28365,7 +28572,8 @@ seiyaku DurableOwner {
         vm.set_register(11, value_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode overlay state value")
                     .len()
@@ -28375,7 +28583,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode overlay state value")
                     .len()
@@ -28423,6 +28632,7 @@ seiyaku DurableOwner {
             entrypoint: "write".to_owned(),
         };
         let mut path_host = CoreHost::new(authority.clone());
+        path_host.set_local_contract_debug_execution();
         path_host.set_contract_runtime_context(Some(context.clone()));
         let scoped_path = path_host
             .scoped_durable_state_path(&path)
@@ -28442,17 +28652,21 @@ seiyaku DurableOwner {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let mut host = CoreHost::from_state(authority, &state);
+        host.set_local_contract_debug_execution();
         host.set_contract_runtime_context(Some(context));
 
         let mut vm = IVM::new(10_000);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         vm.set_register(10, path_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm), Ok(16));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Ok(test_state_path_gas(&path))
+        );
 
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(16),
+            Ok(test_state_path_gas(&path)),
             "scoped tombstone should hide the scoped base value"
         );
         assert_eq!(vm.register(10), 0);
@@ -28470,6 +28684,7 @@ seiyaku DurableOwner {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
+        host.set_local_contract_debug_execution();
         let mut vm = IVM::new(10_000);
 
         let path: Name = "counter".parse().unwrap();
@@ -28497,7 +28712,8 @@ seiyaku DurableOwner {
         vm.set_register(11, value_a_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&11_u64)
                     .expect("encode state value A")
                     .len()
@@ -28526,7 +28742,8 @@ seiyaku DurableOwner {
         vm.set_register(11, value_b_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode state value B")
                     .len()
@@ -28542,7 +28759,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&11_u64)
                     .expect("encode state value A")
                     .len()
@@ -28565,7 +28783,8 @@ seiyaku DurableOwner {
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-            Ok(CoreHost::state_query_gas(
+            Ok(test_state_value_gas(
+                &path,
                 norito::to_bytes(&22_u64)
                     .expect("encode state value B")
                     .len()
@@ -28594,6 +28813,7 @@ seiyaku DurableOwner {
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority.clone(), &state);
+        host.set_local_contract_debug_execution();
         let contract = ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
             &authority,
@@ -28610,7 +28830,10 @@ seiyaku DurableOwner {
         let mut vm = IVM::new(10_000);
         let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         vm.set_register(10, path_ptr);
-        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(16));
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(test_state_path_gas(&path))
+        );
         assert_eq!(
             vm.register(10),
             0,
@@ -29031,7 +29254,7 @@ seiyaku DurableOwner {
         );
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let mut host = CoreHost::new(authority.clone());
+        let mut host = local_contract_host(authority);
         host.set_durable_state_snapshot_from_world(&stx.world);
 
         let mut vm = IVM::new(10_000);
@@ -29043,20 +29266,21 @@ seiyaku DurableOwner {
         vm.set_register(11, value_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            Ok(test_state_value_gas(&path, value_bytes.len())),
             "STATE_SET should stage the overlay"
         );
 
-        host.apply_queued(&mut stx, &authority)
+        // Exercise the durable-state flush primitive directly. Local-debug
+        // artifacts are intentionally rejected by the public apply path.
+        host.flush_durable_state(&mut stx)
             .expect("flush overlay into transaction");
         let stored = stx
             .world
             .smart_contract_state
             .get(&path)
             .expect("stored value");
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        let value: u64 =
+            norito::decode_from_bytes(stored).expect("decode raw persisted state value");
         assert_eq!(value, 1);
     }
 
@@ -29535,7 +29759,11 @@ seiyaku DurableOwner {
             .expect_err("proof gas exceeds the pre-debited reserve");
 
         assert_eq!(error, ivm::VMError::OutOfGas);
-        assert_eq!(vm.remaining_gas(), 0);
+        assert_eq!(
+            vm.remaining_gas(),
+            15,
+            "an unaffordable proof reserve must not be partially debited"
+        );
         assert_eq!(vm.register(10), payload_ptr);
         assert_eq!(vm.register(11), 0xfeed);
         assert!(host.zk_verified_transfer.is_empty());
@@ -30371,10 +30599,13 @@ seiyaku PreparedBoundaryArguments {
         );
         let binding_envelope_len =
             make_tlv(PointerType::NoritoBytes as u16, prepared.binding_bytes()).len();
-        let expected_input_cursor = u64::try_from(binding_envelope_len)
-            .expect("bounded binding envelope length")
+        let expected_next_input = binding_pointer
+            .checked_add(
+                u64::try_from(binding_envelope_len).expect("bounded binding envelope length"),
+            )
+            .expect("bounded binding end")
             .checked_add(7)
-            .expect("bounded aligned binding envelope length")
+            .expect("bounded aligned binding end")
             & !7;
         assert_eq!(
             store_tlv(
@@ -30382,9 +30613,7 @@ seiyaku PreparedBoundaryArguments {
                 PointerType::Blob,
                 b"after-materialization-preflight",
             ),
-            binding_pointer
-                .checked_add(expected_input_cursor)
-                .expect("binding envelope and next INPUT allocation fit"),
+            expected_next_input,
             "failed materialization preflight must not consume INPUT for the small bytes value"
         );
     }
@@ -30495,7 +30724,7 @@ seiyaku PreparedBoundaryArguments {
             .expect("TLV must include a trailing hash");
         *last ^= 0xFF;
 
-        let mut vm = IVM::new(10_000);
+        let mut vm = IVM::new(u64::MAX);
         vm.memory
             .preload_input(0, &account_tlv)
             .expect("preload account TLV");
@@ -30568,18 +30797,41 @@ seiyaku PreparedBoundaryArguments {
     fn decode_tlv_blob_accepts_code_region_literal() {
         crate::test_alias::ensure();
 
-        let mut vm = ivm::IVM::new(1_000_000);
-        vm.load_program(&build_program(
-            &encoding::wide::encode_halt().to_le_bytes(),
-            0,
-        ))
-        .expect("load abi v1 program");
-
         let payload = b"risk".to_vec();
         let tlv = make_tlv(PointerType::Blob as u16, &payload);
-        vm.memory.load_code(&tlv);
+        let literal_data_offset = 16 + core::mem::size_of::<u64>();
+        let post_pad = (4 - ((literal_data_offset + tlv.len()) % 4)) % 4;
+        let mut program = ivm::ProgramMetadata::default().encode();
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&1_u32.to_le_bytes());
+        program.extend_from_slice(
+            &u32::try_from(post_pad)
+                .expect("literal padding fits u32")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &u32::try_from(tlv.len())
+                .expect("literal length fits u32")
+                .to_le_bytes(),
+        );
+        let descriptor = ivm::encode_literal_descriptor(
+            ivm::LiteralKindV1::PointerTlv,
+            u64::try_from(literal_data_offset).expect("literal offset fits u64"),
+        )
+        .expect("encode pointer literal descriptor");
+        program.extend_from_slice(&descriptor.to_le_bytes());
+        program.extend_from_slice(&tlv);
+        program.extend(std::iter::repeat_n(0_u8, post_pad));
+        program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-        let decoded = CoreHost::decode_tlv_blob(&vm, 0).expect("decode code literal");
+        let mut vm = ivm::IVM::new(1_000_000);
+        vm.load_program(&program).expect("load abi v1 program");
+
+        let decoded = CoreHost::decode_tlv_blob(
+            &vm,
+            u64::try_from(literal_data_offset).expect("literal pointer fits u64"),
+        )
+        .expect("decode code literal");
         assert_eq!(decoded, payload);
     }
 
@@ -30782,7 +31034,7 @@ seiyaku PreparedBoundaryArguments {
 
         let program = build_program(&code, 4);
 
-        let mut vm = IVM::new(10_000);
+        let mut vm = IVM::new(u64::MAX);
         vm.set_host(CoreHost::new(authority_clone));
         vm.load_program(&program).unwrap();
         vm.memory

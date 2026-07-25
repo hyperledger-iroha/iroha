@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,74 @@ def _quote_toml(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _format_literal(tag: str, body: str) -> str:
+    """Return the canonical CRC-bound Norito literal for one UTF-8 body."""
+
+    crc = 0xFFFF
+    for byte in tag.encode("utf-8") + b":" + body.encode("utf-8"):
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return f"{tag}:{body}#{crc:04X}"
+
+
+def _canonical_socket_address(value: str, context: str) -> str:
+    """Normalize one host/port into the strict `addr:<body>#<crc16>` form."""
+
+    raw = value.strip()
+    literal_match = re.fullmatch(r"addr:(.+)#([0-9A-F]{4})", raw)
+    if raw.startswith("addr:"):
+        if literal_match is None:
+            raise ValueError(
+                f"{context} must be a canonical addr:<host>:<port>#<CRC16> literal"
+            )
+        body = literal_match.group(1)
+    else:
+        if "#" in raw:
+            raise ValueError(
+                f"{context} must not contain a checksum without the `addr:` tag"
+            )
+        body = raw
+
+    if body.startswith("["):
+        close = body.find("]")
+        if close <= 1 or body[close + 1 : close + 2] != ":":
+            raise ValueError(f"{context} contains an invalid bracketed IPv6 address")
+        host = body[1:close]
+        port_text = body[close + 2 :]
+        if "]" in port_text:
+            raise ValueError(f"{context} contains an invalid bracketed IPv6 address")
+        canonical_host = f"[{host.lower()}]"
+    else:
+        host, separator, port_text = body.rpartition(":")
+        if not separator or not host or ":" in host or any(
+            character in host for character in "[]/@#"
+        ):
+            raise ValueError(f"{context} must contain one host and one port")
+        canonical_host = host.lower()
+
+    if (
+        not port_text
+        or not port_text.isascii()
+        or not port_text.isdecimal()
+        or any(character.isspace() for character in body)
+    ):
+        raise ValueError(f"{context} contains an invalid decimal port")
+    port = int(port_text, 10)
+    if port > 65535:
+        raise ValueError(f"{context} port must fit in u16")
+
+    canonical = _format_literal("addr", f"{canonical_host}:{port}")
+    if literal_match is not None and canonical != raw:
+        raise ValueError(
+            f"{context} is not canonical; expected `{canonical}`"
+        )
+    return canonical
+
+
 def _blake3_token_hash(token: str) -> str:
     """Return the canonical digest stored in account-onboarding config."""
 
@@ -232,8 +301,12 @@ def _load_defaults(payload: dict[str, Any]) -> RosterDefaults:
             )
         torii_public_address = torii_public_address.strip()
     return RosterDefaults(
-        network_address=values["network_address"].strip(),
-        torii_address=values["torii_address"].strip(),
+        network_address=_canonical_socket_address(
+            values["network_address"], "roster default `network_address`"
+        ),
+        torii_address=_canonical_socket_address(
+            values["torii_address"], "roster default `torii_address`"
+        ),
         torii_public_address=torii_public_address,
     )
 
@@ -483,15 +556,22 @@ def render_genesis_template(
         transaction["topology"] = []
 
     registered_accounts: set[str] = set()
-    for transaction in transactions:
+    for transaction_index, transaction in enumerate(transactions):
         instructions = transaction.get("instructions", [])
         if not isinstance(instructions, list):
             raise ValueError(
                 f"base genesis {base_genesis_path} contains a non-array instructions field"
             )
-        for instruction in instructions:
-            if not isinstance(instruction, dict):
+        for instruction_index, instruction in enumerate(instructions):
+            if isinstance(instruction, str) and instruction:
                 continue
+            if not isinstance(instruction, dict) or len(instruction) != 1:
+                raise ValueError(
+                    f"base genesis {base_genesis_path} transaction "
+                    f"{transaction_index} instruction {instruction_index} must be "
+                    "a single-key structured instruction object or a non-empty "
+                    "canonical base64 instruction string"
+                )
             account = instruction.get("Register", {}).get("Account")
             if isinstance(account, dict) and isinstance(account.get("id"), str):
                 registered_accounts.add(account["id"])
@@ -587,7 +667,10 @@ def load_roster(
             )
         private_key = private_key_value.strip()
         pop_hex = _require_string(raw, "pop_hex", f"validator `{slug}`")
-        public_address = _require_string(raw, "public_address", f"validator `{slug}`")
+        public_address = _canonical_socket_address(
+            _require_string(raw, "public_address", f"validator `{slug}`"),
+            f"validator `{slug}` field `public_address`",
+        )
         network_address = raw.get("network_address", defaults.network_address)
         torii_address = raw.get("torii_address", defaults.torii_address)
         torii_public_address = raw.get(
@@ -629,8 +712,14 @@ def load_roster(
                 private_key=private_key,
                 pop_hex=pop_hex,
                 public_address=public_address,
-                network_address=network_address.strip(),
-                torii_address=torii_address.strip(),
+                network_address=_canonical_socket_address(
+                    network_address,
+                    f"validator `{slug}` field `network_address`",
+                ),
+                torii_address=_canonical_socket_address(
+                    torii_address,
+                    f"validator `{slug}` field `torii_address`",
+                ),
                 torii_public_address=torii_public_address.strip(),
             )
         )

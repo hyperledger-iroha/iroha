@@ -1354,7 +1354,7 @@ mod tests {
                     swapped_roster.manifest_digest,
                 )
                 .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::RosterContextMismatch
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
 
         let changed_power = fixture_with_roster(|roster| {

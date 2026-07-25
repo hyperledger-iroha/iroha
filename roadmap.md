@@ -23393,7 +23393,7 @@ signed ancestor-linked solid-block header proof,
 
 ## IVM, Kotodama, and Norito
 
-**Status:** implementation complete; external release evidence remains.
+**Status:** external release evidence remains.
 
 - Archive immutable source, `Cargo.lock`, benchmark workload, and toolchain
   provenance for the documented predecessor, then run the candidate and

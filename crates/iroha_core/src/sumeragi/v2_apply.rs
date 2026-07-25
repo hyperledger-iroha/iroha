@@ -3604,27 +3604,14 @@ mod tests {
                 fixture.task.tag().generation(),
             );
             let mut store = fixture.reopen_body_store();
-            let canonical_wire = fixture.body.encode_wire().expect("encode locked body");
-            let later_manifest = wire::PayloadManifest::derive(
-                &fixture.context,
-                later_round,
-                fixture.task.subject(),
-                u64::try_from(canonical_wire.len()).expect("locked body length fits u64"),
-                std::slice::from_ref(&canonical_wire),
-            )
-            .expect("derive later-view manifest for the exact locked body");
-            let later_durable = store
-                .store(later_manifest, canonical_wire)
-                .expect("bind the exact locked body to the later round");
-            let later_validated = store
-                .validate(&later_durable, |candidate| {
-                    fixture
-                        .service
-                        .validate_candidate(&fixture.context, candidate)
-                })
-                .expect("validate the exact locked body under the later round");
+            let locked_origin_receipt = fixture.task.validated_receipt().clone();
             assert_eq!(
-                later_validated.execution_commitment(),
+                locked_origin_receipt.durable().round(),
+                certificate.proposal_round,
+                "the durable body remains bound to the immutable proposal origin"
+            );
+            assert_eq!(
+                locked_origin_receipt.execution_commitment(),
                 fixture.task.validated_receipt().execution_commitment(),
                 "view rotation must not change deterministic execution"
             );
@@ -3633,7 +3620,7 @@ mod tests {
                 later_tag,
                 fixture.task.subject(),
                 certificate,
-                later_validated,
+                locked_origin_receipt,
             );
             fixture.task = task;
 

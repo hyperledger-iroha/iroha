@@ -18,7 +18,7 @@ use crate::{
 ///
 /// With the `json` feature, the canonical representation is an app expression
 /// object with exactly `op` and `args` fields. Field paths are strings
-/// (`authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`, or
+/// (`block_hash`, `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`, or
 /// `metadata.<name>`); presence operators carry an explicit boolean argument.
 /// Decoding rejects empty logical nodes, empty or duplicate membership sets,
 /// unknown fields, alternate literal spellings, and trees exceeding the shared
@@ -33,6 +33,17 @@ pub enum CommittedTxPredicate {
     Or(Vec<CommittedTxPredicate>),
     /// Logical negation of a sub-predicate.
     Not(Box<CommittedTxPredicate>),
+    // Block hash atoms (always present)
+    /// Matches transactions whose carrier block hash equals the provided value.
+    BlockEq(HashOf<crate::block::BlockHeader>),
+    /// Matches transactions whose carrier block hash differs from the provided value.
+    BlockNe(HashOf<crate::block::BlockHeader>),
+    /// Matches transactions whose carrier block hash is contained in the provided set.
+    BlockIn(Vec<HashOf<crate::block::BlockHeader>>),
+    /// Matches transactions whose carrier block hash is not contained in the provided set.
+    BlockNin(Vec<HashOf<crate::block::BlockHeader>>),
+    /// Matches existence (or absence) of a carrier block hash.
+    BlockExists(bool),
     // Authority atoms (present only for External entrypoints)
     /// Matches when the transaction authority equals the provided account ID.
     AuthorityEq(crate::account::AccountId),
@@ -241,6 +252,9 @@ fn validate_committed_tx_predicate_inner(
             }
         }
         P::Not(inner) => validate_committed_tx_predicate_inner(inner, depth + 1, budget)?,
+        P::BlockIn(values) | P::BlockNin(values) => {
+            budget.validate_membership("block_hash", values)?;
+        }
         P::AuthorityIn(values) | P::AuthorityNin(values) => {
             budget.validate_membership("authority", values)?;
         }
@@ -437,6 +451,7 @@ impl PredicateJsonBudget {
 
 #[cfg(feature = "json")]
 enum CommittedTxField {
+    BlockHash,
     Authority,
     Timestamp,
     EntrypointHash,
@@ -452,6 +467,7 @@ fn parse_committed_tx_field(
         .as_str()
         .ok_or(CommittedTxPredicateJsonError::ExpectedFieldString)?;
     match raw {
+        "block_hash" => Ok(CommittedTxField::BlockHash),
         "authority" => Ok(CommittedTxField::Authority),
         "timestamp_ms" => Ok(CommittedTxField::Timestamp),
         "entrypoint_hash" => Ok(CommittedTxField::EntrypointHash),
@@ -565,6 +581,27 @@ fn parse_entrypoint_hash_literal(
 }
 
 #[cfg(feature = "json")]
+fn parse_block_hash_literal(
+    op: &str,
+    field: &str,
+    value: &Value,
+) -> Result<HashOf<crate::block::BlockHeader>, CommittedTxPredicateJsonError> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| invalid_value(op, field, "a canonical lowercase block hash"))?;
+    let hash = raw
+        .parse::<HashOf<crate::block::BlockHeader>>()
+        .map_err(|_| invalid_value(op, field, "a canonical lowercase block hash"))?;
+    if hash.to_string() != raw {
+        return Err(CommittedTxPredicateJsonError::NonCanonicalLiteral {
+            kind: "block hash",
+            field: field.to_owned(),
+        });
+    }
+    Ok(hash)
+}
+
+#[cfg(feature = "json")]
 fn parse_metadata_literal(value: &Value) -> Result<Json, CommittedTxPredicateJsonError> {
     Json::from_norito_value_ref(value)
         .map_err(|_| CommittedTxPredicateJsonError::InvalidMetadataJson)
@@ -580,6 +617,14 @@ fn parse_equality_atom(
     use CommittedTxPredicate as P;
 
     Ok(match field {
+        CommittedTxField::BlockHash => {
+            let value = parse_block_hash_literal(op, field_path, value)?;
+            if op == "eq" {
+                P::BlockEq(value)
+            } else {
+                P::BlockNe(value)
+            }
+        }
         CommittedTxField::Authority => {
             let value = parse_account_literal(op, field_path, value)?;
             if op == "eq" {
@@ -672,6 +717,17 @@ fn parse_membership_atom(
         .ok_or_else(|| invalid_value(op, field_path, "a non-empty array"))?;
     budget.add_membership_values(field_path, values.len())?;
     Ok(match field {
+        CommittedTxField::BlockHash => {
+            let parsed = values
+                .iter()
+                .map(|value| parse_block_hash_literal(op, field_path, value))
+                .collect::<Result<Vec<_>, _>>()?;
+            if op == "in" {
+                P::BlockIn(parsed)
+            } else {
+                P::BlockNin(parsed)
+            }
+        }
         CommittedTxField::Authority => {
             let parsed = values
                 .iter()
@@ -757,6 +813,7 @@ fn parse_presence_atom(
         .as_bool()
         .ok_or_else(|| invalid_value(op, field_path, "a boolean"))?;
     match (op, field) {
+        ("exists", CommittedTxField::BlockHash) => Ok(P::BlockExists(flag)),
         ("exists", CommittedTxField::Authority) => Ok(P::AuthorityExists(flag)),
         ("exists", CommittedTxField::Timestamp) => Ok(P::TsExists(flag)),
         ("exists", CommittedTxField::EntrypointHash) => Ok(P::EntryExists(flag)),
@@ -950,6 +1007,33 @@ fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -
             "not",
             vec![committed_tx_predicate_to_value_unchecked(inner)],
         ),
+        P::BlockEq(value) => {
+            binary_predicate_expr("eq", "block_hash", Value::String(value.to_string()))
+        }
+        P::BlockNe(value) => {
+            binary_predicate_expr("ne", "block_hash", Value::String(value.to_string()))
+        }
+        P::BlockIn(values) => binary_predicate_expr(
+            "in",
+            "block_hash",
+            Value::Array(
+                values
+                    .iter()
+                    .map(|value| Value::String(value.to_string()))
+                    .collect(),
+            ),
+        ),
+        P::BlockNin(values) => binary_predicate_expr(
+            "nin",
+            "block_hash",
+            Value::Array(
+                values
+                    .iter()
+                    .map(|value| Value::String(value.to_string()))
+                    .collect(),
+            ),
+        ),
+        P::BlockExists(value) => binary_predicate_expr("exists", "block_hash", Value::Bool(*value)),
         P::AuthorityEq(value) => {
             binary_predicate_expr("eq", "authority", Value::String(value.to_string()))
         }
@@ -1185,6 +1269,21 @@ pub(super) fn committed_tx_predicate_from_filters(
 
     let filters = filters.borrow();
     let mut parts = Vec::new();
+    if let Some(value) = filters.block_eq.as_ref() {
+        parts.push(P::BlockEq(*value));
+    }
+    if let Some(value) = filters.block_ne.as_ref() {
+        parts.push(P::BlockNe(*value));
+    }
+    if !filters.block_in.is_empty() {
+        parts.push(P::BlockIn(filters.block_in.clone()));
+    }
+    if !filters.block_nin.is_empty() {
+        parts.push(P::BlockNin(filters.block_nin.clone()));
+    }
+    if let Some(value) = filters.block_exists {
+        parts.push(P::BlockExists(value));
+    }
     if let Some(value) = filters.authority_eq.as_ref() {
         parts.push(P::AuthorityEq(value.clone()));
     }
@@ -1284,6 +1383,11 @@ pub(super) fn committed_tx_filters_from_predicate(
                 }
                 Some(())
             }
+            P::BlockEq(value) => set_same_or_empty(&mut filters.block_eq, value),
+            P::BlockNe(value) => set_same_or_empty(&mut filters.block_ne, value),
+            P::BlockIn(values) => set_vec_same_or_empty(&mut filters.block_in, values),
+            P::BlockNin(values) => set_vec_same_or_empty(&mut filters.block_nin, values),
+            P::BlockExists(value) => set_same_or_empty(&mut filters.block_exists, value),
             P::AuthorityEq(value) => set_same_or_empty(&mut filters.authority_eq, value),
             P::AuthorityNe(value) => set_same_or_empty(&mut filters.authority_ne, value),
             P::AuthorityIn(values) => set_vec_same_or_empty(&mut filters.authority_in, values),
@@ -1376,6 +1480,13 @@ impl CommittedTxPredicate {
             P::And(list) => list.iter().all(|p| p.applies_unchecked(tx)),
             P::Or(list) => list.iter().any(|p| p.applies_unchecked(tx)),
             P::Not(inner) => !inner.applies_unchecked(tx),
+
+            // Carrier block hash (always present)
+            P::BlockEq(hash) => &tx.block_hash == hash,
+            P::BlockNe(hash) => &tx.block_hash != hash,
+            P::BlockIn(list) => list.iter().any(|hash| hash == &tx.block_hash),
+            P::BlockNin(list) => !list.iter().any(|hash| hash == &tx.block_hash),
+            P::BlockExists(required) => *required,
 
             // Authority
             P::AuthorityExists(req) => (Self::authority_of(tx).is_some()) == *req,
@@ -1608,6 +1719,11 @@ mod wire {
         MetadataExists(Name, bool),
         MetadataIsNull(Name, bool),
         Const(bool),
+        BlockEq(HashOf<crate::block::BlockHeader>),
+        BlockNe(HashOf<crate::block::BlockHeader>),
+        BlockIn(MembershipValues<HashOf<crate::block::BlockHeader>>),
+        BlockNin(MembershipValues<HashOf<crate::block::BlockHeader>>),
+        BlockExists(bool),
     }
 
     impl TypeId for Node {
@@ -1679,6 +1795,11 @@ mod wire {
                 out.push(Node::Not);
                 flatten_inner(inner, out)?;
             }
+            P::BlockEq(hash) => out.push(Node::BlockEq(*hash)),
+            P::BlockNe(hash) => out.push(Node::BlockNe(*hash)),
+            P::BlockIn(values) => out.push(Node::BlockIn(values.clone().into())),
+            P::BlockNin(values) => out.push(Node::BlockNin(values.clone().into())),
+            P::BlockExists(flag) => out.push(Node::BlockExists(*flag)),
             P::AuthorityEq(id) => out.push(Node::AuthorityEq(id.clone())),
             P::AuthorityNe(id) => out.push(Node::AuthorityNe(id.clone())),
             P::AuthorityIn(ids) => out.push(Node::AuthorityIn(ids.clone().into())),
@@ -1764,6 +1885,11 @@ mod wire {
                 let child = inflate_inner(nodes, cursor, depth + 1)?;
                 Ok(P::Not(Box::new(child)))
             }
+            Node::BlockEq(hash) => Ok(P::BlockEq(*hash)),
+            Node::BlockNe(hash) => Ok(P::BlockNe(*hash)),
+            Node::BlockIn(values) => Ok(P::BlockIn(values.0.clone())),
+            Node::BlockNin(values) => Ok(P::BlockNin(values.0.clone())),
+            Node::BlockExists(flag) => Ok(P::BlockExists(*flag)),
             Node::AuthorityEq(id) => Ok(P::AuthorityEq(id.clone())),
             Node::AuthorityNe(id) => Ok(P::AuthorityNe(id.clone())),
             Node::AuthorityIn(ids) => Ok(P::AuthorityIn(ids.0.clone())),
@@ -2002,7 +2128,13 @@ mod tests {
         let topic = Name::from_str("topic").expect("metadata key");
         let private = iroha_primitives::json::Json::new("private");
         let public = iroha_primitives::json::Json::new("public");
+        let other_block =
+            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(b"other block"));
         let other_entry = zero_hash::<crate::transaction::signed::TransactionEntrypoint>();
+
+        assert!(CommittedTxPredicate::BlockNe(other_block).applies(&tx));
+        assert!(CommittedTxPredicate::BlockNin(vec![other_block]).applies(&tx));
+        assert!(!CommittedTxPredicate::BlockNin(vec![tx.block_hash]).applies(&tx));
 
         assert!(CommittedTxPredicate::TsGt(50).applies(&tx));
         assert!(!CommittedTxPredicate::TsGt(77).applies(&tx));
@@ -2061,6 +2193,7 @@ mod tests {
         let topic = Name::from_str("topic").expect("metadata key");
         let predicate = CommittedTxPredicate::Or(vec![
             CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::ResultEq(false))),
+            CommittedTxPredicate::BlockNe(zero_hash::<crate::block::BlockHeader>()),
             CommittedTxPredicate::TsGt(50),
             CommittedTxPredicate::EntryNe(zero_hash::<
                 crate::transaction::signed::TransactionEntrypoint,
@@ -2078,7 +2211,7 @@ mod tests {
 
         match decoded {
             CommittedTxPredicate::Or(children) => {
-                assert_eq!(children.len(), 5);
+                assert_eq!(children.len(), 6);
                 assert!(matches!(
                     children.first(),
                     Some(CommittedTxPredicate::Not(inner))
@@ -2086,18 +2219,22 @@ mod tests {
                 ));
                 assert!(matches!(
                     children.get(1),
-                    Some(CommittedTxPredicate::TsGt(50))
+                    Some(CommittedTxPredicate::BlockNe(_))
                 ));
                 assert!(matches!(
                     children.get(2),
-                    Some(CommittedTxPredicate::EntryNe(_))
+                    Some(CommittedTxPredicate::TsGt(50))
                 ));
                 assert!(matches!(
                     children.get(3),
-                    Some(CommittedTxPredicate::MetadataIn { .. })
+                    Some(CommittedTxPredicate::EntryNe(_))
                 ));
                 assert!(matches!(
                     children.get(4),
+                    Some(CommittedTxPredicate::MetadataIn { .. })
+                ));
+                assert!(matches!(
+                    children.get(5),
                     Some(CommittedTxPredicate::Const(false))
                 ));
             }
@@ -2113,6 +2250,12 @@ mod tests {
     fn predicate_json_roundtrip_covers_every_atom_and_boolean_node() {
         let alice = sample_account(0x31);
         let bob = sample_account(0x32);
+        let block_a = sample_hash_literal(0x39)
+            .parse::<HashOf<crate::block::BlockHeader>>()
+            .expect("block hash A");
+        let block_b = sample_hash_literal(0x3A)
+            .parse::<HashOf<crate::block::BlockHeader>>()
+            .expect("block hash B");
         let entry_a = sample_hash_literal(0x41)
             .parse::<HashOf<crate::transaction::signed::TransactionEntrypoint>>()
             .expect("entry hash A");
@@ -2133,6 +2276,11 @@ mod tests {
                 CommittedTxPredicate::TsLt(10),
             ]),
             CommittedTxPredicate::Not(Box::new(CommittedTxPredicate::Const(false))),
+            CommittedTxPredicate::BlockEq(block_a),
+            CommittedTxPredicate::BlockNe(block_b),
+            CommittedTxPredicate::BlockIn(vec![block_a, block_b]),
+            CommittedTxPredicate::BlockNin(vec![block_b]),
+            CommittedTxPredicate::BlockExists(true),
             CommittedTxPredicate::AuthorityEq(alice.clone()),
             CommittedTxPredicate::AuthorityNe(bob.clone()),
             CommittedTxPredicate::AuthorityIn(vec![alice.clone(), bob.clone()]),
@@ -2397,7 +2545,18 @@ mod tests {
         let entry_b = sample_hash_literal(0x72)
             .parse::<HashOf<crate::transaction::signed::TransactionEntrypoint>>()
             .expect("entry hash B");
+        let block_a = sample_hash_literal(0x73)
+            .parse::<HashOf<crate::block::BlockHeader>>()
+            .expect("block hash A");
+        let block_b = sample_hash_literal(0x74)
+            .parse::<HashOf<crate::block::BlockHeader>>()
+            .expect("block hash B");
         let filters = CommittedTxFilters {
+            block_eq: Some(block_a),
+            block_ne: Some(block_b),
+            block_in: vec![block_a],
+            block_nin: vec![block_b],
+            block_exists: Some(true),
             authority_eq: Some(account_a.clone()),
             authority_ne: Some(account_b.clone()),
             authority_in: vec![account_a],

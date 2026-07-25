@@ -160,7 +160,9 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
     // Prepare a minimal IVM program and its hashes
     let (prog, mut manifest) = minimal_contract_artifact(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
     let mut wrong_abi = correct_abi;
@@ -242,7 +244,9 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
     // Prepare a minimal IVM program and its hashes
     let (prog, manifest) = minimal_contract_artifact(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
     let contract_address = ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
         &account_id,
@@ -250,6 +254,8 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive manifest admission contract address");
+    let policy = ivm::SyscallPolicy::AbiV1;
+    let correct_abi = ivm::syscalls::compute_abi_hash(policy);
 
     // Block 1: grant permission and register a manifest with correct abi_hash under the code_hash
     let header1 =
@@ -272,10 +278,18 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     }
     .execute(&account_id, &mut stx1)
     .expect("register exact contract artifact");
+    assert_eq!(
+        manifest.abi_hash,
+        Some(iroha_crypto::Hash::prehashed(correct_abi)),
+        "verified contract manifest must bind the canonical ABI"
+    );
     let manifest = manifest.signed(&kp);
     iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
         .execute(&account_id, &mut stx1)
         .expect("register exact contract manifest");
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&account_id, &mut stx1)
+        .expect("register non-signable contract-subject account");
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
@@ -332,7 +346,9 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
 
     // Prepare a minimal IVM program (v1) and its hashes
     let (prog, mut manifest) = minimal_contract_artifact(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
 
     // Block 1: grant permission and register a manifest with only code_hash (no abi_hash)
     let header1 =
@@ -406,7 +422,9 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     install_current_lane_manifest_registry(&state);
 
     let (prog, manifest) = minimal_contract_artifact(1);
-    let code_hash = ivm::contract_code_hash(&prog);
+    let code_hash = manifest
+        .code_hash
+        .expect("verified contract manifest must bind its artifact hash");
     let contract_address = ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
         &account_id,
@@ -414,6 +432,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive manifest admission contract address");
+    let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash
     let header1 =
@@ -432,10 +451,18 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     }
     .execute(&account_id, &mut stx1)
     .expect("register exact V1 contract artifact");
+    assert_eq!(
+        manifest.abi_hash,
+        Some(iroha_crypto::Hash::prehashed(abi_current)),
+        "verified V1 contract manifest must bind the canonical ABI"
+    );
     let manifest = manifest.signed(&kp);
     iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest }
         .execute(&account_id, &mut stx1)
         .expect("register exact V1 contract manifest");
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&account_id, &mut stx1)
+        .expect("register non-signable V1 contract-subject account");
     iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,

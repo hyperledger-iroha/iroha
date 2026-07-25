@@ -1204,20 +1204,26 @@ impl CommitRosterJournal {
                 }
             })?;
         }
-        if let Err(error) = self.gc_generations(
-            &digest,
-            previous_digest.as_deref(),
-            root_identity,
-            generations_identity,
-        ) {
-            match error {
-                CommitRosterJournalError::Write { .. }
-                | CommitRosterJournalError::NamespaceSync { .. } => {
-                    warn!(?error, path = %self.path.display(), "commit-roster generation GC deferred");
-                }
-                integrity_error => {
-                    self.storage_unknown = true;
-                    return Err(integrity_error);
+        // An exact retry observes the just-published digest as both current and
+        // previous. The first publication already reduced the directory to the
+        // current and its distinct predecessor; running GC again with two
+        // identical protected digests would incorrectly delete that predecessor.
+        if previous_digest.as_deref() != Some(digest.as_str()) {
+            if let Err(error) = self.gc_generations(
+                &digest,
+                previous_digest.as_deref(),
+                root_identity,
+                generations_identity,
+            ) {
+                match error {
+                    CommitRosterJournalError::Write { .. }
+                    | CommitRosterJournalError::NamespaceSync { .. } => {
+                        warn!(?error, path = %self.path.display(), "commit-roster generation GC deferred");
+                    }
+                    integrity_error => {
+                        self.storage_unknown = true;
+                        return Err(integrity_error);
+                    }
                 }
             }
         }

@@ -794,7 +794,11 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
         simulation.install_tc(index, tc2.clone());
     }
     assert_eq!(simulation.current_online_view(), 3);
-    for node in &simulation.nodes {
+    // Validators that installed the lock in an earlier view retain and
+    // retransmit that exact durable Commit intent across later TCs. Validators
+    // learning the lock from `tc2` create their intent in view three.
+    let commit_views = [3, 1, 2, 3];
+    for (index, node) in simulation.nodes.iter().enumerate() {
         assert_eq!(
             node.reducer
                 .durable_state()
@@ -804,7 +808,16 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
         );
         let pools = node.reducer.vote_pool_snapshots();
         assert_eq!(pools.len(), 1);
-        assert_eq!(pools[0].round, prepare.round());
+        assert_eq!(
+            pools[0].round,
+            Round::new(simulation.context.height(), commit_views[index]),
+            "the TC-selected Commit vote retains its durable finality round"
+        );
+        assert_eq!(
+            pools[0].proposal_round,
+            prepare.round(),
+            "the Commit vote retains the immutable Prepare origin"
+        );
         assert_eq!(pools[0].phase, Phase::Commit);
         assert_eq!(pools[0].subject, subject);
     }
@@ -824,7 +837,9 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     );
     let successful_view = simulation.propose(subject);
     simulation.assert_online_committed(subject);
-    let mut current_lock_nodes = 0usize;
+    // A retained Commit intent can complete the decision before a node exposes
+    // an intermediate current-view lock. If a lock is installed, it must still
+    // retire every inert historical Commit pool.
     for node in &simulation.nodes {
         if node
             .reducer
@@ -834,7 +849,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
         {
             continue;
         }
-        current_lock_nodes += 1;
         assert!(
             node.reducer
                 .vote_pool_snapshots()
@@ -843,10 +857,6 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
             "a newly durable lock must retire the inert historical Commit pool"
         );
     }
-    assert!(
-        current_lock_nodes > 0,
-        "the converged proposal must install at least one current-view lock"
-    );
     assert_eq!(successful_view, 3);
     assert!(successful_view <= simulation.context.roster().len() as u64);
 }

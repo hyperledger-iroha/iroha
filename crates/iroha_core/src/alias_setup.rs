@@ -1231,6 +1231,24 @@ mod tests {
         )
     }
 
+    fn set_primary_label_for_testing(world: &World, account_id: &AccountId, label: AccountAlias) {
+        let (account_id, account_value) = iroha_data_model::IntoKeyValue::into_key_value(
+            Account::new(account_id.clone())
+                .with_label(Some(label))
+                .build(account_id),
+        );
+        let mut block = world.block();
+        {
+            let mut transaction = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            transaction.insert_account_for_testing(account_id, account_value);
+            transaction.apply();
+        }
+        block.commit();
+    }
+
     fn insert_record(world: &mut World, intent: &AliasIntentV1, owner: AccountId) {
         let target = intent.target();
         let selector = selector_for_resolved_alias_target(&target).expect("resolved selector");
@@ -1569,11 +1587,8 @@ mod tests {
             "other".parse().expect("other label"),
             DataSpaceId::UNIVERSAL,
         );
-        let target_with_primary = Account::new(target.clone())
-            .with_label(Some(different_primary))
-            .build(&target);
-        let other_account = Account::new(other).build(&target);
-        let mut primary_world = World::with([], [target_with_primary, other_account], []);
+        let mut primary_world = world_with_accounts(&[target.clone(), other]);
+        set_primary_label_for_testing(&primary_world, &target, different_primary);
         insert_record(&mut primary_world, &parent, target.clone());
         insert_record(&mut primary_world, &intent, target);
         let error = classify_alias_intent(
@@ -1662,11 +1677,8 @@ mod tests {
             .expect_err("reverse binding drift must fail");
         assert_eq!(error.code(), "alias.binding.conflict");
 
-        let target_account = Account::new(target.clone()).build(&target);
-        let other_with_primary = Account::new(other.clone())
-            .with_label(Some(alias.clone()))
-            .build(&target);
-        let mut primary_world = World::with([], [target_account, other_with_primary], []);
+        let mut primary_world = world_with_accounts(&[target.clone(), other.clone()]);
+        set_primary_label_for_testing(&primary_world, &other, alias.clone());
         insert_record(&mut primary_world, &parent, target.clone());
         insert_record(&mut primary_world, &intent, target.clone());
         primary_world

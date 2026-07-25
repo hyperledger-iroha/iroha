@@ -112,6 +112,7 @@ pub(crate) struct PagedQueryContinuation {
 
 impl PagedQueryContinuation {
     /// Construct paged continuation state.
+    #[cfg(test)]
     pub(crate) fn new<F>(expected_cursor: NonZeroU64, next_page: F) -> Self
     where
         F: Fn(u64) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>

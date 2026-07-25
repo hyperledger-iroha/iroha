@@ -3505,8 +3505,8 @@ impl StateBlock<'_> {
         Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
         &'static str,
     > {
-        crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
         Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;
+        crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
         let descriptor = &artifact.proposal.descriptor;
         let routing =
             crate::queue::RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id);
@@ -3925,9 +3925,15 @@ impl StateBlock<'_> {
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
         let summary = ivm_cache.summarize_executable(bytes).map_err(|error| {
-            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
-                crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
-            ))
+            let failure = match error {
+                ivm::VMError::UnknownSyscall(number) => ValidationFail::NotPermitted(format!(
+                    "unknown syscall number 0x{number:02x} for abi_version 1"
+                )),
+                error => ValidationFail::IvmAdmission(
+                    crate::smartcontracts::ivm::admission_reason_from_vm_error(error),
+                ),
+            };
+            TransactionRejectionReason::Validation(failure)
         })?;
         let is_contract = matches!(
             &summary,
@@ -5915,7 +5921,7 @@ pub mod tests {
         },
     };
     use iroha_executor_data_model::isi::multisig::{
-        DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigSpec,
+        DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigRegister, MultisigSpec,
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
@@ -6386,23 +6392,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig ok".into())]);
-        let tx = builder.sign(member_ed.private_key());
-
-        let payload = tx.payload().clone();
-        let signatures = vec![
-            iroha_data_model::transaction::signed::MultisigSignature::new(
-                member_ed.public_key().clone(),
-                checked_signature_of(member_ed.private_key(), &payload),
-            ),
-            iroha_data_model::transaction::signed::MultisigSignature::new(
-                member_secp.public_key().clone(),
-                checked_signature_of(member_secp.private_key(), &payload),
-            ),
-        ];
-        let mut tx = tx;
-        tx.set_multisig_signatures(
-            iroha_data_model::transaction::signed::MultisigSignatures::new(signatures),
-        );
+        let tx = builder.sign_multisig([member_ed.private_key(), member_secp.private_key()]);
 
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6476,13 +6466,7 @@ pub mod tests {
         );
         builder = builder
             .with_instructions([Log::new(Level::INFO, "insufficient multisig weight".into())]);
-        let mut tx = builder.sign(signer.private_key());
-
-        let payload = tx.payload().clone();
-        tx.set_multisig_signatures(MultisigSignatures::new(vec![MultisigSignature::new(
-            signer.public_key().clone(),
-            checked_signature_of(signer.private_key(), &payload),
-        )]));
+        let tx = builder.sign_multisig([signer.private_key()]);
 
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6600,6 +6584,12 @@ pub mod tests {
             contract_address.clone(),
             iroha_crypto::Hash::new(b"contract-code"),
         );
+        let lifecycle_permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        world
+            .account_permissions
+            .insert(deployer.clone(), Permissions::from([lifecycle_permission]));
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -6702,8 +6692,6 @@ pub mod tests {
         let signer2 = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
-        let multisig_key = checked_random_tx_keypair();
-        let multisig_id = AccountId::new(multisig_key.public_key().clone());
         let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
 
@@ -6713,42 +6701,42 @@ pub mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
                 .expect("nonzero multisig ttl"),
         };
-        let mut multisig_metadata = Metadata::default();
-        multisig_metadata.insert(
-            crate::smartcontracts::isi::multisig::spec_key(),
-            Json::new(spec),
+        let multisig_id = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(signer1.public_key().clone(), 1).expect("signer1 member"),
+                    MultisigMember::new(signer2.public_key().clone(), 1).expect("signer2 member"),
+                ],
+            )
+            .expect("multisig policy"),
         );
 
         let home = Domain::new(home_domain.clone()).build(&signer1_id);
         let target = Domain::new(target_domain.clone()).build(&signer1_id);
         let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
         let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
-        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
-            .with_metadata(multisig_metadata)
-            .build(&multisig_id);
-        let mut world = World::with(
-            [home, target],
-            [signer1_account, signer2_account, multisig_account],
-            [],
-        );
-
-        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/test-envelope"
-            .parse()
-            .expect("static multisig role must parse");
-        let role = Role {
-            id: role_id.clone(),
-            permissions: Permissions::new(),
-            permission_epochs: BTreeMap::new(),
-        };
-        world.roles.insert(role_id.clone(), role);
-        world.account_roles.insert(
-            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
-            (),
-        );
+        let world = World::with([home, target], [signer1_account, signer2_account], []);
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut setup_block = state.block(setup_header);
+        let mut setup_tx = setup_block.transaction();
+        crate::executor::Executor::Initial
+            .execute_instruction(
+                &mut setup_tx,
+                &signer1_id,
+                InstructionBox::from(MultisigRegister::with_account(
+                    AccountId::new(checked_random_tx_keypair().public_key().clone()),
+                    home_domain.clone(),
+                    spec,
+                )),
+            )
+            .expect("register canonical multisig account");
+        setup_tx.apply();
+        setup_block.commit().expect("commit multisig setup");
 
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
@@ -6768,7 +6756,7 @@ pub mod tests {
         let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
             .expect("admission must accept the signature shape");
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6794,8 +6782,6 @@ pub mod tests {
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
         let validator_id = AccountId::new(validator.public_key().clone());
-        let multisig_key = checked_random_tx_keypair();
-        let multisig_id = AccountId::new(multisig_key.public_key().clone());
         let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
 
@@ -6805,10 +6791,15 @@ pub mod tests {
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
                 .expect("nonzero multisig ttl"),
         };
-        let mut multisig_metadata = Metadata::default();
-        multisig_metadata.insert(
-            crate::smartcontracts::isi::multisig::spec_key(),
-            Json::new(spec),
+        let multisig_id = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(signer1.public_key().clone(), 1).expect("signer1 member"),
+                    MultisigMember::new(signer2.public_key().clone(), 1).expect("signer2 member"),
+                ],
+            )
+            .expect("multisig policy"),
         );
 
         let home = Domain::new(home_domain.clone()).build(&signer1_id);
@@ -6817,37 +6808,32 @@ pub mod tests {
         let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
         let validator_account =
             new_account_in_domain(&validator_id, &home_domain).build(&validator_id);
-        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
-            .with_metadata(multisig_metadata)
-            .build(&multisig_id);
-        let mut world = World::with(
+        let world = World::with(
             [home, target],
-            [
-                signer1_account,
-                signer2_account,
-                validator_account,
-                multisig_account,
-            ],
+            [signer1_account, signer2_account, validator_account],
             [],
-        );
-
-        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/lane-bypass"
-            .parse()
-            .expect("static multisig role must parse");
-        let role = Role {
-            id: role_id.clone(),
-            permissions: Permissions::new(),
-            permission_epochs: BTreeMap::new(),
-        };
-        world.roles.insert(role_id.clone(), role);
-        world.account_roles.insert(
-            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
-            (),
         );
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut setup_block = state.block(setup_header);
+        let mut setup_tx = setup_block.transaction();
+        crate::executor::Executor::Initial
+            .execute_instruction(
+                &mut setup_tx,
+                &signer1_id,
+                InstructionBox::from(MultisigRegister::with_account(
+                    AccountId::new(checked_random_tx_keypair().public_key().clone()),
+                    home_domain.clone(),
+                    spec,
+                )),
+            )
+            .expect("register canonical multisig account");
+        setup_tx.apply();
+        setup_block.commit().expect("commit multisig setup");
+
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -6887,7 +6873,7 @@ pub mod tests {
         let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
             .expect("admission must accept the signature shape");
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -7718,18 +7704,16 @@ pub mod tests {
         )])
         .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
-        let stale_exact_hint = norito::core::NoritoSerialize::encoded_len_exact(&signed)
-            .expect("confidential signed transaction advertises an exact hint");
+        assert!(
+            norito::core::NoritoSerialize::encoded_len_exact(&signed).is_none(),
+            "adaptive confidential payload must not advertise an exact encoded length"
+        );
         let canonical_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
-        assert_ne!(
-            stale_exact_hint, actual_payload_len,
-            "this regression must exercise a stale exact-length hint"
-        );
         assert_eq!(versioned.len().saturating_sub(1), actual_payload_len);
         assert_eq!(
             AcceptedTransaction::signed_encoded_len(&signed),
@@ -8926,6 +8910,43 @@ pub mod tests {
         program
     }
 
+    /// Build a minimal self-describing contract containing only a view entrypoint and HALT.
+    fn minimal_ivm_contract_program() -> Vec<u8> {
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 1_000,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "TxManifestFixture".to_owned(),
+            compiler_fingerprint: "iroha-core-tx-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        program.extend_from_slice(&interface.encode_section());
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
     /// Build a minimal program and override `max_cycles` in the header.
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         let mut prog = minimal_ivm_program(abi_version);
@@ -9278,7 +9299,7 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block1 = state.block(header1);
         let mut tx1 = block1.transaction();
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         tx1.world.contract_manifests.insert(
@@ -9354,10 +9375,7 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
-        use iroha_data_model::{
-            smart_contract::manifest::ContractManifest,
-            transaction::{Executable, TransactionBuilder},
-        };
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
 
         let (world, authority_id, kp) = world_with_authority("wonderland");
@@ -9369,10 +9387,10 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
+        let mut state_tx = block.transaction();
 
         // Build minimal program with abi_version=1 (current baseline)
-        let chain: ChainId = "chain".parse().unwrap();
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         // Compute the canonical full-artifact contract hash.
         let code_hash = ivm::contract_code_hash(&prog);
         // Compute abi hash for the policy
@@ -9397,18 +9415,15 @@ pub mod tests {
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(
-            chain,
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_metadata(md)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = StateBlock::validate_ivm(
+            authority_id,
+            &mut state_tx,
+            IvmBytecode::from_compiled(prog),
+            Some(&md),
+            None,
+            &mut ivm_cache,
+        );
         assert!(result.is_ok(), "valid manifest should pass: {result:?}");
     }
 
@@ -9431,7 +9446,7 @@ pub mod tests {
         let mut block = state.block(header);
 
         let chain: ChainId = "chain".parse().unwrap();
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         // Compute real code hash; then corrupt expected
         let code_hash = ivm::contract_code_hash(&prog);
         // Compute abi hash then flip
@@ -9497,7 +9512,7 @@ pub mod tests {
         let mut block = state.block(header);
 
         let chain: ChainId = "chain".parse().unwrap();
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         let mut wrong_bytes = [0u8; 32];
         wrong_bytes[0] = 0xFF;
         wrong_bytes[31] = 1; // set LSB as per Hash invariant
@@ -9563,7 +9578,7 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block1 = state.block(header1);
         let mut tx1 = block1.transaction();
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let mut wrong_abi = abi_hash;
@@ -9845,10 +9860,7 @@ pub mod tests {
 
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
-        use iroha_data_model::{
-            smart_contract::manifest::ContractManifest,
-            transaction::{Executable, TransactionBuilder},
-        };
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
 
         let (world, authority_id, kp) = world_with_authority("wonderland");
@@ -9863,7 +9875,7 @@ pub mod tests {
         let mut block1 = state.block(header1);
         let mut tx1 = block1.transaction();
         // Build a minimal program to compute its code_hash/abi_hash
-        let prog = minimal_ivm_program(1);
+        let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
         let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest = ContractManifest {
@@ -9890,17 +9902,16 @@ pub mod tests {
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block2 = state.block(header2);
-        let chain: ChainId = "chain".parse().unwrap();
-        let tx = TransactionBuilder::new(
-            chain,
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+        let mut state_tx = block2.transaction();
         let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
+        let result = StateBlock::validate_ivm(
+            authority_id,
+            &mut state_tx,
+            IvmBytecode::from_compiled(prog),
+            None,
+            None,
+            &mut ivm_cache,
+        );
         assert!(result.is_ok(), "lookup manifest should allow validation");
     }
 
@@ -12808,25 +12819,45 @@ pub mod tests {
             public_key: keypair.public_key().clone(),
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
-        let mut entrypoints = Vec::new();
-        for attempt in [2_u64, 0] {
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                Name::from_str("lane_execution_attempt").expect("static metadata key"),
-                Json::new(attempt),
-            );
-            let tx = TransactionBuilder::new(
-                chain.clone(),
-                authority.clone(),
-                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-            )
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(keypair.private_key());
-            entrypoints.push(TransactionEntrypoint::External(tx));
-        }
+        let entrypoints = (0_u64..256)
+            .filter_map(|attempt| {
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    Name::from_str("lane_execution_attempt").expect("static metadata key"),
+                    Json::new(attempt),
+                );
+                let tx = TransactionBuilder::new(
+                    chain.clone(),
+                    authority.clone(),
+                    fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+                )
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+                let plan = {
+                    let view = state.view();
+                    evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        0,
+                        1,
+                    )
+                    .expect("elastic route resolves")
+                };
+                (plan.coordinator_route().lane_id == TestLaneId::new(1))
+                    .then_some(TransactionEntrypoint::External(tx))
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entrypoints.len(),
+            2,
+            "fixture should find two transactions routed to the elastic lane"
+        );
         let expected_hashes = entrypoints
             .iter()
             .map(TransactionEntrypoint::hash)
@@ -12960,15 +12991,38 @@ pub mod tests {
             public_key: keypair.public_key().clone(),
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
-        let tx = TransactionBuilder::new(
-            chain.clone(),
-            authority.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-            minimal_ivm_program(1),
-        )))
-        .sign(keypair.private_key());
+        let tx = (0_u64..256)
+            .find_map(|attempt| {
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    Name::from_str("lane_execution_attempt").expect("static metadata key"),
+                    Json::new(attempt),
+                );
+                let tx = TransactionBuilder::new(
+                    chain.clone(),
+                    authority.clone(),
+                    fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+                )
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+                let plan = {
+                    let view = state.view();
+                    evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        0,
+                        1,
+                    )
+                    .expect("elastic route resolves")
+                };
+                (plan.coordinator_route().lane_id == TestLaneId::new(1)).then_some(tx)
+            })
+            .expect("fixture should find a transaction routed to the elastic lane");
         let artifact = lane_execution_input_artifact(
             TestLaneId::new(1),
             TestDataSpaceId::UNIVERSAL,
@@ -13217,7 +13271,9 @@ pub mod tests {
             norito::json::to_json_pretty(&actual).unwrap()
         };
         if let Some(text) = snapshot_text.as_deref() {
-            if collapse_to_unix_line_endings(text) == rendered {
+            let collapsed = collapse_to_unix_line_endings(text);
+            let collapsed = collapsed.strip_suffix('\n').unwrap_or(collapsed.as_ref());
+            if collapsed == rendered {
                 return;
             }
         }

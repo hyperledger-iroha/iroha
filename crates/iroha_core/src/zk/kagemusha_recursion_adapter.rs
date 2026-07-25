@@ -715,14 +715,14 @@ fn kagemusha_runtime_norito_decode_limits_v4(encoded_len: usize) -> norito::core
     // represented inside this exact input. Binding each individual and
     // cumulative budget to the bytes actually supplied prevents a malicious
     // length prefix from reserving release-sized memory before truncation is
-    // discovered. Four bytes of allocation per encoded byte covers the widest
-    // decoded sequence element here (`u32`) while keeping the absolute
-    // proof-pair ceiling to a 64 MiB decode allocation budget.
+    // discovered. Sixteen bytes of cumulative allocation per encoded byte
+    // covers both nested sequence storage and each sequence's decoded
+    // elements. At the absolute proof-pair ceiling this remains below 349 KiB.
     norito::core::DecodeLimits::new(
         encoded_len,
         encoded_len,
         encoded_len.saturating_mul(2),
-        encoded_len.saturating_mul(4),
+        encoded_len.saturating_mul(16),
         KAGEMUSHA_RUNTIME_NORITO_MAX_NESTING_DEPTH_V4,
     )
 }
@@ -13857,8 +13857,10 @@ mod tests {
             ctx.main().load_witness(C::Base::ZERO),
             ctx.main().load_witness(C::Base::ZERO),
         ];
-        let expected_words = expected_words
-            .map(|words| words.map(|word| ctx.main().load_witness(C::Base::from(u64::from(word)))));
+        let expected_words = expected_words.map(|words| {
+            kagemusha_u32_words_to_u128_chunks_v5(&words)
+                .map(|chunk| ctx.main().load_witness(C::Base::from_u128(chunk)))
+        });
         let mut sha_jobs = KagemushaSha256JobsV4::default();
         constrain_reciprocal_point_audit_identity_v4::<C>(
             &mut ctx,

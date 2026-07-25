@@ -715,7 +715,8 @@ mod tests {
         alias_setup::{
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
             AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
-            AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+            AliasQuoteGuardV1, AliasTargetV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+            ResolvedDomainV1,
         },
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
@@ -782,6 +783,15 @@ mod tests {
         state.nexus.write().fees.fee_asset_id = asset.to_string();
     }
 
+    fn smart_contract_error_contains(error: &InstructionExecutionError, expected: &str) -> bool {
+        matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains(expected)
+        )
+    }
+
     fn asset_balance(
         state: &State,
         payment_asset_definition_id: &AssetDefinitionId,
@@ -841,6 +851,38 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
+    }
+
+    fn seed_active_dataspace_lease(
+        world: &mut World,
+        alias: &str,
+        dataspace_id: DataSpaceId,
+        owner: &AccountId,
+    ) -> iroha_data_model::sns::NameSelectorV1 {
+        let target = AliasTargetV1::Dataspace(ResolvedDataSpaceV1::new(
+            alias.parse().expect("canonical dataspace alias"),
+            dataspace_id,
+        ));
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+            .expect("fixture dataspace selector");
+        let address = AccountAddress::from_account_id(owner).expect("fixture owner address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            crate::alias_setup::alias_registration_metadata(&target)
+                .expect("fixture dataspace metadata"),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        selector
     }
 
     fn exact_alias_quote_guard(
@@ -939,14 +981,18 @@ mod tests {
 
     #[test]
     fn consensus_auto_renew_validation_rejects_window_as_long_as_term() {
-        let policy = iroha_data_model::sns::fixtures::default_policy();
+        let mut policy = iroha_data_model::sns::fixtures::default_policy();
+        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        policy.payment_asset_id = payment_asset.to_string();
+        for tier in &mut policy.pricing {
+            tier.base_price.asset_id = payment_asset.to_string();
+        }
         let config = AliasAutoRenewConfigV1 {
             term_years: 1,
             policy_version: policy.policy_version,
-            payment_asset: policy
-                .payment_asset_id
-                .parse()
-                .expect("policy payment asset definition id"),
+            payment_asset,
             max_amount: Quantity::one(),
             renew_before_expiry_ms: AUTO_RENEW_YEAR_MS,
             retry_backoff_ms: 1,
@@ -956,7 +1002,7 @@ mod tests {
         let error = validate_auto_renew_config(&config, &policy)
             .expect_err("the consensus executor must reject a repeated-charge timing window");
         assert!(
-            error.to_string().contains("alias.auto_renew.range_invalid"),
+            smart_contract_error_contains(&error, "alias.auto_renew.range_invalid"),
             "unexpected error: {error}"
         );
     }
@@ -1339,6 +1385,12 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
+        seed_active_dataspace_lease(
+            &mut world,
+            "universal",
+            DataSpaceId::UNIVERSAL,
+            &resource_owner,
+        );
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -1363,9 +1415,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("an unrelated authority must not repair another owner's alias");
         assert!(
-            error
-                .to_string()
-                .contains("alias.setup.authority_forbidden"),
+            smart_contract_error_contains(&error, "alias.setup.authority_forbidden"),
             "unexpected error: {error}"
         );
         assert!(
@@ -1449,9 +1499,7 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect_err("endorsement-free setup must fail before acquisition");
         assert!(
-            error
-                .to_string()
-                .contains("alias.domain.endorsement_required"),
+            smart_contract_error_contains(&error, "alias.domain.endorsement_required"),
             "unexpected error: {error}"
         );
         assert_eq!(
@@ -1562,7 +1610,7 @@ mod tests {
                 .execute(&authority, &mut transaction)
                 .expect_err("stale create guard must fail");
             assert!(
-                error.to_string().contains(expected_code),
+                smart_contract_error_contains(&error, expected_code),
                 "unexpected {case} guard error: {error}"
             );
             assert_eq!(
@@ -1836,18 +1884,28 @@ mod tests {
     #[test]
     fn ensure_alias_charges_once_and_repairs_with_a_stale_guard_for_free() {
         let authority = owner();
-        let target_account = another_owner();
+        let collector = another_owner();
+        let target_account = {
+            let keypair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid keypair");
+            AccountId::new(keypair.public_key().clone())
+        };
         let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
-                .build(&authority);
-        let authority_account = Account::new(authority.clone()).build(&authority);
+                .build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let collector_account = Account::new(collector.clone()).build(&collector);
         let payment_definition = AssetDefinition::numeric(payment_asset.clone())
             .with_name("xor".to_owned())
             .build(&authority);
-        let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
+        let mut world = World::with(
+            [genesis_domain],
+            [authority_account, collector_account],
+            [payment_definition],
+        );
         seed_default_namespace_policies(&mut world);
         let state = State::new_for_testing(
             world,
@@ -1942,6 +2000,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut transaction = block.transaction();
+            seed_test_call_hash(&mut transaction, 0xC9);
             ensure_parent
                 .clone()
                 .execute(&authority, &mut transaction)
@@ -2065,24 +2124,9 @@ mod tests {
         ])
         .expect("catalog");
 
-        let selector = crate::sns::selector_for_dataspace_alias("trade").expect("selector");
         let owner = owner();
-        let address = AccountAddress::from_account_id(&owner).expect("address");
-        let record = NameRecordV1::new(
-            selector.clone(),
-            owner.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            10,
-            4_000_000_000_000,
-            4_100_000_000_000,
-            4_200_000_000_000,
-            Metadata::default(),
-        );
-        state.world.smart_contract_state.insert(
-            crate::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&record),
-        );
+        let selector =
+            seed_active_dataspace_lease(&mut state.world, "trade", DataSpaceId::new(9), &owner);
 
         let view = state.view();
         let key = crate::sns::record_storage_key(&selector);
@@ -2629,6 +2673,7 @@ mod tests {
             &mut world,
             &payment_asset_definition_id.to_string(),
         ));
+        seed_active_dataspace_lease(&mut world, "paynet", paynet, &collector);
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -2667,8 +2712,11 @@ mod tests {
         .execute(&authority, &mut stx)
         .expect_err("lease acquisition must not bypass the exact native charge");
         assert!(
-            err.to_string()
-                .contains("must execute on authoritative dataspace"),
+            matches!(
+                &err,
+                InstructionExecutionError::InvariantViolation(message)
+                    if message.contains("must execute on authoritative dataspace")
+            ),
             "unexpected error: {err}"
         );
         drop(stx);
@@ -2763,8 +2811,15 @@ mod tests {
         .execute(&authority, &mut stx)
         .expect_err("the unfunded transaction authority must remain the only payer");
 
+        let expected_authority_asset =
+            AssetId::of(payment_asset_definition_id.clone(), authority.clone());
         assert!(
-            err.to_string().contains("asset") || err.to_string().contains("balance"),
+            matches!(
+                &err,
+                InstructionExecutionError::Find(
+                    iroha_data_model::query::error::FindError::Asset(asset_id)
+                ) if asset_id.as_ref() == &expected_authority_asset
+            ),
             "unexpected error: {err:?}"
         );
         drop(stx);

@@ -2018,21 +2018,22 @@ impl BoundedIngress<AdapterCommand> {
         if !ingress_ownership.matches_authenticated(&authenticated) {
             return Err(EnqueueError::FailClosed);
         }
-        let mut compatible_index = None;
-        for (index, queued) in self.commands.iter().enumerate().filter(|(_, queued)| {
-            queued
+        for index in 0..self.commands.len() {
+            if !self.commands[index]
                 .command
                 .is_same_authenticated_envelope(&authenticated)
-        }) {
-            let Some(retained) = queued.ingress_ownership.as_ref() else {
+            {
+                continue;
+            }
+            let Some(retained) = self.commands[index].ingress_ownership.as_ref() else {
                 return Err(EnqueueError::FailClosed);
             };
-            if retained.can_merge_downstream(&ingress_ownership) {
-                compatible_index = Some(index);
-                break;
+            let mut merged = retained.clone();
+            match merged.merge_downstream(ingress_ownership.clone()) {
+                Ok(()) => {}
+                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
+                Err(RuntimeIngressMergeError::Conflict) => continue,
             }
-        }
-        if let Some(index) = compatible_index {
             let queued = self
                 .commands
                 .get_mut(index)
@@ -2040,13 +2041,7 @@ impl BoundedIngress<AdapterCommand> {
             let Some(retained) = queued.ingress_ownership.as_mut() else {
                 return Err(EnqueueError::FailClosed);
             };
-            match retained.merge_downstream(ingress_ownership) {
-                Ok(()) => {}
-                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
-                Err(RuntimeIngressMergeError::Conflict) => {
-                    return Err(EnqueueError::FailClosed);
-                }
-            }
+            *retained = merged;
             return Ok(queued.tag);
         }
         self.enqueue(TaggedCommand::with_ingress_ownership(
@@ -6386,16 +6381,14 @@ mod tests {
             .forge_equal_ordinal_different_tenure(&first_route, source.clone(), source.clone())
             .expect("fixture owns the conflicting route authority");
 
+        let first_ownership = fair_network_ownership_with_route(
+            &message,
+            source.clone(),
+            source.clone(),
+            first_route.clone(),
+        );
         runtime
-            .enqueue_network_with_ingress_ownership(
-                message.clone(),
-                fair_network_ownership_with_route(
-                    &message,
-                    source.clone(),
-                    source.clone(),
-                    first_route,
-                ),
-            )
+            .enqueue_network_with_ingress_ownership(message.clone(), first_ownership.clone())
             .expect("the first exact route owns the authenticated QC");
         let retained_before = runtime
             .ingress
@@ -6405,16 +6398,16 @@ mod tests {
             .expect("the queued QC retains its first route")
             .clone();
 
+        let mut conflicting_ownership = first_ownership;
+        conflicting_ownership
+            .latest
+            .attempts_after
+            .first_mut()
+            .expect("routed ownership retains one reply attempt")
+            .route = conflicting_route;
+        assert!(!conflicting_ownership.validate_exact());
         assert!(matches!(
-            runtime.enqueue_network_with_ingress_ownership(
-                message.clone(),
-                fair_network_ownership_with_route(
-                    &message,
-                    source.clone(),
-                    source,
-                    conflicting_route,
-                ),
-            ),
+            runtime.enqueue_network_with_ingress_ownership(message.clone(), conflicting_ownership),
             Err(NetworkIngressError::FailClosed)
         ));
         let retained_after = runtime
@@ -6427,7 +6420,7 @@ mod tests {
         assert_eq!(retained_after.direct.len(), 1);
         assert_eq!(
             runtime.fail_closed_reason.as_deref(),
-            Some("authenticated ingress exact ownership validation failed")
+            Some("network ingress changed its authenticated fair-queue ownership")
         );
     }
 
