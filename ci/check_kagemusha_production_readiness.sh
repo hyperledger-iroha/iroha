@@ -69,7 +69,7 @@ FINAL_METADATA = (
 )
 MAX_RELEASE_DIRECTORIES = 16
 MAX_RELEASE_INVENTORY_ENTRIES = len(ARTIFACTS + FINAL_METADATA)
-MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 MAX_DIGEST_SIDECAR_BYTES = 65
 MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
 MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
@@ -348,6 +348,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 21",
         '"kagemusha.offline.recursive_spend.artifact_manifest.v4"',
+        '"iroha.reviewed-source-closure.v1"',
+        "reviewed_source_closure_descriptor_sha256",
         "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8]",
         "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
         "ParamsIpa",
@@ -383,14 +385,14 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         if model.count(f'"{artifact}"') != 1:
             errors.append(f"{MODEL}: exact-eight artifact {artifact!r} must be declared once")
     availability = re.search(
-        r"pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE:\s*bool\s*=\s*(true|false)\s*;",
+        r"pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE:\s*bool\s*=\s*"
+        r'cfg!\(feature\s*=\s*"kagemusha-production-enabled"\)\s*;',
         model,
     )
-    expected_availability = "true" if mode == "promotion" else "false"
-    if availability is None or availability.group(1) != expected_availability:
+    if availability is None:
         errors.append(
-            f"{MODEL}: {mode} mode requires production availability "
-            f"{expected_availability}"
+            f"{MODEL}: production availability must be controlled only by the "
+            "kagemusha-production-enabled feature"
         )
 
     require(
@@ -409,11 +411,15 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
         "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
         "installed.validate_live_inventory()?",
-        "from_authenticated_artifact_spool_loader(",
+        "KagemushaQualifiedArtifactSourceV4",
+        "qualify_kagemusha_authenticated_artifact_source_v4(",
+        "KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source(",
+        "KagemushaPastaCycleOpaqueProverV4::from_qualified_artifact_source(",
         "from_candidate_artifact_spool_loader(",
-        "fn authenticated_proving_key_spool(",
         "fn candidate_proving_key_spool(",
-        "shared_terminal_verifier_v5()",
+        "fn runtime_verifier(",
+        "fn runtime_prover(",
+        "recursive_spend_v4_prover_and_terminal_verifier_lifetimes_do_not_overlap",
         '"authenticated-v4-artifact-installation"',
         "connect_norito_kagemusha_recursive_spend_init_v4",
         "connect_norito_kagemusha_recursive_spend_append_v4",
@@ -452,7 +458,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "pub struct KagemushaReleaseCatalogV4",
         "pub fn load(policy_path: &Path, artifact_dir: &Path)",
         "exactly eight artifacts",
-        "KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifact_loader",
+        "KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source",
         "DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4",
         "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
     )
@@ -479,11 +485,15 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         CATALOG,
         errors,
         (
+            r"const\s+KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4:\s*usize\s*=\s*"
+            r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4\.len\(\)\s*;\s*"
+            r"[\s\S]*?"
             r"let\s+(?P<descriptors>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*manifest\s*"
             r"\.profiles\s*\.iter\(\)\s*"
             r"\.flat_map\(\|profile\|\s*profile\.artifacts\.iter\(\)\)\s*"
             r"\.collect::<Vec<_>>\(\)\s*;\s*"
-            r"if\s+(?P=descriptors)\.len\(\)\s*!=\s*8\s*\{"
+            r"if\s+(?P=descriptors)\.len\(\)\s*!=\s*"
+            r"KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4\s*\{"
         ),
         "exact-eight manifest inventory check",
     )
@@ -633,15 +643,63 @@ def promotion_errors() -> list[str]:
         errors.append("promotion artifact root must be a real directory")
         return errors
 
-    status = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
+    source_identity: dict[str, object] | None = None
+    reviewed_closure_text = os.environ.get(
+        "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE", ""
     )
-    if status.returncode != 0 or status.stdout:
-        errors.append("promotion requires a clean source tree, including untracked files")
+    reviewed_closure_sha256 = os.environ.get(
+        "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", ""
+    )
+    if (
+        not reviewed_closure_text
+        or re.fullmatch(r"[0-9a-f]{64}", reviewed_closure_sha256) is None
+        or reviewed_closure_sha256 == "0" * 64
+    ):
+        errors.append(
+            "promotion requires the independently pinned reviewed source-closure path and SHA-256"
+        )
+    else:
+        source_identity_result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(root / "scripts/kagemusha_source_tree_seal.py"),
+                "identity",
+                "--root",
+                str(root),
+                "--reviewed-source-closure",
+                reviewed_closure_text,
+                "--reviewed-source-closure-sha256",
+                reviewed_closure_sha256,
+            ],
+            cwd=root,
+            check=False,
+            capture_output=True,
+        )
+        if source_identity_result.returncode != 0:
+            errors.append(
+                "promotion source differs from the independently pinned reviewed closure"
+            )
+        else:
+            try:
+                parsed_identity = json.loads(source_identity_result.stdout)
+                if (
+                    not isinstance(parsed_identity, dict)
+                    or parsed_identity.get("schema")
+                    != "iroha.kagemusha.reviewed_source_tree_identity.v1"
+                    or parsed_identity.get("source_repo_dirty") is not True
+                    or parsed_identity.get(
+                        "reviewed_source_closure_descriptor_sha256"
+                    )
+                    != reviewed_closure_sha256
+                    or not isinstance(
+                        parsed_identity.get("reviewed_source_closure"), dict
+                    )
+                ):
+                    raise ValueError("reviewed source identity is not exact")
+                source_identity = parsed_identity
+            except (UnicodeError, ValueError, json.JSONDecodeError):
+                errors.append("promotion reviewed source identity is malformed")
     signature = subprocess.run(
         ["git", "verify-commit", "HEAD"], cwd=root, check=False, capture_output=True
     )
@@ -703,8 +761,20 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not False:
+        if manifest.get("bridge_abi_version") != 21 or manifest.get("source_repo_dirty") is not True:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
+        if source_identity is not None and (
+            manifest.get("source_commit") != source_identity.get("source_commit")
+            or manifest.get("source_tree_sha256")
+            != source_identity.get("source_tree_sha256")
+            or manifest.get("reviewed_source_closure")
+            != source_identity.get("reviewed_source_closure")
+            or manifest.get("reviewed_source_closure_descriptor_sha256")
+            != source_identity.get("reviewed_source_closure_descriptor_sha256")
+        ):
+            errors.append(
+                f"{directory.name}: manifest differs from the pinned reviewed source closure"
+            )
         profiles = manifest.get("profiles")
         roles = []
         if isinstance(profiles, list):
@@ -790,19 +860,16 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-19 substitution")
-    flipped_availability = re.sub(
-        r"(KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE:\s*bool\s*=\s*)"
-        r"(?:true|false)",
-        lambda match: match.group(1)
-        + ("false" if mode == "promotion" else "true"),
-        baseline[MODEL],
-        count=1,
+    flipped_availability = baseline[MODEL].replace(
+        'cfg!(feature = "kagemusha-production-enabled")',
+        "true",
+        1,
     )
     if not static_errors({MODEL: flipped_availability}):
         errors.append("self-test failed to reject an invalid availability state")
     seven_artifacts = baseline[CATALOG].replace(
-        "descriptors.len() != 8",
-        "descriptors.len() != 7",
+        "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len();",
+        "7;",
         1,
     )
     seven_artifact_errors = static_errors({CATALOG: seven_artifacts})

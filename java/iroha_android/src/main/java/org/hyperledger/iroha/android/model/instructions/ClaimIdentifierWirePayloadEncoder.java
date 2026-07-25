@@ -50,12 +50,14 @@ public final class ClaimIdentifierWirePayloadEncoder {
   }
 
   /** Decodes a Norito-framed {@code ClaimIdentifier} payload. */
-  static DecodedClaimIdentifierPayload decodePayload(final byte[] wirePayload) {
+  static DecodedClaimIdentifierPayload decodePayload(
+      final byte[] wirePayload, final int chainDiscriminant) {
     Objects.requireNonNull(wirePayload, "wirePayload");
     final ClaimIdentifierPayload payload =
         NoritoCodec.decode(wirePayload, new ClaimIdentifierPayloadAdapter(), SCHEMA_PATH);
     return new DecodedClaimIdentifierPayload(
-        TransferWirePayloadEncoder.decodeAccountIdPayload(payload.accountPayload),
+        TransferWirePayloadEncoder.decodeAccountIdPayload(
+            payload.accountPayload, chainDiscriminant),
         payload.receiptPayload,
         payload.attestationPayload);
   }

@@ -14,6 +14,7 @@ import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 /** Canonical V1 Norito codecs used by alias planners and local apply. */
 object AliasNoritoCodec {
+    private val decodeChainDiscriminant = ThreadLocal<Int?>()
     private const val ENSURE_SCHEMA = "iroha_data_model::isi::alias_setup::EnsureAlias"
     private const val RENEW_SCHEMA = "iroha_data_model::isi::alias_setup::RenewAliasLease"
     private const val AUTO_RENEW_SCHEMA = "iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew"
@@ -28,8 +29,12 @@ object AliasNoritoCodec {
 
     /** Decodes an exact bare setup-plan body. */
     @JvmStatic
-    fun decodePlanBody(payload: ByteArray): AliasTransactionPlanBodyV1 =
+    fun decodePlanBody(
+        payload: ByteArray,
+        chainDiscriminant: Int,
+    ): AliasTransactionPlanBodyV1 = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decodeAdaptive(payload, PLAN_BODY_ADAPTER)
+    }
 
     /** Encodes the exact bare lifecycle-plan body committed by the planner hash. */
     @JvmStatic
@@ -38,8 +43,12 @@ object AliasNoritoCodec {
 
     /** Decodes an exact bare lifecycle-plan body. */
     @JvmStatic
-    fun decodeLifecyclePlanBody(payload: ByteArray): AliasLifecycleTransactionPlanBodyV1 =
+    fun decodeLifecyclePlanBody(
+        payload: ByteArray,
+        chainDiscriminant: Int,
+    ): AliasLifecycleTransactionPlanBodyV1 = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decodeAdaptive(payload, LIFECYCLE_PLAN_BODY_ADAPTER)
+    }
 
     /** Encodes the exact bare sponsored-onboarding receipt body signed by Torii. */
     @JvmStatic
@@ -48,8 +57,12 @@ object AliasNoritoCodec {
 
     /** Decodes an exact bare sponsored-onboarding receipt body. */
     @JvmStatic
-    fun decodeOnboardingPlanBody(payload: ByteArray): AccountOnboardingPlanBodyV1 =
+    fun decodeOnboardingPlanBody(
+        payload: ByteArray,
+        chainDiscriminant: Int,
+    ): AccountOnboardingPlanBodyV1 = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decodeAdaptive(payload, ONBOARDING_PLAN_BODY_ADAPTER)
+    }
 
     /** Encodes one typed EnsureAlias instruction with its canonical schema-bound header. */
     @JvmStatic
@@ -58,8 +71,12 @@ object AliasNoritoCodec {
 
     /** Decodes one schema-bound EnsureAlias frame. */
     @JvmStatic
-    fun decodeEnsureAliasFrame(frame: ByteArray): EnsureAlias =
+    fun decodeEnsureAliasFrame(
+        frame: ByteArray,
+        chainDiscriminant: Int,
+    ): EnsureAlias = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decode(frame, ENSURE_ADAPTER, ENSURE_SCHEMA)
+    }
 
     /** Encodes one typed renewal instruction with its canonical schema-bound header. */
     @JvmStatic
@@ -68,8 +85,12 @@ object AliasNoritoCodec {
 
     /** Decodes one schema-bound renewal frame. */
     @JvmStatic
-    fun decodeRenewAliasLeaseFrame(frame: ByteArray): RenewAliasLease =
+    fun decodeRenewAliasLeaseFrame(
+        frame: ByteArray,
+        chainDiscriminant: Int,
+    ): RenewAliasLease = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decode(frame, RENEW_ADAPTER, RENEW_SCHEMA)
+    }
 
     /** Encodes one typed auto-renew instruction with its canonical schema-bound header. */
     @JvmStatic
@@ -78,8 +99,12 @@ object AliasNoritoCodec {
 
     /** Decodes one schema-bound auto-renew frame. */
     @JvmStatic
-    fun decodeConfigureAutoRenewFrame(frame: ByteArray): ConfigureAliasAutoRenew =
+    fun decodeConfigureAutoRenewFrame(
+        frame: ByteArray,
+        chainDiscriminant: Int,
+    ): ConfigureAliasAutoRenew = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decode(frame, CONFIGURE_AUTO_RENEW_ADAPTER, AUTO_RENEW_SCHEMA)
+    }
 
     /** Encodes one typed account-alias rebind instruction. */
     @JvmStatic
@@ -88,8 +113,12 @@ object AliasNoritoCodec {
 
     /** Decodes one schema-bound account-alias rebind frame. */
     @JvmStatic
-    fun decodeRebindAccountAliasFrame(frame: ByteArray): RebindAccountAlias =
+    fun decodeRebindAccountAliasFrame(
+        frame: ByteArray,
+        chainDiscriminant: Int,
+    ): RebindAccountAlias = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decode(frame, REBIND_ADAPTER, REBIND_SCHEMA)
+    }
 
     /** Encodes one typed primary-alias compare-and-set instruction. */
     @JvmStatic
@@ -98,8 +127,12 @@ object AliasNoritoCodec {
 
     /** Decodes one schema-bound primary-alias compare-and-set frame. */
     @JvmStatic
-    fun decodeCompareAndSetPrimaryAliasFrame(frame: ByteArray): CompareAndSetPrimaryAccountAlias =
+    fun decodeCompareAndSetPrimaryAliasFrame(
+        frame: ByteArray,
+        chainDiscriminant: Int,
+    ): CompareAndSetPrimaryAccountAlias = withDecodeChain(chainDiscriminant) {
         NoritoCodec.decode(frame, PRIMARY_ADAPTER, PRIMARY_SCHEMA)
+    }
 
     private val U8 = NoritoAdapters.uint(8)
     private val U16 = NoritoAdapters.uint(16)
@@ -129,9 +162,38 @@ object AliasNoritoCodec {
         override fun decode(decoder: NoritoDecoder): String =
             TransferWirePayloadEncoder.decodeAccountIdPayload(
                 decoder.readBytes(decoder.remaining()),
+                requiredDecodeChainDiscriminant(),
                 decoder.flags,
                 decoder.flagsHint,
             )
+    }
+
+    private fun requiredDecodeChainDiscriminant(): Int =
+        checkNotNull(decodeChainDiscriminant.get()) {
+            "alias decoding requires an explicit chainDiscriminant"
+        }
+
+    private fun <T> withDecodeChain(
+        chainDiscriminant: Int,
+        operation: () -> T,
+    ): T {
+        require(chainDiscriminant in 0..0xffff) {
+            "chainDiscriminant must fit in u16"
+        }
+        val previous = decodeChainDiscriminant.get()
+        check(previous == null || previous == chainDiscriminant) {
+            "Conflicting nested chainDiscriminant context"
+        }
+        decodeChainDiscriminant.set(chainDiscriminant)
+        return try {
+            operation()
+        } finally {
+            if (previous == null) {
+                decodeChainDiscriminant.remove()
+            } else {
+                decodeChainDiscriminant.set(previous)
+            }
+        }
     }
 
     private val CHAIN_ID_ADAPTER = object : TypeAdapter<String> {
@@ -803,9 +865,17 @@ object DefaultAliasPlanBodyNoritoEncoder : AliasPlanBodyNoritoEncoder {
 
 /** Default typed EnsureAlias registry codec. */
 object DefaultAliasEnsureInstructionFrameCodec : AliasEnsureInstructionFrameCodec {
-    override fun decodeAndReencode(wireId: String, framedPayload: ByteArray): DecodedEnsureAliasFrame {
+    override fun decodeAndReencode(
+        wireId: String,
+        framedPayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedEnsureAliasFrame {
         require(wireId == EnsureAlias.WIRE_ID) { "unsupported alias setup wire id: $wireId" }
-        val value = AliasNoritoCodec.decodeEnsureAliasFrame(framedPayload)
+        val value =
+            AliasNoritoCodec.decodeEnsureAliasFrame(
+                framedPayload,
+                chainDiscriminant,
+            )
         return DecodedEnsureAliasFrame(value, AliasNoritoCodec.encodeEnsureAliasFrame(value))
     }
 }
@@ -818,17 +888,29 @@ object DefaultAliasLifecyclePlanBodyNoritoEncoder : AliasLifecyclePlanBodyNorito
 
 /** Default typed renewal/auto-renew registry codec. */
 object DefaultAliasLifecycleInstructionFrameCodec : AliasLifecycleInstructionFrameCodec {
-    override fun decodeAndReencode(wireId: String, framedPayload: ByteArray): DecodedAliasLifecycleFrame {
+    override fun decodeAndReencode(
+        wireId: String,
+        framedPayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedAliasLifecycleFrame {
         return when (wireId) {
             RenewAliasLease.WIRE_ID -> {
-                val value = AliasNoritoCodec.decodeRenewAliasLeaseFrame(framedPayload)
+                val value =
+                    AliasNoritoCodec.decodeRenewAliasLeaseFrame(
+                        framedPayload,
+                        chainDiscriminant,
+                    )
                 DecodedAliasLifecycleFrame(
                     AliasLifecycleOperationV1.RenewLease(value),
                     AliasNoritoCodec.encodeRenewAliasLeaseFrame(value),
                 )
             }
             ConfigureAliasAutoRenew.WIRE_ID -> {
-                val value = AliasNoritoCodec.decodeConfigureAutoRenewFrame(framedPayload)
+                val value =
+                    AliasNoritoCodec.decodeConfigureAutoRenewFrame(
+                        framedPayload,
+                        chainDiscriminant,
+                    )
                 DecodedAliasLifecycleFrame(
                     AliasLifecycleOperationV1.ConfigureAutoRenew(value),
                     AliasNoritoCodec.encodeConfigureAutoRenewFrame(value),

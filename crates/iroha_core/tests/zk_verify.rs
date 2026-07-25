@@ -55,6 +55,7 @@ const PRODUCTION_CLAIM_ATTACHMENT_BACKENDS: &[&str] = &[
     "stark/fri/boi-audited",
     "stark/fri/external-security-review",
     "stark/fri/security-review-passed",
+    "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
     "stark/fri/s.e.c.u.r.i.t.y-review-passed",
     "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
     "stark/fri/a-u-d-i-t-c-l-a-i-m",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "norito_bridge_source_seal.py"
+APPLE_BUILDER = Path(__file__).parents[1] / "build_norito_xcframework.sh"
 SPEC = importlib.util.spec_from_file_location("norito_bridge_source_seal", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 seal = importlib.util.module_from_spec(SPEC)
@@ -102,6 +104,64 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
     def test_unknown_platform_fails_closed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unsupported source-seal platform"):
             self.inputs("windows")
+
+    def test_apple_builder_never_relies_on_the_default_seal_platform(self) -> None:
+        builder = APPLE_BUILDER.read_text(encoding="utf-8")
+        invocations = re.findall(
+            r"run_source_seal (?:fingerprint|status)[^\n]*",
+            builder,
+        )
+        self.assertEqual(len(invocations), 2)
+        for invocation in invocations:
+            self.assertIn("--platform apple", invocation)
+
+    def test_symlinked_rustup_style_proxies_preserve_dispatch_and_fail_on_retarget(
+        self,
+    ) -> None:
+        tools = self.root / "tools"
+        tools.mkdir()
+        multiplexer = tools / "rustup"
+        replacement = tools / "replacement"
+        for executable in (multiplexer, replacement):
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+        cargo_proxy = tools / "cargo"
+        rustc_proxy = tools / "rustc"
+        cargo_proxy.symlink_to(multiplexer.name)
+        rustc_proxy.symlink_to(multiplexer.name)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NORITO_BRIDGE_SEAL_CARGO": str(cargo_proxy),
+                "NORITO_BRIDGE_SEAL_RUSTC": str(rustc_proxy),
+            },
+            clear=False,
+        ):
+            cargo = seal.required_tool("NORITO_BRIDGE_SEAL_CARGO", "cargo")
+            rustc = seal.required_tool("NORITO_BRIDGE_SEAL_RUSTC", "rustc")
+
+        self.assertEqual(cargo.invocation, cargo_proxy)
+        self.assertEqual(rustc.invocation, rustc_proxy)
+        canonical_multiplexer = multiplexer.resolve()
+        self.assertEqual(cargo.canonical, canonical_multiplexer)
+        self.assertEqual(rustc.canonical, canonical_multiplexer)
+
+        completed = subprocess.CompletedProcess([], 0, stdout=b"")
+        with mock.patch.object(seal.subprocess, "run", return_value=completed) as run:
+            seal.run(self.root, cargo, ["metadata"], {"PATH": str(tools)})
+        self.assertEqual(
+            run.call_args.args[0],
+            [str(cargo_proxy), "metadata"],
+        )
+        self.assertEqual(
+            run.call_args.kwargs["executable"], str(canonical_multiplexer)
+        )
+
+        cargo_proxy.unlink()
+        cargo_proxy.symlink_to(replacement.name)
+        with self.assertRaisesRegex(RuntimeError, "changed after authentication"):
+            seal.run(self.root, cargo, ["metadata"], {"PATH": str(tools)})
 
 
 if __name__ == "__main__":

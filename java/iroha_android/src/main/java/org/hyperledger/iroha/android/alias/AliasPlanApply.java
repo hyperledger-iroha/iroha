@@ -24,6 +24,7 @@ public final class AliasPlanApply {
   public static TransactionPayload buildTransactionPayload(
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
       final Long nonce,
@@ -33,6 +34,7 @@ public final class AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasEnsureInstructionFrameCodec.INSTANCE,
+        chainDiscriminant,
         feePayment,
         creationTimeMs,
         nonce,
@@ -45,6 +47,7 @@ public final class AliasPlanApply {
       final AliasTransactionPlanV1 plan,
       final AliasPlanBodyNoritoEncoder bodyEncoder,
       final AliasEnsureInstructionFrameCodec frameCodec,
+      final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
       final Long nonce,
@@ -65,7 +68,7 @@ public final class AliasPlanApply {
       throw new IllegalArgumentException("canonical alias plan body must not be empty");
     }
     AliasPlanVerifier.requireExecutableForRequest(
-        request, plan, bodyBytes, frameCodec);
+        request, plan, bodyBytes, frameCodec, chainDiscriminant);
     final List<InstructionBox> instructions = new ArrayList<>();
     for (final AliasSetupModels.AliasFramedInstructionV1 frame : plan.body().instructions()) {
       instructions.add(InstructionBox.fromWirePayload(frame.wireId(), frame.framedPayload()));
@@ -89,6 +92,7 @@ public final class AliasPlanApply {
       final AliasTransactionPlanV1 plan,
       final AliasPlanBodyNoritoEncoder bodyEncoder,
       final AliasEnsureInstructionFrameCodec frameCodec,
+      final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
       final FeePaymentIntent feePayment,
@@ -105,6 +109,7 @@ public final class AliasPlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            chainDiscriminant,
             feePayment,
             creationTimeMs,
             nonce,
@@ -117,6 +122,7 @@ public final class AliasPlanApply {
       final IrohaClient client,
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
       final FeePaymentIntent feePayment,
@@ -130,6 +136,7 @@ public final class AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasEnsureInstructionFrameCodec.INSTANCE,
+        chainDiscriminant,
         transactionBuilder,
         signer,
         feePayment,

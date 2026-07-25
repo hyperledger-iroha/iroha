@@ -767,6 +767,11 @@ impl FeePaymentIntent {
     /// Empty limits are structurally valid because fee-free networks have no
     /// applicable components. Admission rejects missing limits whenever a fee
     /// component is enabled by the authoritative schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero sponsor revision, a zero charge maximum,
+    /// or charge limits that are duplicated or not in canonical order.
     pub fn validate(&self) -> Result<(), FeePaymentIntentError> {
         if matches!(
             self,
@@ -1804,11 +1809,11 @@ impl TransactionBuilder {
         self,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
+        use iroha_crypto::PublicKey;
+
         let payload = self.payload;
 
         Self::validate_payload_fee_payment(&payload)?;
-
-        use iroha_crypto::PublicKey;
 
         let expected = payload
             .authority
@@ -4163,17 +4168,32 @@ mod norito_rpc_fixture_tests {
         SignedTransaction::decode_all_versioned(&overlong_signed)
             .expect_err("overlong signed-transaction field length must be rejected");
 
-        assert_eq!(&canonical[..expected_prefix.len()], expected_prefix);
-        let terminal = canonical[expected_prefix.len() - 1];
+        assert_eq!(
+            expected_prefix.len(),
+            6,
+            "the shared fixture must exercise a two-byte External COMPACT_LEN"
+        );
+        assert_eq!(
+            &canonical[..expected_prefix.len()],
+            expected_prefix.as_slice()
+        );
+        let first_length_index = expected_prefix.len() - 2;
+        assert_ne!(
+            canonical[first_length_index] & 0x80,
+            0,
+            "the first External length byte must continue"
+        );
+        let terminal_index = expected_prefix.len() - 1;
+        let terminal = canonical[terminal_index];
         assert_eq!(
             terminal & 0x80,
             0,
-            "canonical COMPACT_LEN terminal byte must clear its continuation bit"
+            "the second External length byte must terminate"
         );
         let mut overlong_entrypoint = Vec::with_capacity(canonical.len() + 1);
-        overlong_entrypoint.extend_from_slice(&canonical[..expected_prefix.len() - 1]);
+        overlong_entrypoint.extend_from_slice(&canonical[..terminal_index]);
         overlong_entrypoint.extend_from_slice(&[terminal | 0x80, 0x00]);
-        overlong_entrypoint.extend_from_slice(&canonical[expected_prefix.len()..]);
+        overlong_entrypoint.extend_from_slice(&canonical[terminal_index + 1..]);
         assert!(
             norito::codec::decode_adaptive::<TransactionEntrypoint>(&overlong_entrypoint).is_err(),
             "overlong External field length must be rejected"

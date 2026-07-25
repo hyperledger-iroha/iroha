@@ -4,6 +4,7 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+import org.hyperledger.iroha.sdk.sccp.SccpV1
 
 /** Closed SCCP payload kinds admitted by the first-release bridge flow. */
 enum class SccpPayloadKindV1(val wireKey: String) {
@@ -172,5 +173,6 @@ object SccpBridgeSubmitResponseParser {
         5 -> setOf("tron-groth16-bn254-v1", "bridge/sccp/native/tron-dpos-v1")
         else -> emptySet()
     }
-    private val TRANSACTION_CODEC = NoritoJavaCodecAdapter()
+    private val TRANSACTION_CODEC =
+        NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 }

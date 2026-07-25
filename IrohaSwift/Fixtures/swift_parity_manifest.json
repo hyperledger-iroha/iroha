@@ -1,7 +1,7 @@
 {
   "fixtures": [
     {
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "chain": "00000042",
       "encoded_file": "swift_transfer_asset_basic.norito",
       "encoded_len": 446,
@@ -15,7 +15,7 @@
       "time_to_live_ms": 3500
     },
     {
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "chain": "00000043",
       "encoded_file": "swift_mint_asset_basic.norito",
       "encoded_len": 362,
@@ -29,7 +29,7 @@
       "time_to_live_ms": 2000
     },
     {
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "chain": "00000044",
       "encoded_file": "swift_burn_asset_basic.norito",
       "encoded_len": 362,

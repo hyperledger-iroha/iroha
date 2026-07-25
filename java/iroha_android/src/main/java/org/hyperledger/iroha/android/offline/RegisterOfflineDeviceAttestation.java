@@ -79,8 +79,9 @@ public final class RegisterOfflineDeviceAttestation {
 
   /** Decode and validate one current instruction archive. */
   public static DeviceAttestationRegistration decodeInstructionPayloadCanonical(
-      final byte[] archive) {
-    return OfflineDeviceAttestationCodec.decodeInstructionPayloadCanonical(archive);
+      final byte[] archive, final int chainDiscriminant) {
+    return OfflineDeviceAttestationCodec.decodeInstructionPayloadCanonical(
+        archive, chainDiscriminant);
   }
 
   /** Build a payload containing exactly one registration instruction. */

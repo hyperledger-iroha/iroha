@@ -60,8 +60,8 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
-        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PostFinalityCleanupOutcome,
-        PostFinalityCleanupTarget, V2EffectExecutor,
+        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
+        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
         AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
@@ -85,6 +85,43 @@ use crate::{
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
+const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
+
+/// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
+#[derive(Clone, Copy, Debug)]
+struct PendingTipRecoveryDeadline {
+    started_at: Instant,
+    deadline: Instant,
+    timeout: Duration,
+}
+
+impl PendingTipRecoveryDeadline {
+    fn new(started_at: Instant, round_timeout: Duration) -> Result<Self, V2RunnerError> {
+        let timeout = round_timeout
+            .checked_mul(PENDING_TIP_RECOVERY_DEADLINE_ROUNDS)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+        let deadline = started_at
+            .checked_add(timeout)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+        Ok(Self {
+            started_at,
+            deadline,
+            timeout,
+        })
+    }
+
+    fn expired(self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+
+    fn remaining(self, now: Instant) -> Duration {
+        self.deadline.saturating_duration_since(now)
+    }
+
+    fn elapsed(self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.started_at)
+    }
+}
 
 /// Exact reducer facts which own one local proposal-side work item.
 ///
@@ -871,6 +908,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         // constructor can observe or reject the recoverable intermediate
         // shape.
         if recovering_interrupted_tip {
+            let recovery_deadline = PendingTipRecoveryDeadline::new(Instant::now(), round_timeout)?;
+            iroha_logger::info!(
+                height = context.height,
+                timeout = ?recovery_deadline.timeout,
+                stage = ?executor
+                    .pending_kura_apply_recovery_evidence()
+                    .map(|evidence| evidence.stage()),
+                "started bounded Sumeragi v2 interrupted-tip recovery"
+            );
             let _ = reconcile_executor_locked_body(&mut executor, &mut services)?;
             executor.consume_pending_tip_recovery_effects(
                 std::mem::take(&mut startup_effects),
@@ -884,6 +930,19 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
+                let now = Instant::now();
+                if recovery_deadline.expired(now) {
+                    executor.record_pending_tip_recovery_deadline_exceeded(&mut services)?;
+                    let error = pending_tip_recovery_deadline_error(
+                        output_guard.as_ref(),
+                        recovery_deadline.timeout,
+                        executor.pending_tip_recovery_attempts(),
+                        executor
+                            .pending_kura_apply_recovery_evidence()
+                            .map(|evidence| evidence.stage()),
+                    );
+                    return Err(error);
+                }
                 let completions = services.drain_completions(&mut executor)?;
                 let advanced = advance_pending_tip_recovery_executor(
                     &mut executor,
@@ -891,9 +950,21 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     control_queue_capacity,
                 )?;
                 if executor.durable_finality().is_none() && completions == 0 && advanced == 0 {
-                    let _ = wake_rx.recv_timeout(IDLE_POLL);
+                    let remaining = recovery_deadline.remaining(Instant::now());
+                    if !remaining.is_zero() {
+                        let _ = wake_rx.recv_timeout(remaining.min(IDLE_POLL));
+                    }
                 }
             }
+            iroha_logger::info!(
+                height = context.height,
+                elapsed = ?recovery_deadline.elapsed(Instant::now()),
+                attempts = executor.pending_tip_recovery_attempts(),
+                stage = ?executor
+                    .pending_kura_apply_recovery_evidence()
+                    .map(|evidence| evidence.stage()),
+                "finished bounded Sumeragi v2 interrupted-tip recovery"
+            );
         }
         let recovered_applied_height = pending_recovery_identity.filter(|pending| {
             usize::try_from(pending.height()).is_ok_and(|height| {
@@ -2401,6 +2472,21 @@ fn construct_after_pending_tip_application_recovery<T>(
     construct()
 }
 
+fn pending_tip_recovery_deadline_error(
+    output_guard: &ConsensusOutputGuard,
+    timeout: Duration,
+    attempts: u64,
+    stage: Option<PendingKuraApplyRecoveryStage>,
+) -> V2RunnerError {
+    output_guard.activate_restart_required();
+    super::status::mark_v2_restart_required();
+    V2RunnerError::PendingTipRecoveryDeadlineExceeded {
+        timeout,
+        attempts,
+        stage,
+    }
+}
+
 fn advance_pending_tip_recovery_executor(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -3053,6 +3139,18 @@ pub(super) enum V2RunnerError {
         "Sumeragi v2 interrupted-tip recovery did not complete post-apply metadata and Native AMX evidence repair before lane-work construction"
     )]
     PendingTipRecoveryIncomplete,
+    /// Closed-ingress interrupted-tip recovery exhausted its cadence-derived deadline.
+    #[error(
+        "Sumeragi v2 interrupted-tip recovery exceeded {timeout:?} after {attempts} serialized attempts at stage {stage:?}; process restart is required"
+    )]
+    PendingTipRecoveryDeadlineExceeded {
+        /// Cadence-derived maximum local recovery duration.
+        timeout: Duration,
+        /// Number of serialized recovery scheduler attempts completed.
+        attempts: u64,
+        /// Exact authenticated recovery stage retained at expiry.
+        stage: Option<PendingKuraApplyRecoveryStage>,
+    },
     /// Durable parent body is unavailable in Kura.
     #[error("Sumeragi v2 successor is missing its canonical parent block")]
     MissingParent,
@@ -3229,6 +3327,41 @@ mod tests {
         .expect("completed pending-tip recovery may construct lane work");
         assert_eq!(value, 7);
         assert!(constructed.get());
+    }
+
+    #[test]
+    fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
+        let _status_guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let started_at = Instant::now();
+        let round_timeout = Duration::from_secs(10);
+        let deadline = PendingTipRecoveryDeadline::new(started_at, round_timeout)
+            .expect("derive recovery deadline");
+        assert_eq!(deadline.timeout, Duration::from_secs(30));
+        assert!(!deadline.expired(started_at + Duration::from_secs(30) - Duration::from_nanos(1)));
+        assert!(deadline.expired(started_at + Duration::from_secs(30)));
+        assert_eq!(
+            deadline.remaining(started_at + Duration::from_secs(29)),
+            Duration::from_secs(1)
+        );
+
+        let output_guard = ConsensusOutputGuard::isolated();
+        let error = pending_tip_recovery_deadline_error(
+            output_guard.as_ref(),
+            deadline.timeout,
+            17,
+            Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
+        );
+        assert!(output_guard.restart_required());
+        assert!(matches!(
+            error,
+            V2RunnerError::PendingTipRecoveryDeadlineExceeded {
+                timeout,
+                attempts: 17,
+                stage: Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
+            } if timeout == Duration::from_secs(30)
+        ));
+        super::super::status::clear_v2_status();
     }
 
     #[test]

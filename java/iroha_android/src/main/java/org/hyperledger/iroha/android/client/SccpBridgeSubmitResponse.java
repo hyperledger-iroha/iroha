@@ -10,6 +10,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
+import org.hyperledger.iroha.android.sccp.SccpV1;
 
 /** Unified strict detached-signing response returned by both SCCP submit endpoints. */
 public final class SccpBridgeSubmitResponse {
@@ -21,7 +22,8 @@ public final class SccpBridgeSubmitResponse {
           "bridge/sccp/native/ethereum-beacon-v1",
           "bridge/sccp/native/bsc-parlia-v1",
           "bridge/sccp/native/tron-dpos-v1");
-  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC = new NoritoJavaCodecAdapter();
+  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC =
+      new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
   private static final Set<String> FIELDS =
       Set.of("submitted", "payload_kind", "message_id_hex", "backend", "counterparty_domain", "counterparty_chain", "route_configuration_hash_hex", "range_start_height", "range_end_height", "creation_time_ms", "tx_hash_hex", "transaction_payload_b64", "signing_message_b64");
 

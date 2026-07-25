@@ -16,6 +16,7 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
+import org.hyperledger.iroha.sdk.address.AccountAddress
 
 internal object CandidateLabHarness {
     private const val CHECKPOINT_SCHEMA =
@@ -1419,6 +1420,7 @@ internal object CandidateLabHarness {
                 opening,
                 branch.membershipWitness,
                 recipient,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 atomicUnits,
                 verifierCommitment,
                 operationId,

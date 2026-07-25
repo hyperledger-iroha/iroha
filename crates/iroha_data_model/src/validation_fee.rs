@@ -626,11 +626,17 @@ impl ValidationFeePolicyRegistryV1 {
         custom.payload().try_into_any_norito::<Self>().ok()
     }
 
-    /// Validate the complete contiguous policy chain.
+    /// Validate the complete contiguous policy chain and authenticate every retained Parliament
+    /// proposal fingerprint.
+    ///
+    /// Builds without the `governance` feature retain the typed registry for canonical decoding,
+    /// but deliberately return
+    /// [`ValidationFeePolicyRegistryError::InvalidParliamentAuthorization`] because the complete
+    /// Parliament proposal preimage is unavailable.
     ///
     /// # Errors
     ///
-    /// Returns an error when the registry is empty, non-monotonic, broken, or
+    /// Returns an error when the registry is empty, non-monotonic, broken, unauthenticated, or
     /// contains a policy whose stored hash differs from its payload.
     pub fn validate(&self) -> Result<(), ValidationFeePolicyRegistryError> {
         let mut entries = self.registered_policies.iter();
@@ -839,33 +845,35 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
         evaluated_height: u64,
         registry: Option<&ValidationFeePolicyRegistryV1>,
     ) -> Self {
-        let status = match registry {
-            None => ValidationFeePolicySnapshotStatusV1::Unconfigured,
-            Some(registry) => {
-                let available = registry.validate().and_then(|()| {
-                    let registry_hash = registry
-                        .snapshot_hash()
-                        .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
-                    let head = registry
-                        .head()
-                        .ok_or(ValidationFeePolicyRegistryError::EmptyRegistry)?;
-                    Ok(ValidationFeePolicySnapshotAvailableV1 {
-                        registry_hash,
-                        head_policy_hash: head.policy_hash,
-                        scheduled_policy_hash: registry
-                            .scheduled_entry_at_height(evaluated_height)
-                            .map(|entry| entry.policy_hash),
-                        effective_policy_hash: registry
-                            .effective_entry_at_height(evaluated_height)
-                            .map(|entry| entry.policy_hash),
-                    })
-                });
-                match available {
-                    Ok(available) => ValidationFeePolicySnapshotStatusV1::Available(available),
-                    Err(error) => {
-                        ValidationFeePolicySnapshotStatusV1::Invalid(Hash::new(error.to_string()))
-                    }
-                }
+        let Some(registry) = registry else {
+            return Self {
+                version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
+                evaluated_height,
+                status: ValidationFeePolicySnapshotStatusV1::Unconfigured,
+            };
+        };
+        let available = registry.validate().and_then(|()| {
+            let registry_hash = registry
+                .snapshot_hash()
+                .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
+            let head = registry
+                .head()
+                .ok_or(ValidationFeePolicyRegistryError::EmptyRegistry)?;
+            Ok(ValidationFeePolicySnapshotAvailableV1 {
+                registry_hash,
+                head_policy_hash: head.policy_hash,
+                scheduled_policy_hash: registry
+                    .scheduled_entry_at_height(evaluated_height)
+                    .map(|entry| entry.policy_hash),
+                effective_policy_hash: registry
+                    .effective_entry_at_height(evaluated_height)
+                    .map(|entry| entry.policy_hash),
+            })
+        });
+        let status = match available {
+            Ok(available) => ValidationFeePolicySnapshotStatusV1::Available(available),
+            Err(error) => {
+                ValidationFeePolicySnapshotStatusV1::Invalid(Hash::new(error.to_string()))
             }
         };
         Self {
@@ -881,23 +889,19 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
         evaluated_height: u64,
         custom: Option<&CustomParameter>,
     ) -> Self {
-        match custom {
-            None => Self::from_registry(evaluated_height, None),
-            Some(custom) => {
-                if let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom)
-                {
-                    Self::from_registry(evaluated_height, Some(&registry))
-                } else {
-                    let invalid_hash = norito::to_bytes(custom)
-                        .map_or_else(|_| Hash::new(custom.id().to_string()), Hash::new);
-                    Self {
-                        version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
-                        evaluated_height,
-                        status: ValidationFeePolicySnapshotStatusV1::Invalid(invalid_hash),
-                    }
-                }
-            }
-        }
+        let Some(custom) = custom else {
+            return Self::from_registry(evaluated_height, None);
+        };
+        let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom) else {
+            let invalid_hash = norito::to_bytes(custom)
+                .map_or_else(|_| Hash::new(custom.id().to_string()), Hash::new);
+            return Self {
+                version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
+                evaluated_height,
+                status: ValidationFeePolicySnapshotStatusV1::Invalid(invalid_hash),
+            };
+        };
+        Self::from_registry(evaluated_height, Some(&registry))
     }
 }
 
@@ -957,6 +961,11 @@ impl ValidationFeePolicyWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stored value is not a valid canonical Norito
+    /// encoding of [`ValidationFeePolicySnapshotCommitmentV1`].
     pub fn commitment(&self) -> Result<ValidationFeePolicySnapshotCommitmentV1, String> {
         let commitment = norito::decode_from_bytes(&self.value)
             .map_err(|error| format!("validation-fee snapshot commitment is invalid: {error}"))?;
@@ -975,6 +984,7 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
+#[cfg(feature = "governance")]
 fn validate_registry_entry_authorization(
     entry: &ValidationFeePolicyRegistryEntryV1,
 ) -> Result<(), ValidationFeePolicyRegistryError> {
@@ -1034,6 +1044,21 @@ fn validate_registry_entry_authorization(
         );
     }
     Ok(())
+}
+
+#[cfg(not(feature = "governance"))]
+fn validate_registry_entry_authorization(
+    entry: &ValidationFeePolicyRegistryEntryV1,
+) -> Result<(), ValidationFeePolicyRegistryError> {
+    // Proposal fingerprints commit to the complete governance `ProposalKind` encoding. A build
+    // that deliberately omits that feature can still decode the typed registry for clients, but
+    // it cannot prove that the retained authorization matches the enacted Parliament proposal.
+    // Keep registry validation fail-closed rather than accepting a weaker surrogate fingerprint.
+    Err(
+        ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
+            policy_version: entry.policy.policy_version,
+        },
+    )
 }
 
 /// One exact recipient and share in the atomic treasury-payout effect plan.
@@ -1381,7 +1406,7 @@ pub fn validation_fee_payout_recipient_share() -> Numeric {
         .expect("hard-coded validation-fee payout recipient share is canonical")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "governance"))]
 mod parliament_tests {
     use std::str::FromStr as _;
 
@@ -1819,5 +1844,55 @@ mod parliament_tests {
         let mut wrong_referendum = valid;
         wrong_referendum.finalization.referendum_id = [0xAA; 32];
         assert!(wrong_referendum.invariant_error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_constructors_fail_closed_for_absent_and_malformed_registry() {
+        let unconfigured = ValidationFeePolicySnapshotCommitmentV1::from_registry(17, None);
+        assert_eq!(
+            unconfigured.version,
+            VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1
+        );
+        assert_eq!(unconfigured.evaluated_height, 17);
+        assert!(matches!(
+            unconfigured.status,
+            ValidationFeePolicySnapshotStatusV1::Unconfigured
+        ));
+
+        let empty_registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: Vec::new(),
+        };
+        let invalid_registry =
+            ValidationFeePolicySnapshotCommitmentV1::from_registry(18, Some(&empty_registry));
+        assert!(matches!(
+            invalid_registry.status,
+            ValidationFeePolicySnapshotStatusV1::Invalid(_)
+        ));
+
+        let malformed_parameter = CustomParameter::new(
+            ValidationFeePolicyRegistryV1::parameter_id(),
+            Json::new("not a validation-fee registry"),
+        );
+        let first = ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+            19,
+            Some(&malformed_parameter),
+        );
+        let second = ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+            19,
+            Some(&malformed_parameter),
+        );
+        assert_eq!(
+            first, second,
+            "malformed-state commitment must be deterministic"
+        );
+        assert!(matches!(
+            first.status,
+            ValidationFeePolicySnapshotStatusV1::Invalid(_)
+        ));
     }
 }

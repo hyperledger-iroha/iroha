@@ -126,11 +126,12 @@ pub use sorafs::{
     visit_find_sorafs_moderation_policy, visit_find_sorafs_moderation_reveal,
     visit_find_sorafs_moderation_snapshot, visit_find_sorafs_moderation_status,
     visit_find_sorafs_orderbook_cancellation_by_order_id,
-    visit_find_sorafs_orderbook_channel_by_id, visit_find_sorafs_orderbook_order_by_id,
+    visit_find_sorafs_orderbook_channel_by_id, visit_find_sorafs_orderbook_channels,
+    visit_find_sorafs_orderbook_events, visit_find_sorafs_orderbook_order_by_id,
     visit_find_sorafs_orderbook_orders, visit_find_sorafs_orderbook_policy,
     visit_find_sorafs_orderbook_receipt_by_id, visit_find_sorafs_orderbook_receipts,
     visit_find_sorafs_orderbook_status, visit_find_sorafs_orderbook_trade_by_id,
-    visit_find_sorafs_pop_audit_digest_by_sequence,
+    visit_find_sorafs_orderbook_trades, visit_find_sorafs_pop_audit_digest_by_sequence,
     visit_find_sorafs_pop_commitment_root_by_version,
     visit_find_sorafs_pop_credential_commitment_by_digest, visit_find_sorafs_pop_issuer_policy,
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
@@ -6209,6 +6210,47 @@ mod sorafs_permission_tests {
                 "derived default Visit dispatch must not bypass foreign juror privacy"
             );
         });
+    }
+
+    fn orderbook_page_queries() -> Vec<iroha_smart_contract::data_model::query::AnyQueryBox> {
+        [
+            FindSorafsOrderbookTrades::new(None, None, 10).into(),
+            FindSorafsOrderbookChannels::new(None, None, None, 10).into(),
+            FindSorafsOrderbookEvents::new(None, None, 10).into(),
+        ]
+        .into_iter()
+        .map(iroha_smart_contract::data_model::query::AnyQueryBox::Singular)
+        .collect()
+    }
+
+    #[test]
+    fn derived_default_visit_dispatches_orderbook_pages_through_permission_checks() {
+        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+            for query in orderbook_page_queries() {
+                let mut executor = MockExecutor::new(false);
+                executor.visit_query(&query);
+                assert!(
+                    executor.verdict().is_err(),
+                    "derived dispatch must reject an unrelated SoraFS permission"
+                );
+            }
+        });
+
+        for permission in [
+            PermissionObject::from(CanSetSorafsPricing),
+            PermissionObject::from(CanCompleteSorafsReplicationOrder),
+        ] {
+            with_mock_permissions(vec![permission], || {
+                for query in orderbook_page_queries() {
+                    let mut executor = MockExecutor::new(false);
+                    executor.visit_query(&query);
+                    assert!(
+                        executor.verdict().is_ok(),
+                        "derived dispatch must accept an orderbook operator permission"
+                    );
+                }
+            });
+        }
     }
 
     fn custom_parameter(name: &str) -> SetParameter {

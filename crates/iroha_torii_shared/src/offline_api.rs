@@ -119,6 +119,16 @@ impl OfflineRecipientRegistrationLineage {
     /// This is the maintained SDK/native-bridge verification boundary. The
     /// caller supplies an externally trusted checkpoint height/context; the
     /// response is never allowed to choose its own trust root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request, trust anchor, finality chain, active
+    /// receiver proofs, or request-lifetime binding is malformed or cannot be
+    /// authenticated against the evaluated block.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered fail-closed checks preserve stable first-error precedence across the public V1 verification boundary"
+    )]
     pub fn verify_against(
         &self,
         request: &KagemushaRecipientPaymentRequestV2,
@@ -317,6 +327,12 @@ pub struct OfflineRecipientReceiveOfferV2 {
 
 impl OfflineRecipientReceiveOfferV2 {
     /// Enforce the transport-only structure before app policy verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the offer version, publisher envelope, signed
+    /// request, receiver lineage, canonical encoding, or peer-size bound is
+    /// invalid.
     pub fn validate_structure(&self) -> Result<(), String> {
         if self.version != OFFLINE_RECIPIENT_LINEAGE_VERSION
             || self.lineage.version != OFFLINE_RECIPIENT_LINEAGE_VERSION
@@ -396,6 +412,7 @@ pub type OfflineTopUpFinalityProof = iroha_data_model::offline::KagemushaTopUpFi
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineReadinessBlocker {
     /// Stable SDK-facing blocker code.
     pub code: String,
@@ -407,6 +424,7 @@ pub struct OfflineReadinessBlocker {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct OfflineVerifierId {
     /// Proof-backend namespace of the registered key.
     pub backend: String,
@@ -451,10 +469,10 @@ pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
 
-/// Active ABI-21 V4 recursive StepEq verifier selected at the readiness snapshot.
+/// Active ABI-21 V4 recursive `StepEq` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 
-/// Active ABI-21 V4 recursive StepEp verifier selected at the readiness snapshot.
+/// Active ABI-21 V4 recursive `StepEp` verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
 
 /// Authenticated ABI-21 recursive release selected at a readiness snapshot.
@@ -599,9 +617,9 @@ pub struct OfflineReadiness {
     pub active_topup_shield_verifier: Option<OfflineActiveTopUpShieldVerifier>,
     /// Active confidential-unshield verifier at the evaluated height.
     pub active_unshield_verifier: Option<OfflineActiveUnshieldVerifier>,
-    /// Active recursive StepEq verifier at the evaluated height.
+    /// Active recursive `StepEq` verifier at the evaluated height.
     pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
-    /// Active recursive StepEp verifier at the evaluated height.
+    /// Active recursive `StepEp` verifier at the evaluated height.
     pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
     /// Exact authenticated ABI-21 release identity, or `None` with a recursive
     /// registry blocker.
@@ -619,6 +637,10 @@ pub struct OfflineReadiness {
 }
 
 impl norito::json::JsonDeserialize for OfflineReadiness {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered one-pass decoder explicitly rejects duplicate, unknown, and missing members for the fixed public V1 JSON shape"
+    )]
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
@@ -634,8 +656,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut active_transfer_verifier = None;
         let mut active_topup_shield_verifier = None;
         let mut active_unshield_verifier = None;
-        let mut active_recursive_step_eq_verifier = None;
-        let mut active_recursive_step_ep_verifier = None;
+        let mut step_eq_slot = None;
+        let mut complementary_step_ep_slot = None;
         let mut artifact_set = None;
         let mut proof_backend_available = None;
         let mut recursive_lineage_supported = None;
@@ -703,18 +725,18 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                         Some(visitor.parse_value::<Option<OfflineActiveUnshieldVerifier>>()?);
                 }
                 "active_recursive_step_eq_verifier" => {
-                    if active_recursive_step_eq_verifier.is_some() {
+                    if step_eq_slot.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_step_eq_verifier = Some(
+                    step_eq_slot = Some(
                         visitor.parse_value::<Option<OfflineActiveRecursiveStepEqVerifier>>()?,
                     );
                 }
                 "active_recursive_step_ep_verifier" => {
-                    if active_recursive_step_ep_verifier.is_some() {
+                    if complementary_step_ep_slot.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    active_recursive_step_ep_verifier = Some(
+                    complementary_step_ep_slot = Some(
                         visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?,
                     );
                 }
@@ -771,9 +793,9 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("active_topup_shield_verifier"))?,
             active_unshield_verifier: active_unshield_verifier
                 .ok_or_else(|| Error::missing_field("active_unshield_verifier"))?,
-            active_recursive_step_eq_verifier: active_recursive_step_eq_verifier
+            active_recursive_step_eq_verifier: step_eq_slot
                 .ok_or_else(|| Error::missing_field("active_recursive_step_eq_verifier"))?,
-            active_recursive_step_ep_verifier: active_recursive_step_ep_verifier
+            active_recursive_step_ep_verifier: complementary_step_ep_slot
                 .ok_or_else(|| Error::missing_field("active_recursive_step_ep_verifier"))?,
             artifact_set: artifact_set.ok_or_else(|| Error::missing_field("artifact_set"))?,
             proof_backend_available: proof_backend_available
@@ -877,6 +899,10 @@ pub struct OfflineRedeemResult {
 }
 
 /// Applied offline operation result, discriminated by command kind.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a result variant would change the canonical public V1 Norito enum wire shape"
+)]
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -891,6 +917,10 @@ pub enum OfflineOperationResult {
 }
 
 /// Pollable terminal or non-terminal state of an offline operation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a status variant would change the canonical public V1 Norito enum wire shape"
+)]
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum OfflineOperationStatus {
@@ -1039,9 +1069,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn readiness_roundtrips_through_both_public_representations() {
-        let readiness = OfflineReadiness {
+    fn available_readiness() -> OfflineReadiness {
+        OfflineReadiness {
             required_bridge_abi_version: 21,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
@@ -1136,7 +1165,12 @@ mod tests {
             recursive_lineage_supported: true,
             ready: true,
             blockers: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn readiness_roundtrips_through_both_public_representations() {
+        let readiness = available_readiness();
 
         let json = norito::json::to_vec(&readiness).expect("encode readiness JSON");
         let decoded_json: OfflineReadiness =
@@ -1165,6 +1199,37 @@ mod tests {
         let error = norito::json::from_str::<OfflineReadiness>(&wrong_type)
             .expect_err("declared readiness field typing is exact");
         assert!(error.to_string().contains("bool"));
+    }
+
+    #[test]
+    fn readiness_json_rejects_unknown_nested_verifier_and_blocker_members() {
+        let available =
+            norito::json::to_string(&available_readiness()).expect("encode available readiness");
+        let verifier_injection = available.replacen(
+            r#""backend":"halo2/ipa""#,
+            r#""backend":"halo2/ipa","future_registry_selector":true"#,
+            1,
+        );
+        let error = norito::json::from_str::<OfflineReadiness>(&verifier_injection)
+            .expect_err("unknown nested verifier identity members fail closed");
+        assert!(
+            error.to_string().contains("future_registry_selector"),
+            "unexpected nested verifier error: {error}"
+        );
+
+        let unavailable = norito::json::to_string(&unavailable_readiness(Some(9)))
+            .expect("encode unavailable readiness");
+        let blocker_injection = unavailable.replacen(
+            r#""code":"transfer_verifier_unavailable""#,
+            r#""code":"transfer_verifier_unavailable","future_blocker_state":true"#,
+            1,
+        );
+        let error = norito::json::from_str::<OfflineReadiness>(&blocker_injection)
+            .expect_err("unknown nested blocker members fail closed");
+        assert!(
+            error.to_string().contains("future_blocker_state"),
+            "unexpected nested blocker error: {error}"
+        );
     }
 
     #[test]

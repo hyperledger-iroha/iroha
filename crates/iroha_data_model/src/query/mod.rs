@@ -1301,7 +1301,7 @@ mod model {
         SorafsRepairStatus(crate::sorafs::moderation_ledger::RepairFinalizedStatusV1),
         /// Cursor-bounded page of committed repair-ledger events.
         SorafsRepairEventPage(crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1),
-        /// Finalized chain-authoritative PDP or PoTR proof outcome.
+        /// Finalized chain-authoritative PDP or `PoTR` proof outcome.
         SorafsProofOutcome(crate::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1),
         /// Cursor-bounded page of committed PDP/PoTR proof-outcome events.
         SorafsProofOutcomeEventPage(crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1),
@@ -5642,7 +5642,7 @@ pub mod sorafs {
             pub limit: u32,
         }
 
-        /// Fetch one finalized chain-authoritative PDP or PoTR proof outcome.
+        /// Fetch one finalized chain-authoritative PDP or `PoTR` proof outcome.
         #[derive(Copy)]
         pub struct FindSorafsProofOutcome {
             /// Proof protocol namespace for the exactly-once identity.

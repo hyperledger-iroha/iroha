@@ -39,10 +39,16 @@ object ClaimIdentifierWirePayloadEncoder {
 
     /** Decodes a Norito-framed `ClaimIdentifier` payload. */
     @JvmStatic
-    internal fun decodePayload(wirePayload: ByteArray): DecodedClaimIdentifierPayload {
+    internal fun decodePayload(
+        wirePayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedClaimIdentifierPayload {
         val payload = NoritoCodec.decode(wirePayload, ClaimIdentifierPayloadAdapter(), SCHEMA_PATH)
         return DecodedClaimIdentifierPayload(
-            accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(payload.accountPayload),
+            accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(
+                payload.accountPayload,
+                chainDiscriminant,
+            ),
             receiptPayloadBytes = payload.receiptPayload,
             attestationPayloadBytes = payload.attestationPayload,
         )

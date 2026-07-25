@@ -79,6 +79,7 @@ class NativeSignerBridge private constructor() {
         fun encodeShieldSignedTransaction(
             algorithm: SigningAlgorithm,
             chainId: String?,
+            chainDiscriminant: Int,
             authority: String?,
             creationTimeMs: Long,
             ttlMs: Long? = null,
@@ -87,6 +88,7 @@ class NativeSignerBridge private constructor() {
             feePayment: FeePaymentIntent,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            val validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
             val feePaymentJson = feePaymentJson(feePayment)
@@ -102,6 +104,7 @@ class NativeSignerBridge private constructor() {
                 nativeEncodeShieldSignedTransaction(
                     algorithm.bridgeCode,
                     chainBytes,
+                    validatedChainDiscriminant,
                     authorityBytes,
                     creationTimeMs,
                     ttl,
@@ -124,6 +127,7 @@ class NativeSignerBridge private constructor() {
         fun encodeUnshieldSignedTransaction(
             algorithm: SigningAlgorithm,
             chainId: String?,
+            chainDiscriminant: Int,
             authority: String?,
             creationTimeMs: Long,
             ttlMs: Long? = null,
@@ -132,6 +136,7 @@ class NativeSignerBridge private constructor() {
             feePayment: FeePaymentIntent,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            val validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
             val feePaymentJson = feePaymentJson(feePayment)
@@ -151,6 +156,7 @@ class NativeSignerBridge private constructor() {
                 nativeEncodeUnshieldSignedTransaction(
                     algorithm.bridgeCode,
                     chainBytes,
+                    validatedChainDiscriminant,
                     authorityBytes,
                     creationTimeMs,
                     ttl,
@@ -173,6 +179,7 @@ class NativeSignerBridge private constructor() {
         fun encodeRegisterZkAssetSignedTransaction(
             algorithm: SigningAlgorithm,
             chainId: String?,
+            chainDiscriminant: Int,
             authority: String?,
             creationTimeMs: Long,
             ttlMs: Long? = null,
@@ -181,6 +188,7 @@ class NativeSignerBridge private constructor() {
             feePayment: FeePaymentIntent,
         ): NativeSignedTransaction {
             requireCreationTime(creationTimeMs)
+            val validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant)
             val selected = requireNotNull(instruction) { "instruction must be provided" }
             val key = requirePrivateKey(privateKey)
             val feePaymentJson = feePaymentJson(feePayment)
@@ -197,6 +205,7 @@ class NativeSignerBridge private constructor() {
                 nativeEncodeRegisterZkAssetSignedTransaction(
                     algorithm.bridgeCode,
                     chainBytes,
+                    validatedChainDiscriminant,
                     authorityBytes,
                     creationTimeMs,
                     ttl,
@@ -266,6 +275,11 @@ class NativeSignerBridge private constructor() {
 
         private fun ttlPresent(ttlMs: Long?): Boolean = ttlMs != null
 
+        private fun requireChainDiscriminant(value: Int): Int {
+            require(value in 0..0xffff) { "chainDiscriminant must fit in u16" }
+            return value
+        }
+
         private fun requirePrivateKey(privateKey: ByteArray?): ByteArray {
             require(privateKey != null && privateKey.isNotEmpty()) { "privateKey must not be empty" }
             return privateKey.copyOf()
@@ -305,6 +319,7 @@ class NativeSignerBridge private constructor() {
         private external fun nativeEncodeShieldSignedTransaction(
             algorithmCode: Int,
             chainId: ByteArray,
+            chainDiscriminant: Int,
             authority: ByteArray,
             creationTimeMs: Long,
             ttlMs: Long,
@@ -324,6 +339,7 @@ class NativeSignerBridge private constructor() {
         private external fun nativeEncodeUnshieldSignedTransaction(
             algorithmCode: Int,
             chainId: ByteArray,
+            chainDiscriminant: Int,
             authority: ByteArray,
             creationTimeMs: Long,
             ttlMs: Long,
@@ -343,6 +359,7 @@ class NativeSignerBridge private constructor() {
         private external fun nativeEncodeRegisterZkAssetSignedTransaction(
             algorithmCode: Int,
             chainId: ByteArray,
+            chainDiscriminant: Int,
             authority: ByteArray,
             creationTimeMs: Long,
             ttlMs: Long,

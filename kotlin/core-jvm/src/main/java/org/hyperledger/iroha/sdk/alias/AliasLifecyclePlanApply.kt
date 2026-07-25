@@ -25,6 +25,7 @@ object AliasLifecyclePlanApply {
     fun buildTransactionPayload(
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
         nonce: Long? = null,
@@ -34,6 +35,7 @@ object AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder,
         DefaultAliasLifecycleInstructionFrameCodec,
+        chainDiscriminant,
         feePayment,
         creationTimeMs,
         nonce,
@@ -48,6 +50,7 @@ object AliasLifecyclePlanApply {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
         frameCodec: AliasLifecycleInstructionFrameCodec,
+        chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
         nonce: Long? = null,
@@ -65,6 +68,7 @@ object AliasLifecyclePlanApply {
             plan,
             bodyBytes,
             frameCodec,
+            chainDiscriminant,
         )
         val frame = requireNotNull(plan.body.instruction) {
             "executable alias lifecycle plan is missing its instruction"
@@ -92,6 +96,7 @@ object AliasLifecyclePlanApply {
         plan: AliasLifecycleTransactionPlanV1,
         bodyEncoder: AliasLifecyclePlanBodyNoritoEncoder,
         frameCodec: AliasLifecycleInstructionFrameCodec,
+        chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
         feePayment: FeePaymentIntent,
@@ -104,6 +109,7 @@ object AliasLifecyclePlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            chainDiscriminant,
             feePayment,
             creationTimeMs,
             nonce,
@@ -119,6 +125,7 @@ object AliasLifecyclePlanApply {
         client: IrohaClient,
         request: AliasLifecyclePlanRequestV1,
         plan: AliasLifecycleTransactionPlanV1,
+        chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
         feePayment: FeePaymentIntent,
@@ -131,6 +138,7 @@ object AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder,
         DefaultAliasLifecycleInstructionFrameCodec,
+        chainDiscriminant,
         transactionBuilder,
         signer,
         feePayment,

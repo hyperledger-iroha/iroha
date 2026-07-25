@@ -3327,75 +3327,75 @@ pub mod sorafs {
     pub const PDP_EXPORT: RouteDescriptor =
         documented_post("sorafs.pdp.export", "/v1/sorafs/pdp/export")
             .with_authentication(AuthenticationPolicy::OperatorSignature);
-    /// Submit one canonical encrypted PoP enrollment.
+    /// Submit one canonical encrypted `PoP` enrollment.
     pub const POP_ENROLLMENT: RouteDescriptor =
         documented_post("sorafs.pop.enrollment.submit", "/v1/sorafs/pop/enrollments")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read payload-free PoP enrollment status.
+    /// Read payload-free `PoP` enrollment status.
     pub const POP_ENROLLMENT_STATUS: RouteDescriptor = documented_post(
         "sorafs.pop.enrollment.status",
         "/v1/sorafs/pop/enrollments/status",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Record one governed dual-control PoP approval.
+    /// Record one governed dual-control `PoP` approval.
     pub const POP_APPROVAL: RouteDescriptor =
         documented_post("sorafs.pop.approval.record", "/v1/sorafs/pop/approvals")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Trigger runtime-resolved HSM-backed PoP issuance.
+    /// Trigger runtime-resolved HSM-backed `PoP` issuance.
     pub const POP_ISSUE: RouteDescriptor =
         documented_post("sorafs.pop.credential.issue", "/v1/sorafs/pop/issue")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Enqueue a governed PoP revocation successor.
+    /// Enqueue a governed `PoP` revocation successor.
     pub const POP_REVOCATION: RouteDescriptor = documented_post(
         "sorafs.pop.revocation.enqueue",
         "/v1/sorafs/pop/revocations",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Submit the next durable PoP registry outbox entry.
+    /// Submit the next durable `PoP` registry outbox entry.
     pub const POP_REGISTRY_SUBMIT: RouteDescriptor = documented_post(
         "sorafs.pop.registry.submit",
         "/v1/sorafs/pop/registry/submit-next",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Reconcile the next finalized PoP registry projection.
+    /// Reconcile the next finalized `PoP` registry projection.
     pub const POP_REGISTRY_RECONCILE: RouteDescriptor = documented_post(
         "sorafs.pop.registry.reconcile",
         "/v1/sorafs/pop/registry/reconcile-next",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read the current finalized PoP registry projection.
+    /// Read the current finalized `PoP` registry projection.
     pub const POP_REGISTRY_PROJECTION: RouteDescriptor = documented_post(
         "sorafs.pop.registry.projection",
         "/v1/sorafs/pop/registry/projection",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Fetch finalized encrypted PoP wallet delivery.
+    /// Fetch finalized encrypted `PoP` wallet delivery.
     pub const POP_WALLET_DELIVERY: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.delivery",
         "/v1/sorafs/pop/wallet/delivery",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Import finalized encrypted PoP wallet delivery.
+    /// Import finalized encrypted `PoP` wallet delivery.
     pub const POP_WALLET_IMPORT: RouteDescriptor =
         documented_post("sorafs.pop.wallet.import", "/v1/sorafs/pop/wallet/import")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Acknowledge durable PoP wallet delivery.
+    /// Acknowledge durable `PoP` wallet delivery.
     pub const POP_WALLET_ACKNOWLEDGE: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.acknowledge",
         "/v1/sorafs/pop/wallet/acknowledge",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Synchronize a runtime-only PoP wallet witness.
+    /// Synchronize a runtime-only `PoP` wallet witness.
     pub const POP_WALLET_SYNCHRONIZE: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.synchronize",
         "/v1/sorafs/pop/wallet/synchronize",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Generate a PoP membership proof from local wallet custody.
+    /// Generate a `PoP` membership proof from local wallet custody.
     pub const POP_WALLET_PROVE: RouteDescriptor =
         documented_post("sorafs.pop.wallet.prove", "/v1/sorafs/pop/wallet/prove")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Verify a PoP membership proof and consume its nullifier.
+    /// Verify a `PoP` membership proof and consume its nullifier.
     pub const POP_VERIFY: RouteDescriptor =
         documented_post("sorafs.pop.membership.verify", "/v1/sorafs/pop/verify")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);

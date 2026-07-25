@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /**
@@ -87,11 +86,10 @@ public final class TransactionPayload {
   }
 
   public static final class Builder {
-    private static final String DEFAULT_AUTHORITY = buildDefaultAuthority();
     private static final long MAX_U32 = 0xffff_ffffL;
 
-    private String chainId = "00000000";
-    private String authority = DEFAULT_AUTHORITY;
+    private String chainId;
+    private String authority;
     private long creationTimeMs = System.currentTimeMillis();
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
@@ -214,12 +212,24 @@ public final class TransactionPayload {
       return build(true);
     }
 
-    /** Internal codec hook that preserves decoding of historical, non-admissible payloads. */
+    /**
+     * Decoder-only construction hook.
+     *
+     * <p>This permits the codec to materialize a wire payload before the encoder performs its
+     * admissibility check. Required payload fields remain mandatory, and encoding/signing still
+     * rejects gasless IVM or contract-call executables.
+     */
     public TransactionPayload buildDecodedForCodec() {
       return build(false);
     }
 
     private TransactionPayload build(final boolean validateExecutableGas) {
+      if (chainId == null) {
+        throw new IllegalStateException("chainId must be set explicitly");
+      }
+      if (authority == null) {
+        throw new IllegalStateException("authority must be set explicitly");
+      }
       if (feePayment == null) {
         throw new IllegalStateException("feePayment must be set explicitly");
       }
@@ -247,14 +257,5 @@ public final class TransactionPayload {
       return normalized;
     }
 
-    private static String buildDefaultAuthority() {
-      try {
-        return AccountAddress.fromCanonicalHex(
-                "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-      } catch (final AccountAddress.AccountAddressException ex) {
-        throw new IllegalStateException("Failed to build default canonical authority", ex);
-      }
-    }
   }
 }

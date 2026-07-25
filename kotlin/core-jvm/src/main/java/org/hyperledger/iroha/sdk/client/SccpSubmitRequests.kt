@@ -114,7 +114,8 @@ internal const val SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME =
     "iroha_sccp::SccpGroth16Bn254ProofArtifactV1"
 internal const val SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME =
     "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1"
-private val SCCP_TRANSACTION_CODEC = NoritoJavaCodecAdapter()
+private val SCCP_TRANSACTION_CODEC =
+    NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
 
 internal fun validateCanonicalSccpNoritoBase64(
     value: String,
@@ -221,7 +222,7 @@ internal fun normalizeOptionalTransactionPayload(
     require(sameCanonicalAccountId(payload.authority, expectedAuthority)) {
         "transaction payload authority does not match authority"
     }
-    require(expectedFeePayment.hasSamePayerAndGasBound(payload.feePayment)) {
+    require(sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment)) {
         "transaction payload changed the requested payer, sponsor revision, or gas bound"
     }
     if (creationTimeMs != null) {
@@ -232,13 +233,28 @@ internal fun normalizeOptionalTransactionPayload(
     return value
 }
 
+private fun sameSccpFeePayerAndGasBound(
+    expected: FeePaymentIntent,
+    actual: FeePaymentIntent,
+): Boolean {
+    if (expected.gasLimit != actual.gasLimit) return false
+    return when {
+        expected is FeePaymentIntent.Authority && actual is FeePaymentIntent.Authority -> true
+        expected is FeePaymentIntent.Sponsor && actual is FeePaymentIntent.Sponsor ->
+            expected.programRevision == actual.programRevision &&
+                expected.programId.name == actual.programId.name &&
+                sameCanonicalAccountId(expected.programId.sponsor, actual.programId.sponsor)
+        else -> false
+    }
+}
+
 private fun sameCanonicalAccountId(left: String, right: String): Boolean = try {
     // AccountId wire identity is domainless and excludes its I105 display discriminant.
     val leftBytes = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address.canonicalBytes
     val rightBytes = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address.canonicalBytes
     leftBytes.contentEquals(rightBytes)
 } catch (ex: AccountAddressException) {
-    throw IllegalArgumentException("transaction payload authority must be canonical I105", ex)
+    throw IllegalArgumentException("transaction payload account must be canonical I105", ex)
 }
 
 internal fun decodeCanonicalBase64(value: String, field: String, maximum: Int): ByteArray {

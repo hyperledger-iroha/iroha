@@ -27504,14 +27504,16 @@ impl State {
         )
     }
 
-    /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
-    /// geometry.
+    /// Create an isolated State whose Kura is opened at the supplied authoritative
+    /// pre-genesis Nexus geometry.
     ///
     /// This is intentionally separate from [`Self::set_nexus`]: installing a
     /// fixture's initial catalog is not a runtime lifecycle transition and must
-    /// not archive a synthetic default-primary segment.
-    #[cfg(test)]
-    pub(crate) fn new_with_nexus_for_testing(
+    /// not archive a synthetic default-primary segment. Unlike the ordinary test
+    /// convenience constructors, this preserves the supplied Nexus fee and
+    /// governance settings exactly so genesis pre-execution matches peer startup.
+    #[must_use]
+    pub fn new_with_pre_genesis_nexus_for_testing(
         world: World,
         mut nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
@@ -27530,6 +27532,18 @@ impl State {
         )
         .expect("test fixture durable State startup journals must validate");
         state.install_pre_genesis_nexus_for_testing(nexus);
+        state
+    }
+
+    /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
+    /// geometry and whose remaining runtime settings use unit-test defaults.
+    #[cfg(test)]
+    pub(crate) fn new_with_nexus_for_testing(
+        world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+    ) -> Self {
+        let mut state = Self::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
         state.configure_test_runtime_defaults();
         state
     }
@@ -27538,7 +27552,6 @@ impl State {
     ///
     /// The caller must have opened Kura with the same lane geometry. This helper
     /// is for tests that need a named store root or custom retention policy.
-    #[cfg(test)]
     pub(crate) fn install_pre_genesis_nexus_for_testing(
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
@@ -64332,14 +64345,14 @@ mod tests {
     }
 
     #[test]
-    fn test_nexus_fixture_constructor_opens_custom_primary_without_default_segment() {
+    fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default_segment() {
         let custom_primary = LaneConfig {
             alias: "custom-primary".to_owned(),
             ..LaneConfig::default()
         };
         let custom_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![custom_primary]).expect("custom lane catalog");
-        let state = State::new_with_nexus_for_testing(
+        let state = State::new_with_pre_genesis_nexus_for_testing(
             World::default(),
             iroha_config::parameters::actual::Nexus {
                 enabled: true,
@@ -64364,6 +64377,10 @@ mod tests {
         assert_ne!(primary.kura_segment, default_primary.kura_segment);
         assert!(!default_primary.blocks_dir(&store_root).exists());
         assert!(!default_primary.merge_log_path(&store_root).exists());
+        assert!(
+            !store_root.join("retired").exists(),
+            "opening a fixture at its authoritative primary must not archive synthetic default geometry"
+        );
     }
 
     #[test]

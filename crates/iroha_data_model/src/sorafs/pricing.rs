@@ -26,7 +26,7 @@ pub const PRICING_SCHEDULE_VERSION_V1: u16 = 1;
 pub const SECONDS_PER_BILLING_MONTH: u64 = 30 * 24 * 60 * 60;
 /// Seconds per week, used for default settlement windows.
 pub const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
-/// Ledger precision used by XOR-denominated SoraFS economic records.
+/// Ledger precision used by XOR-denominated `SoraFS` economic records.
 pub const XOR_QUANTITY_SCALE: u32 = 9;
 /// Maximum commitment-discount tiers accepted in one governance schedule.
 pub const MAX_COMMITMENT_DISCOUNT_TIERS: usize = 64;
@@ -252,7 +252,8 @@ impl PricingScheduleRecord {
                 },
             ],
         };
-        let schedule = Self {
+
+        Self {
             version: PRICING_SCHEDULE_VERSION_V1,
             currency_code: "xor".to_string(),
             default_storage_class: StorageClass::Hot,
@@ -264,8 +265,7 @@ impl PricingScheduleRecord {
                 "Launch pricing schedule (0.50/0.20/0.05 XOR GiB·month; egress 0.05/0.02/0.01 XOR)"
                     .to_string(),
             ),
-        };
-        schedule
+        }
     }
 
     /// Lookup the exact tier rate for a storage class.

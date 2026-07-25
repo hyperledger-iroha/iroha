@@ -755,6 +755,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RequestAuthorizationPreparation prepareRequestAuthorization(
       final String authority,
+      final int chainDiscriminant,
       final String deviceId,
       final String assetDefinitionId,
       final byte[] operationId,
@@ -767,6 +768,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields = nativePrepareAuthorizationV2(
         utf8(authority, "authority"),
+        requireChainDiscriminant(chainDiscriminant),
         utf8(deviceId, "deviceId"),
         utf8(assetDefinitionId, "assetDefinitionId"),
         requireDigest(operationId, "operationId"),
@@ -850,6 +852,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static TopUpPreparation prepareTopUp(
       final String chainId,
+      final int chainDiscriminant,
       final String assetDefinitionId,
       final String payerAccountId,
       final KagemushaScaledAmount amount,
@@ -877,6 +880,7 @@ public final class KagemushaRecursiveSpendProver {
           try {
             fields = nativePrepareTopUpV4(
                 utf8(chainId, "chainId"),
+                requireChainDiscriminant(chainDiscriminant),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 utf8(payerAccountId, "payerAccountId"),
                 utf8(amount.atomicUnits(), "atomicUnits"),
@@ -928,6 +932,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RecipientRequestPreparation prepareRecipientPaymentRequest(
       final String chainId,
+      final int chainDiscriminant,
       final String assetDefinitionId,
       final KagemushaScaledAmount amount,
       final String recipientAccountId,
@@ -954,6 +959,7 @@ public final class KagemushaRecursiveSpendProver {
           try {
             fields = nativePrepareRecipientRequestV2(
                 utf8(chainId, "chainId"),
+                requireChainDiscriminant(chainDiscriminant),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 utf8(amount.atomicUnits(), "atomicUnits"),
                 amount.scale(),
@@ -1193,6 +1199,7 @@ public final class KagemushaRecursiveSpendProver {
   /** Create the request-independent selector used to prefetch portable receiver lineage. */
   public static RecipientLineageQueryV2 createRecipientLineageQueryV2(
       final String chainId,
+      final int chainDiscriminant,
       final String recipientAccountId,
       final String receiverDeviceId,
       final String assetDefinitionId,
@@ -1204,6 +1211,7 @@ public final class KagemushaRecursiveSpendProver {
     return new RecipientLineageQueryV2(
         nativeCreateRecipientLineageQueryV2(
             utf8(chainId, "chainId"),
+            requireChainDiscriminant(chainDiscriminant),
             utf8(recipientAccountId, "recipientAccountId"),
             utf8(receiverDeviceId, "receiverDeviceId"),
             utf8(assetDefinitionId, "assetDefinitionId"),
@@ -1656,6 +1664,7 @@ public final class KagemushaRecursiveSpendProver {
   public static RedeemRequestV4 buildRedeemRequestV4(
       final SpendableBranchV4 input,
       final String recipientAccountId,
+      final int chainDiscriminant,
       final KagemushaScaledAmount amount,
       final NoteOpening changeOpening,
       final OutputMembershipPaths changeOutputMembershipPaths,
@@ -1667,6 +1676,7 @@ public final class KagemushaRecursiveSpendProver {
         ownedChangeOpening -> buildRedeemRequestV4Owned(
             input,
             recipientAccountId,
+            chainDiscriminant,
             amount,
             ownedChangeOpening,
             changeOutputMembershipPaths,
@@ -1678,6 +1688,7 @@ public final class KagemushaRecursiveSpendProver {
   private static RedeemRequestV4 buildRedeemRequestV4Owned(
       final SpendableBranchV4 input,
       final String recipientAccountId,
+      final int chainDiscriminant,
       final KagemushaScaledAmount amount,
       final NoteOpening changeOpening,
       final OutputMembershipPaths changeOutputMembershipPaths,
@@ -1723,7 +1734,7 @@ public final class KagemushaRecursiveSpendProver {
       atomicUnits = utf8(amount.atomicUnits(), "atomicUnits");
       archive = nativeBuildRedeemRequestV4(
           bundleArchive, topUpProvenanceArchive, openingArchive, witnessArchive, recipient,
-          atomicUnits, amount.scale(), change,
+          requireChainDiscriminant(chainDiscriminant), atomicUnits, amount.scale(), change,
           outputMembership, verifier, operation, blockHeight);
       return new RedeemRequestV4(archive, changeOpening);
     } finally {
@@ -1992,6 +2003,13 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalArgumentException(field + " must be canonical non-empty text");
     }
     return value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static int requireChainDiscriminant(final int value) {
+    if (value < 0 || value > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    return value;
   }
 
   private static byte[] copyRequired(final byte[] value, final String field) {
@@ -4937,7 +4955,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeBuildRedeemV4(byte[] requestNorito);
 
   private static native byte[][] nativePrepareRecipientRequestV2(
-      byte[] chainId, byte[] asset, byte[] atomicUnits, int scale, byte[] recipient,
+      byte[] chainId, int chainDiscriminant, byte[] asset, byte[] atomicUnits, int scale, byte[] recipient,
       byte[] receiverDeviceId, byte[] receiverPublicKey, byte[] requestId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] spendKey, byte[] rho,
       byte[] diversifier);
@@ -4945,6 +4963,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
   private static native byte[] nativeCreateRecipientLineageQueryV2(
       byte[] chainId,
+      int chainDiscriminant,
       byte[] recipient,
       byte[] receiverDeviceId,
       byte[] asset,
@@ -4992,7 +5011,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[][] nativeProjectVerifyResultV4(byte[] result);
   private static native byte[] nativeBuildRedeemRequestV4(
       byte[] bundle, byte[] topUpProvenance, byte[] opening, byte[] membershipWitness,
-      byte[] recipient,
+      byte[] recipient, int chainDiscriminant,
       byte[] atomicUnits, int scale, byte[] changeOpening, byte[] changeOutputMembership,
       byte[] verifierCommitment, byte[] operationId, long blockHeight);
   private static native byte[][] nativeProjectRedeemBuildResultV4(byte[] result);
@@ -5006,10 +5025,9 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[][] nativeProjectAuthenticatedArtifactSetV4(byte[] artifactSet);
   private static native byte[][] nativeProjectActiveVerifierV2(byte[] verifier);
   private static native byte[][] nativePrepareAuthorizationV2(
-      byte[] authority, byte[] deviceId, byte[] assetDefinitionId, byte[] operationId,
+      byte[] authority, int chainDiscriminant, byte[] deviceId, byte[] assetDefinitionId, byte[] operationId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] nonce, byte[] payloadDigest,
       byte[] registrationHash, byte[] hardwareAssertionPlatform);
-  private static native byte[] nativeCreateAuthorizationV2(byte[] template, byte[] signature);
   private static native byte[][] nativeFinalizeHardwareAuthorizationV2(
       byte[] preparation, byte[] authenticatorData, byte[] signatureDer);
   private static native byte[][] nativeFinalizeIosAppAttestAuthorizationV2(
@@ -5017,7 +5035,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeFinalizeTopUpV4(byte[] unsigned, byte[] authorization);
   private static native byte[][] nativeFinalizeRedeemV4(byte[] buildResult, byte[] authorization);
   private static native byte[][] nativePrepareTopUpV4(
-      byte[] chainId, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
+      byte[] chainId, int chainDiscriminant, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
       byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);

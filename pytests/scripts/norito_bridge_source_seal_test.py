@@ -101,6 +101,21 @@ def test_android_inputs_and_targets_are_platform_specific(
     android_gradle = source_fixture / "kotlin/client-android/build.gradle.kts"
     android_gradle.parent.mkdir(parents=True)
     android_gradle.write_text("plugins {}\n", encoding="utf-8")
+    kotlin_source = (
+        source_fixture
+        / "kotlin/core-jvm/src/main/java/example/CanonicalTransaction.kt"
+    )
+    kotlin_source.parent.mkdir(parents=True)
+    kotlin_source.write_text("internal object CanonicalTransaction\n", encoding="utf-8")
+    java_source = (
+        source_fixture
+        / "java/iroha_android/src/main/java/example/CanonicalTransaction.java"
+    )
+    java_source.parent.mkdir(parents=True)
+    java_source.write_text(
+        "final class CanonicalTransaction {}\n",
+        encoding="utf-8",
+    )
     apple_package = source_fixture / "IrohaSwift/Package.swift"
     apple_package.parent.mkdir(parents=True)
     apple_package.write_text("// fixture\n", encoding="utf-8")
@@ -116,13 +131,55 @@ def test_android_inputs_and_targets_are_platform_specific(
     apple_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "apple")
 
     assert "kotlin/client-android/build.gradle.kts" in android_inputs
+    assert "kotlin/core-jvm/src/main" in android_inputs
+    assert "java/iroha_android/src/main" in android_inputs
     assert "IrohaSwift/Package.swift" not in android_inputs
     assert "IrohaSwift/Package.swift" in apple_inputs
     assert "kotlin/client-android/build.gradle.kts" not in apple_inputs
+    assert "kotlin/core-jvm/src/main" not in apple_inputs
+    assert "java/iroha_android/src/main" not in apple_inputs
     assert observed_targets == [
         SOURCE_SEAL.ANDROID_TARGETS,
         SOURCE_SEAL.APPLE_TARGETS,
     ]
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "kotlin/core-jvm/src/main/java/example/Core.kt",
+        "kotlin/client-android/src/main/java/example/Client.kt",
+        "java/norito_java/src/main/java/example/Norito.java",
+        "java/iroha_android/src/main/java/example/Core.java",
+        "java/iroha_android/android/src/main/java/example/Android.java",
+    ),
+)
+def test_android_fingerprint_binds_each_shipping_jvm_source_tree(
+    source_fixture: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+) -> None:
+    source = source_fixture / relative_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("shipping-source-v1\n", encoding="utf-8")
+    _git(source_fixture, "add", relative_path)
+    _git(source_fixture, "commit", "-qm", f"add {relative_path}")
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "local_dependency_roots",
+        lambda _root, _targets: {"bridge-src"},
+    )
+
+    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android")
+    before = SOURCE_SEAL.fingerprint(source_fixture, android_inputs)
+    source.write_text("shipping-source-v2\n", encoding="utf-8")
+    after = SOURCE_SEAL.fingerprint(source_fixture, android_inputs)
+
+    assert relative_path in SOURCE_SEAL.listed_files(
+        source_fixture,
+        android_inputs,
+    )
+    assert before != after
 
 
 def test_android_native_cleanup_passes_each_target_set_in_one_delete_call() -> None:
@@ -132,9 +189,16 @@ def test_android_native_cleanup_passes_each_target_set_in_one_delete_call() -> N
         encoding="utf-8"
     )
 
-    assert build_script.count("delete(outputRoot, stagingRoot, sealFile)") == 1
+    assert (
+        build_script.count(
+            "delete(outputRoot, stagingRoot, sealFile, environmentFile)"
+        )
+        == 1
+    )
+    assert "delete(outputRoot, stagingRoot, sealFile)" not in build_script
     assert build_script.count("delete(outputRoot, provenanceRoot)") == 1
     assert "delete(outputRoot)\n            delete(stagingRoot)" not in build_script
+    assert "delete(sealFile)\n            delete(environmentFile)" not in build_script
     assert "delete(outputRoot)\n            delete(provenanceRoot)" not in build_script
 
 
@@ -159,6 +223,64 @@ def test_android_snapshot_rejects_source_change_between_abi_builds(
         SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
 
 
+def test_android_snapshot_rejects_commit_drift_with_unchanged_selected_source(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "seal_inputs",
+        lambda _root, platform="apple": inputs,
+    )
+    snapshot_path = source_fixture / "android-source-seal.json"
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
+    fingerprint_before = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+
+    _git(source_fixture, "commit", "--allow-empty", "-qm", "move head only")
+
+    assert SOURCE_SEAL.fingerprint(source_fixture, inputs) == fingerprint_before
+    with pytest.raises(RuntimeError, match="source changed after the build started"):
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+
+
+def test_android_snapshot_rejects_commit_drift_during_authentication(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "seal_inputs",
+        lambda _root, platform="apple": ["Cargo.toml"],
+    )
+    commits = iter(("0" * 40, "1" * 40))
+    monkeypatch.setattr(SOURCE_SEAL, "source_commit", lambda _root: next(commits))
+    monkeypatch.setattr(SOURCE_SEAL, "status", lambda _root, _inputs: "")
+    monkeypatch.setattr(SOURCE_SEAL, "fingerprint", lambda _root, _inputs: "a" * 64)
+
+    with pytest.raises(RuntimeError, match="source commit changed while authenticating"):
+        SOURCE_SEAL.snapshot(source_fixture, "android")
+
+
+def test_android_snapshot_rejects_selected_source_drift_during_authentication(
+    source_fixture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "seal_inputs",
+        lambda _root, platform="apple": ["Cargo.toml"],
+    )
+    fingerprints = iter(("a" * 64, "b" * 64))
+    monkeypatch.setattr(SOURCE_SEAL, "source_commit", lambda _root: "0" * 40)
+    monkeypatch.setattr(SOURCE_SEAL, "status", lambda _root, _inputs: "")
+    monkeypatch.setattr(
+        SOURCE_SEAL,
+        "fingerprint",
+        lambda _root, _inputs: next(fingerprints),
+    )
+
+    with pytest.raises(RuntimeError, match="selected source changed while authenticating"):
+        SOURCE_SEAL.snapshot(source_fixture, "android")
+
+
 def test_android_snapshot_rejects_tampering(
     source_fixture: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -173,3 +295,35 @@ def test_android_snapshot_rejects_tampering(
 
     with pytest.raises(RuntimeError, match="source changed after the build started"):
         SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+
+
+def test_android_promotions_authenticate_source_immediately_before_and_after_copy() -> None:
+    build_script = (ROOT / "kotlin/client-android/build.gradle.kts").read_text(
+        encoding="utf-8"
+    )
+
+    pre_promotion = build_script.index(
+        '"$abi immediate pre-promotion authentication"',
+    )
+    copy = build_script.index(
+        "Files.copy(\n                stagedLibrary.toPath(),",
+        pre_promotion,
+    )
+    post_promotion = build_script.index(
+        '"$abi immediate post-promotion authentication"',
+        copy,
+    )
+    assert pre_promotion < copy < post_promotion
+
+    stripped_pre_promotion = build_script.index(
+        '"stripped artifact immediate pre-promotion authentication"',
+    )
+    provenance_write = build_script.index(
+        "provenanceFile.writeText(",
+        stripped_pre_promotion,
+    )
+    stripped_post_promotion = build_script.index(
+        '"stripped artifact immediate post-promotion authentication"',
+        provenance_write,
+    )
+    assert stripped_pre_promotion < provenance_write < stripped_post_promotion

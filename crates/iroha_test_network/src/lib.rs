@@ -9716,6 +9716,8 @@ mod tests {
     /// Serializes mutations of config env overrides so local parsing ignores host overrides.
     static CONFIG_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes network permit env overrides so tests do not race on temp directories.
+    ///
+    /// Tests needing both guards must acquire `CONFIG_ENV_GUARD` first.
     static NETWORK_PERMIT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
 
     fn lock_env_guard(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
@@ -13258,7 +13260,8 @@ exit 0
 
     #[test]
     fn base_config_increases_body_queue_capacity() {
-        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let _config_guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let _permit_guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
         let network = NetworkBuilder::new().build();
 
         let mut layers = network.config_layers();

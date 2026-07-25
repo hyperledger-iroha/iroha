@@ -75,6 +75,56 @@ final class TransactionParityFixturesTests: XCTestCase {
         }
     }
 
+    func testSwiftParityFixturesUseOnlyTheTairaAddressDiscriminant() throws {
+        let loader = try Self.fixtures()
+        XCTAssertEqual(FixtureConstants.networkPrefix, SccpV1.tairaI105DiscriminantV1)
+        for (name, payload) in loader.payloads {
+            let authorityPrefix = try AccountAddress.inspectI105NetworkPrefix(
+                payload.authority,
+                expectedPrefix: SccpV1.tairaI105DiscriminantV1
+            )
+            XCTAssertEqual(authorityPrefix.sentinel, "test", "\(name): authority sentinel")
+            XCTAssertEqual(
+                authorityPrefix.chainDiscriminant,
+                SccpV1.tairaI105DiscriminantV1,
+                "\(name): authority discriminant"
+            )
+            let instructions: [TransactionInstruction]
+            switch payload.executable {
+            case let .instructions(items):
+                instructions = items
+            case let .batch(entries):
+                instructions = entries.compactMap { entry in
+                    guard case let .instruction(instruction) = entry else { return nil }
+                    return instruction
+                }
+            case .ivm:
+                instructions = []
+            }
+            for instruction in instructions {
+                guard let destination = instruction.arguments["destination"] else { continue }
+                let destinationPrefix = try AccountAddress.inspectI105NetworkPrefix(
+                    destination,
+                    expectedPrefix: SccpV1.tairaI105DiscriminantV1
+                )
+                XCTAssertEqual(destinationPrefix.sentinel, "test", "\(name): destination sentinel")
+                XCTAssertEqual(
+                    destinationPrefix.chainDiscriminant,
+                    SccpV1.tairaI105DiscriminantV1,
+                    "\(name): destination discriminant"
+                )
+            }
+        }
+        let legacyMinamotoLiteral =
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+        XCTAssertThrowsError(
+            try AccountAddress.parseEncoded(
+                legacyMinamotoLiteral,
+                expectedPrefix: SccpV1.tairaI105DiscriminantV1
+            )
+        )
+    }
+
     func testSwiftTransferAssetFixtureMatchesRustEncoder() throws {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_transfer_asset_basic") { fixture, keypair in
@@ -730,5 +780,5 @@ private enum FixtureError: Error, LocalizedError {
 
 private enum FixtureConstants {
     static let signingSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032"
-    static let networkPrefix: UInt16 = 42
+    static let networkPrefix = SccpV1.tairaI105DiscriminantV1
 }

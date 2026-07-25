@@ -4,5 +4,6 @@ package org.hyperledger.iroha.android.alias;
 @FunctionalInterface
 public interface AliasEnsureInstructionFrameCodec {
   /** Decodes and re-encodes one exact planner frame. */
-  DecodedEnsureAliasFrame decodeAndReencode(String wireId, byte[] framedPayload);
+  DecodedEnsureAliasFrame decodeAndReencode(
+      String wireId, byte[] framedPayload, int chainDiscriminant);
 }

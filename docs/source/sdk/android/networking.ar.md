@@ -250,7 +250,7 @@ TransactionPayload decoded =
     rpcClient.callTransaction(
         "/v1/pipeline/transactions",
         payload,
-        new NoritoJavaCodecAdapter(),
+        new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         NoritoRpcRequestOptions.defaultOptions());
 ```
 

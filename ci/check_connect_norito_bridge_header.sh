@@ -12,6 +12,8 @@ SELF_TESTS=(
   --self-test-bad-abi
   --self-test-missing-header-symbol
   --self-test-forbidden-v3-alias
+  --self-test-forbidden-lineage-v1
+  --self-test-forbidden-auth-create-v2
   --self-test-bad-capability-signature
   --self-test-bad-proof-signature
   --self-test-bad-artifact-signature
@@ -62,7 +64,6 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
@@ -95,7 +96,6 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_topup_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
     "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
@@ -116,6 +116,10 @@ KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
     "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
     "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
+}
+FORBIDDEN_FIRST_RELEASE_EXPORTS = {
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_request_authorization_create_v2",
 }
 
 required_privacy_ffi = (
@@ -270,6 +274,13 @@ def c_parameter_names(name: str) -> list[str]:
 rust_kagemusha = rust_exports("connect_norito_kagemusha_")
 header_kagemusha = header_exports("connect_norito_kagemusha_")
 swift_kagemusha = set(re.findall(r'"(connect_norito_kagemusha_[a-z0-9_]+)"', swift))
+for label, actual in (
+    ("Rust Kagemusha", rust_kagemusha),
+    ("C header Kagemusha", header_kagemusha),
+):
+    forbidden = sorted(actual & FORBIDDEN_FIRST_RELEASE_EXPORTS)
+    if forbidden:
+        raise SystemExit(f"{label} contains forbidden first-release compatibility exports: {forbidden}")
 exact(
     "Rust Kagemusha",
     KAGEMUSHA_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
@@ -439,6 +450,12 @@ if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_prot
         f"{expected_protocol_count} protocol symbols"
     )
 swift_exports = swift_proof_exports | swift_protocol_exports
+forbidden_swift_exports = sorted(swift_exports & FORBIDDEN_FIRST_RELEASE_EXPORTS)
+if forbidden_swift_exports:
+    raise SystemExit(
+        "Swift Kagemusha contains forbidden first-release compatibility exports: "
+        f"{forbidden_swift_exports}"
+    )
 exact("Swift Kagemusha", KAGEMUSHA_EXPORTS, swift_exports)
 if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredProtocolSymbols", swift) is None:
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
@@ -550,6 +567,16 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_recursive_spend_init_v4" \
         "connect_norito_kagemusha_recursive_spend_init_v3"
+      ;;
+    --self-test-forbidden-lineage-v1)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_recipient_registration_lineage_verify_v2" \
+        "connect_norito_kagemusha_recipient_registration_lineage_verify_v1"
+      ;;
+    --self-test-forbidden-auth-create-v2)
+      replace_once "${tmp_swift}" \
+        '"connect_norito_kagemusha_request_authorization_finalize_hardware_v2"' \
+        '"connect_norito_kagemusha_request_authorization_create_v2"'
       ;;
     --self-test-bad-capability-signature)
       replace_regex_once "${tmp_header}" \

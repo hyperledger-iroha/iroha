@@ -644,7 +644,11 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         // readiness. It must remain callable while the production gate is
         // deliberately closed before artifact promotion.
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        XCTAssertFalse(try offer.project().request.archive.isEmpty)
+        XCTAssertFalse(
+            try offer.project(
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ).request.archive.isEmpty
+        )
         #endif
     }
 
@@ -1043,7 +1047,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let publicKey = try KagemushaDevicePublicKeyV2(sec1Bytes: publicKeyBytes)
         let recipient = try AccountAddress
             .fromAccount(publicKey: fixed32(0xC3))
-            .toI105(networkPrefix: 0x02F1)
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let output = try note(seed: 0xE0, amount: "1")
         let payload = try KagemushaRecipientPaymentRequestSigningPayload(
             chainID: output.chainID,
@@ -1079,7 +1083,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             8
         )
         XCTAssertNoThrow(
-            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(request.archive)
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+                request.archive,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         )
 
         var missingPadding = request.archive
@@ -1091,7 +1098,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             0
         )
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(missingPadding)
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+                missingPadding,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         )
 
         var excessPadding = request.archive
@@ -1104,8 +1114,38 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             16
         )
         XCTAssertThrowsError(
-            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(excessPadding)
+            try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+                excessPadding,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         )
+    }
+
+    func testRecipientRequestPreservesExplicitTairaContextAndRejectsWrongContext() throws {
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let decoded = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+            request.archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+
+        XCTAssertEqual(decoded.archive, request.archive)
+        XCTAssertEqual(decoded.payload.recipient, request.payload.recipient)
+        XCTAssertEqual(
+            try AccountAddress.inspectI105NetworkPrefix(
+                decoded.payload.recipient
+            ).chainDiscriminant,
+            SccpV1.tairaI105DiscriminantV1
+        )
+
+        let wrongContext = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+            request.archive,
+            chainDiscriminant: AccountId.defaultNetworkPrefix
+        )
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.canonicalAccountAddress(
+            wrongContext.payload.recipient,
+            field: "recipient",
+            expectedChainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
     }
 
     #if canImport(Darwin)

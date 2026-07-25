@@ -29,10 +29,12 @@ public struct KagemushaNFCMessages: Equatable, Sendable {
 
 public struct KagemushaNFCConfiguration: Equatable, Sendable {
     public let applicationIdentifier: Data
+    public let chainDiscriminant: UInt16
     public let cardSessionEnabled: Bool
     public let messages: KagemushaNFCMessages
 
     public init(
+        chainDiscriminant: UInt16,
         applicationIdentifierHex: String =
             KagemushaPeerTransportContract.nfcApplicationIdentifierHex,
         cardSessionEnabled: Bool = false,
@@ -41,18 +43,21 @@ public struct KagemushaNFCConfiguration: Equatable, Sendable {
         applicationIdentifier = try KagemushaNFCProtocol.applicationIdentifier(
             hex: applicationIdentifierHex
         )
+        self.chainDiscriminant = chainDiscriminant
         self.cardSessionEnabled = cardSessionEnabled
         self.messages = messages
     }
 
     public init(
         applicationIdentifier: Data,
+        chainDiscriminant: UInt16,
         cardSessionEnabled: Bool = false,
         messages: KagemushaNFCMessages = .english
     ) throws {
         self.applicationIdentifier = try KagemushaNFCProtocol.validateApplicationIdentifier(
             applicationIdentifier
         )
+        self.chainDiscriminant = chainDiscriminant
         self.cardSessionEnabled = cardSessionEnabled
         self.messages = messages
     }
@@ -639,6 +644,7 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
     public let applicationIdentifier: Data
 
     private let lock = NSLock()
+    private let chainDiscriminant: UInt16
     private var currentPayload: KagemushaPeerPayload
     private var currentPayloadBytes: Data
     private var currentInfo: Data
@@ -651,10 +657,12 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
 
     public init(
         applicationIdentifier: Data = KagemushaNFCProtocol.defaultApplicationIdentifier,
+        chainDiscriminant: UInt16,
         receiveRequest: KagemushaRecipientReceiveOfferV2
     ) throws {
         self.applicationIdentifier = try KagemushaNFCProtocol
             .validateApplicationIdentifier(applicationIdentifier)
+        self.chainDiscriminant = chainDiscriminant
         currentPayload = .receiveRequest(receiveRequest)
         currentPayloadBytes = currentPayload.archive
         currentInfo = try KagemushaNFCProtocol.encodeInfo(
@@ -804,7 +812,8 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
             }
             guard let payload = try? KagemushaPeerPayload.decode(
                       archive: bytes,
-                      kind: .payment
+                      kind: .payment,
+                      chainDiscriminant: chainDiscriminant
                   ),
                   case .payment = payload else {
                 return rejection(.invalidCommittedPayload)
@@ -1071,7 +1080,8 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
         do {
             return try KagemushaPeerPayload.decode(
                 archive: bytes,
-                kind: expectedKind
+                kind: expectedKind,
+                chainDiscriminant: configuration.chainDiscriminant
             )
         } catch {
             throw KagemushaNFCError.invalidPeer
@@ -1293,6 +1303,7 @@ private final class KagemushaNFCCardRuntime {
         self.configuration = configuration
         stateMachine = try KagemushaNFCCardStateMachine(
             applicationIdentifier: configuration.applicationIdentifier,
+            chainDiscriminant: configuration.chainDiscriminant,
             receiveRequest: receiveRequest
         )
         self.onEvent = onEvent

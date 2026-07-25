@@ -279,8 +279,14 @@ class DeviceAttestationRegistration(
 
         /** Decode a canonical framed registration and reject alternate representations. */
         @JvmStatic
-        fun decodeCanonical(archive: ByteArray): DeviceAttestationRegistration =
-            OfflineDeviceAttestationCodec.decodeRegistrationCanonical(archive)
+        fun decodeCanonical(
+            archive: ByteArray,
+            chainDiscriminant: Int,
+        ): DeviceAttestationRegistration =
+            OfflineDeviceAttestationCodec.decodeRegistrationCanonical(
+                archive,
+                chainDiscriminant,
+            )
 
         /** Build the canonical Android challenge before KeyMint creates the assertion key. */
         @JvmStatic

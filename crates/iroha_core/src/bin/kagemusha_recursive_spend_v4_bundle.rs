@@ -1,6 +1,7 @@
 //! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
 //!
-//! Candidate generation runs the current recursion source exactly once and
+//! Candidate generation runs the independently reviewed recursion source
+//! closure exactly once and
 //! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence
 //! candidate record. Finalization never regenerates proof material: it binds the
 //! unchanged candidate to supplied evidence and authenticates the resulting
@@ -70,8 +71,9 @@ use iroha_data_model::{
         KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
         KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
         KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
-        KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
-        KagemushaTopUpFinalityRosterArtifactReferenceV4, KagemushaTopUpFinalityRosterArtifactV2,
+        KagemushaRecursiveSpendReleasePolicyV1, KagemushaReviewedSourceClosureV1,
+        KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
+        KagemushaTopUpFinalityRosterArtifactV2,
     },
 };
 use norito::{JsonDeserialize, JsonSerialize};
@@ -114,13 +116,15 @@ Candidate generation emits four roles per parity in exact Eq-then-Ep order:
 ParamsIPA, processed proving key, processed verifying key, and the final-VK
 selector-zero BootstrapWitness. Circuit parameters remain bounded inline in the
 authenticated profile and are digest-bound into every artifact header. It writes a
-clean, pre-evidence candidate record; that directory is not an approved release
-and contains no approval payload. Candidate generation requires the requested
-commit to be the clean, signed checkout HEAD. Finalization binds the two supplied
-evidence files into the release manifest, verifies signed attestation thresholds,
+reviewed-closure-bound, pre-evidence candidate record; that directory is not an
+approved release and contains no approval payload. Candidate generation requires
+the requested commit to be the signed checkout HEAD and the complete dirty
+checkout to match the independently pinned source-closure descriptor.
+Finalization binds the two supplied evidence files into the release manifest,
+verifies signed attestation thresholds,
 requires canonical signed Norito cryptographic-review evidence bound to the exact
-candidate and policy reviewer identities, requires that same clean, signed
-candidate checkout, rechecks every staged
+candidate and policy reviewer identities, requires that same signed base commit
+and reviewed source closure, rechecks every staged
 inode/size/hash, and copies those exact bytes without keygen or proof generation.
 Both output directories must be new.
 
@@ -186,11 +190,15 @@ const CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1: &str = "candidate-validation-v1.
 const CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4: &str = "manifest-v4.norito";
 const CANDIDATE_VALIDATION_REPORT_SCHEMA_V1: &str =
     "iroha.kagemusha.recursive_spend.candidate_validation.v1";
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
 const BUILD_SOURCE_COMMIT: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_COMMIT");
 const BUILD_SOURCE_TREE_SHA256: Option<&str> = option_env!("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
+const BUILD_REVIEWED_SOURCE_CLOSURE: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE");
+const BUILD_REVIEWED_SOURCE_CLOSURE_SHA256: Option<&str> =
+    option_env!("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256");
 const TRUSTED_GIT_EXECUTABLE: &str = "/usr/bin/git";
 const TRUSTED_PYTHON_EXECUTABLE: &str = "/usr/bin/python3";
 const TRUSTED_TOOL_PATH: &str = "/usr/bin:/bin";
@@ -417,6 +425,8 @@ struct BundleMetadata {
     parameter_generation: String,
     source_commit: String,
     source_tree_sha256: [u8; 32],
+    reviewed_source_closure: KagemushaReviewedSourceClosureV1,
+    reviewed_source_closure_descriptor_sha256: [u8; 32],
     activation_height: u64,
     withdrawal_height: u64,
     max_proof_bytes: u32,
@@ -561,6 +571,7 @@ struct CandidateValidationReportV1 {
     source_commit: String,
     source_tree_sha256: String,
     source_repo_dirty: bool,
+    reviewed_source_closure_descriptor_sha256: String,
     generation: String,
     bridge_abi_version: u32,
     artifact_count: u32,
@@ -576,6 +587,8 @@ struct FullSourceTreeIdentityV1 {
     source_commit: String,
     source_repo_dirty: bool,
     source_tree_sha256: String,
+    reviewed_source_closure: KagemushaReviewedSourceClosureV1,
+    reviewed_source_closure_descriptor_sha256: String,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -866,6 +879,7 @@ fn decode_canonical_circuit_params(
 
 fn prepare_bundle_metadata(
     options: &BTreeMap<String, String>,
+    source_identity: &FullSourceTreeIdentityV1,
     step_eq_params_input: &mut OpenedInput,
     step_ep_params_input: &mut OpenedInput,
     supervisor_permit: KagemushaGenerationSupervisorPermitV4,
@@ -906,6 +920,16 @@ fn prepare_bundle_metadata(
     {
         return Err("--source-commit must be a nonzero lowercase 40-hex Git object id".into());
     }
+    if source_identity.source_commit != source_commit
+        || source_identity.source_tree_sha256 != required(options, "source-tree-sha256")
+    {
+        return Err("requested source identity differs from the reviewed closure".into());
+    }
+    let mut reviewed_source_closure_descriptor_sha256 = [0_u8; 32];
+    hex::decode_to_slice(
+        &source_identity.reviewed_source_closure_descriptor_sha256,
+        &mut reviewed_source_closure_descriptor_sha256,
+    )?;
     let activation_height = parse_u64(options, "activation-height")?;
     let withdrawal_height = parse_u64(options, "withdrawal-height")?;
     if activation_height == 0 || withdrawal_height <= activation_height {
@@ -1026,6 +1050,8 @@ fn prepare_bundle_metadata(
             parameter_generation,
             source_commit,
             source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
+            reviewed_source_closure: source_identity.reviewed_source_closure.clone(),
+            reviewed_source_closure_descriptor_sha256,
             activation_height,
             withdrawal_height,
             max_proof_bytes,
@@ -1275,7 +1301,7 @@ fn trusted_source_command(executable: &str) -> Command {
     command
 }
 
-fn validate_clean_signed_source(source_commit: &str) -> Result<(), Box<dyn Error>> {
+fn validate_signed_base_source(source_commit: &str) -> Result<(), Box<dyn Error>> {
     let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let head = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
         .arg("--no-optional-locks")
@@ -1295,17 +1321,6 @@ fn validate_clean_signed_source(source_commit: &str) -> Result<(), Box<dyn Error
             "--source-commit must exactly equal the checked-out candidate HEAD ({head})"
         )
         .into());
-    }
-
-    let status = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(&repository_root)
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
-        .output()
-        .map_err(|error| format!("failed to inspect candidate source tree: {error}"))?;
-    if !status.status.success() || !status.stdout.is_empty() {
-        return Err("candidate source tree must be clean, including untracked files".into());
     }
 
     let signature = trusted_source_command(TRUSTED_GIT_EXECUTABLE)
@@ -1330,6 +1345,12 @@ fn is_lower_hex(value: &str, expected_len: usize) -> bool {
 }
 
 fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
+    let (Some(reviewed_closure), Some(reviewed_closure_sha256)) = (
+        BUILD_REVIEWED_SOURCE_CLOSURE,
+        BUILD_REVIEWED_SOURCE_CLOSURE_SHA256,
+    ) else {
+        return Err("candidate generation requires an embedded reviewed source-closure pin".into());
+    };
     let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
     let output = trusted_source_command(TRUSTED_PYTHON_EXECUTABLE)
@@ -1338,6 +1359,10 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
         .arg("identity")
         .arg("--root")
         .arg(&repository_root)
+        .arg("--reviewed-source-closure")
+        .arg(reviewed_closure)
+        .arg("--reviewed-source-closure-sha256")
+        .arg(reviewed_closure_sha256)
         .output()
         .map_err(|error| format!("failed to run the Kagemusha source-tree seal: {error}"))?;
     if !output.status.success() {
@@ -1348,12 +1373,25 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
         norito::json::from_slice(&output.stdout).map_err(|error| {
             format!("Kagemusha source-tree identity is not canonical JSON: {error}")
         })?;
-    if identity.schema != "iroha.kagemusha.full_source_tree_identity.v1"
-        || identity.source_repo_dirty
+    if identity.schema != "iroha.kagemusha.reviewed_source_tree_identity.v1"
+        || !identity.source_repo_dirty
         || !is_lower_hex(&identity.source_commit, 40)
         || !is_lower_hex(&identity.source_tree_sha256, 64)
+        || !is_lower_hex(&identity.reviewed_source_closure_descriptor_sha256, 64)
+        || identity.reviewed_source_closure.validate().is_err()
+        || identity.reviewed_source_closure.source_commit != identity.source_commit
+        || hex::encode(identity.reviewed_source_closure.source_tree_sha256)
+            != identity.source_tree_sha256
+        || !identity.reviewed_source_closure.source_repo_dirty
+        || identity
+            .reviewed_source_closure
+            .canonical_descriptor_sha256()
+            .map(hex::encode)
+            .ok()
+            .as_deref()
+            != Some(identity.reviewed_source_closure_descriptor_sha256.as_str())
     {
-        return Err("Kagemusha source-tree identity is malformed or dirty".into());
+        return Err("Kagemusha reviewed source-closure identity is malformed".into());
     }
     Ok(identity)
 }
@@ -1361,19 +1399,35 @@ fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error
 fn validate_current_source(
     expected_commit: &str,
     expected_tree_sha256: [u8; 32],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
     let expected_tree_sha256 = hex::encode(expected_tree_sha256);
     let first = read_source_tree_identity()?;
     if first.source_commit != expected_commit || first.source_tree_sha256 != expected_tree_sha256 {
         return Err(
-            "Kagemusha source commit/tree pair does not identify the exact clean checkout".into(),
+            "Kagemusha source commit/tree pair does not identify the exact reviewed closure".into(),
         );
     }
-    validate_clean_signed_source(expected_commit)?;
+    validate_signed_base_source(expected_commit)?;
     let second = read_source_tree_identity()?;
     if second != first {
         return Err(
-            "Kagemusha source commit/tree pair changed during signature verification".into(),
+            "Kagemusha reviewed source closure changed during signature verification".into(),
+        );
+    }
+    Ok(first)
+}
+
+fn validate_current_manifest_source(
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+) -> Result<(), Box<dyn Error>> {
+    let current = validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+    if !manifest.source_repo_dirty
+        || manifest.reviewed_source_closure != current.reviewed_source_closure
+        || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
+            != current.reviewed_source_closure_descriptor_sha256
+    {
+        return Err(
+            "candidate manifest does not bind the exact embedded reviewed source closure".into(),
         );
     }
     Ok(())
@@ -1426,7 +1480,8 @@ fn build_candidate(
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
         let expected_tree = parse_digest(options, "source-tree-sha256")?;
-        validate_current_source(required(options, "source-commit"), expected_tree)?;
+        let source_identity =
+            validate_current_source(required(options, "source-commit"), expected_tree)?;
         validate_embedded_candidate_source(
             required(options, "source-commit"),
             expected_tree,
@@ -1471,6 +1526,7 @@ fn build_candidate(
         )?;
         let (metadata, mut generated_artifacts, proving_key_sizes) = prepare_bundle_metadata(
             options,
+            &source_identity,
             &mut step_eq_params_input,
             &mut step_ep_params_input,
             _supervisor_permit,
@@ -1635,9 +1691,13 @@ fn verify_staged_candidate_for_publication(
         .validate()
         .map_err(|error| format!("invalid staged V4 candidate record: {error}"))?;
     let manifest = &candidate_record.manifest;
+    let current_source = validate_current_source(expected_commit, expected_tree_sha256)?;
     if manifest.source_commit != expected_commit
         || manifest.source_tree_sha256 != expected_tree_sha256
-        || manifest.source_repo_dirty
+        || !manifest.source_repo_dirty
+        || manifest.reviewed_source_closure != current_source.reviewed_source_closure
+        || hex::encode(manifest.reviewed_source_closure_descriptor_sha256)
+            != current_source.reviewed_source_closure_descriptor_sha256
     {
         return Err("staged V4 candidate source identity changed before publication".into());
     }
@@ -1784,7 +1844,7 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             .validate()
             .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
         let manifest = &candidate_record.manifest;
-        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+        validate_current_manifest_source(manifest)?;
         tracked_metadata.push(candidate_input);
 
         let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_bytes).into();
@@ -1922,6 +1982,9 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             source_commit: manifest.source_commit.clone(),
             source_tree_sha256: hex::encode(manifest.source_tree_sha256),
             source_repo_dirty: manifest.source_repo_dirty,
+            reviewed_source_closure_descriptor_sha256: hex::encode(
+                manifest.reviewed_source_closure_descriptor_sha256,
+            ),
             generation: manifest.generation.clone(),
             bridge_abi_version: manifest.bridge_abi_version,
             artifact_count: u32::try_from(artifact_report.len())?,
@@ -1941,7 +2004,7 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         }
         roster_input.rehash_and_verify()?;
         candidate.verify_candidate_inventory()?;
-        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+        validate_current_manifest_source(manifest)?;
 
         let out_dir = PathBuf::from(required(options, "out-dir"));
         if out_dir.exists() {
@@ -2004,7 +2067,7 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
         }
         roster_input.rehash_and_verify()?;
         candidate.verify_candidate_inventory()?;
-        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+        validate_current_manifest_source(manifest)?;
         trusted_parent.publish(&staging_name, &publication)?;
         let _published = staging.keep();
         Ok(())
@@ -2036,10 +2099,7 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         candidate_record
             .validate()
             .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
-        validate_current_source(
-            &candidate_record.manifest.source_commit,
-            candidate_record.manifest.source_tree_sha256,
-        )?;
+        validate_current_manifest_source(&candidate_record.manifest)?;
         let candidate_manifest = candidate_record.manifest.clone();
         tracked_metadata.push(candidate_manifest_input);
 
@@ -2407,10 +2467,7 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             input.rehash_and_verify()?;
         }
         candidate.verify_candidate_inventory()?;
-        validate_current_source(
-            &candidate_record.manifest.source_commit,
-            candidate_record.manifest.source_tree_sha256,
-        )?;
+        validate_current_manifest_source(&candidate_record.manifest)?;
         publication.verify_final_inventory()?;
         publication.sync()?;
         for input in &mut tracked_metadata {
@@ -2428,10 +2485,7 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             input.rehash_and_verify()?;
         }
         candidate.verify_candidate_inventory()?;
-        validate_current_source(
-            &candidate_record.manifest.source_commit,
-            candidate_record.manifest.source_tree_sha256,
-        )?;
+        validate_current_manifest_source(&candidate_record.manifest)?;
         trusted_parent.publish(&staging_name, &publication)?;
         let _published = staging.keep();
         Ok(())
@@ -2527,7 +2581,10 @@ fn write_candidate(
         generation: metadata.generation.clone(),
         source_commit: metadata.source_commit,
         source_tree_sha256: metadata.source_tree_sha256,
-        source_repo_dirty: false,
+        source_repo_dirty: true,
+        reviewed_source_closure: metadata.reviewed_source_closure,
+        reviewed_source_closure_descriptor_sha256: metadata
+            .reviewed_source_closure_descriptor_sha256,
         chain_id: metadata.chain_id,
         asset: metadata.asset,
         asset_scale: metadata.asset_scale,
@@ -3667,7 +3724,7 @@ mod tests {
 
     #[test]
     fn candidate_source_must_match_the_signed_checkout_head() {
-        assert!(validate_clean_signed_source("0000000000000000000000000000000000000000").is_err());
+        assert!(validate_signed_base_source("0000000000000000000000000000000000000000").is_err());
     }
 
     #[test]

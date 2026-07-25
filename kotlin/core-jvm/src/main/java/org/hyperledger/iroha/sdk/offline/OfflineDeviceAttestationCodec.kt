@@ -17,6 +17,7 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Package-private canonical Norito codec for the current registration instruction. */
 internal object OfflineDeviceAttestationCodec {
+    private val decodeChainDiscriminant = ThreadLocal<Int?>()
     const val REGISTRATION_SCHEMA: String =
         "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
     const val CHALLENGE_SCHEMA: String =
@@ -39,18 +40,22 @@ internal object OfflineDeviceAttestationCodec {
             NoritoHeader.COMPACT_LEN,
         )
 
-    fun decodeRegistrationCanonical(archive: ByteArray): DeviceAttestationRegistration {
-        val snapshot = archive.copyOf()
-        val view = NoritoCodec.fromBytesView(snapshot, REGISTRATION_SCHEMA)
-        require(view.flags == NoritoHeader.COMPACT_LEN) {
-            "registration archive must use canonical compact lengths"
+    fun decodeRegistrationCanonical(
+        archive: ByteArray,
+        chainDiscriminant: Int,
+    ): DeviceAttestationRegistration =
+        withDecodeChain(chainDiscriminant) {
+            val snapshot = archive.copyOf()
+            val view = NoritoCodec.fromBytesView(snapshot, REGISTRATION_SCHEMA)
+            require(view.flags == NoritoHeader.COMPACT_LEN) {
+                "registration archive must use canonical compact lengths"
+            }
+            val decoded = view.decode(registrationAdapter)
+            require(snapshot.contentEquals(encodeRegistration(decoded))) {
+                "registration archive is not canonically encoded"
+            }
+            decoded
         }
-        val decoded = view.decode(registrationAdapter)
-        require(snapshot.contentEquals(encodeRegistration(decoded))) {
-            "registration archive is not canonically encoded"
-        }
-        return decoded
-    }
 
     fun encodeInstructionPayload(registration: DeviceAttestationRegistration): ByteArray =
         NoritoCodec.encode(
@@ -60,18 +65,22 @@ internal object OfflineDeviceAttestationCodec {
             NoritoHeader.COMPACT_LEN,
         )
 
-    fun decodeInstructionPayloadCanonical(archive: ByteArray): DeviceAttestationRegistration {
-        val snapshot = archive.copyOf()
-        val view = NoritoCodec.fromBytesView(snapshot, INSTRUCTION_SCHEMA)
-        require(view.flags == NoritoHeader.COMPACT_LEN) {
-            "instruction archive must use canonical compact lengths"
+    fun decodeInstructionPayloadCanonical(
+        archive: ByteArray,
+        chainDiscriminant: Int,
+    ): DeviceAttestationRegistration =
+        withDecodeChain(chainDiscriminant) {
+            val snapshot = archive.copyOf()
+            val view = NoritoCodec.fromBytesView(snapshot, INSTRUCTION_SCHEMA)
+            require(view.flags == NoritoHeader.COMPACT_LEN) {
+                "instruction archive must use canonical compact lengths"
+            }
+            val decoded = view.decode(instructionAdapter)
+            require(snapshot.contentEquals(encodeInstructionPayload(decoded))) {
+                "instruction archive is not canonically encoded"
+            }
+            decoded
         }
-        val decoded = view.decode(instructionAdapter)
-        require(snapshot.contentEquals(encodeInstructionPayload(decoded))) {
-            "instruction archive is not canonically encoded"
-        }
-        return decoded
-    }
 
     fun instruction(registration: DeviceAttestationRegistration): InstructionBox =
         InstructionBox.fromWirePayload(INSTRUCTION_SCHEMA, encodeInstructionPayload(registration))
@@ -179,6 +188,7 @@ internal object OfflineDeviceAttestationCodec {
                 accountId = readField(decoder) {
                     TransferWirePayloadEncoder.decodeAccountIdPayload(
                         it.readBytes(it.remaining()),
+                        requiredDecodeChainDiscriminant(),
                         it.flags,
                         it.flagsHint,
                     )
@@ -204,6 +214,34 @@ internal object OfflineDeviceAttestationCodec {
                 recentBlockHash = readField(decoder) { readHash(it, "recent_block_hash") },
                 expiresAtMs = readField(decoder) { it.readUInt(64) },
             )
+    }
+
+    private fun requiredDecodeChainDiscriminant(): Int =
+        checkNotNull(decodeChainDiscriminant.get()) {
+            "offline attestation decoding requires an explicit chainDiscriminant"
+        }
+
+    private fun <T> withDecodeChain(
+        chainDiscriminant: Int,
+        operation: () -> T,
+    ): T {
+        require(chainDiscriminant in 0..0xffff) {
+            "chainDiscriminant must fit in u16"
+        }
+        val previous = decodeChainDiscriminant.get()
+        check(previous == null || previous == chainDiscriminant) {
+            "Conflicting nested chainDiscriminant context"
+        }
+        decodeChainDiscriminant.set(chainDiscriminant)
+        return try {
+            operation()
+        } finally {
+            if (previous == null) {
+                decodeChainDiscriminant.remove()
+            } else {
+                decodeChainDiscriminant.set(previous)
+            }
+        }
     }
 
     private class InstructionAdapter : TypeAdapter<DeviceAttestationRegistration> {

@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.core.model
 
+import java.lang.reflect.InvocationTargetException
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
@@ -8,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class TransactionPayloadTest {
 
@@ -24,6 +26,52 @@ class TransactionPayloadTest {
         assertEquals(null, payload.timeToLiveMs)
         assertEquals(null, payload.nonce)
         assertEquals(emptyMap(), payload.metadata)
+    }
+
+    @Test
+    fun `authority cannot be synthesized by the Kotlin default constructor`() {
+        val defaultingConstructor = TransactionPayload::class.java.declaredConstructors.single {
+            it.isSynthetic && it.parameterTypes.last().name == "kotlin.jvm.internal.DefaultConstructorMarker"
+        }
+        val error = assertFailsWith<InvocationTargetException> {
+            defaultingConstructor.newInstance(
+                "00000000",
+                null,
+                0L,
+                null,
+                null,
+                null,
+                FeePaymentIntent.authority(emptyList()),
+                null,
+                0xbf,
+                null,
+            )
+        }
+        assertTrue(error.cause is NullPointerException)
+        assertTrue(error.cause?.message?.contains("authority") == true)
+    }
+
+    @Test
+    fun `chainId cannot be synthesized by the Kotlin default constructor`() {
+        val defaultingConstructor = TransactionPayload::class.java.declaredConstructors.single {
+            it.isSynthetic && it.parameterTypes.last().name == "kotlin.jvm.internal.DefaultConstructorMarker"
+        }
+        val error = assertFailsWith<InvocationTargetException> {
+            defaultingConstructor.newInstance(
+                null,
+                sampleAuthority(0x00),
+                0L,
+                null,
+                null,
+                null,
+                FeePaymentIntent.authority(emptyList()),
+                null,
+                0xbf,
+                null,
+            )
+        }
+        assertTrue(error.cause is NullPointerException)
+        assertTrue(error.cause?.message?.contains("chainId") == true)
     }
 
     @Test
@@ -117,7 +165,7 @@ class TransactionPayloadTest {
         val payload = testPayload(nonce = 0xffff_ffffL, creationTimeMs = 1000L)
         assertEquals(0xffff_ffffL, payload.nonce)
 
-        val adapter = NoritoJavaCodecAdapter()
+        val adapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val decoded = adapter.decodeTransaction(adapter.encodeTransaction(payload))
         assertEquals(0xffff_ffffL, decoded.nonce)
     }
@@ -196,13 +244,13 @@ class TransactionPayloadTest {
         executables.forEach { executable ->
             val gasless = testPayload(executable = executable)
             assertFailsWith<NoritoException> {
-                NoritoJavaCodecAdapter().encodeTransaction(gasless)
+                NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).encodeTransaction(gasless)
             }
             val gasBound = testPayload(
                 executable = executable,
                 feePayment = FeePaymentIntent.authority(emptyList(), 1L),
             )
-            NoritoJavaCodecAdapter().encodeTransaction(gasBound)
+            NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).encodeTransaction(gasBound)
         }
     }
 

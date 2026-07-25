@@ -739,8 +739,7 @@ impl BuildDriver {
             let results = std::thread::scope(|scope| {
                 let handles = chunk
                     .iter()
-                    .cloned()
-                    .map(|request| scope.spawn(move || self.build_project(request)))
+                    .map(|request| scope.spawn(move || self.build_project(request.clone())))
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()

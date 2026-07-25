@@ -129,7 +129,7 @@ public final class IrohaPeerTransportV1Tests {
         kagemushaArchive(IrohaPeerPayloadKind.RECEIVE_REQUEST, new byte[] {0x51});
     assertEquals(49, canonical.length);
     assertEquals(
-        "4e5254300000136f80655378267532a71119f46e6f0a000100000000000000"
+        "4e5254300000bfd427e87daf1d5cfa39b7fb60a76859000100000000000000"
             + "de8130dd3f67aeb502000000000000000051",
         hex(canonical));
     final IrohaPeerWireMessageV1 message = new IrohaPeerWireMessageV1(
@@ -158,7 +158,7 @@ public final class IrohaPeerTransportV1Tests {
     final byte[] trailing = concat(canonical, new byte[] {0});
     final byte[] body = {0x51};
     final NoritoHeader bareHeader = new NoritoHeader(
-        SchemaHash.hash16("KagemushaRecipientPaymentRequestV2"),
+        SchemaHash.hash16("OfflineRecipientReceiveOfferV2"),
         body.length,
         CRC64.compute(body),
         NoritoHeader.COMPACT_LEN,
@@ -278,7 +278,7 @@ public final class IrohaPeerTransportV1Tests {
     sender.acceptPeerAuthentication(receiverAuthentication, acceptAll);
     nearbyReceiver.acceptPeerAuthentication(senderAuthentication, acceptAll);
     final IrohaPeerNearbyEncryptedRecordV1 record = sender.seal(message.encode());
-    assertArrayEquals(unhex((String) nearby.get("sender_record_hex")), record.encode());
+    assertEquals(nearby.get("sender_record_hex"), hex(record.encode()));
     assertArrayEquals(
         message.encode(),
         nearbyReceiver.open(IrohaPeerNearbyEncryptedRecordV1.decode(record.encode())));
@@ -523,7 +523,7 @@ public final class IrohaPeerTransportV1Tests {
       final IrohaPeerPayloadKind kind, final byte[] payload) {
     final String schema = switch (kind) {
       case RECEIVE_REQUEST ->
-          "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2";
+          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2";
       case PAYMENT ->
           "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4";
       case ACKNOWLEDGEMENT ->

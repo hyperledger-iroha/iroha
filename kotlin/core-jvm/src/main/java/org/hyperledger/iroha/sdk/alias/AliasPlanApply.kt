@@ -25,6 +25,7 @@ object AliasPlanApply {
     fun buildTransactionPayload(
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
         nonce: Long? = null,
@@ -34,6 +35,7 @@ object AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder,
         DefaultAliasEnsureInstructionFrameCodec,
+        chainDiscriminant,
         feePayment,
         creationTimeMs,
         nonce,
@@ -53,6 +55,7 @@ object AliasPlanApply {
         plan: AliasTransactionPlanV1,
         bodyEncoder: AliasPlanBodyNoritoEncoder,
         frameCodec: AliasEnsureInstructionFrameCodec,
+        chainDiscriminant: Int,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
         nonce: Long? = null,
@@ -62,7 +65,13 @@ object AliasPlanApply {
         require(plan.body.validUntilMs > creationTimeMs) { "alias setup plan has expired" }
         val bodyBytes = bodyEncoder.encode(plan.body)
         require(bodyBytes.isNotEmpty()) { "canonical alias plan body must not be empty" }
-        AliasPlanVerifier.requireExecutableForRequest(request, plan, bodyBytes, frameCodec)
+        AliasPlanVerifier.requireExecutableForRequest(
+            request,
+            plan,
+            bodyBytes,
+            frameCodec,
+            chainDiscriminant,
+        )
         val instructions = plan.body.instructions.map { frame ->
             InstructionBox.fromWirePayload(frame.wireId, frame.framedPayload)
         }
@@ -87,6 +96,7 @@ object AliasPlanApply {
         plan: AliasTransactionPlanV1,
         bodyEncoder: AliasPlanBodyNoritoEncoder,
         frameCodec: AliasEnsureInstructionFrameCodec,
+        chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
         feePayment: FeePaymentIntent,
@@ -99,6 +109,7 @@ object AliasPlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            chainDiscriminant,
             feePayment,
             creationTimeMs,
             nonce,
@@ -114,6 +125,7 @@ object AliasPlanApply {
         client: IrohaClient,
         request: AliasSetupPlanRequestV1,
         plan: AliasTransactionPlanV1,
+        chainDiscriminant: Int,
         transactionBuilder: TransactionBuilder,
         signer: Signer,
         feePayment: FeePaymentIntent,
@@ -126,6 +138,7 @@ object AliasPlanApply {
         plan,
         DefaultAliasPlanBodyNoritoEncoder,
         DefaultAliasEnsureInstructionFrameCodec,
+        chainDiscriminant,
         transactionBuilder,
         signer,
         feePayment,

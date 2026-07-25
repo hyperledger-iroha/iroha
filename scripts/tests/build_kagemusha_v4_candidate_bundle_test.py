@@ -25,24 +25,39 @@ SPEC.loader.exec_module(builder)
 class SealedCandidateBuildTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
-        binary = self.root / "target" / "release" / builder.BINARY_NAME
-        binary.parent.mkdir(parents=True)
-        binary.write_bytes(b"sealed candidate fixture\n")
-        binary.chmod(0o700)
+        self.root = Path(self.temporary.name).resolve(strict=True)
+        self.external = tempfile.TemporaryDirectory()
+        self.external_root = Path(self.external.name).resolve(strict=True)
+        self.target_dir = self.external_root / "cargo-target"
         self.cargo = self.root / "admitted-cargo"
         self.cargo.write_bytes(b"cargo fixture\n")
         self.cargo.chmod(0o700)
+        self.reviewed_source_closure = self.root / "reviewed-source-closure.json"
+        self.reviewed_source_closure.write_bytes(b"{\"fixture\":true}\n")
+        self.reviewed_source_closure_sha256 = "c" * 64
+        self.reviewed_source_closure_value = {
+            "schema": builder.source_seal.REVIEWED_SOURCE_CLOSURE_SCHEMA,
+            "fixture": True,
+        }
         self.identity = builder.source_seal.SourceIdentity(
             source_commit="a" * 40,
             source_tree_sha256="b" * 64,
+            source_repo_dirty=True,
+            reviewed_source_closure=self.reviewed_source_closure_value,
+            reviewed_source_closure_descriptor_sha256=(
+                self.reviewed_source_closure_sha256
+            ),
         )
 
     def cargo_result(
         self, command: list[str], *, executable: Path | None = None
     ) -> subprocess.CompletedProcess[bytes]:
         if executable is None:
-            executable = self.root / "target" / "release" / builder.BINARY_NAME
+            executable = self.target_dir / "release" / builder.BINARY_NAME
+        if not executable.exists() and not executable.is_symlink():
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"sealed candidate fixture\n")
+            executable.chmod(0o700)
         message = {
             "reason": "compiler-artifact",
             "target": {"kind": ["bin"], "name": builder.BINARY_NAME},
@@ -56,6 +71,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        self.external.cleanup()
         self.temporary.cleanup()
 
     def build_candidate_bundle(
@@ -68,6 +84,15 @@ class SealedCandidateBuildTests(unittest.TestCase):
             lambda: builder.MINIMUM_BUILD_PHYSICAL_MEMORY_BYTES,
         )
         kwargs.setdefault("build_lock", lambda: nullcontext())
+        kwargs.setdefault(
+            "reviewed_source_closure",
+            self.reviewed_source_closure,
+        )
+        kwargs.setdefault(
+            "reviewed_source_closure_sha256",
+            self.reviewed_source_closure_sha256,
+        )
+        kwargs.setdefault("target_dir", self.target_dir)
         return builder.build_candidate_bundle(root, cargo, **kwargs)
 
     def test_build_command_and_report_bind_exact_source_and_release_binary(self) -> None:
@@ -76,8 +101,17 @@ class SealedCandidateBuildTests(unittest.TestCase):
         lock_events: list[str] = []
         lock_active = False
 
-        def identity_reader(root: Path) -> builder.source_seal.SourceIdentity:
+        def identity_reader(
+            root: Path,
+            descriptor_path: str,
+            descriptor_sha256: str,
+        ) -> builder.source_seal.SourceIdentity:
             identities.append(root)
+            self.assertEqual(descriptor_path, str(self.reviewed_source_closure))
+            self.assertEqual(
+                descriptor_sha256,
+                self.reviewed_source_closure_sha256,
+            )
             return self.identity
 
         def command_runner(
@@ -124,6 +158,10 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.assertEqual(command[0], str(self.cargo.resolve()))
         self.assertIn("--release", command)
         self.assertIn("--locked", command)
+        self.assertEqual(
+            command[command.index("--target-dir") + 1],
+            str(self.target_dir),
+        )
         self.assertIn(builder.SEALED_FEATURE, command)
         self.assertIn("--message-format=json-render-diagnostics", command)
         self.assertNotIn("CARGO_BUILD_TARGET", environment)
@@ -141,8 +179,26 @@ class SealedCandidateBuildTests(unittest.TestCase):
             environment["KAGEMUSHA_BUILD_SOURCE_TREE_SHA256"],
             self.identity.source_tree_sha256,
         )
+        self.assertEqual(
+            environment["KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE"],
+            str(self.reviewed_source_closure),
+        )
+        self.assertEqual(
+            environment["KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256"],
+            self.reviewed_source_closure_sha256,
+        )
         self.assertEqual(report["build_profile"], "release")
+        self.assertEqual(report["target_dir"], str(self.target_dir))
         self.assertEqual(report["source_commit"], self.identity.source_commit)
+        self.assertIs(report["source_repo_dirty"], True)
+        self.assertEqual(
+            report["reviewed_source_closure"],
+            self.reviewed_source_closure_value,
+        )
+        self.assertEqual(
+            report["reviewed_source_closure_descriptor_sha256"],
+            self.reviewed_source_closure_sha256,
+        )
         self.assertEqual(lock_events, ["enter", "exit"])
         self.assertEqual(
             report["minimum_build_physical_memory_bytes"],
@@ -158,6 +214,11 @@ class SealedCandidateBuildTests(unittest.TestCase):
         changed = builder.source_seal.SourceIdentity(
             source_commit="c" * 40,
             source_tree_sha256="d" * 64,
+            source_repo_dirty=True,
+            reviewed_source_closure=self.reviewed_source_closure_value,
+            reviewed_source_closure_descriptor_sha256=(
+                self.reviewed_source_closure_sha256
+            ),
         )
         identities = iter((self.identity, changed))
 
@@ -165,40 +226,38 @@ class SealedCandidateBuildTests(unittest.TestCase):
             self.build_candidate_bundle(
                 self.root,
                 str(self.cargo),
-                identity_reader=lambda _root: next(identities),
+                identity_reader=lambda _root, _path, _sha256: next(identities),
                 command_runner=lambda command, **_kwargs: self.cargo_result(command),
             )
 
     def test_exact_release_artifact_symlink_is_rejected_before_resolution(self) -> None:
-        linked_binary = self.root / "target" / "release" / builder.BINARY_NAME
-        linked_binary.unlink()
-        real_binary = linked_binary.with_name("real-candidate")
-        real_binary.write_bytes(b"replacement candidate\n")
-        real_binary.chmod(0o700)
-        linked_binary.symlink_to(real_binary)
+        linked_binary = self.target_dir / "release" / builder.BINARY_NAME
+
+        def symlink_result(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+            linked_binary.parent.mkdir(parents=True)
+            real_binary = linked_binary.with_name("real-candidate")
+            real_binary.write_bytes(b"replacement candidate\n")
+            real_binary.chmod(0o700)
+            linked_binary.symlink_to(real_binary)
+            return self.cargo_result(command, executable=linked_binary)
 
         with self.assertRaisesRegex(builder.CandidateBuildError, "symbolic link"):
             self.build_candidate_bundle(
                 self.root,
                 str(self.cargo),
-                identity_reader=lambda _root: self.identity,
-                command_runner=lambda command, **_kwargs: self.cargo_result(
-                    command, executable=linked_binary
-                ),
+                identity_reader=lambda _root, _path, _sha256: self.identity,
+                command_runner=lambda command, **_kwargs: symlink_result(command),
             )
 
     def test_cargo_artifact_path_not_default_layout_is_authoritative(self) -> None:
         configured_binary = (
-            self.root / "target" / "configured-triple" / "release" / builder.BINARY_NAME
+            self.target_dir / "configured-triple" / "release" / builder.BINARY_NAME
         )
-        configured_binary.parent.mkdir(parents=True)
-        configured_binary.write_bytes(b"configured target candidate\n")
-        configured_binary.chmod(0o700)
 
         report = self.build_candidate_bundle(
             self.root,
             str(self.cargo),
-            identity_reader=lambda _root: self.identity,
+            identity_reader=lambda _root, _path, _sha256: self.identity,
             command_runner=lambda command, **_kwargs: self.cargo_result(
                 command, executable=configured_binary
             ),
@@ -211,7 +270,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
             self.build_candidate_bundle(
                 self.root,
                 str(self.cargo),
-                identity_reader=lambda _root: self.identity,
+                identity_reader=lambda _root, _path, _sha256: self.identity,
                 command_runner=lambda command, **_kwargs: subprocess.CompletedProcess(
                     command, 0, stdout=b""
                 ),
@@ -224,7 +283,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
                 "target": {"kind": ["bin"], "name": builder.BINARY_NAME},
                 "profile": {"debug_assertions": True, "test": False},
                 "executable": str(
-                    self.root / "target" / "release" / builder.BINARY_NAME
+                    self.target_dir / "release" / builder.BINARY_NAME
                 ),
             }
             return subprocess.CompletedProcess(
@@ -235,7 +294,7 @@ class SealedCandidateBuildTests(unittest.TestCase):
             self.build_candidate_bundle(
                 self.root,
                 str(self.cargo),
-                identity_reader=lambda _root: self.identity,
+                identity_reader=lambda _root, _path, _sha256: self.identity,
                 command_runner=lambda command, **_kwargs: debug_result(command),
             )
 
@@ -262,6 +321,35 @@ class SealedCandidateBuildTests(unittest.TestCase):
         identity_reader.assert_not_called()
         build_lock.assert_not_called()
         command_runner.assert_not_called()
+
+    def test_target_directory_must_be_fresh_absolute_and_external(self) -> None:
+        common = {
+            "identity_reader": lambda _root, _path, _sha256: self.identity,
+            "command_runner": lambda command, **_kwargs: self.cargo_result(command),
+        }
+        with self.assertRaisesRegex(builder.CandidateBuildError, "absolute and normalized"):
+            self.build_candidate_bundle(
+                self.root,
+                str(self.cargo),
+                target_dir=Path("relative-target"),
+                **common,
+            )
+
+        with self.assertRaisesRegex(builder.CandidateBuildError, "outside"):
+            self.build_candidate_bundle(
+                self.root,
+                str(self.cargo),
+                target_dir=self.root / "target",
+                **common,
+            )
+
+        self.target_dir.mkdir()
+        with self.assertRaisesRegex(builder.CandidateBuildError, "fresh nonexistent"):
+            self.build_candidate_bundle(
+                self.root,
+                str(self.cargo),
+                **common,
+            )
 
     def test_detects_macos_physical_memory_with_sysctl(self) -> None:
         expected = 24 * 1024 * 1024 * 1024

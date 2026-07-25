@@ -484,12 +484,10 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recipient_payment_request_create_v2",
         "connect_norito_kagemusha_recipient_payment_request_verify_v2",
         "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-        "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
         "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
         "connect_norito_kagemusha_recipient_receive_offer_create_v2",
         "connect_norito_kagemusha_recipient_receive_offer_project_v2",
         "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-        "connect_norito_kagemusha_request_authorization_create_v2",
         "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
         "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
         "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
@@ -626,6 +624,43 @@ public enum KagemushaRecursiveSpend {
               value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         else {
+            throw KagemushaRecursiveSpendError.invalidField(field)
+        }
+    }
+
+    static func canonicalAccountAddress(
+        _ value: String,
+        field: String,
+        expectedChainDiscriminant: UInt16? = nil
+    ) throws -> (address: AccountAddress, chainDiscriminant: UInt16) {
+        do {
+            guard !value.isEmpty,
+                  value.utf8.elementsEqual(
+                      value.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+                  ),
+                  !value.contains("@"),
+                  !value.contains("#"),
+                  !value.contains("$") else {
+                throw KagemushaRecursiveSpendError.invalidField(field)
+            }
+            let chainDiscriminant = try AccountAddress
+                .inspectI105NetworkPrefix(value).chainDiscriminant
+            if let expectedChainDiscriminant,
+               chainDiscriminant != expectedChainDiscriminant {
+                throw KagemushaRecursiveSpendError.invalidField(field)
+            }
+            let address = try AccountAddress.parseEncodedSwiftOnly(
+                value,
+                expectedPrefix: chainDiscriminant
+            )
+            let canonical = try address.toI105(networkPrefix: chainDiscriminant)
+            guard canonical.utf8.elementsEqual(value.utf8) else {
+                throw KagemushaRecursiveSpendError.invalidField(field)
+            }
+            return (address, chainDiscriminant)
+        } catch let error as KagemushaRecursiveSpendError {
+            throw error
+        } catch {
             throw KagemushaRecursiveSpendError.invalidField(field)
         }
     }
@@ -1297,7 +1332,10 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
-        _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            recipient,
+            field: "recipient"
+        )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             recipientKeyReference,
             field: "recipientKeyReference"
@@ -1497,7 +1535,10 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
         registrationHash: Data,
         platform: KagemushaOnlineHardwareAssertionPlatform
     ) throws {
-        _ = try AccountAddress.parseEncoded(authority, expectedPrefix: 0x02F1)
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            authority,
+            field: "authority"
+        )
         try KagemushaRecursiveSpend.requirePortableText(deviceID, field: "deviceID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")

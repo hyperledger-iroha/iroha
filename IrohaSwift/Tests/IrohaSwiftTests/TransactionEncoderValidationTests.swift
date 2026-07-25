@@ -2,10 +2,12 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
-private func canonicalOwnerLiteral() throws -> String {
+private func canonicalOwnerLiteral(
+    networkPrefix: UInt16 = AccountId.defaultNetworkPrefix
+) throws -> String {
     let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
     let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-    let i105 = try address.toI105(networkPrefix: 0x02F1)
+    let i105 = try address.toI105(networkPrefix: networkPrefix)
     return i105
 }
 
@@ -17,14 +19,52 @@ private func noncanonicalOwnerLiteral() throws -> String {
 }
 
 @available(macOS 10.15, iOS 13.0, *)
-private func canonicalAuthorityLiteral(from signingKey: SigningKey) throws -> String {
+private func canonicalAuthorityLiteral(
+    from signingKey: SigningKey,
+    networkPrefix: UInt16 = AccountId.defaultNetworkPrefix
+) throws -> String {
     let publicKey = try signingKey.publicKey()
     let address = try AccountAddress.fromAccount(publicKey: publicKey)
-    let i105 = try address.toI105(networkPrefix: 0x02F1)
+    let i105 = try address.toI105(networkPrefix: networkPrefix)
     return i105
 }
 
 final class TransactionEncoderValidationTests: XCTestCase {
+    func testTransferEncoderPreservesTairaAccountLiterals() throws {
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native encoder not linked")
+        }
+        let signingKey = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x31, count: 32)
+        )
+        let authority = try AccountAddress
+            .fromAccount(publicKey: signingKey.publicKey())
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let destination = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x32, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let transfer = TransferRequest(
+            chainId: "taira",
+            authority: authority,
+            assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            quantity: "1",
+            destination: destination,
+            description: nil,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil)
+        )
+
+        let envelope = try SwiftTransactionEncoder.encodeTransfer(
+            transfer: transfer,
+            signingKey: signingKey,
+            creationTimeMs: 1
+        )
+        let decoded = try XCTUnwrap(
+            NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
+        )
+        XCTAssertTrue(decoded.contains(authority), decoded)
+        XCTAssertTrue(decoded.contains(destination), decoded)
+    }
+
     func testAssetBuildersRejectNoncanonicalAndNegativeQuantitiesBeforeNativeDispatch() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 13, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
@@ -286,9 +326,14 @@ final class TransactionEncoderValidationTests: XCTestCase {
     }
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {
-        let owner = try canonicalOwnerLiteral()
+        let owner = try canonicalOwnerLiteral(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
-        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let authority = try canonicalAuthorityLiteral(
+            from: signingKey,
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let publicInputs = try NoritoJSON(["owner": owner])
         let request = CastZkBallotRequest(chainId: "chain",
                                           authority: authority,
@@ -309,9 +354,14 @@ final class TransactionEncoderValidationTests: XCTestCase {
     }
 
     func testCastZkBallotRejectsInvalidRootHintHex() throws {
-        let owner = try canonicalOwnerLiteral()
+        let owner = try canonicalOwnerLiteral(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
-        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let authority = try canonicalAuthorityLiteral(
+            from: signingKey,
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let publicInputs = try NoritoJSON.fromJSONObject([
             "owner": owner,
             "amount": "1",
@@ -365,9 +415,14 @@ final class TransactionEncoderValidationTests: XCTestCase {
         guard NoritoNativeBridge.shared.isAvailable else {
             throw XCTSkip("NoritoBridge not available")
         }
-        let owner = try canonicalOwnerLiteral()
+        let owner = try canonicalOwnerLiteral(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
-        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let authority = try canonicalAuthorityLiteral(
+            from: signingKey,
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
         let publicInputs = try NoritoJSON.fromJSONObject([
             "owner": owner,
             "amount": "1",

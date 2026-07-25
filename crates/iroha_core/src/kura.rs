@@ -4234,7 +4234,6 @@ impl Kura {
     /// canonical block store and merge log at the requested primary paths. Tests
     /// that exercise lifecycle changes from a non-default pre-genesis catalog
     /// therefore do not leave an unauthenticated default-primary segment behind.
-    #[cfg(test)]
     pub(crate) fn blank_kura_for_testing_with_lane_config(lane_config: &LaneConfig) -> Arc<Kura> {
         Self::blank_kura_for_testing_with_lane_config_and_retention(lane_config, BLOCKS_IN_MEMORY)
     }

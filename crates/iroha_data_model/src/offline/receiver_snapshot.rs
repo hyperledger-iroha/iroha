@@ -104,6 +104,10 @@ pub struct KagemushaActiveReceiverAmbiguousEntryV1 {
 }
 
 /// One receiver tuple committed by the canonical balanced snapshot tree.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the public snapshot entry keeps its canonical Norito variant payloads inline"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -230,6 +234,12 @@ pub struct KagemushaActiveReceiverSnapshotV1 {
 
 impl KagemushaActiveReceiverSnapshotV1 {
     /// Build and validate one canonical available snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero height or policy hash, an oversized or
+    /// duplicate entry set, an invalid entry, or a snapshot tree that cannot
+    /// be encoded canonically.
     pub fn available(
         evaluated_height: u64,
         evaluated_at_ms: u64,
@@ -269,6 +279,11 @@ impl KagemushaActiveReceiverSnapshotV1 {
     }
 
     /// Build a deterministic fail-closed snapshot for unusable governed state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the evaluated height is zero or the failure
+    /// reason is empty.
     pub fn unavailable(
         evaluated_height: u64,
         evaluated_at_ms: u64,
@@ -291,6 +306,11 @@ impl KagemushaActiveReceiverSnapshotV1 {
     }
 
     /// Return one active entry and its exact canonical membership path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot is unavailable, the key is absent
+    /// or ambiguous, or the entry or proof cannot be encoded canonically.
     pub fn active_membership(
         &self,
         key: &KagemushaActiveReceiverKeyV1,
@@ -405,6 +425,11 @@ impl KagemushaActiveReceiverWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stored value is not a valid canonical Norito
+    /// encoding of [`KagemushaActiveReceiverSnapshotCommitmentV1`].
     pub fn commitment(&self) -> Result<KagemushaActiveReceiverSnapshotCommitmentV1, String> {
         let commitment = norito::decode_from_bytes(&self.value)
             .map_err(|error| format!("active-receiver commitment is invalid: {error}"))?;

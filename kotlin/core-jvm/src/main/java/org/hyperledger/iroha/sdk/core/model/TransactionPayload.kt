@@ -1,13 +1,8 @@
 package org.hyperledger.iroha.sdk.core.model
 
-import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
-private const val DEFAULT_CHAIN_ID = "00000000"
 private const val MAX_U32 = 0xffff_ffffL
-private val DEFAULT_AUTHORITY = AccountAddress
-    .fromCanonicalHex("0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29")
-    .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
 /**
  * Representation of a transaction payload prior to Norito encoding.
@@ -18,8 +13,8 @@ private val DEFAULT_AUTHORITY = AccountAddress
  * unsigned 32-bit wire range.
  */
 class TransactionPayload(
-    val chainId: String = DEFAULT_CHAIN_ID,
-    val authority: String = DEFAULT_AUTHORITY,
+    val chainId: String,
+    val authority: String,
     val creationTimeMs: Long = System.currentTimeMillis(),
     val executable: Executable = Executable.ivm(byteArrayOf()),
     val timeToLiveMs: Long? = null,

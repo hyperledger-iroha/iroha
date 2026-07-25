@@ -46,7 +46,8 @@ public final class IdentifierReceiptCanonicalEncoder {
     return writer.toByteArray();
   }
 
-  static IdentifierResolutionPayload decodePayload(final byte[] encoded) {
+  static IdentifierResolutionPayload decodePayload(
+      final byte[] encoded, final int chainDiscriminant) {
     final NoritoDecoder decoder =
         new NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
     final String policyId =
@@ -72,6 +73,7 @@ public final class IdentifierReceiptCanonicalEncoder {
     final String accountId =
         TransferWirePayloadEncoder.decodeAccountIdPayload(
             decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.account_id"),
+            chainDiscriminant,
             decoder.flags(),
             decoder.flagsHint());
     if (decoder.remaining() != 0) {

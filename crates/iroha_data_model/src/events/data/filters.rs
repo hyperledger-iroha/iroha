@@ -888,6 +888,10 @@ impl super::EventFilter for SoradnsDirectoryEventFilter {
 impl super::EventFilter for SorafsGatewayEventFilter {
     type Event = super::sorafs::SorafsGatewayEvent;
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive SoraFS event/filter compatibility matrix stays together so new variants cannot silently inherit a matcher policy"
+    )]
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
             return false;

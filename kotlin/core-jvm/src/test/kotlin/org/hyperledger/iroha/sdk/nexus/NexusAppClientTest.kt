@@ -12,6 +12,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -50,11 +51,12 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 appId = "sample-app",
                 signingPublicKey = PUBLIC_KEY,
             ),
             connectTransport = connect,
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = torii,
         )
 
@@ -81,8 +83,8 @@ class NexusAppClientTest {
     @Test
     fun `buildTransferDraft fails closed without signing public key`() {
         val client = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain", authority = ACCOUNT_ID),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT, authority = ACCOUNT_ID),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
 
         val error = assertFailsWith<NexusAppError> {
@@ -99,10 +101,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
 
         val draft = client.buildTransferDraft(sampleInput())
@@ -111,7 +114,7 @@ class NexusAppClientTest {
             .setEncodedPayload(draft.signable.payloadBytes)
             .setSignature(fixtureSignature)
             .setPublicKey(PUBLIC_KEY)
-            .setSchemaName(NoritoJavaCodecAdapter().schemaName())
+            .setSchemaName(NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).schemaName())
             .build()
 
         assertEquals(string(expected, "payload_hash_hex"), draft.signable.payloadHashHex)
@@ -127,10 +130,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = torii,
         )
         val draft = client.buildTransferDraft(sampleInput())
@@ -154,10 +158,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(),
         )
         val draft = client.buildTransferDraft(sampleInput())
@@ -241,9 +246,9 @@ class NexusAppClientTest {
         for (algorithm in listOf("", "ed25519 ", " 0", "ED25519", "ed\u200B25519")) {
             val connect = SignatureConnect(WALLET_SIGNATURE)
             val client = NexusAppClient(
-                config = NexusAppConfig(chainId = "test-chain"),
+                config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
                 connectTransport = connect,
-                codecAdapter = NoritoJavaCodecAdapter(),
+                codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             )
 
             val error = assertFailsWith<NexusAppError> {
@@ -257,9 +262,9 @@ class NexusAppClientTest {
         for (algorithm in listOf("ed25519 ", " 0", "\uFF10", "ed\u000025519", "\u0435d25519")) {
             val connect = SignatureConnect(WALLET_SIGNATURE, algorithm)
             val client = NexusAppClient(
-                config = NexusAppConfig(chainId = "test-chain"),
+                config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
                 connectTransport = connect,
-                codecAdapter = NoritoJavaCodecAdapter(),
+                codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             )
 
             val error = assertFailsWith<NexusAppError> {
@@ -274,9 +279,9 @@ class NexusAppClientTest {
     @Test
     fun `awaitApproval rejects missing account and signing key`() {
         val missingAccount = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
             connectTransport = ApprovalConnect(NexusApprovedAccount(accountId = "")),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
         val missingAccountError = assertFailsWith<NexusAppError> {
             missingAccount.awaitApproval(NexusConnectSession("session-1", "sora://wallet/connect?session=session-1"))
@@ -284,9 +289,9 @@ class NexusAppClientTest {
         assertEquals("approval_missing_account", missingAccountError.code)
 
         val missingKey = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
             connectTransport = ApprovalConnect(NexusApprovedAccount(accountId = ACCOUNT_ID)),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
         val missingKeyError = assertFailsWith<NexusAppError> {
             missingKey.awaitApproval(NexusConnectSession("session-1", "sora://wallet/connect?session=session-1"))
@@ -294,9 +299,9 @@ class NexusAppClientTest {
         assertEquals("missing_signing_public_key", missingKeyError.code)
 
         val invalidKey = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
             connectTransport = ApprovalConnect(NexusApprovedAccount(accountId = ACCOUNT_ID, signingPublicKey = ByteArray(31) { 0x01 })),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         )
         val invalidKeyError = assertFailsWith<NexusAppError> {
             invalidKey.awaitApproval(NexusConnectSession("session-1", "sora://wallet/connect?session=session-1"))
@@ -304,7 +309,7 @@ class NexusAppClientTest {
         assertEquals("invalid_signing_public_key", invalidKeyError.code)
 
         val mixedTorsionKey = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
             connectTransport = ApprovalConnect(
                 NexusApprovedAccount(accountId = ACCOUNT_ID, signingPublicKey = ByteArray(32) { 0x11 }),
             ),
@@ -323,10 +328,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 signingPublicKey = PUBLIC_KEY,
             ),
             connectTransport = connect,
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(),
         )
         val session = NexusConnectSession(
@@ -352,10 +358,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(),
         )
         val draft = client.buildTransferDraft(sampleInput())
@@ -375,10 +382,11 @@ class NexusAppClientTest {
         val draftClient = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(),
         )
         val draft = draftClient.buildTransferDraft(sampleInput())
@@ -388,13 +396,13 @@ class NexusAppClientTest {
                 .setEncodedPayload(draft.signable.payloadBytes)
                 .setSignature(walletSignature)
                 .setPublicKey(PUBLIC_KEY)
-                .setSchemaName(NoritoJavaCodecAdapter().schemaName())
+                .setSchemaName(NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).schemaName())
                 .build(),
         )
 
         val mismatchClient = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(responseHash = "f".repeat(64)),
         )
         val mismatchError = assertFailsWith<NexusAppError> {
@@ -403,8 +411,8 @@ class NexusAppClientTest {
         assertEquals("transaction_hash_mismatch", mismatchError.code)
 
         val submitFailureClient = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(submitFailure = RuntimeException("down")),
         )
         val submitError = assertFailsWith<NexusAppError> {
@@ -413,8 +421,8 @@ class NexusAppClientTest {
         assertEquals("submit_failed", submitError.code)
 
         val statusFailureClient = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(responseHash = localHash, statusFailure = RuntimeException("timeout")),
         )
         val statusError = assertFailsWith<NexusAppError> {
@@ -423,8 +431,8 @@ class NexusAppClientTest {
         assertEquals("status_wait_failed", statusError.code)
 
         val committedOnlyClient = NexusAppClient(
-            config = NexusAppConfig(chainId = "test-chain"),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            config = NexusAppConfig(chainId = "test-chain", chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(statusKind = "Committed"),
         )
         val committedOnlyError = assertFailsWith<NexusAppError> {
@@ -442,10 +450,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = torii,
         )
         val draft = client.buildTransferDraft(sampleInput())
@@ -470,10 +479,11 @@ class NexusAppClientTest {
         val client = NexusAppClient(
             config = NexusAppConfig(
                 chainId = "test-chain",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = ACCOUNT_ID,
                 signingPublicKey = PUBLIC_KEY,
             ),
-            codecAdapter = NoritoJavaCodecAdapter(),
+            codecAdapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
             toriiClient = FakeToriiClient(),
         )
         val draft = client.buildTransferDraft(sampleInput())

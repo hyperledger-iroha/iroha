@@ -81,7 +81,8 @@ use super::{
         ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
         CompletionDisposition, ConsensusSignTask, DurableApplyCompletion, EffectExecutorError,
         EffectExecutorStatus, EffectRuntime, EffectTransportError, EffectWorkId,
-        PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
+        PendingTipRecoveryAttemptResult, PostFinalityCleanupOutcome, PostFinalityCleanupTarget,
+        V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{DurableLaneRolloverAuthority, V2LaneWorkEffect, lane_output_identity},
     v2_runtime::RuntimeQueueLaneSnapshot,
@@ -9439,6 +9440,42 @@ impl V2EffectServices for ProductionV2Services {
             },
             |io| io.completion_snapshot(captured_at),
         );
+        let recovery_changed = self.last_status.as_ref().is_none_or(|previous| {
+            previous.pending_tip_recovery_stage != status.pending_tip_recovery_stage
+                || previous.pending_tip_recovery_last_result
+                    != status.pending_tip_recovery_last_result
+        });
+        if recovery_changed && status.pending_tip_recovery_stage.is_some() {
+            match status.pending_tip_recovery_last_result {
+                Some(PendingTipRecoveryAttemptResult::Completed) => {
+                    iroha_logger::info!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        result = ?status.pending_tip_recovery_last_result,
+                        "completed bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                Some(PendingTipRecoveryAttemptResult::DeadlineExceeded) => {
+                    iroha_logger::warn!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        result = ?status.pending_tip_recovery_last_result,
+                        "exhausted bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+                _ => {
+                    iroha_logger::debug!(
+                        height = status.height,
+                        stage = ?status.pending_tip_recovery_stage,
+                        attempts = status.pending_tip_recovery_attempts,
+                        result = ?status.pending_tip_recovery_last_result,
+                        "advanced bounded Sumeragi v2 interrupted-tip recovery"
+                    );
+                }
+            }
+        }
         self.last_status = Some(status.clone());
         super::status::set_v2_effect_status(status);
         Ok(())

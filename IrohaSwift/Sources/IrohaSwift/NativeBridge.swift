@@ -672,7 +672,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     public static let shared = NoritoNativeBridge()
     private var bridgeStatus: NoritoBridgeLoader.ValidationStatus
     #if canImport(Darwin)
-    private let chainDiscriminantLock = NSRecursiveLock()
     private typealias LoadedBridgeAbiVersionFn = @convention(c) () -> UInt32
     #endif
 
@@ -1438,7 +1437,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Int32
 
     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
-    private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
+    private typealias ChainDiscriminantScopeEnterFn = @convention(c) (UInt16) -> UInt64
+    private typealias ChainDiscriminantScopeExitFn = @convention(c) (UInt64) -> Int32
     private typealias SetAccelerationConfigFn = @convention(c) (UnsafeRawPointer?) -> Void
     private typealias GetAccelerationConfigFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
     private typealias GetAccelerationStateFn = @convention(c) (UnsafeMutableRawPointer?) -> Int32
@@ -2046,7 +2046,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
     private var freeFn: FreeFn? = nil
-    private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
+    private var chainDiscriminantScopeFns: (
+        enter: ChainDiscriminantScopeEnterFn,
+        exit: ChainDiscriminantScopeExitFn
+    )? = nil
     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
     private var getAccelerationConfigFn: GetAccelerationConfigFn? = nil
     private var getAccelerationStateFn: GetAccelerationStateFn? = nil
@@ -2177,7 +2180,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let decodeSignedFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
     private let freeFn: Any? = nil
-    private let setChainDiscriminantFn: Any? = nil
+    private let chainDiscriminantScopeFns: Any? = nil
     private let setAccelerationConfigFn: Any? = nil
     private let encodeCiphertextFrameFn: Any? = nil
     private let encodeControlOpenFn: Any? = nil
@@ -2375,7 +2378,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
             .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
         self.freeFn = connect_norito_free
-        self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
+        if let enterSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_chain_discriminant_scope_enter")
+        }), let exitSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_chain_discriminant_scope_exit")
+        }) {
+            self.chainDiscriminantScopeFns = (
+                enter: unsafeBitCast(enterSymbol, to: ChainDiscriminantScopeEnterFn.self),
+                exit: unsafeBitCast(exitSymbol, to: ChainDiscriminantScopeExitFn.self)
+            )
+        } else {
+            self.chainDiscriminantScopeFns = nil
+        }
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
         NSLog("[NoritoNativeBridge] using statically linked Norito bridge")
         #endif
@@ -2407,18 +2421,47 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 #endif
 
-    func withChainDiscriminant<R>(_ discriminant: UInt16?, _ body: () throws -> R) rethrows -> R {
+    static func validateChainDiscriminantContext(
+        _ discriminant: UInt16?,
+        scopeAvailable: Bool
+    ) throws {
+        guard discriminant == nil || scopeAvailable else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+    }
+
+    func withChainDiscriminant<R>(
+        _ discriminant: UInt16?,
+        _ body: () throws -> R
+    ) throws -> R {
         #if canImport(Darwin)
-        guard let discriminant, let setChainDiscriminantFn else {
+        try Self.validateChainDiscriminantContext(
+            discriminant,
+            scopeAvailable: chainDiscriminantScopeFns != nil
+        )
+        guard let discriminant else {
             return try body()
         }
-        chainDiscriminantLock.lock()
-        let previous = setChainDiscriminantFn(discriminant)
-        defer {
-            _ = setChainDiscriminantFn(previous)
-            chainDiscriminantLock.unlock()
+        guard let chainDiscriminantScopeFns else {
+            throw NativeBridgeError.bridgeUnavailable
         }
-        return try body()
+        let token = chainDiscriminantScopeFns.enter(discriminant)
+        guard token != 0 else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        var exitStatus: Int32?
+        let result: Result<R, Error> = {
+            defer {
+                exitStatus = chainDiscriminantScopeFns.exit(token)
+            }
+            return Result {
+                try body()
+            }
+        }()
+        guard exitStatus == 0 else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        return try result.get()
         #else
         return try body()
         #endif
@@ -2501,10 +2544,19 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 "connect_norito_alias_instruction_round_trip_v1"
             ).map { unsafeBitCast($0, to: AliasInstructionRoundTripFn.self) }
             loadPrivacySymbols(from: handle)
-            if let chainSymbol = dlsym(handle, "connect_norito_set_chain_discriminant") {
-                self.setChainDiscriminantFn = unsafeBitCast(chainSymbol, to: SetChainDiscriminantFn.self)
+            if let enterSymbol = dlsym(
+                handle,
+                "connect_norito_chain_discriminant_scope_enter"
+            ), let exitSymbol = dlsym(
+                handle,
+                "connect_norito_chain_discriminant_scope_exit"
+            ) {
+                self.chainDiscriminantScopeFns = (
+                    enter: unsafeBitCast(enterSymbol, to: ChainDiscriminantScopeEnterFn.self),
+                    exit: unsafeBitCast(exitSymbol, to: ChainDiscriminantScopeExitFn.self)
+                )
             } else {
-                self.setChainDiscriminantFn = nil
+                self.chainDiscriminantScopeFns = nil
             }
             if let encodeAlgSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_alg") {
                 self.encodeTransferWithAlgFn = unsafeBitCast(encodeAlgSymbol, to: EncodeTransferWithAlgFn.self)
@@ -3153,7 +3205,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
             self.freeFn = nil
-            self.setChainDiscriminantFn = nil
+            self.chainDiscriminantScopeFns = nil
             self.setAccelerationConfigFn = nil
             self.getAccelerationConfigFn = nil
             self.getAccelerationStateFn = nil

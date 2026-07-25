@@ -24,17 +24,22 @@ enum KagemushaPeerTransportTestFixtures {
     {
         let exact = try receiveOfferArchive()
         if seed == 0x41 {
-            return try KagemushaRecipientReceiveOfferV2(noritoArchive: exact)
+            return try KagemushaRecipientReceiveOfferV2(
+                noritoArchive: exact,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         }
         let request = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
-            rustFixtureData("offline_recipient_payment_request_v2.hex")
+            rustFixtureData("offline_recipient_payment_request_v2.hex"),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
         return try KagemushaRecipientReceiveOfferV2(
             request: request,
             lineageArchive: rustFixtureData(
                 "offline_recipient_registration_lineage_v2.hex"
             ),
-            publisherCheckpointEnvelope: Data(repeating: seed, count: 2_048)
+            publisherCheckpointEnvelope: Data(repeating: seed, count: 2_048),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
     }
 
@@ -49,7 +54,7 @@ enum KagemushaPeerTransportTestFixtures {
         )
         let recipient = try AccountAddress
             .fromAccount(publicKey: fixed32(seed))
-            .toI105(networkPrefix: 0x02F1)
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let amount = try KagemushaScaledAmount(atomicUnits: "125", scale: 2)
         let note = try KagemushaSpendableNoteDescriptor(
             chainID: "swift-kagemusha-transport",

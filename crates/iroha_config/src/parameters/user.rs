@@ -1051,8 +1051,10 @@ impl Root {
             let reply_source_capacity = network
                 .max_total_connections
                 .or(lane_profile.derived_limits().max_total_connections)
-                .map(NonZeroUsize::get)
-                .unwrap_or(lane_profile.defaults().max_total_connections);
+                .map_or(
+                    lane_profile.defaults().max_total_connections,
+                    NonZeroUsize::get,
+                );
             if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -12588,6 +12590,12 @@ pub struct SnapshotBootstrapPolicy {
 
 impl SnapshotBootstrapPolicy {
     /// Validate that the policy is either fully disabled or fully and canonically specified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when disabled bootstrap retains an audit anchor, or
+    /// when enabled bootstrap lacks a canonical lowercase SHA-256 digest or a
+    /// non-zero audited height.
     pub fn validate(&self) -> core::result::Result<(), String> {
         if !self.enabled {
             if self.audited_sha256.is_some() || self.audited_height.is_some() {
@@ -12976,6 +12984,10 @@ impl SoracloudRuntimeInrou {
 }
 
 /// User-level runtime-originated transaction submission settings.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fee_* names are canonical public configuration and JSON keys and cannot be shortened without breaking the V1 shape"
+)]
 #[derive(Debug, Clone, Default, ReadConfig, norito::JsonDeserialize)]
 pub struct SoracloudRuntimeSubmission {
     /// Exact fee payer: `authority` or `sponsor`.
@@ -12988,12 +13000,7 @@ pub struct SoracloudRuntimeSubmission {
 
 impl SoracloudRuntimeSubmission {
     fn parse(self) -> actual::SoracloudRuntimeSubmission {
-        let fee_payer = match self
-            .fee_payer
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("authority")
-        {
+        let fee_payer = match self.fee_payer.as_deref().map_or("authority", str::trim) {
             "authority" => {
                 assert!(
                     self.fee_program_id.is_none() && self.fee_program_revision.is_none(),
@@ -15303,9 +15310,7 @@ impl AccountOnboarding {
         let (Some(authority), Some(private_key)) = (authority, private_key) else {
             return None;
         };
-        let Some(public_key) = authority.try_signatory() else {
-            return None;
-        };
+        let public_key = authority.try_signatory()?;
         match KeyPair::new(public_key.clone(), private_key) {
             Ok(signer) => Some(signer),
             Err(err) => {
@@ -15356,9 +15361,8 @@ impl AccountOnboarding {
             );
             return None;
         };
-        match <[u8; 32]>::try_from(decoded.as_slice()) {
-            Ok(digest) => Some(digest),
-            Err(_) => {
+        <[u8; 32]>::try_from(decoded.as_slice()).map_or_else(
+            |_| {
                 emit_torii_config_error(
                     emitter,
                     format!(
@@ -15366,8 +15370,9 @@ impl AccountOnboarding {
                     ),
                 );
                 None
-            }
-        }
+            },
+            Some,
+        )
     }
 
     fn parse_credential_scope(
@@ -15633,6 +15638,10 @@ impl AccountOnboarding {
         valid.then_some(parsed_permissions)
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "outer None marks an invalid configured value, while Some(None) is the valid absent state and Some(Some(_)) is valid presence"
+    )]
     fn parse_fee_sponsor_program_id(
         raw: Option<String>,
         emitter: &mut Emitter<ParseError>,
@@ -15662,6 +15671,10 @@ impl AccountOnboarding {
         Some(Some(parsed))
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "outer None marks invalid auto-renew configuration, while Some(None) is valid absence and Some(Some(_)) is valid presence"
+    )]
     fn parse_auto_renew(
         config: Option<AccountOnboardingAutoRenew>,
         emitter: &mut Emitter<ParseError>,
@@ -15950,9 +15963,7 @@ impl ToriiFaucet {
         let (Some(authority), Some(private_key)) = (authority, private_key) else {
             return None;
         };
-        let Some(public_key) = authority.try_signatory() else {
-            return None;
-        };
+        let public_key = authority.try_signatory()?;
         match KeyPair::new(public_key.clone(), private_key) {
             Ok(signer) => Some(signer),
             Err(err) => {
@@ -18045,29 +18056,32 @@ impl SorafsModerationOrchestrator {
             );
         }
 
-        let maintenance_authority = match self.maintenance_authority.as_deref() {
-            Some(raw) => match AccountId::parse_encoded(raw) {
-                Ok(parsed) if parsed.canonical() == raw => Some(parsed.into_account_id()),
-                Ok(_) | Err(_) => {
-                    emit(
-                        emitter,
-                        "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
-                    );
-                    None
-                }
-            },
-            None => {
-                emit(
-                    emitter,
-                    "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
-                );
-                None
-            }
+        let Some(authority_literal) = self.maintenance_authority.as_deref() else {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
+            );
+            return None;
         };
+        let Ok(decoded_account) = AccountId::parse_encoded(authority_literal) else {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+            );
+            return None;
+        };
+        if decoded_account.canonical() != authority_literal {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+            );
+            return None;
+        }
+        let maintenance_authority = decoded_account.into_account_id();
 
         Some(actual::SorafsModerationOrchestrator {
             checkpoint_path: self.checkpoint_path,
-            maintenance_authority: maintenance_authority?,
+            maintenance_authority,
             max_cases: usize::try_from(self.max_cases).unwrap_or(usize::MAX),
             max_events: usize::try_from(self.max_events).unwrap_or(usize::MAX),
             max_outbox_entries: usize::try_from(self.max_outbox_entries).unwrap_or(usize::MAX),

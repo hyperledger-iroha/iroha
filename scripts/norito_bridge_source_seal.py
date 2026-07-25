@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Compute and verify source seals for production NoritoBridge artifacts.
+"""Compute and verify source seals for production mobile SDK artifacts.
 
 The seal follows the transitive local-package dependency closure of
 ``connect_norito_bridge`` for every packaged target on the selected mobile
-platform.  This keeps an artifact bound to every source file that can affect it
-without making builds depend on unrelated workspace tools such as Kagami or
-test-network helpers.
+platform.  Platform inputs also bind the SDK sources compiled into the shipping
+application: Swift on Apple, and Kotlin/Java on Android.  This keeps the native
+artifact and its directly paired SDK source on one authenticated snapshot
+without pulling in unrelated workspace tools such as Kagami or test-network
+helpers.
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -39,6 +43,7 @@ COMMON_ROOT_INPUTS = (
     "codec",
     "scripts/check_mobile_sdk_artifacts.sh",
     "scripts/norito_bridge_source_seal.py",
+    "scripts/run_mobile_hermetic_command.py",
 )
 APPLE_ROOT_INPUTS = (
     "IrohaSwift/Package.swift",
@@ -47,14 +52,35 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
     "scripts/build_norito_xcframework.sh",
 )
+# CBSI consumes these Gradle builds directly through composite substitution, so
+# their shipping JVM sources must be bound alongside the native `.so` closure.
 ANDROID_ROOT_INPUTS = (
-    "kotlin/client-android/build.gradle.kts",
     "kotlin/settings.gradle.kts",
     "kotlin/build.gradle.kts",
     "kotlin/gradle.properties",
     "kotlin/gradle/libs.versions.toml",
+    "kotlin/gradle/wrapper/gradle-wrapper.jar",
     "kotlin/gradle/wrapper/gradle-wrapper.properties",
     "kotlin/gradlew",
+    "kotlin/gradlew.bat",
+    "kotlin/core-jvm/build.gradle.kts",
+    "kotlin/core-jvm/src/main",
+    "kotlin/client-android/build.gradle.kts",
+    "kotlin/client-android/src/main",
+    "kotlin/offline-wallet-android/build.gradle.kts",
+    "java/norito_java/settings.gradle.kts",
+    "java/norito_java/build.gradle.kts",
+    "java/norito_java/gradle.properties",
+    "java/norito_java/src/main",
+    "java/iroha_android/settings.gradle.kts",
+    "java/iroha_android/build.gradle.kts",
+    "java/iroha_android/gradle.properties",
+    "java/iroha_android/schemas/norito_schema_manifest.json",
+    "java/iroha_android/core/build.gradle.kts",
+    "java/iroha_android/core/src/main",
+    "java/iroha_android/src/main",
+    "java/iroha_android/android/build.gradle.kts",
+    "java/iroha_android/android/src/main",
     "scripts/package_mobile_sdk_artifacts.sh",
 )
 PLATFORM_TARGETS = {
@@ -72,22 +98,183 @@ ROOT_INPUTS = tuple(
 SNAPSHOT_SCHEMA = "iroha.norito-bridge-source-seal.v1"
 
 
-def run(root: pathlib.Path, args: list[str]) -> bytes:
-    return subprocess.run(
-        args,
+class AuthenticatedTool:
+    """One tool's proxy invocation and authenticated canonical executable."""
+
+    __slots__ = ("invocation", "canonical", "canonical_identity")
+
+    def __init__(
+        self,
+        *,
+        invocation: pathlib.Path,
+        canonical: pathlib.Path,
+        canonical_identity: tuple[int, int, int, int, int],
+    ) -> None:
+        self.invocation = invocation
+        self.canonical = canonical
+        self.canonical_identity = canonical_identity
+
+    def authenticate(self) -> None:
+        try:
+            canonical = self.invocation.resolve(strict=True)
+            stat_result = canonical.stat()
+        except OSError as error:
+            raise RuntimeError(
+                f"source-seal tool became unavailable: {self.invocation}"
+            ) from error
+        identity = (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_mode,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+        )
+        if canonical != self.canonical or identity != self.canonical_identity:
+            raise RuntimeError(
+                f"source-seal tool changed after authentication: {self.invocation}"
+            )
+
+
+def required_tool(environment_name: str, fallback_name: str) -> AuthenticatedTool:
+    configured = os.environ.get(environment_name)
+    candidate = pathlib.Path(configured) if configured else None
+    if candidate is None:
+        discovered = shutil.which(fallback_name)
+        if discovered is None:
+            raise RuntimeError(f"required source-seal tool is unavailable: {fallback_name}")
+        candidate = pathlib.Path(discovered)
+    if not candidate.is_absolute():
+        raise RuntimeError(f"{environment_name} must name an absolute executable")
+    invocation = pathlib.Path(os.path.abspath(candidate))
+    canonical = invocation.resolve(strict=True)
+    if not canonical.is_file() or not os.access(canonical, os.X_OK):
+        raise RuntimeError(f"source-seal tool is not a regular executable: {canonical}")
+    stat_result = canonical.stat()
+    return AuthenticatedTool(
+        invocation=invocation,
+        canonical=canonical,
+        canonical_identity=(
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_mode,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+        ),
+    )
+
+
+def source_seal_home() -> pathlib.Path:
+    configured = os.environ.get("NORITO_BRIDGE_SEAL_HOME")
+    if configured:
+        candidate = pathlib.Path(configured)
+        if not candidate.is_absolute():
+            raise RuntimeError("NORITO_BRIDGE_SEAL_HOME must be absolute")
+        return candidate.resolve(strict=True)
+    if os.name == "posix":
+        import pwd
+
+        return pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+    return pathlib.Path.home().resolve(strict=True)
+
+
+def source_seal_environment(
+    *,
+    cargo: AuthenticatedTool,
+    rustc: AuthenticatedTool,
+    git: pathlib.Path,
+) -> dict[str, str]:
+    home = source_seal_home()
+    cargo_home = pathlib.Path(
+        os.environ.get("NORITO_BRIDGE_SEAL_CARGO_HOME", str(home / ".cargo"))
+    )
+    rustup_home = pathlib.Path(
+        os.environ.get("NORITO_BRIDGE_SEAL_RUSTUP_HOME", str(home / ".rustup"))
+    )
+    temporary_directory = pathlib.Path(
+        os.environ.get("NORITO_BRIDGE_SEAL_TMPDIR", "/tmp")
+    )
+    for label, path in (
+        ("NORITO_BRIDGE_SEAL_CARGO_HOME", cargo_home),
+        ("NORITO_BRIDGE_SEAL_RUSTUP_HOME", rustup_home),
+        ("NORITO_BRIDGE_SEAL_TMPDIR", temporary_directory),
+    ):
+        if not path.is_absolute():
+            raise RuntimeError(f"{label} must be absolute")
+    path_entries = tuple(
+        dict.fromkeys(
+            (
+                str(cargo.invocation.parent),
+                str(rustc.invocation.parent),
+                str(git.parent),
+                "/usr/bin",
+                "/bin",
+            )
+        )
+    )
+    return {
+        "CARGO": str(cargo.invocation),
+        "CARGO_HOME": str(cargo_home),
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": os.pathsep.join(path_entries),
+        "RUSTC": str(rustc.invocation),
+        "RUSTUP_HOME": str(rustup_home),
+        "TMPDIR": str(temporary_directory),
+    }
+
+
+def source_seal_tools() -> tuple[AuthenticatedTool, AuthenticatedTool, pathlib.Path]:
+    git = pathlib.Path("/usr/bin/git").resolve(strict=True)
+    if not git.is_file() or not os.access(git, os.X_OK):
+        raise RuntimeError("pinned source-seal Git executable is unavailable")
+    return (
+        required_tool("NORITO_BRIDGE_SEAL_CARGO", "cargo"),
+        required_tool("NORITO_BRIDGE_SEAL_RUSTC", "rustc"),
+        git,
+    )
+
+
+def run(
+    root: pathlib.Path,
+    executable: AuthenticatedTool | pathlib.Path,
+    args: list[str],
+    environment: dict[str, str],
+) -> bytes:
+    if isinstance(executable, AuthenticatedTool):
+        executable.authenticate()
+        invocation = executable.invocation
+        canonical = executable.canonical
+    else:
+        invocation = executable
+        canonical = executable
+    result = subprocess.run(
+        [str(invocation), *args],
+        executable=str(canonical),
         cwd=root,
+        env=environment,
         check=True,
         stdout=subprocess.PIPE,
     ).stdout
+    if isinstance(executable, AuthenticatedTool):
+        executable.authenticate()
+    return result
 
 
 def metadata(root: pathlib.Path, target: str) -> dict[str, object]:
+    cargo, rustc, git = source_seal_tools()
     output = run(
         root,
+        cargo,
         [
-            "cargo",
             "metadata",
             "--locked",
+            "--offline",
             "--format-version",
             "1",
             "--features",
@@ -95,6 +282,7 @@ def metadata(root: pathlib.Path, target: str) -> dict[str, object]:
             "--filter-platform",
             target,
         ],
+        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
     )
     return json.loads(output)
 
@@ -173,10 +361,11 @@ def seal_inputs(root: pathlib.Path, platform: str = "apple") -> list[str]:
 
 def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
     input_set = set(inputs)
+    cargo, rustc, git = source_seal_tools()
     output = run(
         root,
+        git,
         [
-            "git",
             "ls-files",
             "-z",
             "-co",
@@ -184,6 +373,7 @@ def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
             "--",
             *inputs,
         ],
+        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
     )
     listed = {
         value.decode("utf-8")
@@ -225,22 +415,30 @@ def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:
 
 
 def status(root: pathlib.Path, inputs: list[str]) -> str:
+    cargo, rustc, git = source_seal_tools()
     output = run(
         root,
+        git,
         [
-            "git",
             "status",
             "--porcelain=v1",
             "--untracked-files=all",
             "--",
             *inputs,
         ],
+        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
     )
     return output.decode("utf-8").rstrip("\n")
 
 
 def source_commit(root: pathlib.Path) -> str:
-    value = run(root, ["git", "rev-parse", "--verify", "HEAD"]).decode("ascii").strip()
+    cargo, rustc, git = source_seal_tools()
+    value = run(
+        root,
+        git,
+        ["rev-parse", "--verify", "HEAD"],
+        source_seal_environment(cargo=cargo, rustc=rustc, git=git),
+    ).decode("ascii").strip()
     if len(value) != 40 or any(character not in "0123456789abcdef" for character in value):
         raise RuntimeError("source commit is not a canonical lowercase Git SHA-1")
     return value
@@ -250,15 +448,33 @@ def snapshot(root: pathlib.Path, platform: str) -> dict[str, object]:
     """Return the canonical source state consumed by one platform build."""
 
     inputs = seal_inputs(root, platform)
-    source_status = status(root, inputs)
+    source_commit_before = source_commit(root)
+    source_status_before = status(root, inputs)
+    source_fingerprint_before = fingerprint(root, inputs)
+    source_fingerprint_after = fingerprint(root, inputs)
+    source_status_after = status(root, inputs)
+    source_commit_after = source_commit(root)
+    if source_commit_before != source_commit_after:
+        raise RuntimeError(
+            f"{platform} NoritoBridge source commit changed while authenticating "
+            "the selected-source fingerprint"
+        )
+    if (
+        source_status_before != source_status_after
+        or source_fingerprint_before != source_fingerprint_after
+    ):
+        raise RuntimeError(
+            f"{platform} NoritoBridge selected source changed while authenticating "
+            "the build snapshot"
+        )
     return {
         "schema": SNAPSHOT_SCHEMA,
         "platform": platform,
         "targets": list(PLATFORM_TARGETS[platform]),
-        "source_commit": source_commit(root),
-        "source_tree_dirty": bool(source_status),
-        "source_status": source_status,
-        "source_fingerprint_sha256": fingerprint(root, inputs),
+        "source_commit": source_commit_before,
+        "source_tree_dirty": bool(source_status_before),
+        "source_status": source_status_before,
+        "source_fingerprint_sha256": source_fingerprint_before,
     }
 
 

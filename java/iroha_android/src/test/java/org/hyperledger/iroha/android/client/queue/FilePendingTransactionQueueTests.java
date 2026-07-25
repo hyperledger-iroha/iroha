@@ -7,6 +7,7 @@ import java.util.List;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 public final class FilePendingTransactionQueueTests {
 
@@ -94,7 +95,8 @@ public final class FilePendingTransactionQueueTests {
             .setSchemaName("schema.v1")
             .setMultisigSignatures(
                 MultisigSignatures.of(
-                    MultisigSignature.fromCurveId(0x01, randomBytes(32), randomBytes(64))))
+                    MultisigSignature.fromCurveId(
+                        0x01, TestEd25519Keys.publicKey(0x33), randomBytes(64))))
             .build();
     try {
       queue.enqueue(transaction);

@@ -3,7 +3,6 @@ package org.hyperledger.iroha.android.norito;
 import java.util.List;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
-import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -18,7 +17,6 @@ public final class SignedTransactionEncoder {
 
   private static final byte VERSION_BYTE = 0x01;
   private static final String SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1";
-  private static final TransactionPayloadAdapter PAYLOAD_ADAPTER = new TransactionPayloadAdapter();
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> SIGNATURE_ADAPTER = new TransactionSignatureAdapter();
   private static final TypeAdapter<Optional<byte[]>> EMPTY_OPTION_ADAPTER =
@@ -31,15 +29,15 @@ public final class SignedTransactionEncoder {
       new MultisigSignaturesAdapter();
   private static final TypeAdapter<Optional<MultisigSignatures>> MULTISIG_SIGNATURES_OPTION_ADAPTER =
       NoritoAdapters.option(MULTISIG_SIGNATURES_ADAPTER);
-  private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
-
   private SignedTransactionEncoder() {}
 
   public static byte[] encode(final SignedTransaction transaction) throws NoritoException {
-    final TransactionPayload payload = PAYLOAD_CODEC.decodeTransaction(transaction.encodedPayload());
-    final SignedRecord record =
-        new SignedRecord(transaction.signature(), payload, transaction.multisigSignatures());
     try {
+      final byte[] payloadBytes = transaction.encodedPayload();
+      TransactionPayloadAdapter.validateCanonicalPayloadBytes(payloadBytes);
+      final SignedRecord record =
+          new SignedRecord(
+              transaction.signature(), payloadBytes, transaction.multisigSignatures());
       return NoritoCodec.encodeAdaptive(record, SignedTransactionAdapter.INSTANCE).payload();
     } catch (final Exception ex) {
       throw new NoritoException("Failed to encode signed transaction", ex);
@@ -57,9 +55,9 @@ public final class SignedTransactionEncoder {
   public static SignedTransaction decode(final byte[] encoded) throws NoritoException {
     try {
       final SignedRecord record = NoritoCodec.decodeAdaptive(encoded, SignedTransactionAdapter.INSTANCE);
-      final byte[] payloadBytes = PAYLOAD_CODEC.encodeTransaction(record.payload());
+      TransactionPayloadAdapter.validateCanonicalPayloadBytes(record.payloadBytes());
       return SignedTransaction.builder()
-          .setEncodedPayload(payloadBytes)
+          .setEncodedPayload(record.payloadBytes())
           .setSignature(record.signature())
           .setPublicKey(new byte[0])
           .setSchemaName(SIGNED_SCHEMA)
@@ -91,15 +89,15 @@ public final class SignedTransactionEncoder {
 
   private static final class SignedRecord {
     private final byte[] signature;
-    private final TransactionPayload payload;
+    private final byte[] payloadBytes;
     private final Optional<MultisigSignatures> multisigSignatures;
 
     private SignedRecord(
         final byte[] signature,
-        final TransactionPayload payload,
+        final byte[] payloadBytes,
         final Optional<MultisigSignatures> multisigSignatures) {
       this.signature = signature;
-      this.payload = payload;
+      this.payloadBytes = payloadBytes;
       this.multisigSignatures = multisigSignatures == null ? Optional.empty() : multisigSignatures;
     }
 
@@ -107,8 +105,8 @@ public final class SignedTransactionEncoder {
       return signature;
     }
 
-    private TransactionPayload payload() {
-      return payload;
+    private byte[] payloadBytes() {
+      return payloadBytes;
     }
 
     private Optional<MultisigSignatures> multisigSignatures() {
@@ -122,7 +120,7 @@ public final class SignedTransactionEncoder {
     @Override
     public void encode(final NoritoEncoder encoder, final SignedRecord value) {
       encodeSizedField(encoder, SIGNATURE_ADAPTER, value.signature());
-      encodeSizedField(encoder, PAYLOAD_ADAPTER, value.payload());
+      encodeSizedRawField(encoder, value.payloadBytes());
       encodeSizedField(encoder, EMPTY_OPTION_ADAPTER, Optional.empty());
       encodeSizedField(encoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, value.multisigSignatures());
     }
@@ -130,7 +128,7 @@ public final class SignedTransactionEncoder {
     @Override
     public SignedRecord decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
       final byte[] signature = decodeSizedField(decoder, SIGNATURE_ADAPTER, "signature");
-      final TransactionPayload payload = decodeSizedField(decoder, PAYLOAD_ADAPTER, "payload");
+      final byte[] payloadBytes = decodeSizedRawField(decoder, "payload");
       final Optional<byte[]> attachments =
           decodeSizedField(decoder, EMPTY_OPTION_ADAPTER, "attachments");
       if (attachments.isPresent()) {
@@ -139,7 +137,7 @@ public final class SignedTransactionEncoder {
       final Optional<MultisigSignatures> multisigSignatures =
           decodeSizedField(
               decoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, "multisig_signatures");
-      return new SignedRecord(signature, payload, multisigSignatures);
+      return new SignedRecord(signature, payloadBytes, multisigSignatures);
     }
   }
 
@@ -151,6 +149,22 @@ public final class SignedTransactionEncoder {
     final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
     encoder.writeLength(payload.length, compact);
     encoder.writeBytes(payload);
+  }
+
+  private static void encodeSizedRawField(
+      final NoritoEncoder encoder, final byte[] payload) {
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
+  private static byte[] decodeSizedRawField(
+      final NoritoDecoder decoder, final String fieldName) {
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " payload too large");
+    }
+    return decoder.readBytes((int) length);
   }
 
   private static final class TransactionSignatureAdapter implements TypeAdapter<byte[]> {

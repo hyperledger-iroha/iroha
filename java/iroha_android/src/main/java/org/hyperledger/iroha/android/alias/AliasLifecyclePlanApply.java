@@ -22,6 +22,7 @@ public final class AliasLifecyclePlanApply {
   public static TransactionPayload buildTransactionPayload(
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
       final Long nonce,
@@ -31,6 +32,7 @@ public final class AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasLifecycleInstructionFrameCodec.INSTANCE,
+        chainDiscriminant,
         feePayment,
         creationTimeMs,
         nonce,
@@ -43,6 +45,7 @@ public final class AliasLifecyclePlanApply {
       final AliasLifecycleTransactionPlanV1 plan,
       final AliasLifecyclePlanBodyNoritoEncoder bodyEncoder,
       final AliasLifecycleInstructionFrameCodec frameCodec,
+      final int chainDiscriminant,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
       final Long nonce,
@@ -67,7 +70,7 @@ public final class AliasLifecyclePlanApply {
       throw new IllegalArgumentException("canonical alias lifecycle plan body must not be empty");
     }
     AliasPlanVerifier.requireLifecycleExecutableForRequest(
-        request, plan, bodyBytes, frameCodec);
+        request, plan, bodyBytes, frameCodec, chainDiscriminant);
     final AliasSetupModels.AliasFramedInstructionV1 frame = plan.body().instruction();
     if (frame == null) {
       throw new IllegalArgumentException("executable alias lifecycle plan is missing its instruction");
@@ -93,6 +96,7 @@ public final class AliasLifecyclePlanApply {
       final AliasLifecycleTransactionPlanV1 plan,
       final AliasLifecyclePlanBodyNoritoEncoder bodyEncoder,
       final AliasLifecycleInstructionFrameCodec frameCodec,
+      final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
       final FeePaymentIntent feePayment,
@@ -109,6 +113,7 @@ public final class AliasLifecyclePlanApply {
             plan,
             bodyEncoder,
             frameCodec,
+            chainDiscriminant,
             feePayment,
             creationTimeMs,
             nonce,
@@ -121,6 +126,7 @@ public final class AliasLifecyclePlanApply {
       final IrohaClient client,
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
       final FeePaymentIntent feePayment,
@@ -134,6 +140,7 @@ public final class AliasLifecyclePlanApply {
         plan,
         DefaultAliasLifecyclePlanBodyNoritoEncoder.INSTANCE,
         DefaultAliasLifecycleInstructionFrameCodec.INSTANCE,
+        chainDiscriminant,
         transactionBuilder,
         signer,
         feePayment,

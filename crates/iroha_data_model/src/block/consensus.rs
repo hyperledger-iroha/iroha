@@ -274,7 +274,7 @@ impl ConsensusGenesisParams {
     ///
     /// # Errors
     /// Returns a diagnostic for unsupported protocol revisions, invalid v2
-    /// context geometry, or invalid NPoS election parameters.
+    /// context geometry, or invalid `NPoS` election parameters.
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != u32::from(super::consensus_v2::PROTOCOL_VERSION) {
             return Err(format!(
@@ -326,7 +326,7 @@ pub struct NposGenesisParams {
 }
 
 impl NposGenesisParams {
-    /// Validate signed NPoS election and reconfiguration inputs.
+    /// Validate signed `NPoS` election and reconfiguration inputs.
     ///
     /// # Errors
     /// Returns a stable diagnostic when a seed, window, bond, percentage, or
@@ -631,7 +631,10 @@ pub struct CensorshipEvidencePayloadSchema {
 }
 
 /// Evidence payloads.
-#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "evidence retains complete canonical artifacts inline; boxing a variant would change the Norito V1 wire shape"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum EvidencePayload {
     /// Two votes by the same signer for the same (phase, height, view, epoch)
@@ -974,8 +977,8 @@ pub fn committed_lane_block_status_counts_as_progress(
         | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => executable_payload_available,
-        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
-        | COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION => false,
+        // Rejected preflight, predecessor waits, conflicts, and unknown future
+        // status labels all fail closed.
         _ => false,
     }
 }
@@ -1360,7 +1363,7 @@ impl LaneBlockVoteBodyV1 {
 /// The body names both the immutable payload's origin proposal and the
 /// view-specific proposal being prepared. This prevents a valid payload
 /// certificate from being rebound across chains, epochs, lane incarnations,
-/// proposals, NewView transitions, or DA/RBC instances.
+/// proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1443,7 +1446,7 @@ pub struct LanePayloadAvailabilityQcV1 {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered historical validator set indexed by `signers_bitmap`.
     pub validator_set: Vec<PeerId>,
-    /// Valid historical PoPs aligned exactly with `validator_set`.
+    /// Valid historical `PoPs` aligned exactly with `validator_set`.
     pub validator_set_pops: Vec<Vec<u8>>,
     /// Compact READY signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
@@ -1654,6 +1657,10 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the public replay helper mirrors the canonical V1 subject preimage fields; grouping them would change the established API contract"
+    )]
     pub fn compute_replay_subject_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -1686,6 +1693,10 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the public replay helper mirrors the canonical V1 ownership preimage fields; grouping them would change the established API contract"
+    )]
     pub fn compute_replay_payload_ownership_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -2525,7 +2536,10 @@ fn validate_native_amx_qc_shape(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered Native AMX V2 audit preserves stable first-error precedence across one cross-field protocol record"
+)]
 fn validate_native_amx_leg_shape(
     receipt: &NativeAmxReceipt,
     leg: &NativeAmxLegRecordV2,
@@ -2651,10 +2665,12 @@ fn validate_native_amx_leg_shape(
     }
 
     let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
+    let proposal_uses_coordinator_authority_context =
+        descriptor.proposal_height == receipt.authority_context_height;
     if same_route
         && (entrypoint_position.is_none()
             || descriptor.lane_incarnation != receipt.lane_incarnation
-            || descriptor.proposal_height != receipt.authority_context_height
+            || !proposal_uses_coordinator_authority_context
             || descriptor.lane_block_height != receipt.lane_block_height
             || descriptor.lane_block_view != receipt.lane_block_view
             || leg.participant_proposal.proposal_hash != receipt.coordinator_proposal_hash)
@@ -2694,6 +2710,8 @@ impl LaneBlockCommitment {
         }
 
         for receipt in &self.native_amx_receipts {
+            let receipt_belongs_to_commitment_height =
+                receipt.lane_block_height == self.block_height;
             if receipt.version != NATIVE_AMX_RECEIPT_VERSION_V2
                 || !native_amx_nonzero(&receipt.source_id)
                 || !native_amx_nonzero(receipt.chain_id_hash.as_ref())
@@ -2705,7 +2723,7 @@ impl LaneBlockCommitment {
                 || receipt.lane_id != self.lane_id
                 || receipt.dataspace_id != self.dataspace_id
                 || receipt.lane_incarnation != self.lane_incarnation
-                || receipt.lane_block_height != self.block_height
+                || !receipt_belongs_to_commitment_height
             {
                 return Err("Native AMX receipt coordinator identity is invalid");
             }
@@ -2766,7 +2784,6 @@ pub struct SumeragiRuntimeUpgradeHook {
 }
 
 /// Governance manifest readiness snapshot for a lane.
-#[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(
     feature = "json",
@@ -2802,8 +2819,7 @@ pub struct SumeragiLaneGovernance {
 }
 
 /// DA availability reason reported by `/v1/sumeragi/status`.
-#[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2826,8 +2842,7 @@ pub enum SumeragiDaGateReason {
 }
 
 /// Which DA availability condition was satisfied most recently.
-#[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2844,7 +2859,7 @@ pub enum SumeragiDaGateSatisfaction {
 }
 
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3890,6 +3905,10 @@ pub struct SumeragiSafetyHaltStatus {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each boolean is an independent V1 operator-visible session fact; collapsing them would change the canonical diagnostics wire shape"
+)]
 pub struct SumeragiLaneBlockSessionStatus {
     /// Lane whose lane-local block is being certified.
     #[norito(default)]
@@ -4198,9 +4217,9 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
             "kura_wsv_application_receipt_durable" => Ok(Self::KuraWsvApplicationReceiptDurable),
             "queue_finalized" => Ok(Self::QueueFinalized),
             "conflict" => Ok(Self::Conflict),
-            other => Err(norito::json::Error::Message(
-                format!("unknown autonomous lane execution stage `{other}`").into(),
-            )),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown autonomous lane execution stage `{other}`"
+            ))),
         }
     }
 }
@@ -4265,9 +4284,80 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReaso
             "awaiting_application_receipt" => Ok(Self::AwaitingApplicationReceipt),
             "queue_finalization_unverifiable" => Ok(Self::QueueFinalizationUnverifiable),
             "evidence_conflict" => Ok(Self::EvidenceConflict),
-            other => Err(norito::json::Error::Message(
-                format!("unknown autonomous lane execution stuck reason `{other}`").into(),
-            )),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown autonomous lane execution stuck reason `{other}`"
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutonomousLaneEvidenceGeometry {
+    ReservationsOnly,
+    PayloadOnly,
+    CertifiedBundle,
+    MergeSelected,
+    Applied,
+}
+
+impl AutonomousLaneEvidenceGeometry {
+    const fn from_presence(
+        presence: (bool, bool, bool, bool),
+    ) -> Option<AutonomousLaneEvidenceGeometry> {
+        match presence {
+            (false, false, false, false) => Some(Self::ReservationsOnly),
+            (true, false, false, false) => Some(Self::PayloadOnly),
+            (true, true, false, false) => Some(Self::CertifiedBundle),
+            (true, true, true, false) => Some(Self::MergeSelected),
+            (true, true, true, true) => Some(Self::Applied),
+            _ => None,
+        }
+    }
+}
+
+impl SumeragiAutonomousLaneExecutionStage {
+    const fn expected_stuck_reason(self) -> Option<SumeragiAutonomousLaneExecutionStuckReason> {
+        match self {
+            Self::ReservationsDurable | Self::ExecutablePayloadDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability)
+            }
+            Self::PayloadAvailabilityCertified => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingLaneCertification)
+            }
+            Self::LaneCertified => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::CertifiedBundleUnavailable)
+            }
+            Self::CertifiedBundleDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection)
+            }
+            Self::MergeCandidateDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier)
+            }
+            Self::GlobalCarrierCommitted => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingApplicationReceipt)
+            }
+            Self::KuraWsvApplicationReceiptDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable)
+            }
+            Self::QueueFinalized => None,
+            Self::Conflict => Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict),
+        }
+    }
+
+    const fn expected_evidence_geometry(self) -> Option<AutonomousLaneEvidenceGeometry> {
+        match self {
+            Self::ReservationsDurable => Some(AutonomousLaneEvidenceGeometry::ReservationsOnly),
+            Self::ExecutablePayloadDurable
+            | Self::PayloadAvailabilityCertified
+            | Self::LaneCertified => Some(AutonomousLaneEvidenceGeometry::PayloadOnly),
+            Self::CertifiedBundleDurable => Some(AutonomousLaneEvidenceGeometry::CertifiedBundle),
+            Self::MergeCandidateDurable | Self::GlobalCarrierCommitted => {
+                Some(AutonomousLaneEvidenceGeometry::MergeSelected)
+            }
+            Self::KuraWsvApplicationReceiptDurable | Self::QueueFinalized => {
+                Some(AutonomousLaneEvidenceGeometry::Applied)
+            }
+            Self::Conflict => None,
         }
     }
 }
@@ -4350,6 +4440,12 @@ impl SumeragiAutonomousLaneExecution {
     }
 
     /// Validate bounded counters, paired carrier identity, and stage geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when identity fields are zero, carrier fields
+    /// are incomplete, counters exceed protocol bounds, or durable stage and
+    /// wait-state evidence disagree.
     pub fn validate(&self) -> Result<(), &'static str> {
         let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
         if self.lane_block_height == 0
@@ -4393,34 +4489,7 @@ impl SumeragiAutonomousLaneExecution {
         {
             return Err("autonomous lane execution merge entry hash must be non-zero");
         }
-        let expected_reason = match self.highest_durable_stage {
-            SumeragiAutonomousLaneExecutionStage::ReservationsDurable
-            | SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability)
-            }
-            SumeragiAutonomousLaneExecutionStage::PayloadAvailabilityCertified => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingLaneCertification)
-            }
-            SumeragiAutonomousLaneExecutionStage::LaneCertified => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::CertifiedBundleUnavailable)
-            }
-            SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection)
-            }
-            SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier)
-            }
-            SumeragiAutonomousLaneExecutionStage::GlobalCarrierCommitted => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingApplicationReceipt)
-            }
-            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable)
-            }
-            SumeragiAutonomousLaneExecutionStage::QueueFinalized => None,
-            SumeragiAutonomousLaneExecutionStage::Conflict => {
-                Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict)
-            }
-        };
+        let expected_reason = self.highest_durable_stage.expected_stuck_reason();
         if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::Conflict
             && self.stuck_reason
                 != Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict)
@@ -4445,29 +4514,13 @@ impl SumeragiAutonomousLaneExecution {
         {
             return Err("durable autonomous application stage requires a carrier identity");
         }
-        let geometry_matches = match self.highest_durable_stage {
-            SumeragiAutonomousLaneExecutionStage::ReservationsDurable => {
-                !has_payload && !has_bundle && !has_merge && !has_carrier
-            }
-            SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable
-            | SumeragiAutonomousLaneExecutionStage::PayloadAvailabilityCertified
-            | SumeragiAutonomousLaneExecutionStage::LaneCertified => {
-                has_payload && !has_bundle && !has_merge && !has_carrier
-            }
-            SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable => {
-                has_payload && has_bundle && !has_merge && !has_carrier
-            }
-            SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable
-            | SumeragiAutonomousLaneExecutionStage::GlobalCarrierCommitted => {
-                has_payload && has_bundle && has_merge && !has_carrier
-            }
-            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable
-            | SumeragiAutonomousLaneExecutionStage::QueueFinalized => {
-                has_payload && has_bundle && has_merge && has_carrier
-            }
-            SumeragiAutonomousLaneExecutionStage::Conflict => unreachable!(),
-        };
-        if !geometry_matches {
+        let observed_geometry = AutonomousLaneEvidenceGeometry::from_presence((
+            has_payload,
+            has_bundle,
+            has_merge,
+            has_carrier,
+        ));
+        if observed_geometry != self.highest_durable_stage.expected_evidence_geometry() {
             return Err("autonomous lane execution evidence does not match its durable stage");
         }
         Ok(())
@@ -4518,9 +4571,9 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
             "committed_evidence_pending" => Ok(Self::CommittedEvidencePending),
             "durably_applied" => Ok(Self::DurablyApplied),
             "conflict" => Ok(Self::Conflict),
-            other => Err(norito::json::Error::Message(
-                format!("unknown Native AMX participant application state `{other}`").into(),
-            )),
+            other => Err(norito::json::Error::Message(format!(
+                "unknown Native AMX participant application state `{other}`"
+            ))),
         }
     }
 }
@@ -4751,6 +4804,11 @@ impl SumeragiDiagnosticsStatus {
     }
 
     /// Validate bounded, canonical autonomous lane-execution diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the vector exceeds its hard cap, a row is
+    /// malformed, or complete lane-slot identities are not strictly ordered.
     pub fn validate_autonomous_lane_executions(&self) -> Result<(), &'static str> {
         if self.autonomous_lane_executions.len() > SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX {
             return Err("autonomous lane execution diagnostics vector exceeds its hard limit");
@@ -6100,6 +6158,38 @@ mod tests {
         assert_eq!(
             same_route_drift.validate_native_amx_receipts(),
             Err("Native AMX same-route leg differs from the coordinator identity")
+        );
+    }
+
+    #[test]
+    fn native_amx_grouped_receipts_reject_cross_context_height_drift() {
+        let mut commitment_height_drift = grouped_native_amx_commitment_fixture();
+        let receipt = &mut commitment_height_drift.native_amx_receipts[0];
+        receipt.lane_block_height = receipt.lane_block_height.saturating_add(1);
+        assert_eq!(
+            commitment_height_drift.validate_native_amx_receipts(),
+            Err("Native AMX receipt coordinator identity is invalid"),
+            "a receipt lane height belongs to the containing lane commitment, not an unrelated receipt field"
+        );
+
+        let mut proposal_context_drift = grouped_native_amx_commitment_fixture();
+        let receipt = &mut proposal_context_drift.native_amx_receipts[0];
+        let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| (leg.lane_id, leg.dataspace_id) == coordinator_route)
+            .expect("fixture contains same-route coordinator leg");
+        leg.participant_proposal.descriptor.proposal_height = leg
+            .participant_proposal
+            .descriptor
+            .proposal_height
+            .saturating_add(1);
+        refresh_native_amx_participant_proposal(leg);
+        assert_eq!(
+            proposal_context_drift.validate_native_amx_receipts(),
+            Err("Native AMX participant leg identity is internally inconsistent"),
+            "a participant proposal height is bound to the coordinator authority context"
         );
     }
 

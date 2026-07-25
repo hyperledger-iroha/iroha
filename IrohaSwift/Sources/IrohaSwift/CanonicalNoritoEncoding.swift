@@ -511,7 +511,6 @@ public enum CanonicalNorito {
     static let maxNumericScale: UInt32 = 28
     static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
-    private static let defaultNetworkPrefix: UInt16 = 0x02F1
     private static let isRunningXCTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
     static func wrap(typeName: String, payload: Data) -> Data {
@@ -532,12 +531,8 @@ public enum CanonicalNorito {
     /// produce byte-identical output.
     static func encodeAccountId(_ value: String) throws -> Data {
         if isRunningXCTest {
-            if let canonical = try? canonicalizeEncodedAccountId(value),
-               let address = try? AccountAddress.parseEncoded(
-                canonical,
-                expectedPrefix: defaultNetworkPrefix
-               ) {
-                return try address.noritoAccountControllerPayload()
+            if let canonical = try? canonicalEncodedAccount(value) {
+                return try canonical.address.noritoAccountControllerPayload()
             }
             let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
             var accountControllerPayload = CanonicalNoritoWriter()
@@ -545,12 +540,8 @@ public enum CanonicalNorito {
             accountControllerPayload.writeField(encodeString(canonical))
             return accountControllerPayload.data
         }
-        let canonical = try canonicalizeEncodedAccountId(value)
-        let address = try AccountAddress.parseEncoded(
-            canonical,
-            expectedPrefix: defaultNetworkPrefix
-        )
-        return try address.noritoAccountControllerPayload()
+        return try canonicalEncodedAccount(value).address
+            .noritoAccountControllerPayload()
     }
 
     static func encodeBool(_ value: Bool) -> Data {
@@ -682,15 +673,8 @@ public enum CanonicalNorito {
     /// Encode a canonical I105 account literal as a bare compact-Norito
     /// `AccountId` payload.
     public static func encodeCompactAccountId(_ value: String) throws -> Data {
-        let canonical = try canonicalizeEncodedAccountId(value)
-        guard canonical == value else {
-            throw CanonicalNoritoError.invalidAccountId(value)
-        }
-        let address = try AccountAddress.parseEncoded(
-            canonical,
-            expectedPrefix: defaultNetworkPrefix
-        )
-        return try address.compactNoritoAccountControllerPayload()
+        try canonicalEncodedAccount(value).address
+            .compactNoritoAccountControllerPayload()
     }
 
     /// Encode a canonical asset-definition address as a bare compact-Norito
@@ -805,6 +789,16 @@ public enum CanonicalNorito {
     }
 
     private static func canonicalizeEncodedAccountId(_ value: String) throws -> String {
+        try canonicalEncodedAccount(value).literal
+    }
+
+    private static func canonicalEncodedAccount(
+        _ value: String
+    ) throws -> (
+        literal: String,
+        address: AccountAddress,
+        chainDiscriminant: UInt16
+    ) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw CanonicalNoritoError.invalidAccountId(value)
@@ -818,16 +812,25 @@ public enum CanonicalNorito {
         if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
             throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
-        let address: AccountAddress
         do {
-            address = try AccountAddress.parseEncodedSwiftOnly(
+            let chainDiscriminant = try AccountAddress
+                .inspectI105NetworkPrefix(trimmed).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(
                 trimmed,
-                expectedPrefix: defaultNetworkPrefix
+                expectedPrefix: chainDiscriminant
             )
+            let canonical = try address.toI105(
+                networkPrefix: chainDiscriminant
+            )
+            guard canonical.utf8.elementsEqual(trimmed.utf8) else {
+                throw CanonicalNoritoError.invalidAccountId(trimmed)
+            }
+            return (canonical, address, chainDiscriminant)
+        } catch let error as CanonicalNoritoError {
+            throw error
         } catch {
             throw CanonicalNoritoError.invalidAccountId(trimmed)
         }
-        return try address.toI105(networkPrefix: defaultNetworkPrefix)
     }
 
     static func canonicalAssetIdLiteral(_ raw: String) throws -> String {

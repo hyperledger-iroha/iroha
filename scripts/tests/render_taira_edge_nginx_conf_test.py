@@ -156,7 +156,14 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
     assert "server_name *.mon.taira.sora.net ~^.+\\.mon\\.taira\\.sora\\.net$;" in rendered
     assert "proxy_set_header Host $taira_mon_alias_host;" in rendered
     assert "proxy_set_header X-Forwarded-Host $host;" in rendered
-    assert "proxy_set_header Host taira-validator-2.sora.org;" in rendered
+    assert "proxy_set_header Host taira-validator-1.sora.org;" in rendered
+    public_upstream = rendered.split(
+        "upstream taira_public_edge_upstream {", 1
+    )[1].split("}", 1)[0]
+    assert "server 127.0.0.1:18080 max_fails=1 fail_timeout=5s;" in public_upstream
+    assert "127.0.0.1:18081" not in public_upstream
+    assert "127.0.0.1:18082" not in public_upstream
+    assert "127.0.0.1:18083" not in public_upstream
     assert "proxy_pass http://taira_public_edge_upstream;" in rendered
     assert "proxy_pass http://taira_public_edge_upstream$soradns_target_path$is_args$args;" in rendered
     assert "proxy_pass http://taira_validator_1_upstream;" in rendered
@@ -177,11 +184,61 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
             "location = /v1/mcp",
         ):
             block = _location_block(server, marker)
-            assert "proxy_pass http://taira_validator_2_upstream;" in block
+            assert "proxy_pass http://taira_validator_1_upstream;" in block
             assert "proxy_next_upstream" not in block
     assert "location = /v1/mcp" in rendered
     assert "location ^~ /v1/app-api/" in rendered
     assert "client_max_body_size 1g;" in rendered
+
+
+def test_render_edge_nginx_conf_uses_explicit_canonical_public_validator() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    rendered = MODULE.render_edge_nginx_conf(
+        validators,
+        public_upstream_host="taira-validator-3.sora.org",
+    )
+    public_upstream = rendered.split(
+        "upstream taira_public_edge_upstream {", 1
+    )[1].split("}", 1)[0]
+
+    assert "server 127.0.0.1:18082 max_fails=1 fail_timeout=5s;" in public_upstream
+    assert "127.0.0.1:18080" not in public_upstream
+    public_server = rendered.split("server_name taira.sora.org;", 1)[1].split(
+        "server_name mon.taira.sora.net;", 1
+    )[0]
+    assert "proxy_set_header Host taira-validator-3.sora.org;" in public_server
+    assert "proxy_pass http://taira_validator_3_upstream;" in public_server
+
+
+def test_render_edge_nginx_conf_rejects_unknown_public_validator() -> None:
+    validators = [
+        MODULE.EdgeValidator(
+            slug=f"taira-validator-{index}",
+            upstream_name=f"taira_validator_{index}",
+            validator_host=f"taira-validator-{index}.sora.org",
+            upstream_address=f"127.0.0.1:{18079 + index}",
+        )
+        for index in range(1, 5)
+    ]
+
+    try:
+        MODULE.render_edge_nginx_conf(
+            validators,
+            public_upstream_host="not-a-validator.sora.org",
+        )
+    except ValueError as error:
+        assert "must match a validator hostname" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("accepted an unknown canonical public validator")
 
 
 def test_parse_soracloud_alias_routes_normalizes_and_rejects_unsafe_values() -> None:

@@ -121,6 +121,10 @@ pub struct ConsensusHandshakeMetadata {
 impl ConsensusHandshakeMetadata {
     /// Validate the first-release signed handshake envelope.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the wire version is not the first-release version
+    /// or the signed Sumeragi v2 genesis context is invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
@@ -460,7 +464,7 @@ mod model {
             self
         }
 
-        /// Validate all signed NPoS election and reconfiguration invariants.
+        /// Validate all signed `NPoS` election and reconfiguration invariants.
         ///
         /// # Errors
         /// Returns a stable diagnostic when a seed, window, bond, percentage,

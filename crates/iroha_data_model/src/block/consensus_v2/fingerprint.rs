@@ -51,6 +51,11 @@ struct NposGenesisFingerprintInput {
 /// collectors, per-phase/adaptive timers, the global-RBC enable flag, the BLS
 /// domain string, and node-local fallbacks are deliberately discarded. Live
 /// startup therefore cannot fingerprint input that omits its v2 context.
+///
+/// # Errors
+///
+/// Returns an error when the signed genesis parameters violate the first-release
+/// consensus invariants.
 #[must_use = "a rejected genesis carrier must not be fingerprinted"]
 pub fn compute(chain_id: &ChainId, params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
     params.validate()?;

@@ -77,7 +77,7 @@
   },
   "generation_provenance": {
     "koto_sha256": "37609ea5fef9ca96a8a7200c1a94fa3ad4f4ad307beed9384f09a0f0fb40a39a",
-    "ivm_rlib_sha256": "ebd3e092e4e05e26a9784640b70bfcf7ea47b8cdfe2c12f65d1720dc87718a61",
+    "ivm_rlib_sha256": "ce814719fe79d457e9307d044f6c19b33c452600f98e65d7b6e02024ebb8f3dc",
     "contract_source_git_blob": "9187a6b5eeda3306f9c8be4029168c473a49c42e",
     "artifact_generator_git_blob": "4e249f296cc6df1390b6279f52653813fd661311",
     "rust_verifier_rs_git_blob": "5b6d900bbd7f7613778e9a2a3ecc8433b56b78f4",

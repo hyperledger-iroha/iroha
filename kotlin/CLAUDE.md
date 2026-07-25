@@ -86,9 +86,10 @@ All mutable collections and byte arrays are copied on construction and access. U
   `client-android/build/generated/jniLibs/<mode>/`, with matching provenance in
   `build/generated/nativeProvenance/<mode>/`. Cargo-ndk output first lands in a
   transient per-ABI staging directory so unrelated workspace `cdylib` outputs
-  cannot enter the exact raw inventory. The build verifies its Android source
-  seal after every ABI and binds the dependency-closure fingerprint into
-  provenance. AGP packages those generated outputs and explicitly excludes
+  cannot enter the exact raw inventory. The build verifies its race-stable
+  Android source seal after every ABI and immediately before and after each raw
+  or stripped/provenance promotion, and binds the dependency-closure fingerprint
+  into provenance. AGP packages those generated outputs and explicitly excludes
   `src/main/jniLibs`.
 
 ## Testing

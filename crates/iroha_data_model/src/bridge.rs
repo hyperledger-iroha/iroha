@@ -802,10 +802,10 @@ pub enum BridgeFinalityAttestationValidationError {
     /// Status and proof name different committed block subjects.
     #[error("bridge finality attestation status and proof subjects do not match")]
     StatusSubjectMismatch,
-    /// The status does not expose its latest authenticated durable CommitQC.
+    /// The status does not expose its latest authenticated durable `CommitQC`.
     #[error("bridge finality attestation status has no durable CommitQC")]
     StatusCommitMissing,
-    /// Status and proof carry different exact CommitQCs.
+    /// Status and proof carry different exact `CommitQCs`.
     #[error("bridge finality attestation status and proof CommitQCs do not match")]
     StatusCommitMismatch,
     /// The signature does not verify under the declared canonical node key.

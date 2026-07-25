@@ -5,6 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_SCRIPT="$SCRIPT_DIR/check_mobile_sdk_artifacts.sh"
 PACKAGE_SCRIPT="$SCRIPT_DIR/package_mobile_sdk_artifacts.sh"
 TMP_DIR="$(mktemp -d)"
+TEST_PYTHON_BINARY=""
+for trusted_python in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  if [[ -x "$trusted_python" ]]; then
+    TEST_PYTHON_BINARY="$trusted_python"
+    break
+  fi
+done
+[[ -n "$TEST_PYTHON_BINARY" ]] || {
+  printf '[mobile-sdk-artifacts-test] ERROR: pinned Python 3 is required\n' >&2
+  exit 1
+}
+TEST_PYTHON_BINARY="$("$TEST_PYTHON_BINARY" -I -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$TEST_PYTHON_BINARY")"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -26,6 +40,9 @@ test_build_source_seal() {
     "$root/scripts/build_norito_xcframework.sh"
   cp "$SCRIPT_DIR/norito_bridge_source_seal.py" \
     "$root/scripts/norito_bridge_source_seal.py"
+  cp "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+    "$root/scripts/run_mobile_hermetic_command.py"
+  printf '[toolchain]\nchannel = "1.93.1"\n' >"$root/rust-toolchain.toml"
   printf '[workspace]\nmembers = ["crates/connect_norito_bridge", "crates/unrelated"]\nresolver = "2"\n' \
     >"$root/Cargo.toml"
   printf '[package]\nname = "connect_norito_bridge"\nversion = "0.1.0"\nedition = "2024"\n\n[features]\nprivacy-production-enabled = []\n' \
@@ -43,6 +60,30 @@ test_build_source_seal() {
 
   NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
     bash "$root/scripts/build_norito_xcframework.sh"
+
+  local hostile_bin="$root/hostile-bin"
+  local hostile_marker="$root/hostile-tool-invoked"
+  mkdir -p "$hostile_bin"
+  local tool_name
+  for tool_name in python3 git rustup cargo rustc nm; do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$0" >>"%s"\nexit 97\n' "$hostile_marker" \
+      >"$hostile_bin/$tool_name"
+    chmod 0700 "$hostile_bin/$tool_name"
+  done
+  PATH="$hostile_bin" \
+    HOME="$root/forged-home" \
+    RUSTFLAGS="-C link-arg=forged" \
+    CARGO_ENCODED_RUSTFLAGS="forged" \
+    RUSTC_WRAPPER="$hostile_bin/rustc-wrapper" \
+    RUSTC_WORKSPACE_WRAPPER="$hostile_bin/workspace-wrapper" \
+    GIT_DIR="$root/forged-git-dir" \
+    GIT_WORK_TREE="$root/forged-work-tree" \
+    GIT_INDEX_FILE="$root/forged-index" \
+    GIT_CONFIG_GLOBAL="$root/forged-git-config" \
+    NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY=1 \
+    /bin/bash "$root/scripts/build_norito_xcframework.sh"
+  [[ ! -e "$hostile_marker" ]] \
+    || fail "Apple builder trusted a hostile ambient PATH tool"
 
   # A workspace package outside the bridge dependency closure must not make
   # otherwise identical native slices appear mixed-source.
@@ -66,8 +107,90 @@ test_build_source_seal() {
   esac
 }
 
+test_hermetic_command_environment() {
+  local probe="$TMP_DIR/hermetic-environment-probe"
+  local output="$TMP_DIR/hermetic-environment.txt"
+  local rejected_output
+  printf '%s\n' \
+    "#!$TEST_PYTHON_BINARY" \
+    'import os' \
+    'from pathlib import Path' \
+    'import sys' \
+    'Path(sys.argv[1]).write_text("".join(f"{key}={value}\n" for key, value in sorted(os.environ.items())), encoding="utf-8")' \
+    >"$probe"
+  chmod 0700 "$probe"
+  RUSTFLAGS="-C link-arg=forged" \
+    CARGO_ENCODED_RUSTFLAGS="forged" \
+    RUSTC_WRAPPER="$TMP_DIR/forged-wrapper" \
+    RUSTC_WORKSPACE_WRAPPER="$TMP_DIR/forged-workspace-wrapper" \
+    CC="$TMP_DIR/forged-cc" \
+    SDKROOT="$TMP_DIR/forged-sdk" \
+    python3 -I "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+      --profile host-cargo \
+      --set "CARGO=/reviewed/cargo" \
+      --set "CARGO_HOME=/reviewed/cargo-home" \
+      --set "CARGO_INCREMENTAL=0" \
+      --set "CARGO_NET_OFFLINE=true" \
+      --set "CARGO_TARGET_DIR=/reviewed/cargo-target" \
+      --set "HOME=/reviewed/home" \
+      --set "LANG=C.UTF-8" \
+      --set "LC_ALL=C.UTF-8" \
+      --set "NORITO_SKIP_BINDINGS_SYNC=1" \
+      --set "PATH=/reviewed/toolchain/bin:/usr/bin:/bin" \
+      --set "RUSTC=/reviewed/rustc" \
+      --set "RUSTUP_HOME=/reviewed/rustup-home" \
+      --set "TMPDIR=/tmp" \
+      -- "$probe" "$output"
+  python3 -I - "$output" <<'PY'
+from pathlib import Path
+import sys
+
+environment = {}
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    name, value = line.split("=", 1)
+    if name in environment:
+        raise SystemExit(f"duplicate probe environment key: {name}")
+    environment[name] = value
+# macOS injects this process-local CoreFoundation encoding marker after exec;
+# it is not inherited from the caller and has no compiler/tool selection role.
+environment.pop("__CF_USER_TEXT_ENCODING", None)
+expected = {
+    "CARGO",
+    "CARGO_HOME",
+    "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE",
+    "CARGO_TARGET_DIR",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "NORITO_SKIP_BINDINGS_SYNC",
+    "PATH",
+    "RUSTC",
+    "RUSTUP_HOME",
+    "TMPDIR",
+}
+if set(environment) != expected:
+    raise SystemExit(f"hermetic Cargo environment is not exact: {sorted(environment)}")
+if environment["CARGO_NET_OFFLINE"] != "true":
+    raise SystemExit("hermetic Cargo environment is not offline")
+PY
+  if rejected_output="$(
+      python3 -I "$SCRIPT_DIR/run_mobile_hermetic_command.py" \
+        --profile host-cargo \
+        --set "RUSTFLAGS=forged" \
+        -- "$probe" "$output" 2>&1
+    )"; then
+    fail "hermetic command accepted an undeclared Rust flag"
+  fi
+  case "$rejected_output" in
+    *"environment inventory is not exact"*) ;;
+    *) fail "hermetic command rejected a Rust flag without an explicit inventory error" ;;
+  esac
+}
+
 if [[ "${MOBILE_SDK_SKIP_SOURCE_SEAL_SELF_TEST:-0}" != "1" ]]; then
   test_build_source_seal
+  test_hermetic_command_environment
 fi
 
 make_aar() {
@@ -161,6 +284,46 @@ manifest = {
     "cargo_locked": True,
     "privacy_production_enabled": production,
     "cargo_features": ["privacy-production-enabled"] if production else [],
+    "build_environment": {
+        "schema": "iroha.mobile-native-build-environment.v1",
+        "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
+        "hermetic_runner_sha256": "1" * 64,
+        "environment_profile": "android-cargo",
+        "environment_allowlist": [
+            "ANDROID_NDK_HOME",
+            "ANDROID_NDK_ROOT",
+            "CARGO",
+            "CARGO_HOME",
+            "CARGO_INCREMENTAL",
+            "CARGO_NET_OFFLINE",
+            "CARGO_TARGET_DIR",
+            "HOME",
+            "LANG",
+            "LC_ALL",
+            "NORITO_SKIP_BINDINGS_SYNC",
+            "PATH",
+            "RUSTC",
+            "RUSTUP_HOME",
+            "TMPDIR",
+        ],
+        "rust_toolchain_channel": "1.93.1",
+        "cargo_release": "1.93.1",
+        "cargo_commit_hash": "2" * 40,
+        "cargo_binary_sha256": "2" * 64,
+        "rustc_release": "1.93.1",
+        "rustc_commit_hash": "3" * 40,
+        "rustc_binary_sha256": "3" * 64,
+        "cargo_ndk_version": "4.1.2",
+        "cargo_ndk_binary_sha256": "4" * 64,
+        "python_version": "3.11.9",
+        "python_binary_sha256": "5" * 64,
+        "git_version": "2.43.0",
+        "git_binary_sha256": "6" * 64,
+        "rustup_version": "1.28.2",
+        "rustup_binary_sha256": "7" * 64,
+        "android_ndk_revision": "28.0.12674087",
+        "android_ndk_source_properties_sha256": "8" * 64,
+    },
     "source_commit": "0" * 40,
     "source_tree_dirty": False,
     "source_fingerprint_sha256": "c" * 64,
@@ -343,9 +506,16 @@ java.write_text(
 PY
   cat >"$root/IrohaSwift/Package.swift" <<'SWIFT'
 // swift-tools-version:5.9
+import Foundation
 import PackageDescription
 
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
+let configuredArtifactDirectory = ProcessInfo.processInfo.environment[
+    "MOBILE_SDK_APPLE_ARTIFACT_DIR"
+]
+let bridgeTargetPath = configuredArtifactDirectory == nil
+    ? bridgeRelativePath
+    : configuredArtifactDirectory! + "/NoritoBridge.xcframework"
 
 let package = Package(
     name: "IrohaSwift",
@@ -355,7 +525,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "NoritoBridge",
-            path: bridgeRelativePath
+            path: bridgeTargetPath
         )
     ]
 )
@@ -396,6 +566,51 @@ PLIST
   "native_bridge_abi_version": 21,
   "privacy_production_enabled": false,
   "cargo_features": [],
+  "build_environment": {
+    "schema": "iroha.mobile-native-build-environment.v1",
+    "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
+    "hermetic_runner_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "environment_profiles": {
+      "apple-ios-device": [
+        "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
+        "IPHONEOS_DEPLOYMENT_TARGET", "LANG", "LC_ALL",
+        "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC", "RUSTUP_HOME",
+        "SDKROOT", "TMPDIR"
+      ],
+      "apple-ios-simulator": [
+        "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME",
+        "IPHONEOS_DEPLOYMENT_TARGET", "IPHONESIMULATOR_DEPLOYMENT_TARGET",
+        "LANG", "LC_ALL", "NORITO_SKIP_BINDINGS_SYNC", "PATH", "RUSTC",
+        "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+      ],
+      "apple-macos": [
+        "CARGO", "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR", "DEVELOPER_DIR", "HOME", "LANG", "LC_ALL",
+        "MACOSX_DEPLOYMENT_TARGET", "NORITO_SKIP_BINDINGS_SYNC", "PATH",
+        "RUSTC", "RUSTUP_HOME", "SDKROOT", "TMPDIR"
+      ]
+    },
+    "rust_toolchain_channel": "1.93.1",
+    "cargo_release": "1.93.1",
+    "cargo_commit_hash": "2222222222222222222222222222222222222222",
+    "cargo_binary_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "rustc_release": "1.93.1",
+    "rustc_commit_hash": "3333333333333333333333333333333333333333",
+    "rustc_binary_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "python_version": "3.11.9",
+    "python_binary_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "git_version": "2.43.0",
+    "git_binary_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "rustup_version": "1.28.2",
+    "rustup_binary_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "xcode_version": "16.2",
+    "xcode_build_version": "16C5032a",
+    "iphoneos_sdk_version": "18.2",
+    "iphonesimulator_sdk_version": "18.2",
+    "macosx_sdk_version": "15.2"
+  },
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
   "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -403,6 +618,8 @@ PLIST
   "required_symbols": [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
+    "connect_norito_chain_discriminant_scope_enter",
+    "connect_norito_chain_discriminant_scope_exit",
     "connect_norito_encode_transfer_signed_transaction",
     "connect_norito_encode_transfer_instruction_box",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
@@ -445,13 +662,11 @@ PLIST
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
     "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
@@ -648,7 +863,7 @@ SH
 #!/usr/bin/env bash
 binary="${*: -1}"
 root="${binary%%/dist/*}"
-python3 - "$root/dist/NoritoBridge.artifacts.json" <<'PY'
+python3 - "$root/dist/NoritoBridge.artifacts.json" "$binary" <<'PY'
 import json
 import os
 import sys
@@ -659,6 +874,10 @@ for symbol in manifest["required_symbols"]:
     print("_" + symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_KAGEMUSHA") == "1":
     print("_connect_norito_kagemusha_unexpected_v2")
+forbidden = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_SYMBOL")
+target = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_APPLE_SLICE")
+if forbidden and (not target or f"/{target}/" in sys.argv[2]):
+    print("_" + forbidden)
 PY
 SH
   chmod +x "$tools/lipo" "$tools/nm"
@@ -669,7 +888,8 @@ make_android_inspection_tools() {
   mkdir -p "$tools"
   cat >"$tools/llvm-nm" <<'SH'
 #!/usr/bin/env bash
-python3 - "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" <<'PY'
+binary="${*: -1}"
+python3 - "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" "$binary" <<'PY'
 import os
 import re
 import sys
@@ -699,6 +919,10 @@ for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
     print(symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
     print("connect_norito_kagemusha_recursive_spend_init_v3")
+forbidden = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_SYMBOL")
+target = os.environ.get("MOBILE_SDK_TEST_FORBIDDEN_ANDROID_ABI")
+if forbidden and (not target or f"/{target}/" in sys.argv[2]):
+    print(forbidden)
 PY
 SH
   cat >"$tools/file" <<'SH'
@@ -727,6 +951,29 @@ run_expect_binary_fail() {
     *)
       printf '%s\n' "$output" >&2
       fail "expected strict binary failure containing: $expected"
+      ;;
+  esac
+}
+
+run_expect_apple_forbidden_binary_fail() {
+  local root="$1"
+  local symbol="$2"
+  local slice="$3"
+  local tools="$4"
+  local output
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_FORBIDDEN_SYMBOL="$symbol" \
+      MOBILE_SDK_TEST_FORBIDDEN_APPLE_SLICE="$slice" \
+      bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected Apple validation to reject forbidden symbol $symbol in $slice"
+  fi
+  case "$output" in
+    *"NoritoBridge $slice exports forbidden first-release symbol $symbol"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected Apple forbidden-symbol failure for $symbol in $slice"
       ;;
   esac
 }
@@ -764,6 +1011,31 @@ run_expect_android_binary_fail() {
     *)
       printf '%s\n' "$output" >&2
       fail "expected strict Android binary failure containing: $expected"
+      ;;
+  esac
+}
+
+run_expect_android_forbidden_binary_fail() {
+  local root="$1"
+  local symbol="$2"
+  local abi="$3"
+  local tools="$4"
+  local output
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      MOBILE_SDK_TEST_FORBIDDEN_SYMBOL="$symbol" \
+      MOBILE_SDK_TEST_FORBIDDEN_ANDROID_ABI="$abi" \
+      bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected Android validation to reject forbidden symbol $symbol in $abi"
+  fi
+  case "$output" in
+    *"client-android $abi bridge exports forbidden first-release symbol $symbol"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected Android forbidden-symbol failure for $symbol in $abi"
       ;;
   esac
 }
@@ -1125,6 +1397,22 @@ sed -i.bak 's/"native_bridge_abi_version": 21/"native_bridge_abi_version": 20/' 
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
+tampered_apple_build_environment="$TMP_DIR/tampered-apple-build-environment"
+make_fixture "$tampered_apple_build_environment"
+"$TEST_PYTHON_BINARY" -I - "$tampered_apple_build_environment" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+manifest = Path(sys.argv[1]) / "dist/NoritoBridge.artifacts.json"
+payload = json.loads(manifest.read_text(encoding="utf-8"))
+payload["build_environment"]["environment_profiles"]["apple-macos"].append("RUSTFLAGS")
+manifest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+PY
+run_expect_fail \
+  "$tampered_apple_build_environment" \
+  "artifact build_environment is missing, malformed, or not hermetic"
+
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
 sed -i.bak \
@@ -1300,6 +1588,26 @@ run_expect_binary_fail \
   "$extra_binary_symbol" \
   "Kagemusha export inventory is not exact" \
   "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_get_chain_discriminant" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_set_chain_discriminant" \
+  "macos-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_kagemusha_recipient_registration_lineage_verify_v1" \
+  "ios-arm64_x86_64-simulator" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_kagemusha_request_authorization_create_v2" \
+  "ios-arm64" \
+  "$inspection_tools"
 
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
@@ -1368,12 +1676,64 @@ make_fixture "$with_android_outputs"
 make_android_outputs "$with_android_outputs"
 run_expect_pass "$with_android_outputs" --require-built-android
 
+tampered_android_build_environment="$TMP_DIR/tampered-android-build-environment"
+cp -R "$with_android_outputs" "$tampered_android_build_environment"
+"$TEST_PYTHON_BINARY" -I - "$tampered_android_build_environment" <<'PY'
+import json
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+manifest = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+payload = json.loads(manifest.read_text(encoding="utf-8"))
+payload["build_environment"]["cargo_ndk_version"] = "4.1.3"
+manifest_bytes = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+manifest.write_bytes(manifest_bytes)
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = manifest_bytes
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, child in entries.items():
+        output.writestr(name, child)
+PY
+run_expect_fail \
+  "$tampered_android_build_environment" \
+  "native provenance build_environment is not canonical" \
+  --android-only --require-built-android
+
 packaged_android_outputs="$TMP_DIR/packaged-android-outputs"
 cp -R "$with_android_outputs" "$packaged_android_outputs"
 mkdir -p "$packaged_android_outputs/scripts"
 cp "$CHECK_SCRIPT" "$packaged_android_outputs/scripts/check_mobile_sdk_artifacts.sh"
 cp "$PACKAGE_SCRIPT" "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh"
+if MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
+  bash "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh" \
+    --root "$packaged_android_outputs" \
+    --android \
+    --version 1.0.0 >/dev/null 2>&1; then
+  fail "Android release packager accepted source-tree build outputs without an external artifact root"
+fi
+packaged_android_artifacts="$TMP_DIR/packaged-android-artifacts"
+packaged_android_gradle_root="$packaged_android_artifacts/gradle-build/iroha_kotlin_sdk"
+mkdir -p \
+  "$packaged_android_gradle_root/core-jvm" \
+  "$packaged_android_gradle_root/client-android"
+packaged_android_artifacts="$(cd "$packaged_android_artifacts" && pwd -P)"
+packaged_android_gradle_root="$packaged_android_artifacts/gradle-build/iroha_kotlin_sdk"
+cp -R \
+  "$with_android_outputs/kotlin/core-jvm/build/." \
+  "$packaged_android_gradle_root/core-jvm/"
+cp -R \
+  "$with_android_outputs/kotlin/client-android/build/." \
+  "$packaged_android_gradle_root/client-android/"
 MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
+  MOBILE_SDK_ANDROID_ARTIFACT_DIR="$packaged_android_artifacts" \
   bash "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh" \
   --root "$packaged_android_outputs" \
   --android \
@@ -1681,6 +2041,36 @@ run_expect_fail \
 android_inspection_tools="$TMP_DIR/android-inspection-tools"
 make_android_inspection_tools "$android_inspection_tools"
 run_expect_android_binary_pass "$with_android_outputs" "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_get_chain_discriminant" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_set_chain_discriminant" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_kagemusha_recipient_registration_lineage_verify_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_kagemusha_request_authorization_create_v2" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2" \
+  "x86_64" \
+  "$android_inspection_tools"
 run_expect_android_unstripped_fail "$with_android_outputs" "$android_inspection_tools"
 run_expect_android_binary_fail \
   "$with_android_outputs" \

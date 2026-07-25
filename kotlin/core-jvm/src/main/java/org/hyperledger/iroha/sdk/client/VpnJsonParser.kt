@@ -254,7 +254,9 @@ object VpnJsonParser {
     }
 
     private fun requiredString(value: Any?, path: String): String {
-        check(value is String && value.isNotEmpty()) { "$path must be a non-empty string" }
+        check(value is String && value.isNotEmpty() && value.trim() == value) {
+            "$path must be a non-empty string without surrounding whitespace"
+        }
         return value
     }
 

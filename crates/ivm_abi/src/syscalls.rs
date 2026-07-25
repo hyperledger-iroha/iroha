@@ -2362,14 +2362,14 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     for operator in ARITHMETIC {
         for lhs in TYPES {
             for rhs in TYPES {
-                let allowed = match (operator, lhs, rhs) {
-                    (_, "int", "int") => true,
-                    ("+" | "-" | "*" | "/", "decimal", "decimal") => true,
-                    ("+" | "-", "quantity", "quantity")
-                    | ("*" | "/", "quantity", "decimal")
-                    | ("/", "quantity", "quantity") => true,
-                    _ => false,
-                };
+                let allowed = matches!(
+                    (operator, lhs, rhs),
+                    (_, "int", "int")
+                        | ("+" | "-" | "*" | "/", "decimal", "decimal")
+                        | ("+" | "-", "quantity", "quantity")
+                        | ("*" | "/", "quantity", "decimal")
+                        | ("/", "quantity", "quantity")
+                );
                 let (result, semantics) = if !allowed {
                     INVALID
                 } else {

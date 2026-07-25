@@ -345,6 +345,82 @@ final class SccpV1Tests: XCTestCase {
         ))
     }
 
+    func testSubmitAcceptsExactTairaSponsorProgram() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x54, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let programId = try FeeSponsorProgramId(
+            "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+        )
+        let feePayment = FeePaymentIntent.sponsor(
+            programId: programId,
+            programRevision: 1,
+            chargeLimits: [],
+            gasLimit: nil
+        )
+        let transactionPayload = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            feePayment: feePayment
+        )
+        let artifact = noritoEncode(
+            typeName: SccpSubmitValidation.destinationArtifactTypeName,
+            payload: Data([1])
+        ).base64EncodedString()
+        let request = try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: artifact,
+            signatureB64: Data(repeating: 1, count: 64).base64EncodedString(),
+            transactionPayloadB64: transactionPayload.base64EncodedString(),
+            creationTimeMs: 7,
+            feePayment: feePayment
+        )
+
+        XCTAssertEqual(request.feePayment, feePayment)
+        XCTAssertEqual(
+            request.transactionPayloadB64,
+            transactionPayload.base64EncodedString()
+        )
+    }
+
+    func testSubmitRejectsNonNfcSponsorProgramNameInRawCompactTransaction() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x55, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let sponsor = try AccountAddress.parseEncoded(
+            "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+            expectedPrefix: SccpV1.tairaI105DiscriminantV1
+        )
+        var program = CompactNoritoWriter()
+        program.writeField(try sponsor.compactNoritoAccountControllerPayload())
+        program.writeField(CompactNorito.encodeString("e\u{301}"))
+
+        var chargeLimits = CompactNoritoWriter()
+        chargeLimits.writeLength(0)
+        var sponsored = CompactNoritoWriter()
+        sponsored.writeField(program.data)
+        sponsored.writeField(CompactNorito.encodeUInt64(1))
+        sponsored.writeField(chargeLimits.data)
+        sponsored.writeField(Data([0]))
+        var feePayment = CompactNoritoWriter()
+        feePayment.writeUInt32LE(1)
+        feePayment.writeField(sponsored.data)
+
+        let transactionPayload = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            rawFeePayment: feePayment.data
+        )
+        XCTAssertThrowsError(
+            try SccpSubmitValidation.canonicalTransactionPayload(
+                transactionPayload,
+                creationTimeMs: 7,
+                expectedAuthority: authority,
+                expectedFeePayment: nil
+            )
+        )
+    }
+
     func testSubmitAuthorityRequiresExactTairaDiscriminant() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x41, count: 32))
         let authority = try address.toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
@@ -1845,6 +1921,18 @@ final class SccpV1Tests: XCTestCase {
         creationTimeMs: UInt64,
         feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
     ) throws -> Data {
+        try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            rawFeePayment: feePayment.compactNorito()
+        )
+    }
+
+    private func canonicalSccpTransactionPayload(
+        authority: String,
+        creationTimeMs: UInt64,
+        rawFeePayment: Data
+    ) throws -> Data {
         var chain = CompactNoritoWriter()
         chain.writeField(CompactNorito.encodeString("sccp-test"))
         let address = try AccountAddress.parseEncoded(
@@ -1863,7 +1951,7 @@ final class SccpV1Tests: XCTestCase {
         payload.writeField(Data([1]))
         payload.writeField(Data([0]))
         payload.writeField(Data([0]))
-        payload.writeField(try feePayment.compactNorito())
+        payload.writeField(rawFeePayment)
         payload.writeField(emptyMetadata.data)
         return payload.data
     }

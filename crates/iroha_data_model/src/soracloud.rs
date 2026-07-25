@@ -1955,15 +1955,13 @@ impl SoraServiceLeaseStateV1 {
             .runtime_price_per_sequence
             .try_mul_decimal(&Numeric::from(billed_sequences))?;
         let storage_gib =
-            (u128::from(accounted_storage_bytes) + u128::from(SORA_STORAGE_BYTES_PER_GIB) - 1)
-                / u128::from(SORA_STORAGE_BYTES_PER_GIB);
+            u128::from(accounted_storage_bytes).div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB));
         let storage_units = u128::from(billed_sequences) * storage_gib;
         let storage_cost = self
             .storage_price_per_gib_sequence
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
-        let egress_mib =
-            (u128::from(self.accounted_egress_bytes) + u128::from(SORA_NETWORK_BYTES_PER_MIB) - 1)
-                / u128::from(SORA_NETWORK_BYTES_PER_MIB);
+        let egress_mib = u128::from(self.accounted_egress_bytes)
+            .div_ceil(u128::from(SORA_NETWORK_BYTES_PER_MIB));
         let egress_cost = self
             .egress_price_per_mib
             .try_mul_decimal(&Numeric::new(egress_mib, 0))?;
@@ -2740,8 +2738,7 @@ impl SoraServiceManifestV1 {
         let storage_gib = if storage_bytes == 0 {
             0
         } else {
-            (storage_bytes + u128::from(SORA_STORAGE_BYTES_PER_GIB) - 1)
-                / u128::from(SORA_STORAGE_BYTES_PER_GIB)
+            storage_bytes.div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB))
         };
         let storage_cost = self
             .economics

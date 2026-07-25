@@ -23,6 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.Properties
@@ -38,6 +39,51 @@ private object NativeBridgeBuildContract {
     val rustTargets = listOf("aarch64-linux-android", "x86_64-linux-android")
     const val libraryName = "libconnect_norito_bridge.so"
     const val sourceSealSchema = "iroha.norito-bridge-source-seal.v1"
+    const val buildEnvironmentSchema = "iroha.mobile-native-build-environment.v1"
+    const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
+    const val pinnedRustToolchain = "1.93.1"
+    const val pinnedCargoNdkVersion = "4.1.2"
+    const val pinnedAndroidNdkRevision = "28.0.12674087"
+    val androidCargoEnvironmentAllowlist = listOf(
+        "ANDROID_NDK_HOME",
+        "ANDROID_NDK_ROOT",
+        "CARGO",
+        "CARGO_HOME",
+        "CARGO_INCREMENTAL",
+        "CARGO_NET_OFFLINE",
+        "CARGO_TARGET_DIR",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "NORITO_SKIP_BINDINGS_SYNC",
+        "PATH",
+        "RUSTC",
+        "RUSTUP_HOME",
+        "TMPDIR",
+    )
+
+    data class BuildTools(
+        val home: java.io.File,
+        val temporaryDirectory: java.io.File,
+        val python: java.nio.file.Path,
+        val git: java.nio.file.Path,
+        val rustup: java.nio.file.Path,
+        val cargo: java.nio.file.Path,
+        val rustc: java.nio.file.Path,
+        val cargoNdk: java.nio.file.Path,
+        val hermeticRunner: java.nio.file.Path,
+        val androidNdk: java.nio.file.Path,
+        val cargoRelease: String,
+        val cargoCommitHash: String,
+        val rustcRelease: String,
+        val rustcCommitHash: String,
+        val cargoNdkVersion: String,
+        val pythonVersion: String,
+        val gitVersion: String,
+        val rustupVersion: String,
+        val androidNdkRevision: String,
+        val androidNdkSourcePropertiesSha256: String,
+    )
 
     fun sha256Hex(path: java.nio.file.Path): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -53,6 +99,374 @@ private object NativeBridgeBuildContract {
             "%02x".format(byte.toInt() and 0xff)
         }
     }
+
+    private fun requireExecutable(path: java.nio.file.Path, label: String): java.nio.file.Path {
+        val resolved = path.toRealPath()
+        require(
+            Files.isRegularFile(resolved, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(resolved) &&
+                Files.isExecutable(resolved),
+        ) {
+            "$label must resolve to a non-symbolic regular executable: $path -> $resolved"
+        }
+        return resolved
+    }
+
+    private fun trustedPython(): java.nio.file.Path {
+        val candidate = listOf(
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3",
+        ).map(::File).firstOrNull { file -> file.isFile && file.canExecute() }
+            ?: throw GradleException("A pinned absolute Python 3 executable is required")
+        return requireExecutable(candidate.toPath(), "Python")
+    }
+
+    private fun commandOutput(
+        execOperations: ExecOperations,
+        workingDirectory: File,
+        environment: Map<String, String>,
+        command: List<String>,
+        label: String,
+    ): String {
+        val stdout = ByteArrayOutputStream()
+        val stderr = ByteArrayOutputStream()
+        val result = execOperations.exec {
+            workingDir(workingDirectory)
+            setEnvironment(environment)
+            commandLine(command)
+            standardOutput = stdout
+            errorOutput = stderr
+            isIgnoreExitValue = true
+        }
+        require(result.exitValue == 0) {
+            "$label failed: ${stderr.toString(Charsets.UTF_8.name()).trim()}"
+        }
+        return stdout.toString(Charsets.UTF_8.name()).trim()
+    }
+
+    private fun baseToolEnvironment(
+        home: File,
+        temporaryDirectory: File,
+        path: String,
+    ): Map<String, String> = linkedMapOf(
+        "HOME" to home.absolutePath,
+        "PATH" to path,
+        "TMPDIR" to temporaryDirectory.absolutePath,
+        "LANG" to "C.UTF-8",
+        "LC_ALL" to "C.UTF-8",
+        "RUSTUP_HOME" to home.resolve(".rustup").absolutePath,
+        "CARGO_HOME" to home.resolve(".cargo").absolutePath,
+    )
+
+    fun resolveBuildTools(
+        execOperations: ExecOperations,
+        irohaRoot: File,
+        hermeticRunnerFile: File,
+        androidNdkDirectory: File,
+    ): BuildTools {
+        val python = trustedPython()
+        val homeText = commandOutput(
+            execOperations,
+            irohaRoot,
+            mapOf(
+                "HOME" to "/",
+                "PATH" to "${python.parent}:/usr/bin:/bin",
+                "TMPDIR" to "/tmp",
+                "LANG" to "C.UTF-8",
+                "LC_ALL" to "C.UTF-8",
+            ),
+            listOf(
+                python.toString(),
+                "-I",
+                "-c",
+                "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)",
+            ),
+            "system account home resolution",
+        )
+        val home = File(homeText).toPath().toRealPath().toFile()
+        val temporaryDirectory = File("/tmp").toPath().toRealPath().toFile()
+        val git = requireExecutable(Path.of("/usr/bin/git"), "Git")
+        val rustup = requireExecutable(home.resolve(".cargo/bin/rustup").toPath(), "rustup")
+        val hermeticRunner = hermeticRunnerFile.toPath().toRealPath()
+        require(
+            Files.isRegularFile(hermeticRunner, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(hermeticRunner),
+        ) {
+            "Hermetic command runner must be a non-symbolic regular file: $hermeticRunner"
+        }
+        val rustToolchainFile = irohaRoot.resolve("rust-toolchain.toml")
+        require(
+            Files.isRegularFile(rustToolchainFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(rustToolchainFile.toPath()),
+        ) {
+            "rust-toolchain.toml must be a non-symbolic regular file"
+        }
+        val toolchainMatches = Regex(
+            """(?m)^\s*channel\s*=\s*"([^"]+)"\s*$""",
+        ).findAll(rustToolchainFile.readText()).map { match -> match.groupValues[1] }.toList()
+        require(toolchainMatches == listOf(pinnedRustToolchain)) {
+            "Android native builds require exact Rust $pinnedRustToolchain"
+        }
+
+        val rustupEnvironment = baseToolEnvironment(
+            home,
+            temporaryDirectory,
+            "${rustup.parent}:/usr/bin:/bin",
+        )
+        val cargo = requireExecutable(
+            Path.of(
+                commandOutput(
+                    execOperations,
+                    irohaRoot,
+                    rustupEnvironment,
+                    listOf(
+                        rustup.toString(),
+                        "which",
+                        "--toolchain",
+                        pinnedRustToolchain,
+                        "cargo",
+                    ),
+                    "pinned Cargo resolution",
+                ),
+            ),
+            "Cargo",
+        )
+        val rustc = requireExecutable(
+            Path.of(
+                commandOutput(
+                    execOperations,
+                    irohaRoot,
+                    rustupEnvironment,
+                    listOf(
+                        rustup.toString(),
+                        "which",
+                        "--toolchain",
+                        pinnedRustToolchain,
+                        "rustc",
+                    ),
+                    "pinned rustc resolution",
+                ),
+            ),
+            "rustc",
+        )
+        val cargoNdk = requireExecutable(
+            home.resolve(".cargo/bin/cargo-ndk").toPath(),
+            "cargo-ndk",
+        )
+        val androidNdk = androidNdkDirectory.toPath().toRealPath()
+        require(
+            Files.isDirectory(androidNdk, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(androidNdk),
+        ) {
+            "Android NDK must resolve to a non-symbolic directory: $androidNdk"
+        }
+        val sourceProperties = androidNdk.resolve("source.properties")
+        require(Files.isRegularFile(sourceProperties, LinkOption.NOFOLLOW_LINKS)) {
+            "Android NDK source.properties is unavailable: $sourceProperties"
+        }
+        val androidNdkRevision = Files.readAllLines(sourceProperties)
+            .singleOrNull { line -> line.startsWith("Pkg.Revision = ") }
+            ?.substringAfter("Pkg.Revision = ")
+            ?.trim()
+            .orEmpty()
+        require(Regex("^[0-9]+(?:\\.[0-9]+){1,3}$").matches(androidNdkRevision)) {
+            "Android NDK revision is not canonical"
+        }
+        require(androidNdkRevision == pinnedAndroidNdkRevision) {
+            "Android native builds require exact NDK $pinnedAndroidNdkRevision"
+        }
+
+        val cargoPath = listOf(
+            cargo.parent.toString(),
+            rustc.parent.toString(),
+            cargoNdk.parent.toString(),
+            "/usr/bin",
+            "/bin",
+        ).distinct().joinToString(File.pathSeparator)
+        val cargoEnvironment = baseToolEnvironment(home, temporaryDirectory, cargoPath) +
+            mapOf(
+                "CARGO" to cargo.toString(),
+                "RUSTC" to rustc.toString(),
+                "CARGO_INCREMENTAL" to "0",
+                "CARGO_NET_OFFLINE" to "true",
+            )
+        val cargoVersion = commandOutput(
+            execOperations,
+            irohaRoot,
+            cargoEnvironment,
+            listOf(cargo.toString(), "--version", "--verbose"),
+            "Cargo identity",
+        )
+        val rustcVersion = commandOutput(
+            execOperations,
+            irohaRoot,
+            cargoEnvironment,
+            listOf(rustc.toString(), "--version", "--verbose"),
+            "rustc identity",
+        )
+        fun versionField(document: String, field: String): String =
+            document.lineSequence().singleOrNull { line -> line.startsWith("$field: ") }
+                ?.substringAfter("$field: ")
+                ?.trim()
+                ?: throw GradleException("Native tool identity is missing $field")
+        val cargoRelease = versionField(cargoVersion, "release")
+        val cargoCommitHash = versionField(cargoVersion, "commit-hash")
+        val rustcRelease = versionField(rustcVersion, "release")
+        val rustcCommitHash = versionField(rustcVersion, "commit-hash")
+        require(cargoRelease == pinnedRustToolchain && rustcRelease == pinnedRustToolchain) {
+            "Cargo/rustc do not match exact Rust $pinnedRustToolchain"
+        }
+        require(
+            Regex("^[0-9a-f]{40}$").matches(cargoCommitHash) &&
+                Regex("^[0-9a-f]{40}$").matches(rustcCommitHash),
+        ) {
+            "Cargo/rustc commit identity is not canonical"
+        }
+        val cargoNdkVersionOutput = commandOutput(
+            execOperations,
+            irohaRoot,
+            cargoEnvironment,
+            listOf(cargo.toString(), "ndk", "--version"),
+            "cargo-ndk identity",
+        )
+        val cargoNdkVersion = Regex("""^cargo-ndk ([0-9]+(?:\.[0-9]+){1,2})$""")
+            .matchEntire(cargoNdkVersionOutput)
+            ?.groupValues
+            ?.get(1)
+            ?: throw GradleException("cargo-ndk returned a non-canonical version")
+        require(cargoNdkVersion == pinnedCargoNdkVersion) {
+            "Android native builds require exact cargo-ndk $pinnedCargoNdkVersion"
+        }
+
+        val pythonEnvironment = mapOf(
+            "HOME" to home.absolutePath,
+            "PATH" to "${python.parent}:/usr/bin:/bin",
+            "TMPDIR" to temporaryDirectory.absolutePath,
+            "LANG" to "C.UTF-8",
+            "LC_ALL" to "C.UTF-8",
+        )
+        val pythonVersion = commandOutput(
+            execOperations,
+            irohaRoot,
+            pythonEnvironment,
+            listOf(
+                python.toString(),
+                "-I",
+                "-c",
+                "import platform; print(platform.python_version())",
+            ),
+            "Python identity",
+        )
+        val gitEnvironment = pythonEnvironment + mapOf(
+            "GIT_CONFIG_NOSYSTEM" to "1",
+            "GIT_CONFIG_GLOBAL" to "/dev/null",
+            "GIT_OPTIONAL_LOCKS" to "0",
+        )
+        val gitVersion = commandOutput(
+            execOperations,
+            irohaRoot,
+            gitEnvironment,
+            listOf(git.toString(), "--version"),
+            "Git identity",
+        ).let { output ->
+            Regex("""^git version ([0-9]+(?:\.[0-9]+){1,3}).*$""")
+                .matchEntire(output)
+                ?.groupValues
+                ?.get(1)
+                ?: throw GradleException("Git returned a non-canonical version")
+        }
+        val rustupVersion = commandOutput(
+            execOperations,
+            irohaRoot,
+            rustupEnvironment,
+            listOf(rustup.toString(), "--version"),
+            "rustup identity",
+        ).lineSequence().first().let { output ->
+            Regex("""^rustup ([0-9]+(?:\.[0-9]+){1,2}).*$""")
+                .matchEntire(output)
+                ?.groupValues
+                ?.get(1)
+                ?: throw GradleException("rustup returned a non-canonical version")
+        }
+        require(Regex("^[0-9]+(?:\\.[0-9]+){1,2}$").matches(pythonVersion)) {
+            "Python returned a non-canonical version"
+        }
+
+        return BuildTools(
+            home = home,
+            temporaryDirectory = temporaryDirectory,
+            python = python,
+            git = git,
+            rustup = rustup,
+            cargo = cargo,
+            rustc = rustc,
+            cargoNdk = cargoNdk,
+            hermeticRunner = hermeticRunner,
+            androidNdk = androidNdk,
+            cargoRelease = cargoRelease,
+            cargoCommitHash = cargoCommitHash,
+            rustcRelease = rustcRelease,
+            rustcCommitHash = rustcCommitHash,
+            cargoNdkVersion = cargoNdkVersion,
+            pythonVersion = pythonVersion,
+            gitVersion = gitVersion,
+            rustupVersion = rustupVersion,
+            androidNdkRevision = androidNdkRevision,
+            androidNdkSourcePropertiesSha256 = sha256Hex(sourceProperties),
+        )
+    }
+
+    fun buildEnvironmentDocument(tools: BuildTools): Map<String, Any> = linkedMapOf(
+        "schema" to buildEnvironmentSchema,
+        "hermetic_runner_schema" to hermeticRunnerSchema,
+        "hermetic_runner_sha256" to sha256Hex(tools.hermeticRunner),
+        "environment_profile" to "android-cargo",
+        "environment_allowlist" to androidCargoEnvironmentAllowlist,
+        "rust_toolchain_channel" to pinnedRustToolchain,
+        "cargo_release" to tools.cargoRelease,
+        "cargo_commit_hash" to tools.cargoCommitHash,
+        "cargo_binary_sha256" to sha256Hex(tools.cargo),
+        "rustc_release" to tools.rustcRelease,
+        "rustc_commit_hash" to tools.rustcCommitHash,
+        "rustc_binary_sha256" to sha256Hex(tools.rustc),
+        "cargo_ndk_version" to tools.cargoNdkVersion,
+        "cargo_ndk_binary_sha256" to sha256Hex(tools.cargoNdk),
+        "python_version" to tools.pythonVersion,
+        "python_binary_sha256" to sha256Hex(tools.python),
+        "git_version" to tools.gitVersion,
+        "git_binary_sha256" to sha256Hex(tools.git),
+        "rustup_version" to tools.rustupVersion,
+        "rustup_binary_sha256" to sha256Hex(tools.rustup),
+        "android_ndk_revision" to tools.androidNdkRevision,
+        "android_ndk_source_properties_sha256" to tools.androidNdkSourcePropertiesSha256,
+    )
+
+    fun buildEnvironmentBytes(tools: BuildTools): ByteArray =
+        (JsonOutput.prettyPrint(JsonOutput.toJson(buildEnvironmentDocument(tools))) + "\n")
+            .toByteArray(Charsets.UTF_8)
+
+    private fun sourceSealEnvironment(tools: BuildTools): Map<String, String> =
+        linkedMapOf(
+            "HOME" to tools.home.absolutePath,
+            "PATH" to listOf(
+                tools.python.parent.toString(),
+                tools.cargo.parent.toString(),
+                tools.rustc.parent.toString(),
+                tools.git.parent.toString(),
+                "/usr/bin",
+                "/bin",
+            ).distinct().joinToString(File.pathSeparator),
+            "TMPDIR" to tools.temporaryDirectory.absolutePath,
+            "LANG" to "C.UTF-8",
+            "LC_ALL" to "C.UTF-8",
+            "NORITO_BRIDGE_SEAL_HOME" to tools.home.absolutePath,
+            "NORITO_BRIDGE_SEAL_CARGO_HOME" to tools.home.resolve(".cargo").absolutePath,
+            "NORITO_BRIDGE_SEAL_RUSTUP_HOME" to tools.home.resolve(".rustup").absolutePath,
+            "NORITO_BRIDGE_SEAL_TMPDIR" to tools.temporaryDirectory.absolutePath,
+            "NORITO_BRIDGE_SEAL_CARGO" to tools.cargo.toString(),
+            "NORITO_BRIDGE_SEAL_RUSTC" to tools.rustc.toString(),
+        )
 
     fun requireLibraries(
         root: java.io.File,
@@ -136,13 +550,16 @@ private object NativeBridgeBuildContract {
         execOperations: ExecOperations,
         irohaRoot: java.io.File,
         sourceSealScript: java.io.File,
+        tools: BuildTools,
     ): ByteArray {
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
         val result = execOperations.exec {
             workingDir(irohaRoot)
+            setEnvironment(sourceSealEnvironment(tools))
             commandLine(
-                "python3",
+                tools.python.toString(),
+                "-I",
                 sourceSealScript.absolutePath,
                 "snapshot",
                 "--root",
@@ -169,12 +586,15 @@ private object NativeBridgeBuildContract {
         sourceSealScript: java.io.File,
         sourceSealFile: java.io.File,
         phase: String,
+        tools: BuildTools,
     ) {
         val stderr = ByteArrayOutputStream()
         val result = execOperations.exec {
             workingDir(irohaRoot)
+            setEnvironment(sourceSealEnvironment(tools))
             commandLine(
-                "python3",
+                tools.python.toString(),
+                "-I",
                 sourceSealScript.absolutePath,
                 "verify",
                 "--root",
@@ -216,11 +636,20 @@ abstract class CompileNativeBridgeTask @Inject constructor(
     @get:Internal
     abstract val sourceSealScript: RegularFileProperty
 
+    @get:Internal
+    abstract val hermeticRunner: RegularFileProperty
+
+    @get:Internal
+    abstract val androidNdkDirectory: DirectoryProperty
+
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
 
     @get:OutputFile
     abstract val sourceSealFile: RegularFileProperty
+
+    @get:OutputFile
+    abstract val buildEnvironmentFile: RegularFileProperty
 
     @TaskAction
     fun compile() {
@@ -229,26 +658,35 @@ abstract class CompileNativeBridgeTask @Inject constructor(
         require(Files.isRegularFile(sealScript.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             "NoritoBridge source-seal script must be a non-symbolic regular file: $sealScript"
         }
+        val tools = NativeBridgeBuildContract.resolveBuildTools(
+            execOperations,
+            irohaRoot,
+            hermeticRunner.get().asFile,
+            androidNdkDirectory.get().asFile,
+        )
         val sourceSeal = NativeBridgeBuildContract.captureSourceSeal(
             execOperations,
             irohaRoot,
             sealScript,
+            tools,
         )
+        val buildEnvironment = NativeBridgeBuildContract.buildEnvironmentBytes(tools)
         val outputRoot = outputDirectory.get().asFile
         val stagingRoot = cargoNdkStagingDirectory.get().asFile
         val sealFile = sourceSealFile.get().asFile
+        val environmentFile = buildEnvironmentFile.get().asFile
         fileSystemOperations.delete {
             // Gradle's DeleteSpec.delete(...) replaces its target array on
             // every invocation; pass the complete inventory in one call.
-            delete(outputRoot, stagingRoot, sealFile)
+            delete(outputRoot, stagingRoot, sealFile, environmentFile)
         }
         require(
-            listOf(outputRoot, stagingRoot, sealFile).none { candidate ->
+            listOf(outputRoot, stagingRoot, sealFile, environmentFile).none { candidate ->
                 Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)
             },
         ) {
             "Unable to clear stale Android native build outputs before sealing: " +
-                listOf(outputRoot, stagingRoot, sealFile)
+                listOf(outputRoot, stagingRoot, sealFile, environmentFile)
         }
         require(outputRoot.mkdirs() || outputRoot.isDirectory) {
             "Unable to create cargo-ndk output directory: $outputRoot"
@@ -259,13 +697,20 @@ abstract class CompileNativeBridgeTask @Inject constructor(
         require(sealFile.parentFile.mkdirs() || sealFile.parentFile.isDirectory) {
             "Unable to create Android source-seal directory: ${sealFile.parentFile}"
         }
+        require(
+            environmentFile.parentFile.mkdirs() || environmentFile.parentFile.isDirectory,
+        ) {
+            "Unable to create Android build-environment directory: ${environmentFile.parentFile}"
+        }
         sealFile.writeBytes(sourceSeal)
+        environmentFile.writeBytes(buildEnvironment)
         NativeBridgeBuildContract.assertSourceSeal(
             execOperations,
             irohaRoot,
             sealScript,
             sealFile,
             "build start",
+            tools,
         )
         val cargoTargetRoot = cargoTargetDirectory.get().asFile
         require(cargoTargetRoot.mkdirs() || cargoTargetRoot.isDirectory) {
@@ -278,12 +723,65 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             require(abiStagingRoot.mkdirs() || abiStagingRoot.isDirectory) {
                 "Unable to create transient cargo-ndk staging directory for $abi: $abiStagingRoot"
             }
+            val cargoPath = listOf(
+                tools.cargo.parent.toString(),
+                tools.rustc.parent.toString(),
+                tools.cargoNdk.parent.toString(),
+                "/usr/bin",
+                "/bin",
+            ).distinct().joinToString(File.pathSeparator)
             val command = buildList {
-                addAll(listOf("cargo", "ndk", "-t", abi, "-o", abiStagingRoot.absolutePath))
+                addAll(
+                    listOf(
+                        tools.python.toString(),
+                        "-I",
+                        tools.hermeticRunner.toString(),
+                        "--profile",
+                        "android-cargo",
+                        "--set",
+                        "ANDROID_NDK_HOME=${tools.androidNdk}",
+                        "--set",
+                        "ANDROID_NDK_ROOT=${tools.androidNdk}",
+                        "--set",
+                        "CARGO=${tools.cargo}",
+                        "--set",
+                        "CARGO_HOME=${tools.home.resolve(".cargo")}",
+                        "--set",
+                        "CARGO_INCREMENTAL=0",
+                        "--set",
+                        "CARGO_NET_OFFLINE=true",
+                        "--set",
+                        "CARGO_TARGET_DIR=${cargoTargetRoot.absolutePath}",
+                        "--set",
+                        "HOME=${tools.home.absolutePath}",
+                        "--set",
+                        "LANG=C.UTF-8",
+                        "--set",
+                        "LC_ALL=C.UTF-8",
+                        "--set",
+                        "NORITO_SKIP_BINDINGS_SYNC=1",
+                        "--set",
+                        "PATH=$cargoPath",
+                        "--set",
+                        "RUSTC=${tools.rustc}",
+                        "--set",
+                        "RUSTUP_HOME=${tools.home.resolve(".rustup")}",
+                        "--set",
+                        "TMPDIR=${tools.temporaryDirectory.absolutePath}",
+                        "--",
+                        tools.cargo.toString(),
+                        "ndk",
+                        "-t",
+                        abi,
+                        "-o",
+                        abiStagingRoot.absolutePath,
+                    ),
+                )
                 addAll(
                     listOf(
                         "build",
                         "--locked",
+                        "--offline",
                         "--release",
                         "-p",
                         "connect_norito_bridge",
@@ -295,7 +793,15 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             }
             execOperations.exec {
                 workingDir(irohaRoot)
-                environment("CARGO_TARGET_DIR", cargoTargetRoot.absolutePath)
+                setEnvironment(
+                    mapOf(
+                        "HOME" to tools.home.absolutePath,
+                        "PATH" to "${tools.python.parent}:/usr/bin:/bin",
+                        "TMPDIR" to tools.temporaryDirectory.absolutePath,
+                        "LANG" to "C.UTF-8",
+                        "LC_ALL" to "C.UTF-8",
+                    ),
+                )
                 commandLine(*command.toTypedArray())
             }.assertNormalExitValue()
             NativeBridgeBuildContract.assertSourceSeal(
@@ -304,6 +810,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                 sealScript,
                 sealFile,
                 "$abi Cargo build",
+                tools,
             )
 
             // cargo-ndk can copy unrelated cdylib workspace outputs into its
@@ -323,6 +830,14 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             require(promotedLibrary.parentFile.mkdirs() || promotedLibrary.parentFile.isDirectory) {
                 "Unable to create promoted raw native ABI directory: ${promotedLibrary.parentFile}"
             }
+            NativeBridgeBuildContract.assertSourceSeal(
+                execOperations,
+                irohaRoot,
+                sealScript,
+                sealFile,
+                "$abi immediate pre-promotion authentication",
+                tools,
+            )
             Files.copy(
                 stagedLibrary.toPath(),
                 promotedLibrary.toPath(),
@@ -339,7 +854,8 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                 irohaRoot,
                 sealScript,
                 sealFile,
-                "$abi promotion",
+                "$abi immediate post-promotion authentication",
+                tools,
             )
         }
         NativeBridgeBuildContract.requireLibraries(outputRoot)
@@ -349,20 +865,37 @@ abstract class CompileNativeBridgeTask @Inject constructor(
             sealScript,
             sealFile,
             "native compile completion",
+            tools,
         )
     }
 
     fun hasReusableSealedOutput(): Boolean = runCatching {
         val outputRoot = outputDirectory.get().asFile
         val sealFile = sourceSealFile.get().asFile
+        val environmentFile = buildEnvironmentFile.get().asFile
+        val tools = NativeBridgeBuildContract.resolveBuildTools(
+            execOperations,
+            irohaDirectory.get().asFile,
+            hermeticRunner.get().asFile,
+            androidNdkDirectory.get().asFile,
+        )
         NativeBridgeBuildContract.requireLibraries(outputRoot)
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS))
+        require(Files.isRegularFile(environmentFile.toPath(), LinkOption.NOFOLLOW_LINKS))
+        require(
+            environmentFile.readBytes().contentEquals(
+                NativeBridgeBuildContract.buildEnvironmentBytes(tools),
+            ),
+        ) {
+            "Reusable Android native output was built with a different toolchain environment"
+        }
         NativeBridgeBuildContract.assertSourceSeal(
             execOperations,
             irohaDirectory.get().asFile,
             sourceSealScript.get().asFile,
             sealFile,
             "up-to-date authentication",
+            tools,
         )
         true
     }.getOrDefault(false)
@@ -386,11 +919,18 @@ abstract class StripNativeBridgeTask @Inject constructor(
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val sourceSealFile: RegularFileProperty
 
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val buildEnvironmentFile: RegularFileProperty
+
     @get:Internal
     abstract val irohaDirectory: DirectoryProperty
 
     @get:Internal
     abstract val sourceSealScript: RegularFileProperty
+
+    @get:Internal
+    abstract val hermeticRunner: RegularFileProperty
 
     @get:Internal
     abstract val androidNdkDirectory: DirectoryProperty
@@ -406,8 +946,28 @@ abstract class StripNativeBridgeTask @Inject constructor(
         val irohaRoot = irohaDirectory.get().asFile
         val sealScript = sourceSealScript.get().asFile
         val sealFile = sourceSealFile.get().asFile
+        val environmentFile = buildEnvironmentFile.get().asFile
+        val tools = NativeBridgeBuildContract.resolveBuildTools(
+            execOperations,
+            irohaRoot,
+            hermeticRunner.get().asFile,
+            androidNdkDirectory.get().asFile,
+        )
         require(Files.isRegularFile(sealFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             "Android source seal must be a non-symbolic regular file: $sealFile"
+        }
+        require(
+            Files.isRegularFile(environmentFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(environmentFile.toPath()),
+        ) {
+            "Android build environment must be a non-symbolic regular file: $environmentFile"
+        }
+        require(
+            environmentFile.readBytes().contentEquals(
+                NativeBridgeBuildContract.buildEnvironmentBytes(tools),
+            ),
+        ) {
+            "Android native build environment changed between compile and strip"
         }
         NativeBridgeBuildContract.assertSourceSeal(
             execOperations,
@@ -415,6 +975,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
             sealScript,
             sealFile,
             "strip start",
+            tools,
         )
         val sourceSeal = JsonSlurper().parse(sealFile) as? Map<*, *>
             ?: throw GradleException("Android source seal root must be a JSON object")
@@ -542,8 +1103,17 @@ abstract class StripNativeBridgeTask @Inject constructor(
                 "${stripLauncher.parentFile}: $stripLauncher -> $stripExecutablePath"
         }
         execOperations.exec {
+            setEnvironment(
+                mapOf(
+                    "HOME" to tools.home.absolutePath,
+                    "PATH" to "${stripExecutablePath.parent}:/usr/bin:/bin",
+                    "TMPDIR" to tools.temporaryDirectory.absolutePath,
+                    "LANG" to "C.UTF-8",
+                    "LC_ALL" to "C.UTF-8",
+                ),
+            )
             commandLine(
-                stripLauncher.absolutePath,
+                stripExecutablePath.toString(),
                 "--strip-unneeded",
                 *outputLibraries.map { it.absolutePath }.toTypedArray(),
             )
@@ -564,16 +1134,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
         require(Files.isRegularFile(cargoLock.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             "Cargo.lock must be a non-symbolic regular file: $cargoLock"
         }
-        val ndkRevision = androidNdkDirectory.get().file("source.properties").asFile
-            .takeIf { it.isFile }
-            ?.readLines()
-            ?.singleOrNull { line -> line.startsWith("Pkg.Revision = ") }
-            ?.substringAfter("Pkg.Revision = ")
-            ?.trim()
-            .orEmpty()
-        require(ndkRevision.isNotEmpty()) {
-            "Android NDK source.properties must contain exactly one Pkg.Revision"
-        }
+        val ndkRevision = tools.androidNdkRevision
 
         val outputByAbi = outputLibraries.associateBy { library -> library.parentFile.name }
         val libraries = linkedMapOf<String, Any>()
@@ -600,6 +1161,7 @@ abstract class StripNativeBridgeTask @Inject constructor(
             "cargo_locked" to true,
             "privacy_production_enabled" to privacyProductionEnabled.get(),
             "cargo_features" to cargoFeatures,
+            "build_environment" to NativeBridgeBuildContract.buildEnvironmentDocument(tools),
             "source_commit" to sourceCommit,
             "source_tree_dirty" to sourceTreeDirty,
             "source_fingerprint_sha256" to sourceFingerprint,
@@ -614,13 +1176,22 @@ abstract class StripNativeBridgeTask @Inject constructor(
         require(provenanceFile.parentFile.mkdirs() || provenanceFile.parentFile.isDirectory) {
             "Unable to create native provenance directory: ${provenanceFile.parentFile}"
         }
+        NativeBridgeBuildContract.assertSourceSeal(
+            execOperations,
+            irohaRoot,
+            sealScript,
+            sealFile,
+            "stripped artifact immediate pre-promotion authentication",
+            tools,
+        )
         provenanceFile.writeText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + "\n")
         NativeBridgeBuildContract.assertSourceSeal(
             execOperations,
             irohaRoot,
             sealScript,
             sealFile,
-            "strip and provenance completion",
+            "stripped artifact immediate post-promotion authentication",
+            tools,
         )
     }
 }
@@ -734,6 +1305,56 @@ if (privacyProductionEnabledInput != "true" && privacyProductionEnabledInput != 
 }
 val privacyProductionEnabledValue = privacyProductionEnabledInput == "true"
 val nativeBuildMode = if (privacyProductionEnabledValue) "production" else "default"
+val mobileSdkAndroidArtifactDirectoryInput =
+    providers.environmentVariable("MOBILE_SDK_ANDROID_ARTIFACT_DIR")
+val requireExternalAndroidArtifactDirectory =
+    tasks.register("requireExternalAndroidArtifactDirectory") {
+        group = "verification"
+        description =
+            "Requires the canonical external artifact root used by reviewed Android releases"
+        inputs.property(
+            "mobileSdkAndroidArtifactDirectory",
+            mobileSdkAndroidArtifactDirectoryInput.orElse("<missing>"),
+        )
+        doLast {
+            val raw = mobileSdkAndroidArtifactDirectoryInput.orNull
+                ?: throw GradleException(
+                    "Reviewed Android Release builds require " +
+                        "MOBILE_SDK_ANDROID_ARTIFACT_DIR.",
+                )
+            val supplied = Path.of(raw)
+            require(supplied.isAbsolute && supplied.normalize().toString() == raw) {
+                "MOBILE_SDK_ANDROID_ARTIFACT_DIR must be an absolute normalized path"
+            }
+            val canonical = supplied.toRealPath()
+            require(
+                canonical == supplied &&
+                    Files.isDirectory(canonical, LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(canonical) &&
+                    Files.isWritable(canonical),
+            ) {
+                "MOBILE_SDK_ANDROID_ARTIFACT_DIR must be one canonical writable " +
+                    "non-symbolic directory"
+            }
+            val irohaRoot = file(irohaDir()).toPath().toRealPath()
+            require(canonical != irohaRoot && !canonical.startsWith(irohaRoot)) {
+                "MOBILE_SDK_ANDROID_ARTIFACT_DIR must be outside the reviewed Iroha source tree"
+            }
+            val expectedBuildDirectory = canonical
+                .resolve("gradle-build/iroha_kotlin_sdk/client-android")
+                .normalize()
+            require(
+                layout.buildDirectory.get().asFile.toPath().toAbsolutePath().normalize() ==
+                    expectedBuildDirectory,
+            ) {
+                "client-android Release outputs are not redirected to the canonical " +
+                    "MOBILE_SDK_ANDROID_ARTIFACT_DIR"
+            }
+        }
+    }
+val androidNdkRoot = providers.environmentVariable("ANDROID_NDK_HOME")
+    .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
+    .orElse(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.absolutePath })
 
 val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLibs") {
     group = "native"
@@ -747,16 +1368,22 @@ val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLi
         layout.buildDirectory.dir("native/cargo-ndk-staging/$nativeBuildMode"),
     )
     sourceSealScript.set(file(irohaDir()).resolve("scripts/norito_bridge_source_seal.py"))
+    hermeticRunner.set(file(irohaDir()).resolve("scripts/run_mobile_hermetic_command.py"))
+    androidNdkDirectory.set(
+        layout.dir(androidNdkRoot.map { ndkPath -> file(ndkPath) }),
+    )
     outputDirectory.set(layout.buildDirectory.dir("native/cargo-ndk/$nativeBuildMode"))
     sourceSealFile.set(
         layout.buildDirectory.file("native/sourceSeal/$nativeBuildMode/source-seal-v1.json"),
     )
+    buildEnvironmentFile.set(
+        layout.buildDirectory.file(
+            "native/buildEnvironment/$nativeBuildMode/build-environment-v1.json",
+        ),
+    )
     outputs.upToDateWhen { hasReusableSealedOutput() }
+    dependsOn(requireExternalAndroidArtifactDirectory)
 }
-
-val androidNdkRoot = providers.environmentVariable("ANDROID_NDK_HOME")
-    .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
-    .orElse(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.absolutePath })
 
 val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     group = "native"
@@ -764,8 +1391,10 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     privacyProductionEnabled.set(privacyProductionEnabledValue)
     inputDirectory.set(compileNativeLibs.flatMap { it.outputDirectory })
     sourceSealFile.set(compileNativeLibs.flatMap { it.sourceSealFile })
+    buildEnvironmentFile.set(compileNativeLibs.flatMap { it.buildEnvironmentFile })
     irohaDirectory.set(file(irohaDir()))
     sourceSealScript.set(file(irohaDir()).resolve("scripts/norito_bridge_source_seal.py"))
+    hermeticRunner.set(file(irohaDir()).resolve("scripts/run_mobile_hermetic_command.py"))
     androidNdkDirectory.set(
         layout.dir(androidNdkRoot.map { ndkPath -> file(ndkPath) }),
     )
@@ -795,6 +1424,15 @@ tasks.register("buildNativeLibs") {
     group = "native"
     description = "Build and canonically strip connect_norito_bridge Android libraries"
     dependsOn(stripNativeLibs)
+    dependsOn(requireExternalAndroidArtifactDirectory)
+}
+
+tasks.matching {
+    name == "assembleRelease" ||
+        name == "bundleReleaseAar" ||
+        name.startsWith("publishRelease")
+}.configureEach {
+    dependsOn(requireExternalAndroidArtifactDirectory)
 }
 
 afterEvaluate {

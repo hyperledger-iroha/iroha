@@ -43,9 +43,12 @@ disconnect_on_post_overflow = false
 
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
+preauth_allow_cidrs = ["127.0.0.1/32"]
 max_content_len = 1_073_741_824
 deploy_rate_per_origin_per_sec = 1000
 deploy_burst_per_origin = 2000
+query_rate_per_authority_per_sec = 160
+query_burst_per_authority = 320
 webhooks_enabled = false
 zk_attachments_enabled = false
 

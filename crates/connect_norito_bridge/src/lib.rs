@@ -5,6 +5,7 @@
 #[cfg(test)]
 use core::ffi::c_void;
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, SeekFrom, Write as _},
@@ -31,7 +32,7 @@ use iroha_data_model::{
     ChainId,
     account::{
         AccountId,
-        address::{AccountAddress, AccountAddressError},
+        address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::id::{AssetBalanceScope, AssetDefinitionId, AssetId},
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
@@ -857,6 +858,11 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
     AccountId::parse_encoded(&value)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Authority)
+}
+
+fn parse_account_id_for_chain(value: String, chain_discriminant: u16) -> BridgeResult<AccountId> {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
+    parse_account_id(value)
 }
 
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
@@ -4747,14 +4753,56 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
 
 // ---------------- Chain discriminant helpers ----------------
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_get_chain_discriminant() -> u16 {
-    iroha_data_model::account::address::chain_discriminant()
+static NEXT_CHAIN_DISCRIMINANT_SCOPE_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static CHAIN_DISCRIMINANT_SCOPES: RefCell<Vec<(u64, ChainDiscriminantGuard)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
+/// Enter a chain-discriminant override scoped to the current native thread.
+///
+/// The returned non-zero token must be exited on the same thread and in LIFO
+/// order. A zero token means that the scope could not be entered.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_set_chain_discriminant(discriminant: u16) -> u16 {
-    iroha_data_model::account::address::set_chain_discriminant(discriminant)
+pub extern "C" fn connect_norito_chain_discriminant_scope_enter(discriminant: u16) -> u64 {
+    let token = NEXT_CHAIN_DISCRIMINANT_SCOPE_TOKEN
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .unwrap_or(0);
+    if token == 0 {
+        return 0;
+    }
+    let guard = ChainDiscriminantGuard::enter(discriminant);
+    CHAIN_DISCRIMINANT_SCOPES.with(|scopes| {
+        let Ok(mut scopes) = scopes.try_borrow_mut() else {
+            return 0;
+        };
+        scopes.push((token, guard));
+        token
+    })
+}
+
+/// Exit a current-thread chain-discriminant override.
+///
+/// Returns zero on success and `-1` for a zero, wrong-thread, underflow, or
+/// non-LIFO token. On failure the active scope stack is left unchanged.
+#[unsafe(no_mangle)]
+pub extern "C" fn connect_norito_chain_discriminant_scope_exit(token: u64) -> c_int {
+    if token == 0 {
+        return -1;
+    }
+    CHAIN_DISCRIMINANT_SCOPES.with(|scopes| {
+        let Ok(mut scopes) = scopes.try_borrow_mut() else {
+            return -1;
+        };
+        if scopes.last().map(|(active, _)| *active) != Some(token) {
+            return -1;
+        }
+        scopes.pop();
+        0
+    })
 }
 
 // ---------------- Account address helpers ----------------
@@ -13271,6 +13319,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_veri
 pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create_v2(
     chain_id_ptr: *const c_uchar,
     chain_id_len: c_ulong,
+    chain_discriminant: u16,
     recipient_ptr: *const c_uchar,
     recipient_len: c_ulong,
     receiver_device_id_ptr: *const c_uchar,
@@ -13305,36 +13354,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create
         .map_err(|_| BridgeError::KagemushaProve)?;
         let query = kagemusha_recipient_lineage_query_create_v2(
             ChainId::from(chain_id),
-            parse_account_id(recipient)?,
+            parse_account_id_for_chain(recipient, chain_discriminant)?,
             receiver_device_id,
             parse_asset_definition(asset)?,
             trusted_checkpoint_height,
         )?;
         unsafe { write_kagemusha_archive_bridge(out_query_ptr, out_query_len, &query) }
-    })();
-    bridge_result_to_code(result)
-}
-
-/// Retired request-bound v1 lineage verifier; retained for ABI compatibility.
-///
-/// This entry point always fails closed. Callers must migrate to the external
-/// durable-checkpoint v2 verifier below.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
-    _request_norito_ptr: *const c_uchar,
-    _request_norito_len: c_ulong,
-    _lineage_norito_ptr: *const c_uchar,
-    _lineage_norito_len: c_ulong,
-    _verified_at_ms: u64,
-    _expected_evaluated_block_height: u64,
-    _expected_evaluated_block_hash_ptr: *const c_uchar,
-    _expected_evaluated_block_hash_len: c_ulong,
-    out_lineage_ptr: *mut *mut c_uchar,
-    out_lineage_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_lineage_ptr, out_lineage_len)?;
-        Err(BridgeError::KagemushaProve)
     })();
     bridge_result_to_code(result)
 }
@@ -13609,27 +13634,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_
                 &signing_bytes,
             )
         }
-    })();
-    bridge_result_to_code(result)
-}
-
-/// Retired ABI-21 authorization-template finalizer.
-///
-/// The signature is retained verbatim for binary compatibility. Placeholder
-/// authorization templates are no longer admitted, so this entrypoint clears
-/// its output and fails closed without reading either input.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_create_v2(
-    _template_norito_ptr: *const c_uchar,
-    _template_norito_len: c_ulong,
-    _signature_ptr: *const c_uchar,
-    _signature_len: c_ulong,
-    out_authorization_ptr: *mut *mut c_uchar,
-    out_authorization_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_authorization_ptr, out_authorization_len)?;
-        Err(BridgeError::KagemushaProve)
     })();
     bridge_result_to_code(result)
 }
@@ -17683,7 +17687,11 @@ mod kagemusha_bridge_tests {
     use iroha_data_model::{
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
-        offline::{KagemushaRecipientOutputDerivationRequestV2, KagemushaScaledAmountV2},
+        offline::{
+            KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1,
+            KagemushaRecipientOutputDerivationRequestV2, KagemushaReviewedSourceClosureV1,
+            KagemushaScaledAmountV2,
+        },
     };
     use p256::ecdsa::{SigningKey, signature::Signer as _};
 
@@ -17896,6 +17904,39 @@ mod kagemusha_bridge_tests {
             .expect("fixture seed must derive a valid keypair")
     }
 
+    fn reviewed_source_closure_v1(
+        source_commit: &str,
+        source_tree_sha256: [u8; 32],
+        seed: u8,
+    ) -> (KagemushaReviewedSourceClosureV1, [u8; 32]) {
+        let tracked_binary_diff_sha256 = Sha256::digest([seed; 32]).into();
+        let untracked_path_mode_blob_oid_manifest_sha256 = Sha256::digest([]).into();
+        let mut combined = Sha256::new();
+        combined.update(b"iroha-source-diff-v1\0");
+        combined.update(b"tracked-binary-diff-sha256\0");
+        combined.update(tracked_binary_diff_sha256);
+        combined.update(b"untracked-path-blob-manifest-sha256\0");
+        combined.update(untracked_path_mode_blob_oid_manifest_sha256);
+        let closure = KagemushaReviewedSourceClosureV1 {
+            schema: KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1.to_owned(),
+            base_commit: source_commit.to_owned(),
+            source_commit: source_commit.to_owned(),
+            source_repo_dirty: true,
+            source_tree_sha256,
+            tracked_binary_diff_sha256,
+            untracked_file_count: 0,
+            untracked_path_mode_blob_oid_manifest: Vec::new(),
+            untracked_path_mode_blob_oid_manifest_sha256,
+            ignored_cargo_lock_size_bytes: 1,
+            ignored_cargo_lock_sha256: Sha256::digest([seed.wrapping_add(1)]).into(),
+            combined_source_fingerprint_sha256: combined.finalize().into(),
+        };
+        let descriptor_sha256 = closure
+            .canonical_descriptor_sha256()
+            .expect("valid reviewed source closure fixture");
+        (closure, descriptor_sha256)
+    }
+
     fn lightweight_authenticated_source_v4() -> Arc<KagemushaRecursiveSpendInstalledArtifactSourceV4>
     {
         use iroha_crypto::SignatureOf;
@@ -18012,6 +18053,10 @@ mod kagemusha_bridge_tests {
             DomainId::try_new("offline", "universal").expect("offline domain"),
             "sbd".parse().expect("SBD asset name"),
         );
+        let source_commit = "0123456789abcdef0123456789abcdef01234567";
+        let source_tree_sha256 = digest(b"SBD streaming installer source tree");
+        let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
+            reviewed_source_closure_v1(source_commit, source_tree_sha256, 0x21);
         let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -18019,9 +18064,11 @@ mod kagemusha_bridge_tests {
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
             generation: generation.to_owned(),
-            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            source_tree_sha256: digest(b"SBD streaming installer source tree"),
-            source_repo_dirty: false,
+            source_commit: source_commit.to_owned(),
+            source_tree_sha256,
+            source_repo_dirty: true,
+            reviewed_source_closure,
+            reviewed_source_closure_descriptor_sha256,
             chain_id: ChainId::from("sbd-streaming-install-test"),
             asset,
             asset_scale: 2,
@@ -19533,15 +19580,7 @@ mod kagemusha_bridge_tests {
     }
 
     #[test]
-    fn authorization_finalizer_abi_is_append_only_and_legacy_stub_clears_output() {
-        let _legacy_c: unsafe extern "C" fn(
-            *const c_uchar,
-            c_ulong,
-            *const c_uchar,
-            c_ulong,
-            *mut *mut c_uchar,
-            *mut c_ulong,
-        ) -> c_int = connect_norito_kagemusha_request_authorization_create_v2;
+    fn authorization_finalizer_abi_exposes_only_platform_exact_paths() {
         let _hardware_c: unsafe extern "C" fn(
             *const c_uchar,
             c_ulong,
@@ -19568,21 +19607,6 @@ mod kagemusha_bridge_tests {
         ) -> c_int = connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2;
 
         let header = include_str!("../include/connect_norito_bridge.h");
-        let legacy_start = header
-            .find("int32_t connect_norito_kagemusha_request_authorization_create_v2(")
-            .expect("legacy authorization finalizer declaration");
-        let legacy_end = legacy_start
-            + header[legacy_start..]
-                .find(");")
-                .expect("legacy declaration terminator")
-            + 2;
-        let legacy = &header[legacy_start..legacy_end];
-        assert_eq!(legacy.matches("const uint8_t*").count(), 2);
-        assert_eq!(legacy.matches("uint8_t**").count(), 1);
-        assert!(legacy.contains("template_norito_ptr"));
-        assert!(legacy.contains("signature_ptr"));
-        assert!(!legacy.contains("authenticator_data_ptr"));
-
         let hardware_start = header
             .find("int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(")
             .expect("hardware authorization finalizer declaration");
@@ -19610,26 +19634,34 @@ mod kagemusha_bridge_tests {
         assert_eq!(ios.matches("uint8_t**").count(), 3);
 
         let source = include_str!("lib.rs");
+        let retired_c_symbol = [
+            "connect_norito_kagemusha_request_",
+            "authorization_create_v2",
+        ]
+        .concat();
+        for (label, contents) in [("Rust source", source), ("C header", header)] {
+            assert!(
+                !contents.contains(&retired_c_symbol),
+                "{label} must not expose the retired authorization-template finalizer",
+            );
+        }
         for namespace in ["sdk", "android"] {
             let package = if namespace == "sdk" {
                 "org_hyperledger_iroha_sdk_offline"
             } else {
                 "org_hyperledger_iroha_android_offline"
             };
-            let legacy_symbol = format!(
-                "fn Java_{package}_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2("
+            let retired_jni_symbol = [
+                "fn Java_",
+                package,
+                "_KagemushaRecursiveSpendProver_native",
+                "CreateAuthorizationV2(",
+            ]
+            .concat();
+            assert!(
+                !source.contains(&retired_jni_symbol),
+                "{namespace} must not expose the retired JNI authorization finalizer",
             );
-            let legacy_start = source
-                .find(&legacy_symbol)
-                .unwrap_or_else(|| panic!("missing {namespace} legacy JNI finalizer"));
-            let legacy_end = legacy_start
-                + source[legacy_start..]
-                    .find(" {\n")
-                    .expect("legacy JNI signature terminator");
-            let legacy_signature = &source[legacy_start..legacy_end];
-            assert_eq!(legacy_signature.matches("JByteArray<'_>").count(), 2);
-            assert!(legacy_signature.contains("-> jni::sys::jbyteArray"));
-            assert!(!legacy_signature.contains("authenticator_data"));
 
             let hardware_symbol = format!(
                 "fn Java_{package}_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2("
@@ -19644,23 +19676,21 @@ mod kagemusha_bridge_tests {
             let hardware_signature = &source[hardware_start..hardware_end];
             assert_eq!(hardware_signature.matches("JByteArray<'_>").count(), 3);
             assert!(hardware_signature.contains("-> jni::sys::jobjectArray"));
-        }
 
-        let mut out_ptr = ptr::dangling_mut::<c_uchar>();
-        let mut out_len = 99;
-        let status = unsafe {
-            connect_norito_kagemusha_request_authorization_create_v2(
-                ptr::dangling(),
-                c_ulong::MAX,
-                ptr::dangling(),
-                c_ulong::MAX,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_ne!(status, 0);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
+            let ios_symbol = format!(
+                "fn Java_{package}_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2("
+            );
+            let ios_start = source
+                .find(&ios_symbol)
+                .unwrap_or_else(|| panic!("missing {namespace} App Attest JNI finalizer"));
+            let ios_end = ios_start
+                + source[ios_start..]
+                    .find(" {\n")
+                    .expect("App Attest JNI signature terminator");
+            let ios_signature = &source[ios_start..ios_end];
+            assert_eq!(ios_signature.matches("JByteArray<'_>").count(), 2);
+            assert!(ios_signature.contains("-> jni::sys::jobjectArray"));
+        }
 
         let mut authorization_ptr = ptr::dangling_mut::<c_uchar>();
         let mut authorization_len = 99;
@@ -20997,6 +21027,10 @@ mod kagemusha_bridge_tests {
         let benchmark_evidence =
             b"resource-guarded KRV4 integration benchmark evidence; mobile acceptance is simulator-only"
                 .to_vec();
+        let source_commit = "0123456789abcdef0123456789abcdef01234567";
+        let source_tree_sha256 = digest(b"production gate exact reviewed source tree");
+        let (reviewed_source_closure, reviewed_source_closure_descriptor_sha256) =
+            reviewed_source_closure_v1(source_commit, source_tree_sha256, 0x81);
         let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -21004,9 +21038,11 @@ mod kagemusha_bridge_tests {
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
             generation: generation.to_owned(),
-            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            source_tree_sha256: digest(b"production gate exact clean source tree"),
-            source_repo_dirty: false,
+            source_commit: source_commit.to_owned(),
+            source_tree_sha256,
+            source_repo_dirty: true,
+            reviewed_source_closure,
+            reviewed_source_closure_descriptor_sha256,
             chain_id,
             asset,
             asset_scale: 2,
@@ -29293,6 +29329,33 @@ mod test_support {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    pub(super) struct ChainDiscriminantScope {
+        token: u64,
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl ChainDiscriminantScope {
+        pub(super) fn enter(discriminant: u16) -> Self {
+            let guard = chain_discriminant_guard();
+            let token = super::connect_norito_chain_discriminant_scope_enter(discriminant);
+            assert_ne!(token, 0, "test chain-discriminant scope must be entered");
+            Self {
+                token,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for ChainDiscriminantScope {
+        fn drop(&mut self) {
+            assert_eq!(
+                super::connect_norito_chain_discriminant_scope_exit(self.token),
+                0,
+                "test chain-discriminant scope must exit on its entry thread"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -29363,30 +29426,6 @@ mod accel_tests {
 
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
-    }
-
-    struct ChainDiscriminantReset {
-        previous: u16,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl ChainDiscriminantReset {
-        fn new(discriminant: u16) -> Self {
-            let guard = super::test_support::chain_discriminant_guard();
-            let previous = unsafe { connect_norito_set_chain_discriminant(discriminant) };
-            Self {
-                previous,
-                _guard: guard,
-            }
-        }
-    }
-
-    impl Drop for ChainDiscriminantReset {
-        fn drop(&mut self) {
-            unsafe {
-                connect_norito_set_chain_discriminant(self.previous);
-            }
-        }
     }
 
     fn decode_signed(ptr: *mut u8, len: c_ulong) -> SignedTransaction {
@@ -29566,15 +29605,106 @@ mod accel_tests {
     }
 
     #[test]
-    fn chain_discriminant_roundtrip() {
+    fn chain_discriminant_scopes_restore_nested_context_and_reject_misordered_exit() {
         let _guard = super::test_support::chain_discriminant_guard();
-        let previous = unsafe { connect_norito_get_chain_discriminant() };
-        let returned = unsafe { connect_norito_set_chain_discriminant(42) };
-        assert_eq!(returned, previous);
-        let current = unsafe { connect_norito_get_chain_discriminant() };
-        assert_eq!(current, 42);
-        unsafe {
-            connect_norito_set_chain_discriminant(previous);
+        let baseline = iroha_data_model::account::address::chain_discriminant();
+        let outer = connect_norito_chain_discriminant_scope_enter(369);
+        assert_ne!(outer, 0);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            369
+        );
+
+        let inner = connect_norito_chain_discriminant_scope_enter(753);
+        assert_ne!(inner, 0);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
+        assert_eq!(
+            connect_norito_chain_discriminant_scope_exit(outer),
+            -1,
+            "non-LIFO exit must fail closed"
+        );
+        assert_eq!(
+            connect_norito_chain_discriminant_scope_exit(0),
+            -1,
+            "zero-token underflow must fail closed"
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            753
+        );
+
+        assert_eq!(connect_norito_chain_discriminant_scope_exit(inner), 0);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            369
+        );
+        assert_eq!(connect_norito_chain_discriminant_scope_exit(outer), 0);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            baseline
+        );
+    }
+
+    #[test]
+    fn chain_discriminant_scope_rejects_wrong_thread_without_consuming_guard() {
+        let _guard = super::test_support::chain_discriminant_guard();
+        let baseline = iroha_data_model::account::address::chain_discriminant();
+        let token = connect_norito_chain_discriminant_scope_enter(369);
+        assert_ne!(token, 0);
+        assert_eq!(
+            std::thread::spawn(move || connect_norito_chain_discriminant_scope_exit(token))
+                .join()
+                .expect("wrong-thread exit worker"),
+            -1
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            369
+        );
+        assert_eq!(connect_norito_chain_discriminant_scope_exit(token), 0);
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            baseline
+        );
+    }
+
+    #[test]
+    fn chain_discriminant_scopes_isolate_concurrent_taira_and_sora_account_parsing() {
+        let _guard = super::test_support::chain_discriminant_guard();
+        let key_pair = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account_id).expect("account address");
+        let taira = address
+            .to_i105_for_discriminant(369)
+            .expect("Taira account");
+        let sora = address.to_i105_for_discriminant(753).expect("Sora account");
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+
+        let workers = [(369, taira), (753, sora)].map(|(discriminant, literal)| {
+            let barrier = Arc::clone(&barrier);
+            let account_id = account_id.clone();
+            std::thread::spawn(move || {
+                let token = connect_norito_chain_discriminant_scope_enter(discriminant);
+                assert_ne!(token, 0);
+                barrier.wait();
+                for _ in 0..512 {
+                    assert_eq!(
+                        parse_account_id(literal.clone()).expect("scoped account parse"),
+                        account_id
+                    );
+                    std::thread::yield_now();
+                }
+                barrier.wait();
+                assert_eq!(connect_norito_chain_discriminant_scope_exit(token), 0);
+            })
+        });
+
+        for worker in workers {
+            worker.join().expect("chain-discriminant scope worker");
         }
     }
 
@@ -29879,7 +30009,7 @@ mod accel_tests {
 
     #[test]
     fn encode_transfer_preserves_dataspace_balance_scope_suffix() {
-        let _reset = ChainDiscriminantReset::new(42);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
         let chain = cstring("00000042");
         let authority = fixture_authority("wonderland");
         let asset_definition = cstring(&format!(
@@ -29979,7 +30109,7 @@ mod accel_tests {
 
     #[test]
     fn swift_parity_transfer_hash_matches_fixture() {
-        let _reset = ChainDiscriminantReset::new(42);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
         let chain = cstring("00000042");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
@@ -30025,7 +30155,7 @@ mod accel_tests {
 
     #[test]
     fn swift_parity_mint_hash_matches_fixture() {
-        let _reset = ChainDiscriminantReset::new(42);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
         let chain = cstring("00000043");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
@@ -30071,7 +30201,7 @@ mod accel_tests {
 
     #[test]
     fn swift_parity_burn_hash_matches_fixture() {
-        let _reset = ChainDiscriminantReset::new(42);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(42);
         let chain = cstring("00000044");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
@@ -34206,6 +34336,7 @@ fn java_native_encode_shield_signed_transaction(
     env: &mut jni::JNIEnv<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -34227,12 +34358,20 @@ fn java_native_encode_shield_signed_transaction(
         let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
             .parse()
             .map_err(|_| "invalid chainId".to_owned())?;
-        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
-            .map_err(|_| "invalid authority".to_owned())?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_text_array(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "invalid authority".to_owned())?;
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
-        let from_account = parse_account_id(java_text_array(env, &from_account, "from")?)
-            .map_err(|_| "invalid from".to_owned())?;
+        let from_account = parse_account_id_for_chain(
+            java_text_array(env, &from_account, "from")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "invalid from".to_owned())?;
         let amount = parse_public_quantity(java_text_array(env, &amount, "amount")?)
             .map_err(|_| "invalid amount".to_owned())?;
         let note_commitment = java_fixed_array::<32>(env, &note_commitment, "noteCommitment")?;
@@ -34291,6 +34430,7 @@ fn java_native_encode_unshield_signed_transaction(
     env: &mut jni::JNIEnv<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -34312,12 +34452,20 @@ fn java_native_encode_unshield_signed_transaction(
         let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
             .parse()
             .map_err(|_| "invalid chainId".to_owned())?;
-        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
-            .map_err(|_| "invalid authority".to_owned())?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_text_array(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "invalid authority".to_owned())?;
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
-        let destination = parse_account_id(java_text_array(env, &destination, "to")?)
-            .map_err(|_| "invalid to".to_owned())?;
+        let destination = parse_account_id_for_chain(
+            java_text_array(env, &destination, "to")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "invalid to".to_owned())?;
         let public_amount =
             parse_public_quantity(java_text_array(env, &public_amount, "publicAmount")?)
                 .map_err(|_| "invalid publicAmount".to_owned())?;
@@ -34384,6 +34532,7 @@ fn java_native_encode_register_zk_asset_signed_transaction(
     env: &mut jni::JNIEnv<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -34408,8 +34557,13 @@ fn java_native_encode_register_zk_asset_signed_transaction(
         let chain_id: ChainId = java_text_array(env, &chain_id, "chainId")?
             .parse()
             .map_err(|_| "invalid chainId".to_owned())?;
-        let authority = parse_account_id(java_text_array(env, &authority, "authority")?)
-            .map_err(|_| "invalid authority".to_owned())?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_text_array(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "invalid authority".to_owned())?;
         let asset_definition = parse_asset_definition(java_text_array(env, &asset, "asset")?)
             .map_err(|_| "invalid asset".to_owned())?;
         let mode = java_zk_asset_mode_from_code(mode_code)?;
@@ -35971,6 +36125,7 @@ fn java_native_kagemusha_branch_claims_conflict_v2(
 fn java_native_kagemusha_prepare_recipient_request_v2(
     env: &mut jni::JNIEnv<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
@@ -35985,12 +36140,17 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
     diversifier: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "recipient request preparation", |env| {
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
         let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
         let asset = parse_asset_definition(java_kagemusha_text(env, &asset, "asset")?)
             .map_err(|_| "asset must be a canonical asset-definition address".to_owned())?;
         let amount = java_kagemusha_amount(env, &atomic_units, scale)?;
-        let recipient = parse_account_id(java_kagemusha_text(env, &recipient, "recipient")?)
-            .map_err(|_| "recipient must be a canonical account address".to_owned())?;
+        let recipient = parse_account_id_for_chain(
+            java_kagemusha_text(env, &recipient, "recipient")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "recipient must be a canonical account address".to_owned())?;
         let receiver_device_id = java_kagemusha_text(env, &receiver_device_id, "receiverDeviceId")?;
         let receiver_public_key_bytes =
             read_java_byte_array(env, &receiver_public_key, "receiverPublicKey")
@@ -36318,15 +36478,21 @@ fn java_native_kagemusha_verify_recipient_request_v2(
 fn java_native_kagemusha_create_recipient_lineage_query_v2(
     env: &mut jni::JNIEnv<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
     asset: jni::objects::JByteArray<'_>,
     trusted_checkpoint_height: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     java_kagemusha_archive_array_result(env, "recipient lineage query creation", |env| {
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
         let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
-        let recipient = parse_account_id(java_kagemusha_text(env, &recipient, "recipient")?)
-            .map_err(|_| "recipient must be a canonical account address".to_owned())?;
+        let recipient = parse_account_id_for_chain(
+            java_kagemusha_text(env, &recipient, "recipient")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "recipient must be a canonical account address".to_owned())?;
         let receiver_device_id = java_kagemusha_text(env, &receiver_device_id, "receiverDeviceId")?;
         let asset = parse_asset_definition(java_kagemusha_text(env, &asset, "asset")?)
             .map_err(|_| "asset must be a canonical asset-definition address".to_owned())?;
@@ -38725,6 +38891,7 @@ fn java_native_kagemusha_build_redeem_request_v4(
     opening: jni::objects::JByteArray<'_>,
     membership_witness: jni::objects::JByteArray<'_>,
     recipient: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
     change_opening: jni::objects::JByteArray<'_>,
@@ -38759,8 +38926,13 @@ fn java_native_kagemusha_build_redeem_request_v4(
                 "membershipWitness",
             )?,
         };
-        let recipient = parse_account_id(java_kagemusha_text(env, &recipient, "recipient")?)
-            .map_err(|_| "recipient must be a canonical account address".to_owned())?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let recipient = parse_account_id_for_chain(
+            java_kagemusha_text(env, &recipient, "recipient")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "recipient must be a canonical account address".to_owned())?;
         let public_amount = java_kagemusha_amount(env, &atomic_units, scale)?;
         let change_opening =
             java_kagemusha_optional_opening(env, &change_opening, "changeOpening")?;
@@ -39353,6 +39525,7 @@ fn java_native_kagemusha_project_active_verifier_v2(
 fn java_native_kagemusha_prepare_authorization_v2(
     env: &mut jni::JNIEnv<'_>,
     authority: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     device_id: jni::objects::JByteArray<'_>,
     asset_definition_id: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
@@ -39364,8 +39537,13 @@ fn java_native_kagemusha_prepare_authorization_v2(
     hardware_assertion_platform: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "authorization preparation", |env| {
-        let authority = parse_account_id(java_kagemusha_text(env, &authority, "authority")?)
-            .map_err(|_| "authority must be a canonical account address".to_owned())?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let authority = parse_account_id_for_chain(
+            java_kagemusha_text(env, &authority, "authority")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "authority must be a canonical account address".to_owned())?;
         let device_id = java_kagemusha_text(env, &device_id, "deviceId")?;
         if device_id.len() > 128 {
             return Err("deviceId exceeds 128 bytes".to_owned());
@@ -39647,6 +39825,7 @@ fn java_kagemusha_bridge_failure(label: &str, error: BridgeError) -> JavaKagemus
 fn java_native_kagemusha_prepare_top_up_v4(
     env: &mut jni::JNIEnv<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -39677,8 +39856,14 @@ fn java_native_kagemusha_prepare_top_up_v4(
                     .to_owned(),
             )
         })?;
-        let payer = parse_account_id(java_kagemusha_text(env, &payer, "payer").map_err(invalid)?)
-            .map_err(|_| {
+        let chain_discriminant = u16::try_from(chain_discriminant).map_err(|_| {
+            JavaKagemushaLifecycleFailure::Invalid("chainDiscriminant must fit in u16".to_owned())
+        })?;
+        let payer = parse_account_id_for_chain(
+            java_kagemusha_text(env, &payer, "payer").map_err(invalid)?,
+            chain_discriminant,
+        )
+        .map_err(|_| {
             JavaKagemushaLifecycleFailure::Invalid(
                 "payer must be a canonical account address".to_owned(),
             )
@@ -40234,6 +40419,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40252,6 +40438,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -40281,6 +40468,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40299,6 +40487,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -40328,6 +40517,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40349,6 +40539,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -40467,6 +40658,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40485,6 +40677,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -40514,6 +40707,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40532,6 +40726,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -40561,6 +40756,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
     _class: jni::objects::JClass<'_>,
     algorithm_code: jni::sys::jint,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     authority: jni::objects::JByteArray<'_>,
     creation_time_ms: jni::sys::jlong,
     ttl_ms: jni::sys::jlong,
@@ -40582,6 +40778,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSi
         &mut env,
         algorithm_code,
         chain_id,
+        chain_discriminant,
         authority,
         creation_time_ms,
         ttl_ms,
@@ -41935,6 +42132,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
@@ -41951,6 +42149,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     java_native_kagemusha_prepare_recipient_request_v2(
         &mut env,
         chain_id,
+        chain_discriminant,
         asset,
         atomic_units,
         scale,
@@ -42012,6 +42211,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
     asset: jni::objects::JByteArray<'_>,
@@ -42020,6 +42220,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     java_native_kagemusha_create_recipient_lineage_query_v2(
         &mut env,
         chain_id,
+        chain_discriminant,
         recipient,
         receiver_device_id,
         asset,
@@ -42373,6 +42574,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     opening: jni::objects::JByteArray<'_>,
     membership_witness: jni::objects::JByteArray<'_>,
     recipient: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
     change_opening: jni::objects::JByteArray<'_>,
@@ -42388,6 +42590,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         opening,
         membership_witness,
         recipient,
+        chain_discriminant,
         atomic_units,
         scale,
         change_opening,
@@ -42593,6 +42796,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     authority: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     device_id: jni::objects::JByteArray<'_>,
     asset_definition_id: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
@@ -42606,6 +42810,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     java_native_kagemusha_prepare_authorization_v2(
         &mut env,
         authority,
+        chain_discriminant,
         device_id,
         asset_definition_id,
         operation_id,
@@ -42616,28 +42821,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         registration_hash,
         hardware_assertion_platform,
     )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    _template: jni::objects::JByteArray<'_>,
-    _signature: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    throw_java_illegal_argument(
-        &mut env,
-        "nativeCreateAuthorizationV2 is retired; use nativeFinalizeHardwareAuthorizationV2"
-            .to_owned(),
-    );
-    ptr::null_mut()
 }
 
 #[cfg(any(
@@ -42730,6 +42913,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -42748,6 +42932,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     java_native_kagemusha_prepare_top_up_v4(
         &mut env,
         chain_id,
+        chain_discriminant,
         asset_definition,
         payer,
         atomic_units,
@@ -43214,6 +43399,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
@@ -43230,6 +43416,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     java_native_kagemusha_prepare_recipient_request_v2(
         &mut env,
         chain_id,
+        chain_discriminant,
         asset,
         atomic_units,
         scale,
@@ -43291,6 +43478,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     recipient: jni::objects::JByteArray<'_>,
     receiver_device_id: jni::objects::JByteArray<'_>,
     asset: jni::objects::JByteArray<'_>,
@@ -43299,6 +43487,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     java_native_kagemusha_create_recipient_lineage_query_v2(
         &mut env,
         chain_id,
+        chain_discriminant,
         recipient,
         receiver_device_id,
         asset,
@@ -43652,6 +43841,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     opening: jni::objects::JByteArray<'_>,
     membership_witness: jni::objects::JByteArray<'_>,
     recipient: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
     change_opening: jni::objects::JByteArray<'_>,
@@ -43667,6 +43857,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         opening,
         membership_witness,
         recipient,
+        chain_discriminant,
         atomic_units,
         scale,
         change_opening,
@@ -43872,6 +44063,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     authority: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     device_id: jni::objects::JByteArray<'_>,
     asset_definition_id: jni::objects::JByteArray<'_>,
     operation_id: jni::objects::JByteArray<'_>,
@@ -43885,6 +44077,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     java_native_kagemusha_prepare_authorization_v2(
         &mut env,
         authority,
+        chain_discriminant,
         device_id,
         asset_definition_id,
         operation_id,
@@ -43895,28 +44088,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         registration_hash,
         hardware_assertion_platform,
     )
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    _template: jni::objects::JByteArray<'_>,
-    _signature: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    throw_java_illegal_argument(
-        &mut env,
-        "nativeCreateAuthorizationV2 is retired; use nativeFinalizeHardwareAuthorizationV2"
-            .to_owned(),
-    );
-    ptr::null_mut()
 }
 
 #[cfg(any(
@@ -44009,6 +44180,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     chain_id: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     asset_definition: jni::objects::JByteArray<'_>,
     payer: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
@@ -44027,6 +44199,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
     java_native_kagemusha_prepare_top_up_v4(
         &mut env,
         chain_id,
+        chain_discriminant,
         asset_definition,
         payer,
         atomic_units,
@@ -46910,6 +47083,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate
     opening: jni::objects::JByteArray<'_>,
     membership_witness: jni::objects::JByteArray<'_>,
     recipient: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
     change_opening: jni::objects::JByteArray<'_>,
@@ -46925,6 +47099,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate
         opening,
         membership_witness,
         recipient,
+        chain_discriminant,
         atomic_units,
         scale,
         change_opening,
@@ -47176,6 +47351,176 @@ mod tests {
             assert!(
                 parse_public_quantity(malformed.to_owned()).is_err(),
                 "noncanonical or negative public Quantity {malformed:?} must fail"
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_recipient_parser_requires_the_explicit_taira_discriminant() {
+        const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+        const SORA_CHAIN_DISCRIMINANT: u16 = 753;
+
+        let key_pair = KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account_id).expect("account address");
+        let taira_recipient = address
+            .to_i105_for_discriminant(TAIRA_CHAIN_DISCRIMINANT)
+            .expect("Taira recipient");
+        let sora_recipient = address
+            .to_i105_for_discriminant(SORA_CHAIN_DISCRIMINANT)
+            .expect("Sora recipient");
+
+        assert_eq!(
+            parse_account_id_for_chain(taira_recipient, TAIRA_CHAIN_DISCRIMINANT)
+                .expect("canonical 369 recipient must parse under the scoped guard"),
+            account_id
+        );
+        assert!(
+            parse_account_id_for_chain(sora_recipient, TAIRA_CHAIN_DISCRIMINANT).is_err(),
+            "a valid 753 recipient must fail when the JNI caller requires Taira 369"
+        );
+    }
+
+    #[test]
+    fn kagemusha_lineage_c_boundary_uses_explicit_chain_and_resolved_asset_id() {
+        const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+        const SORA_CHAIN_DISCRIMINANT: u16 = 753;
+
+        let key_pair = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let recipient = AccountAddress::from_account_id(&account_id)
+            .expect("account address")
+            .to_i105_for_discriminant(TAIRA_CHAIN_DISCRIMINANT)
+            .expect("Taira recipient");
+        let chain_id = b"taira";
+        let receiver_device_id = b"receiver-device";
+        // Runtime/app configuration uses the exact `sbd#cbsi` selector. This
+        // low-level ABI receives its exact resolved deployed typed definition ID.
+        let asset = AssetDefinitionId::parse_address_literal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
+            .expect("deployed typed SBD definition ID")
+            .to_string()
+            .into_bytes();
+        assert_eq!(asset, b"7ZepsJTHCVLKsrFFNZGSRGZgvBhv");
+        let ambient = connect_norito_chain_discriminant_scope_enter(SORA_CHAIN_DISCRIMINANT);
+        assert_ne!(ambient, 0);
+
+        let mut output = ptr::null_mut();
+        let mut output_len = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_recipient_lineage_query_create_v2(
+                chain_id.as_ptr(),
+                chain_id.len() as c_ulong,
+                TAIRA_CHAIN_DISCRIMINANT,
+                recipient.as_ptr(),
+                recipient.len() as c_ulong,
+                receiver_device_id.as_ptr(),
+                receiver_device_id.len() as c_ulong,
+                asset.as_ptr(),
+                asset.len() as c_ulong,
+                1,
+                &mut output,
+                &mut output_len,
+            )
+        };
+        assert_eq!(status, 0);
+        assert!(!output.is_null());
+        assert_ne!(output_len, 0);
+        connect_norito_free(output);
+
+        let status = unsafe {
+            connect_norito_kagemusha_recipient_lineage_query_create_v2(
+                chain_id.as_ptr(),
+                chain_id.len() as c_ulong,
+                SORA_CHAIN_DISCRIMINANT,
+                recipient.as_ptr(),
+                recipient.len() as c_ulong,
+                receiver_device_id.as_ptr(),
+                receiver_device_id.len() as c_ulong,
+                asset.as_ptr(),
+                asset.len() as c_ulong,
+                1,
+                &mut output,
+                &mut output_len,
+            )
+        };
+        assert_eq!(status, ERR_AUTHORITY_PARSE);
+        assert!(output.is_null());
+        assert_eq!(output_len, 0);
+        assert_eq!(connect_norito_chain_discriminant_scope_exit(ambient), 0);
+    }
+
+    #[test]
+    fn bridge_abi_omits_obsolete_process_global_and_kagemusha_exports() {
+        let source = include_str!("lib.rs");
+        let header = include_str!("../include/connect_norito_bridge.h");
+        let obsolete_exports = [
+            ["connect_norito_", "get_chain_discriminant"].concat(),
+            ["connect_norito_", "set_chain_discriminant"].concat(),
+            [
+                "connect_norito_kagemusha_recipient_registration_",
+                "lineage_verify_v1",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_request_",
+                "authorization_create_v2",
+            ]
+            .concat(),
+        ];
+
+        for (label, contents) in [("Rust source", source), ("C header", header)] {
+            for symbol in &obsolete_exports {
+                assert!(
+                    !contents.contains(symbol),
+                    "{label} must not expose obsolete bridge symbol {symbol}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn java_native_account_entrypoints_require_explicit_chain_context() {
+        let source = include_str!("lib.rs");
+        let production_helpers = source
+            .split_once("fn java_native_validation_fee_current_policy_proof_request_v1(")
+            .expect("first Java native helper must remain present")
+            .1
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("Java native helper region must precede the test module")
+            .0;
+        let context_free_parser = concat!("parse_account_", "id(");
+        assert!(
+            !production_helpers.contains(context_free_parser),
+            "production java_native_* helpers must never parse account text without explicit chain context"
+        );
+
+        for symbol in [
+            "java_native_encode_shield_signed_transaction",
+            "java_native_encode_unshield_signed_transaction",
+            "java_native_encode_register_zk_asset_signed_transaction",
+            "java_native_kagemusha_prepare_recipient_request_v2",
+            "java_native_kagemusha_create_recipient_lineage_query_v2",
+            "java_native_kagemusha_build_redeem_request_v4",
+            "java_native_kagemusha_prepare_authorization_v2",
+            "java_native_kagemusha_prepare_top_up_v4",
+        ] {
+            let marker = format!("\nfn {symbol}(");
+            let helper = source
+                .split_once(&marker)
+                .unwrap_or_else(|| panic!("{symbol} must remain present"))
+                .1
+                .split_once("\n}\n\n#[cfg(")
+                .unwrap_or_else(|| panic!("{symbol} must remain a discrete guarded helper"))
+                .0;
+            assert!(
+                helper.contains("chain_discriminant: jni::sys::jint"),
+                "{symbol} must require a caller-owned chainDiscriminant"
+            );
+            assert!(
+                helper.contains("parse_account_id_for_chain("),
+                "{symbol} must parse account text inside its explicit chain context"
             );
         }
     }
@@ -53823,11 +54168,7 @@ mod signed_transaction_fixture_tests {
     use std::time::Duration;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        ChainId,
-        account::{AccountId, address},
-        transaction::TransactionBuilder,
-    };
+    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
     use iroha_version::codec::EncodeVersioned as _;
 
     use super::decode_signed_transaction;
@@ -53849,31 +54190,9 @@ mod signed_transaction_fixture_tests {
         );
     }
 
-    struct ChainDiscriminantReset {
-        previous: u16,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl ChainDiscriminantReset {
-        fn new(discriminant: u16) -> Self {
-            let guard = super::test_support::chain_discriminant_guard();
-            let previous = address::set_chain_discriminant(discriminant);
-            Self {
-                previous,
-                _guard: guard,
-            }
-        }
-    }
-
-    impl Drop for ChainDiscriminantReset {
-        fn drop(&mut self) {
-            address::set_chain_discriminant(self.previous);
-        }
-    }
-
     #[test]
     fn signed_transaction_decoder_accepts_only_versioned_bytes() {
-        let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
@@ -53894,7 +54213,7 @@ mod signed_transaction_fixture_tests {
 
     #[test]
     fn signed_transaction_versioned_reencode_match() {
-        let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");
@@ -53912,7 +54231,7 @@ mod signed_transaction_fixture_tests {
 
     #[test]
     fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
-        let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
+        let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "00000004".parse().expect("valid chain id");

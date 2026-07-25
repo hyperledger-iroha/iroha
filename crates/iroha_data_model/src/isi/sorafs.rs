@@ -621,7 +621,7 @@ pub struct SorafsRepairEscalateV1 {
     pub idempotency_key: String,
 }
 
-/// Chain-authoritative mutation of one SoraFS repair task.
+/// Chain-authoritative mutation of one `SoraFS` repair task.
 #[derive(
     Debug,
     Clone,
@@ -738,7 +738,7 @@ pub struct SorafsPdpProofOutcomeSubmissionV1 {
     pub archive_payload: Vec<u8>,
 }
 
-/// Canonical PoTR proof material accepted by the chain-authoritative outcome journal.
+/// Canonical `PoTR` proof material accepted by the chain-authoritative outcome journal.
 #[derive(
     Debug,
     Clone,
@@ -793,13 +793,13 @@ pub enum SorafsProofOutcomeSubmissionV1 {
     /// Exact canonical PDP terminal archive and authentication material.
     #[codec(index = 0)]
     Pdp(SorafsPdpProofOutcomeSubmissionV1),
-    /// Exact canonical dual-signed PoTR receipt and admission binding.
+    /// Exact canonical dual-signed `PoTR` receipt and admission binding.
     #[codec(index = 1)]
     Potr(SorafsPotrProofOutcomeSubmissionV1),
 }
 
 isi! {
-    /// Activate or rotate provider-scoped governed keys for PDP and PoTR outcome validation.
+    /// Activate or rotate provider-scoped governed keys for `PDP` and `PoTR` outcome validation.
     pub struct SetSorafsProofOutcomeSignerPolicy {
         /// Monotonic provider-scoped signer policy.
         pub policy: ProofOutcomeSignerPolicyV1,
@@ -809,7 +809,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsProofOutcomeSignerPolicy {}
 
 isi! {
-    /// Commit one validated PDP or PoTR terminal outcome.
+    /// Commit one validated `PDP` or `PoTR` terminal outcome.
     pub struct SubmitSorafsProofOutcome {
         /// Existing canonical proof/archive material; no competing receipt schema is accepted.
         pub submission: SorafsProofOutcomeSubmissionV1,

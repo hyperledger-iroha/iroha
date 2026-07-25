@@ -131,7 +131,9 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             throw XCTSkip("NoritoBridge native decoder not linked")
         }
         let signedBytes = try XCTUnwrap(Data(base64Encoded: fixture.entry.signedBase64))
-        let json = NoritoNativeBridge.shared.withChainDiscriminant(FixtureConstants.networkPrefix) {
+        let json = try NoritoNativeBridge.shared.withChainDiscriminant(
+            FixtureConstants.networkPrefix
+        ) {
             NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
         }
         let payload = try XCTUnwrap(json.flatMap { decodeSignedPayload(from: $0) })
@@ -190,7 +192,9 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             "signed_base64 missing or invalid for \(name)"
         )
         let expectedAuthority = try expectedAuthorityLiteral(from: fixture.entry.authority)
-        let json = NoritoNativeBridge.shared.withChainDiscriminant(FixtureConstants.networkPrefix) {
+        let json = try NoritoNativeBridge.shared.withChainDiscriminant(
+            FixtureConstants.networkPrefix
+        ) {
             NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
         }
         guard let json else {

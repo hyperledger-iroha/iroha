@@ -53,10 +53,14 @@ tasks.test {
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/numeric_v1_golden.json"))
     inputs.file(rootProject.layout.projectDirectory.dir("..").file("fixtures/offline/peer_transport_v1.json"))
 
-    // Host JNI bridge (libconnect_norito_bridge) for the opt-in localnet integration tests.
-    // Build it from the iroha repo root with: cargo build -p connect_norito_bridge --lib
-    // Pure-JVM tests ignore this; the localnet tests are gated on IROHA_LOCALNET_TEST=1.
-    val hostNativeDir = rootProject.projectDir.parentFile.resolve("target/debug")
+    // Release CI supplies a freshly built, isolated ABI-21 bridge. Local
+    // development retains the conventional root target/debug fallback.
+    val configuredNativeDir = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
+    val hostNativeDir = if (configuredNativeDir.isNullOrBlank()) {
+        rootProject.projectDir.parentFile.resolve("target/debug")
+    } else {
+        file(configuredNativeDir)
+    }
     systemProperty("java.library.path", hostNativeDir.absolutePath)
 }
 

@@ -131,7 +131,7 @@ public final class HttpClientTransportPendingQueueTests {
             .setNonce(nonce)
             .setMetadata(Map.of("marker", marker))
             .build();
-    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final byte[] encoded;
     try {
       encoded = codec.encodeTransaction(payload);

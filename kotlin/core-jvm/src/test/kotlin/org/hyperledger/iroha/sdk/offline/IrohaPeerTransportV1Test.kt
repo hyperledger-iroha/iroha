@@ -214,9 +214,32 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `Kagemusha adapter wraps verified bounded wire message`() {
+    fun `Kagemusha adapter fails closed without native or roundtrips with native`() {
         assertEquals(0x0102, IrohaPeerKagemushaAdapterV1.NATIVE_ARCHIVE_SCHEMA_VERSION)
         val archive = portableOfferFixture()
+        val nativeAvailable = KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()
+        if (System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE") == "1") {
+            assertTrue(
+                nativeAvailable,
+                "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
+            )
+        }
+        if (!nativeAvailable) {
+            val failure = assertFailsWith<IllegalArgumentException> {
+                KagemushaPeerPayload.decode(
+                    archive,
+                    KagemushaPeerPayloadKind.RECEIVE_REQUEST,
+                )
+            }
+            assertEquals("Invalid Kagemusha receive_request archive", failure.message)
+            assertTrue(failure.cause is IllegalStateException)
+            assertEquals(
+                "connect_norito_bridge ABI 21 artifact streaming is unavailable",
+                failure.cause?.message,
+            )
+            return
+        }
+
         val typed = KagemushaPeerPayload.decode(
             archive,
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
@@ -229,8 +252,8 @@ class IrohaPeerTransportV1Test {
         assertEquals(0x0102, wrapped.canonicalPayload.schemaVersion)
         assertContentEquals(archive, wrapped.canonicalPayload.bytes)
         assertContentEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive())
-        assertEquals(14_005, archive.size)
-        assertEquals(14_089, wrapped.encode().size)
+        assertEquals(12_306, archive.size)
+        assertEquals(12_390, wrapped.encode().size)
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,
@@ -263,7 +286,7 @@ class IrohaPeerTransportV1Test {
         )
         assertEquals(49, canonical.size)
         assertEquals(
-            "4e5254300000136f80655378267532a71119f46e6f0a000100000000000000" +
+            "4e5254300000bfd427e87daf1d5cfa39b7fb60a76859000100000000000000" +
                 "de8130dd3f67aeb502000000000000000051",
             canonical.hex(),
         )
@@ -285,7 +308,7 @@ class IrohaPeerTransportV1Test {
         val trailing = canonical + byteArrayOf(0)
         val body = byteArrayOf(0x51)
         val bareSchema = NoritoHeader(
-            SchemaHash.hash16("KagemushaRecipientPaymentRequestV2"),
+            SchemaHash.hash16("OfflineRecipientReceiveOfferV2"),
             body.size,
             CRC64.compute(body),
             NoritoHeader.COMPACT_LEN,
@@ -1000,7 +1023,7 @@ class IrohaPeerTransportV1Test {
     ): ByteArray {
         val schema = when (kind) {
             IrohaPeerPayloadKind.RECEIVE_REQUEST ->
-                "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"
+                "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
             IrohaPeerPayloadKind.PAYMENT ->
                 "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"
             IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->

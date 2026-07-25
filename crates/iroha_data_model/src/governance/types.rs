@@ -398,6 +398,10 @@ impl JsonDeserialize for AbiVersion {
 }
 
 /// Governance proposal kinds supported today.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "proposal variants retain their canonical public Norito payload shapes"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

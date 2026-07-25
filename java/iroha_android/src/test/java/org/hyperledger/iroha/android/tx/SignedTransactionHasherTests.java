@@ -318,7 +318,7 @@ public final class SignedTransactionHasherTests {
   }
 
   private static SignedTransaction newTransaction(final byte seed) throws NoritoException {
-    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
             .setChainId(String.format("%08x", seed))

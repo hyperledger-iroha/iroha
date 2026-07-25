@@ -761,10 +761,14 @@ on:
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/norito_bridge_source_seal.py"
+      - "scripts/run_mobile_hermetic_command.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
       - "scripts/run_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
+      - "ci/check_kagemusha_jvm_native_bridge.sh"
+      - "rust-toolchain.toml"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "tools/kotlin-fixture-gen/**"
   workflow_dispatch:
@@ -847,11 +851,18 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Prefetch locked Rust dependency graph
+        run: cargo fetch --locked
       - run: ci/check_kagemusha_candidate_android_lab_compile.sh
-      - run: ./gradlew :core-jvm:test --console=plain
-        working-directory: kotlin
-      - run: ./gradlew test --console=plain
-        working-directory: java/iroha_android
+      - name: Require fresh ABI-21 JNI bridge in complete Kotlin and Java suites
+        run: >-
+          NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
+          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
+          bash ci/check_kagemusha_jvm_native_bridge.sh
 
   csharp-torii:
     name: C# ABI-21/V4 Torii DTOs

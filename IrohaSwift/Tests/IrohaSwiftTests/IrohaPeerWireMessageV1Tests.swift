@@ -343,7 +343,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         var trailing = canonical
         trailing.append(0)
         let bareSchema = noritoEncode(
-            typeName: "KagemushaRecipientPaymentRequestV2",
+            typeName: "OfflineRecipientReceiveOfferV2",
             payload: Data([0x51]),
             flags: NoritoHeader.compactLen,
             payloadAlignment: 16
