@@ -68,7 +68,7 @@ use super::{
         production_recovered_successor_trace_refines_indexed_activation_kernel,
         production_startup_failure_and_restart_refines_indexed_lifecycle_kernel,
     },
-    v2_effects::EffectExecutorStatus,
+    v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         SnapshotSuccessorActivationAuthority, successor_context_refinement_projection,
@@ -1438,6 +1438,62 @@ fn overlay_v2_effect_status(
     {
         status.liveness.work.application = SumeragiV2LocalWorkStage::Running;
     }
+    if let Some(stage) = effect_status.pending_tip_recovery_stage {
+        overlay_pending_tip_recovery_work(status, stage);
+    }
+}
+
+/// Replace reducer-queued startup work with the exact closed-ingress recovery stage.
+///
+/// A durable Decision keeps the public phase/body pair at `PendingApply`.
+/// These local-work fields identify whether the node is still replaying body
+/// availability, storage, validation, or application without presenting a
+/// decided block as an ordinary live-view reconstruction.
+fn overlay_pending_tip_recovery_work(
+    status: &mut SumeragiV2Status,
+    stage: PendingKuraApplyRecoveryStage,
+) {
+    use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
+
+    let work = &mut status.liveness.work;
+    match stage {
+        PendingKuraApplyRecoveryStage::CertifiedFetch => {
+            work.body_recovery = Queued;
+            work.body_store = Idle;
+            work.validation = Idle;
+            work.application = Queued;
+        }
+        PendingKuraApplyRecoveryStage::DurableStore => {
+            work.body_recovery = Complete;
+            work.body_store = Queued;
+            work.validation = Idle;
+            work.application = Queued;
+        }
+        PendingKuraApplyRecoveryStage::DeterministicValidation => {
+            work.body_recovery = Complete;
+            work.body_store = Complete;
+            work.validation = Queued;
+            work.application = Queued;
+        }
+        PendingKuraApplyRecoveryStage::Apply => {
+            work.body_recovery = Complete;
+            work.body_store = Complete;
+            work.validation = Complete;
+            work.application = Queued;
+        }
+        PendingKuraApplyRecoveryStage::ApplicationDispatched => {
+            work.body_recovery = Complete;
+            work.body_store = Complete;
+            work.validation = Complete;
+            work.application = Running;
+        }
+        PendingKuraApplyRecoveryStage::Completed => {
+            work.body_recovery = Complete;
+            work.body_store = Complete;
+            work.validation = Complete;
+            work.application = Complete;
+        }
+    }
 }
 
 fn overlay_v2_effect_completion_snapshot(
@@ -2290,12 +2346,13 @@ mod v2_liveness_watchdog_tests {
     use iroha_data_model::peer::PeerId;
 
     use super::{
-        EffectExecutorStatus, V2IoCompletionQueueObserver, V2LivenessWatchdog,
-        V2LivenessWatchdogTransition, V2SuccessorActivationError,
+        EffectExecutorStatus, PendingKuraApplyRecoveryStage, V2IoCompletionQueueObserver,
+        V2LivenessWatchdog, V2LivenessWatchdogTransition, V2SuccessorActivationError,
         activate_recovered_v2_successor_height_at, activate_v2_successor_height_at,
         begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
-        mark_v2_restart_required, set_v2_effect_completion_observer, set_v2_effect_status,
-        set_v2_network_ingress, set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
+        mark_v2_restart_required, overlay_v2_effect_status, set_v2_effect_completion_observer,
+        set_v2_effect_status, set_v2_network_ingress, set_v2_status_at,
+        update_v2_successor_work_stage_at, v2_status_at,
     };
     use crate::sumeragi::{
         BlockMessage, FairV2Ingress, InboundBlockMessage,
@@ -2493,6 +2550,9 @@ mod v2_liveness_watchdog_tests {
             captured_at,
             fail_closed: false,
             fatal_reason: None,
+            pending_tip_recovery_stage: None,
+            pending_tip_recovery_attempts: 0,
+            pending_tip_recovery_last_result: None,
             pending_signatures: 0,
             pending_candidate_loads: 0,
             pending_fetches: 0,
@@ -2514,6 +2574,80 @@ mod v2_liveness_watchdog_tests {
                 completion: lane(96),
             },
             watchdog_threshold: threshold,
+        }
+    }
+
+    #[test]
+    fn pending_tip_recovery_overlay_reports_the_exact_local_stage() {
+        use SumeragiV2LocalWorkStage::{Complete, Idle, Queued, Running};
+
+        let captured_at = Instant::now();
+        let mut baseline = status();
+        baseline.phase = SumeragiV2StatusPhase::PendingApply;
+        baseline.body_state = SumeragiV2BodyState::PendingApply;
+        let cases = [
+            (
+                PendingKuraApplyRecoveryStage::CertifiedFetch,
+                (Queued, Idle, Idle, Queued),
+            ),
+            (
+                PendingKuraApplyRecoveryStage::DurableStore,
+                (Complete, Queued, Idle, Queued),
+            ),
+            (
+                PendingKuraApplyRecoveryStage::DeterministicValidation,
+                (Complete, Complete, Queued, Queued),
+            ),
+            (
+                PendingKuraApplyRecoveryStage::Apply,
+                (Complete, Complete, Complete, Queued),
+            ),
+            (
+                PendingKuraApplyRecoveryStage::ApplicationDispatched,
+                (Complete, Complete, Complete, Running),
+            ),
+            (
+                PendingKuraApplyRecoveryStage::Completed,
+                (Complete, Complete, Complete, Complete),
+            ),
+        ];
+
+        for (stage, expected) in cases {
+            let mut observed = baseline.clone();
+            let phase_before = observed.phase;
+            let body_state_before = observed.body_state;
+            let mut effects = effect_status(Duration::from_secs(5), captured_at);
+            effects.pending_tip_recovery_stage = Some(stage);
+            overlay_v2_effect_status(&mut observed, &effects, captured_at);
+            assert_eq!(
+                (
+                    observed.liveness.work.body_recovery,
+                    observed.liveness.work.body_store,
+                    observed.liveness.work.validation,
+                    observed.liveness.work.application,
+                ),
+                expected,
+                "closed-ingress recovery stage {stage:?}"
+            );
+            assert_eq!(observed.phase, phase_before);
+            assert_eq!(observed.body_state, body_state_before);
+            let expected_blocker = match stage {
+                PendingKuraApplyRecoveryStage::CertifiedFetch
+                | PendingKuraApplyRecoveryStage::DurableStore
+                | PendingKuraApplyRecoveryStage::DeterministicValidation => {
+                    SumeragiV2LivenessBlocker::BodyUnavailable
+                }
+                PendingKuraApplyRecoveryStage::Apply
+                | PendingKuraApplyRecoveryStage::ApplicationDispatched
+                | PendingKuraApplyRecoveryStage::Completed => {
+                    SumeragiV2LivenessBlocker::ApplicationPending
+                }
+            };
+            assert_eq!(
+                classify_v2_liveness_blocker(&observed, false),
+                expected_blocker,
+                "closed-ingress recovery stage {stage:?} must expose its actual blocker"
+            );
         }
     }
 

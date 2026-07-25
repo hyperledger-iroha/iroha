@@ -47,13 +47,22 @@ private func canonicalAliasSegment(_ raw: String, field: String) throws -> Strin
 
 private func canonicalAliasAccountId(_ raw: String, field: String) throws -> String {
     guard !raw.isEmpty,
-          raw == raw.trimmingCharacters(in: .whitespacesAndNewlines),
+          raw.utf8.elementsEqual(
+              raw.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+          ),
           !raw.contains("@"),
           !raw.contains("#"),
           !raw.contains("$"),
-          let address = try? AccountAddress.parseEncodedSwiftOnly(raw),
-          let canonical = try? address.toI105(networkPrefix: AccountId.defaultNetworkPrefix),
-          canonical == raw else {
+          let chainDiscriminant = try? AccountAddress
+            .inspectI105NetworkPrefix(raw).chainDiscriminant,
+          let address = try? AccountAddress.parseEncodedSwiftOnly(
+              raw,
+              expectedPrefix: chainDiscriminant
+          ),
+          let canonical = try? address.toI105(
+              networkPrefix: chainDiscriminant
+          ),
+          canonical.utf8.elementsEqual(raw.utf8) else {
         throw AliasSetupModelError.invalidValue(field: field)
     }
     return raw

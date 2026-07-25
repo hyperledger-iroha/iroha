@@ -37,7 +37,10 @@ object IdentifierReceiptCanonicalEncoder {
     }
 
     @JvmStatic
-    internal fun decodePayload(encoded: ByteArray): IdentifierResolutionPayload {
+    internal fun decodePayload(
+        encoded: ByteArray,
+        chainDiscriminant: Int,
+    ): IdentifierResolutionPayload {
         val decoder = NoritoDecoder(encoded, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
         val policyId = decodePolicyId(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.policy_id"))
         val execution = decodeExecution(decodeSizedField(decoder, PassthroughBytesAdapter, "payload.execution"))
@@ -55,6 +58,7 @@ object IdentifierReceiptCanonicalEncoder {
         )
         val accountId = TransferWirePayloadEncoder.decodeAccountIdPayload(
             decodeSizedField(decoder, PassthroughBytesAdapter, "payload.account_id"),
+            chainDiscriminant,
             decoder.flags,
             decoder.flagsHint,
         )

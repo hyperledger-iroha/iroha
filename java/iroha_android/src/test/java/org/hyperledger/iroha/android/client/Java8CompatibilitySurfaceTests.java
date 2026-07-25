@@ -241,7 +241,7 @@ public final class Java8CompatibilitySurfaceTests {
     }
 
     try {
-      VpnJsonParser.parseProfile(bytes("{\"available\":true,\"relay_endpoint\":\"   \"}"));
+      VpnJsonParser.parseProfile(bytes(vpnProfileWithRelayEndpoint("   ")));
       fail("VPN parser must reject blank required strings");
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains("relay_endpoint"));
@@ -361,6 +361,34 @@ public final class Java8CompatibilitySurfaceTests {
 
   private static byte[] bytes(final String value) {
     return value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static String vpnProfileWithRelayEndpoint(final String relayEndpoint) {
+    return "{"
+        + "\"available\":true,"
+        + "\"relay_endpoint\":\""
+        + relayEndpoint
+        + "\","
+        + "\"supported_exit_classes\":[\"standard\",\"low-latency\",\"high-security\"],"
+        + "\"default_exit_class\":\"standard\","
+        + "\"lease_secs\":600,"
+        + "\"dns_push_interval_secs\":60,"
+        + "\"meter_family\":\"soranet.vpn.standard\","
+        + "\"route_pushes\":[\"0.0.0.0/0\"],"
+        + "\"excluded_routes\":[\"10.0.0.0/8\"],"
+        + "\"dns_servers\":[\"1.1.1.1\"],"
+        + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
+        + "\"mtu_bytes\":1280,"
+        + "\"display_billing_label\":\"standard XOR\","
+        + "\"fee_asset_id\":\"xor#universal.universal\","
+        + "\"escrow_account_id\":\"sorauEscrow\","
+        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"lease_fee\":\"1000000.25\","
+        + "\"settlement_grace_secs\":120,"
+        + "\"flow_label_bits\":24,"
+        + "\"padding_budget_ms\":15,"
+        + "\"relay_tls_spki_sha256_hex\":null"
+        + "}";
   }
 
   private static String soracloudExecuteResponseJsonWithBlankReceiptId() {

@@ -108,8 +108,16 @@ struct TransactionInputValidator {
             throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }
         do {
-            let address = try AccountAddress.parseEncodedSwiftOnly(checked, expectedPrefix: nil)
-            return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+            let prefix = try AccountAddress.inspectI105NetworkPrefix(checked).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(
+                checked,
+                expectedPrefix: prefix
+            )
+            let canonical = try address.toI105(networkPrefix: prefix)
+            guard canonical.utf8.elementsEqual(checked.utf8) else {
+                throw TransactionInputError.malformedAccountId(field: field, value: checked)
+            }
+            return canonical
         } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }
@@ -1433,19 +1441,16 @@ struct SwiftTransactionEncoder {
                 "owner must be a canonical I105 account id"
             )
         }
-        let address: AccountAddress
         do {
-            address = try AccountAddress.parseEncodedSwiftOnly(
+            return try TransactionInputValidator.sanitizeAccountId(
                 trimmed,
-                expectedPrefix: 0x02F1
+                field: "owner"
             )
         } catch {
             throw TransactionInputError.invalidZkBallotPublicInputs(
                 "owner must be a canonical I105 account id"
             )
         }
-        let i105 = try address.toI105(networkPrefix: 0x02F1)
-        return i105
     }
 
     private static func zkHintPresent(_ value: ToriiJSONValue?) -> Bool {

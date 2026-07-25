@@ -229,13 +229,19 @@ final class KagemushaRedemptionChangeV4Tests: XCTestCase {
 
     func testRequiredNativeInventoryIncludesPrepareAndSecretFree() {
         XCTAssertEqual(KagemushaRecursiveSpend.requiredProofSymbols.count, 4)
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredProtocolSymbols.count, 46)
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeSymbols.count, 50)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredProtocolSymbols.count, 44)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeSymbols.count, 48)
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4"
         ))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_secret_free_buffer"
+        ))
+        XCTAssertFalse(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_recipient_registration_lineage_verify_v1"
+        ))
+        XCTAssertFalse(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_request_authorization_create_v2"
         ))
     }
 

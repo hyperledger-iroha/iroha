@@ -2,7 +2,8 @@
 //!
 //! Ordinary builds retain the lightweight Git-commit marker used by RBC. The
 //! opt-in Kagemusha candidate-build feature additionally requires and verifies
-//! an exact clean full-source-tree seal supplied by the dedicated build helper.
+//! an independently pinned reviewed dirty source closure supplied by the
+//! dedicated build helper.
 
 use std::{env, path::Path, process::Command};
 
@@ -11,6 +12,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=IROHA_GIT_COMMIT_HASH");
     println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_SOURCE_COMMIT");
     println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
+    println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE");
+    println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256");
     println!("cargo:rerun-if-env-changed=KAGEMUSHA_SOURCE_SEAL_PYTHON");
     if let Some(commit) = env_commit_hash().or_else(git_commit_hash) {
         println!("cargo:rustc-env=GIT_COMMIT_HASH={commit}");
@@ -28,6 +31,22 @@ fn main() {
 fn embed_exact_kagemusha_source_seal() {
     let expected_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT", 40);
     let expected_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
+    let reviewed_closure_sha256 =
+        required_lower_hex_env("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256", 64);
+    let reviewed_closure =
+        env::var("KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE").unwrap_or_else(|_| {
+            panic!(
+                "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE is required for a sealed candidate build"
+            )
+        });
+    let reviewed_closure_path = Path::new(&reviewed_closure);
+    if !reviewed_closure_path.is_absolute()
+        || reviewed_closure_path.canonicalize().ok().as_deref() != Some(reviewed_closure_path)
+    {
+        panic!(
+            "KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE must be one canonical absolute nonsymlink path"
+        );
+    }
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")
         .unwrap_or_else(|_| panic!("CARGO_MANIFEST_DIR is required for a sealed candidate build"));
     let repository_root = Path::new(&manifest_dir).join("../..");
@@ -40,8 +59,12 @@ fn embed_exact_kagemusha_source_seal() {
             .arg(&seal_script)
             .arg("fingerprint")
             .arg("--root")
-            .arg(&repository_root),
-        "Kagemusha full-source-tree seal",
+            .arg(&repository_root)
+            .arg("--reviewed-source-closure")
+            .arg(reviewed_closure_path)
+            .arg("--reviewed-source-closure-sha256")
+            .arg(&reviewed_closure_sha256),
+        "Kagemusha reviewed source-closure seal",
     );
     let actual_commit = command_text(
         Command::new("git").arg("-C").arg(&repository_root).args([
@@ -57,8 +80,12 @@ fn embed_exact_kagemusha_source_seal() {
             .arg(&seal_script)
             .arg("fingerprint")
             .arg("--root")
-            .arg(&repository_root),
-        "Kagemusha full-source-tree seal recheck",
+            .arg(&repository_root)
+            .arg("--reviewed-source-closure")
+            .arg(reviewed_closure_path)
+            .arg("--reviewed-source-closure-sha256")
+            .arg(&reviewed_closure_sha256),
+        "Kagemusha reviewed source-closure seal recheck",
     );
     if actual_commit != expected_commit
         || first_tree != expected_tree
@@ -70,6 +97,11 @@ fn embed_exact_kagemusha_source_seal() {
     }
     println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_COMMIT={expected_commit}");
     println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_TREE_SHA256={expected_tree}");
+    println!("cargo:rustc-env=KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE={reviewed_closure}");
+    println!(
+        "cargo:rustc-env=KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256={reviewed_closure_sha256}"
+    );
+    println!("cargo:rerun-if-changed={reviewed_closure}");
 }
 
 fn required_lower_hex_env(name: &str, expected_len: usize) -> String {

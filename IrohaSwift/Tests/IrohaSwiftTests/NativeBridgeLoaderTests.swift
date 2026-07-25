@@ -26,6 +26,23 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertEqual(status, .missing(path: "/tmp/does/not/exist"))
     }
 
+    func testExplicitChainDiscriminantRequiresNativeScope() throws {
+        XCTAssertNoThrow(try NoritoNativeBridge.validateChainDiscriminantContext(
+            nil,
+            scopeAvailable: false
+        ))
+        XCTAssertNoThrow(try NoritoNativeBridge.validateChainDiscriminantContext(
+            SccpV1.tairaI105DiscriminantV1,
+            scopeAvailable: true
+        ))
+        XCTAssertThrowsError(try NoritoNativeBridge.validateChainDiscriminantContext(
+            SccpV1.tairaI105DiscriminantV1,
+            scopeAvailable: false
+        )) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .bridgeUnavailable)
+        }
+    }
+
     func testTamperedBridgeFailsHashCheck() throws {
         let original = try bundledBridgeBinary()
         let tempDir = FileManager.default.temporaryDirectory

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
@@ -21,7 +22,8 @@ final class SccpSubmitEncoding {
       "iroha_sccp::SccpGroth16Bn254ProofArtifactV1";
   static final String NATIVE_INBOUND_PROOF_SCHEMA_NAME =
       "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1";
-  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC = new NoritoJavaCodecAdapter();
+  private static final NoritoJavaCodecAdapter TRANSACTION_CODEC =
+      new NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
 
   private SccpSubmitEncoding() {}
 
@@ -143,7 +145,7 @@ final class SccpSubmitEncoding {
       throw new IllegalArgumentException(
           "transaction payload authority does not match authority");
     }
-    if (!expectedFeePayment.hasSamePayerAndGasBound(payload.feePayment())) {
+    if (!sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment())) {
       throw new IllegalArgumentException(
           "transaction payload changed the requested payer, sponsor revision, or gas bound");
     }
@@ -152,6 +154,25 @@ final class SccpSubmitEncoding {
           "transaction payload creation time does not match creation_time_ms");
     }
     return value;
+  }
+
+  private static boolean sameSccpFeePayerAndGasBound(
+      final FeePaymentIntent expected, final FeePaymentIntent actual) {
+    if (!Objects.equals(expected.gasLimit(), actual.gasLimit())) return false;
+    if (expected instanceof FeePaymentIntent.Authority
+        && actual instanceof FeePaymentIntent.Authority) {
+      return true;
+    }
+    if (expected instanceof FeePaymentIntent.Sponsor
+        && actual instanceof FeePaymentIntent.Sponsor) {
+      final FeePaymentIntent.Sponsor left = (FeePaymentIntent.Sponsor) expected;
+      final FeePaymentIntent.Sponsor right = (FeePaymentIntent.Sponsor) actual;
+      return left.programRevision() == right.programRevision()
+          && left.programId().name().equals(right.programId().name())
+          && sameCanonicalAccountId(
+              left.programId().sponsor(), right.programId().sponsor());
+    }
+    return false;
   }
 
   private static boolean sameCanonicalAccountId(final String left, final String right) {
@@ -164,7 +185,7 @@ final class SccpSubmitEncoding {
       return Arrays.equals(leftBytes, rightBytes);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(
-          "transaction payload authority must be canonical I105", ex);
+          "transaction payload account must be canonical I105", ex);
     }
   }
 

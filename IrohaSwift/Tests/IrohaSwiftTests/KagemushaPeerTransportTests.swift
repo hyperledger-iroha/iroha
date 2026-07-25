@@ -10,7 +10,13 @@ final class KagemushaPeerTransportTests: XCTestCase {
         let message = try IrohaPeerKagemushaAdapterV1.wrap(payload)
         XCTAssertEqual(message.profile, .kagemusha)
         XCTAssertEqual(message.schemaVersion, 0x0102)
-        XCTAssertEqual(try IrohaPeerKagemushaAdapterV1.decode(message), payload)
+        XCTAssertEqual(
+            try IrohaPeerKagemushaAdapterV1.decode(
+                message,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ),
+            payload
+        )
 
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
             profile: .kagemusha,
@@ -43,7 +49,10 @@ final class KagemushaPeerTransportTests: XCTestCase {
             schemaVersion: 1,
             canonicalPayload: payload.archive
         )
-        XCTAssertThrowsError(try IrohaPeerKagemushaAdapterV1.decode(offline)) {
+        XCTAssertThrowsError(try IrohaPeerKagemushaAdapterV1.decode(
+            offline,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )) {
             XCTAssertEqual(
                 $0 as? IrohaPeerWireMessageErrorV1,
                 .unexpectedProfile(expected: .kagemusha, actual: .offlineNote)
@@ -89,7 +98,9 @@ final class KagemushaPeerTransportTests: XCTestCase {
             )
         )
 
-        let nestedRequest = try offer.project().request.archive
+        let nestedRequest = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request.archive
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
             profile: .kagemusha,
             kind: .receiveRequest,
@@ -150,55 +161,66 @@ final class KagemushaPeerTransportTests: XCTestCase {
 
     func testRustCanonicalReceiveOfferFixtureIsByteExactAcrossSDKProjectionAndIPM1() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let projection = try offer.project()
+        let projection = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         let message = try IrohaPeerKagemushaAdapterV1.wrap(.receiveRequest(offer))
 
-        XCTAssertEqual(offer.noritoArchive.count, 14_005)
+        XCTAssertEqual(offer.noritoArchive.count, 12_306)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "06360875dc6f6f21f020105ddc995735e94a388dac107b2624beefdb1526f95a"
+            "cd32b93ab3fa990f586d72416fec3540c0dde736b9f7d00197c12d5a1b85e7a2"
         )
         XCTAssertEqual(projection.request.archive.count, 759)
         XCTAssertEqual(
             sha256Hex(projection.request.archive),
-            "862bfeaf377917c8f32700bcd37f1140ba3a8cf465ccb83749026cb0aeaa2577"
+            "9886a74736619c6edee9442a6b392ede0f7b75ffa2c9fdd958e3741ab9dcfb49"
         )
         XCTAssertEqual(projection.lineageArchive.count, 11_218)
         XCTAssertEqual(
             sha256Hex(projection.lineageArchive),
-            "62960c5ce0217ae6372ca6e173db7d4b913f0c913e002fda073bb3a086a2932a"
+            "7dcbf73a0cedde48740dd2f0b71f53c642a139c29e851c714a751807521277a5"
         )
-        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 2_048)
+        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 349)
         XCTAssertEqual(
             sha256Hex(projection.publisherCheckpointEnvelope),
-            "d155d8352105884fe0bbb10b9fac2ad7573ab851a51dd62f91e36d4c23fe57bd"
+            "92ea89c32730f161ddc61ee7eded2a032d33cc3364cfe7281cbe0bdd2149e4d3"
         )
-        XCTAssertEqual(message.encoded.count, 14_089)
+        XCTAssertEqual(message.encoded.count, 12_390)
         XCTAssertEqual(
             try IrohaPeerKagemushaAdapterV1.decode(
-                IrohaPeerWireMessageV1.decode(message.encoded)
+                IrohaPeerWireMessageV1.decode(message.encoded),
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             ),
             .receiveRequest(offer)
         )
     }
 
-    func testTypedRequestTextRoundTripIsCanonical() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let payload = KagemushaPeerPayload.receiveRequest(request)
+    func testTypedPaymentTextRoundTripIsCanonical() throws {
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let payload = KagemushaPeerPayload.payment(payment)
         let text = try KagemushaPeerTextCodec.encode(payload)
 
-        XCTAssertTrue(text.hasPrefix("PKK2R."))
+        XCTAssertTrue(text.hasPrefix("PKK2P."))
         XCTAssertFalse(text.contains("="))
         XCTAssertLessThanOrEqual(
             text.utf8.count,
             KagemushaRecursiveSpend.maximumPeerTextEnvelopeBytes
         )
         XCTAssertEqual(
-            try KagemushaPeerTextCodec.decode(text, expectedKind: .receiveRequest),
+            try KagemushaPeerTextCodec.decode(
+                text,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                expectedKind: .payment
+            ),
             payload
         )
         XCTAssertEqual(try KagemushaPeerTextCodec.encode(
-            KagemushaPeerTextCodec.decode(text)
+            KagemushaPeerTextCodec.decode(
+                text,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         ), text)
     }
 
@@ -215,67 +237,89 @@ final class KagemushaPeerTransportTests: XCTestCase {
     }
 
     func testUserPresentedBoundaryNormalizationIsNarrowAndExplicit() throws {
-        let payload = KagemushaPeerPayload.receiveRequest(
-            try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let payload = KagemushaPeerPayload.payment(
+            try KagemushaPeerTransportTestFixtures.payment(request: request)
         )
         let text = try KagemushaPeerTextCodec.encode(payload)
         let presented = " \t\r\n" + text + "\n\r\t "
 
-        XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(presented))
+        XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(
+            presented,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
         XCTAssertEqual(
             KagemushaPeerTextCodec.canonicalizeUserPresented(presented),
             text
         )
         XCTAssertEqual(
-            try KagemushaPeerTextCodec.decodeUserPresented(presented),
+            try KagemushaPeerTextCodec.decodeUserPresented(
+                presented,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ),
             payload
         )
         for scalar in ["\u{000B}", "\u{0085}", "\u{00A0}", "\u{200B}", "\u{2028}", "\u{FEFF}"] {
             XCTAssertThrowsError(
-                try KagemushaPeerTextCodec.decodeUserPresented(scalar + text),
+                try KagemushaPeerTextCodec.decodeUserPresented(
+                    scalar + text,
+                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                ),
                 "unexpectedly normalized U+\(scalar.unicodeScalars.first!.value)"
             )
         }
     }
 
     func testExpectedKindCannotBeSubstituted() throws {
-        let text = try KagemushaPeerTextCodec.encode(.receiveRequest(
-            KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let text = try KagemushaPeerTextCodec.encode(.payment(
+            KagemushaPeerTransportTestFixtures.payment(request: request)
         ))
         XCTAssertThrowsError(
-            try KagemushaPeerTextCodec.decode(text, expectedKind: .payment)
+            try KagemushaPeerTextCodec.decode(
+                text,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                expectedKind: .receiveRequest
+            )
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,
-                .unexpectedKind(expected: .payment, actual: .receiveRequest)
+                .unexpectedKind(expected: .receiveRequest, actual: .payment)
             )
         }
     }
 
     func testTextDecoderRejectsAdversarialSyntaxAndArbitraryBytes() throws {
-        let text = try KagemushaPeerTextCodec.encode(.receiveRequest(
-            KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let text = try KagemushaPeerTextCodec.encode(.payment(
+            KagemushaPeerTransportTestFixtures.payment(request: request)
         ))
-        let body = String(text.dropFirst("PKK2R.".count))
+        let body = String(text.dropFirst("PKK2P.".count))
         let cases = [
-            "", "PKK2R.", "pkk2r." + body, "PKK2R." + body + "=",
-            "PKK2R." + body + "+", "PKK2R." + body + "/",
-            "PKK2R." + body + ".", "PKK2R." + body + "~",
-            "PKK2R." + body + "?x=1", "PKK2R." + body + "#fragment",
+            "", "PKK2P.", "pkk2p." + body, "PKK2P." + body + "=",
+            "PKK2P." + body + "+", "PKK2P." + body + "/",
+            "PKK2P." + body + ".", "PKK2P." + body + "~",
+            "PKK2P." + body + "?x=1", "PKK2P." + body + "#fragment",
             "https://example.test/?payload=" + text,
             "prefix" + text,
-            "PKK2R.PKK2P." + body,
+            "PKK2P.PKK2R." + body,
             text + "\nPKK2A.AQ",
             text + "\u{0000}", text + "\u{007F}", text + "\u{200D}",
             text + "😀",
         ]
         for value in cases {
-            XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(value), value)
+            XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(
+                value,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ), value)
         }
 
         for archive in [Data([0]), Data("not norito".utf8), Data(repeating: 0, count: 128)] {
-            let arbitrary = "PKK2R." + KagemushaPeerTextCodec.base64URLEncode(archive)
-            XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(arbitrary))
+            let arbitrary = "PKK2P." + KagemushaPeerTextCodec.base64URLEncode(archive)
+            XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(
+                arbitrary,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ))
         }
     }
 
@@ -323,7 +367,10 @@ final class KagemushaPeerTransportTests: XCTestCase {
             repeating: "A",
             count: KagemushaPeerTransportContract.maximumTextEnvelopeBytes
         )
-        XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(oversized)) { error in
+        XCTAssertThrowsError(try KagemushaPeerTextCodec.decode(
+            oversized,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )) { error in
             guard case .textEnvelopeTooLarge = error as? KagemushaPeerTransportError else {
                 return XCTFail("unexpected error: \(error)")
             }
@@ -331,15 +378,19 @@ final class KagemushaPeerTransportTests: XCTestCase {
     }
 
     func testUserPresentedInputIsBoundedBeforeBoundaryNormalization() throws {
-        let text = try KagemushaPeerTextCodec.encode(.receiveRequest(
-            KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let text = try KagemushaPeerTextCodec.encode(.payment(
+            KagemushaPeerTransportTestFixtures.payment(request: request)
         ))
         let leadingBytes = KagemushaPeerTransportContract.maximumTextEnvelopeBytes
             - text.utf8.count + 1
         let oversized = String(repeating: " ", count: leadingBytes) + text
 
         XCTAssertThrowsError(
-            try KagemushaPeerTextCodec.decodeUserPresented(oversized)
+            try KagemushaPeerTextCodec.decodeUserPresented(
+                oversized,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaPeerTransportError,

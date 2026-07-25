@@ -16,16 +16,21 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
 
   private static final String DEFAULT_SCHEMA = "iroha.android.transaction.Payload.v1";
 
+  private final int chainDiscriminant;
   private final String schemaName;
   private final TypeAdapter<TransactionPayload> adapter;
 
-  public NoritoJavaCodecAdapter() {
-    this(DEFAULT_SCHEMA);
+  public NoritoJavaCodecAdapter(final int chainDiscriminant) {
+    this(chainDiscriminant, DEFAULT_SCHEMA);
   }
 
-  public NoritoJavaCodecAdapter(final String schemaName) {
+  public NoritoJavaCodecAdapter(final int chainDiscriminant, final String schemaName) {
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    this.chainDiscriminant = chainDiscriminant;
     this.schemaName = schemaName;
-    this.adapter = new TransactionPayloadAdapter();
+    this.adapter = TransactionPayloadAdapter.forChain(chainDiscriminant);
   }
 
   @Override
@@ -49,6 +54,11 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
     }
   }
 
+  /** Returns the target chain's required I105 discriminant. */
+  public int chainDiscriminant() {
+    return chainDiscriminant;
+  }
+
   @Override
   public String schemaName() {
     return schemaName;
@@ -62,10 +72,11 @@ public final class NoritoJavaCodecAdapter implements NoritoCodecAdapter {
     }
   }
 
-  public static byte[] encodeMultisigProposeRequest(final MultisigProposeRequest request)
-      throws NoritoException {
+  public static byte[] encodeMultisigProposeRequest(
+      final MultisigProposeRequest request, final int chainDiscriminant) throws NoritoException {
     try {
-      return TransactionPayloadAdapter.encodeMultisigProposeRequest(request);
+      return TransactionPayloadAdapter.encodeMultisigProposeRequest(
+          request, chainDiscriminant);
     } catch (final Exception ex) {
       throw new NoritoException("Failed to encode Norito multisig propose request", ex);
     }

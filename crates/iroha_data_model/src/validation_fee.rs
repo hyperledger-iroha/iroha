@@ -626,11 +626,17 @@ impl ValidationFeePolicyRegistryV1 {
         custom.payload().try_into_any_norito::<Self>().ok()
     }
 
-    /// Validate the complete contiguous policy chain.
+    /// Validate the complete contiguous policy chain and authenticate every retained Parliament
+    /// proposal fingerprint.
+    ///
+    /// Builds without the `governance` feature retain the typed registry for canonical decoding,
+    /// but deliberately return
+    /// [`ValidationFeePolicyRegistryError::InvalidParliamentAuthorization`] because the complete
+    /// Parliament proposal preimage is unavailable.
     ///
     /// # Errors
     ///
-    /// Returns an error when the registry is empty, non-monotonic, broken, or
+    /// Returns an error when the registry is empty, non-monotonic, broken, unauthenticated, or
     /// contains a policy whose stored hash differs from its payload.
     pub fn validate(&self) -> Result<(), ValidationFeePolicyRegistryError> {
         let mut entries = self.registered_policies.iter();
@@ -975,6 +981,7 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
+#[cfg(feature = "governance")]
 fn validate_registry_entry_authorization(
     entry: &ValidationFeePolicyRegistryEntryV1,
 ) -> Result<(), ValidationFeePolicyRegistryError> {
@@ -1034,6 +1041,21 @@ fn validate_registry_entry_authorization(
         );
     }
     Ok(())
+}
+
+#[cfg(not(feature = "governance"))]
+fn validate_registry_entry_authorization(
+    entry: &ValidationFeePolicyRegistryEntryV1,
+) -> Result<(), ValidationFeePolicyRegistryError> {
+    // Proposal fingerprints commit to the complete governance `ProposalKind` encoding. A build
+    // that deliberately omits that feature can still decode the typed registry for clients, but
+    // it cannot prove that the retained authorization matches the enacted Parliament proposal.
+    // Keep registry validation fail-closed rather than accepting a weaker surrogate fingerprint.
+    Err(
+        ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
+            policy_version: entry.policy.policy_version,
+        },
+    )
 }
 
 /// One exact recipient and share in the atomic treasury-payout effect plan.
@@ -1381,7 +1403,7 @@ pub fn validation_fee_payout_recipient_share() -> Numeric {
         .expect("hard-coded validation-fee payout recipient share is canonical")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "governance"))]
 mod parliament_tests {
     use std::str::FromStr as _;
 

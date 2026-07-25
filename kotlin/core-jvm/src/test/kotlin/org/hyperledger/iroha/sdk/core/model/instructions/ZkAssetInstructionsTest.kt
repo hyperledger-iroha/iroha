@@ -301,10 +301,11 @@ class ZkAssetInstructionsTest {
             .build()
 
         assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                "alice",
+                NativeSignerBridge.encodeShieldSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    "alice",
                 -1,
                 null,
                 shield,
@@ -313,10 +314,11 @@ class ZkAssetInstructionsTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeUnshieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                " chain ",
-                "alice",
+                NativeSignerBridge.encodeUnshieldSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    " chain ",
+                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    "alice",
                 0,
                 null,
                 unshield,
@@ -325,10 +327,11 @@ class ZkAssetInstructionsTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                "alice",
+                NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    "alice",
                 0,
                 0L,
                 register,
@@ -337,10 +340,11 @@ class ZkAssetInstructionsTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            NativeSignerBridge.encodeShieldSignedTransaction(
-                SigningAlgorithm.ED25519,
-                "chain",
-                "alice",
+                NativeSignerBridge.encodeShieldSignedTransaction(
+                    SigningAlgorithm.ED25519,
+                    "chain",
+                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    "alice",
                 0,
                 null,
                 shield,
@@ -419,6 +423,7 @@ class ZkAssetInstructionsTest {
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = authority,
                 creationTimeMs = 1_736_000_000_000,
                 ttlMs = null,
@@ -440,6 +445,7 @@ class ZkAssetInstructionsTest {
             NativeSignerBridge.encodeShieldSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = authority,
                 creationTimeMs = 1_736_000_000_001,
                 ttlMs = null,
@@ -461,6 +467,7 @@ class ZkAssetInstructionsTest {
             NativeSignerBridge.encodeUnshieldSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
+                chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = authority,
                 creationTimeMs = 1_736_000_000_002,
                 ttlMs = null,
@@ -574,7 +581,7 @@ class ZkAssetInstructionsTest {
         expected: FeePaymentIntent,
     ) {
         val signed = SignedTransactionEncoder.decodeVersioned(native.versionedSignedTransaction)
-        val payload = NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload())
+        val payload = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload())
         assertEquals(expected, payload.feePayment)
         assertFalse(payload.metadata.containsKey("gas_asset_id"))
         assertFalse(payload.metadata.containsKey("gas_limit"))

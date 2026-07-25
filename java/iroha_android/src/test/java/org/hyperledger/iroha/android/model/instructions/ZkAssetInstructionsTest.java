@@ -237,17 +237,53 @@ public final class ZkAssetInstructionsTest {
         RegisterZkAssetInstruction.builder().setAsset("rose#wonderland").build();
 
     expectThrows(
-        () -> NativeSignerBridge.encodeShieldSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", -1, null, shield, new byte[] {1}, noFeePayment()));
+        () ->
+            NativeSignerBridge.encodeShieldSignedTransaction(
+                SigningAlgorithm.ED25519,
+                "chain",
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                "alice",
+                -1,
+                null,
+                shield,
+                new byte[] {1},
+                noFeePayment()));
     expectThrows(
-        () -> NativeSignerBridge.encodeUnshieldSignedTransaction(
-            SigningAlgorithm.ED25519, " chain ", "alice", 0, null, unshield, new byte[] {1}, noFeePayment()));
+        () ->
+            NativeSignerBridge.encodeUnshieldSignedTransaction(
+                SigningAlgorithm.ED25519,
+                " chain ",
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                "alice",
+                0,
+                null,
+                unshield,
+                new byte[] {1},
+                noFeePayment()));
     expectThrows(
-        () -> NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", 0, 0L, register, new byte[] {1}, noFeePayment()));
+        () ->
+            NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                SigningAlgorithm.ED25519,
+                "chain",
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                "alice",
+                0,
+                0L,
+                register,
+                new byte[] {1},
+                noFeePayment()));
     expectThrows(
-        () -> NativeSignerBridge.encodeShieldSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", 0, null, shield, new byte[0], noFeePayment()));
+        () ->
+            NativeSignerBridge.encodeShieldSignedTransaction(
+                SigningAlgorithm.ED25519,
+                "chain",
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                "alice",
+                0,
+                null,
+                shield,
+                new byte[0],
+                noFeePayment()));
   }
 
   private static void nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch() {
@@ -321,6 +357,7 @@ public final class ZkAssetInstructionsTest {
         NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority,
             1_736_000_000_000L,
             null,
@@ -341,6 +378,7 @@ public final class ZkAssetInstructionsTest {
         NativeSignerBridge.encodeShieldSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority,
             1_736_000_000_001L,
             null,
@@ -361,6 +399,7 @@ public final class ZkAssetInstructionsTest {
         NativeSignerBridge.encodeUnshieldSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             authority,
             1_736_000_000_002L,
             null,
@@ -376,7 +415,7 @@ public final class ZkAssetInstructionsTest {
     final SignedTransaction signed =
         SignedTransactionEncoder.decodeVersioned(nativeTx.versionedSignedTransaction());
     final TransactionPayload payload =
-        new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+        new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).decodeTransaction(signed.encodedPayload());
 
     assert expected.equals(payload.feePayment()) : "fee payment mismatch";
     assert !payload.metadata().containsKey("gas_asset_id") : "legacy gas_asset_id must be absent";

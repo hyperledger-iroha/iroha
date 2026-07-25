@@ -5360,11 +5360,11 @@ pub mod sorafs {
                 OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
                 OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
             },
-            reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
             proof_ledger::{
                 ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
                 ProofOutcomeKindV1,
             },
+            reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
     };
 
@@ -6138,8 +6138,8 @@ pub mod sorafs {
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
-            FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
+            FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
         };
     }
 }

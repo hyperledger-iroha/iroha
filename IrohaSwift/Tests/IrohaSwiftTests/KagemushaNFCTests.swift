@@ -259,7 +259,9 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testEveryCanonicalNFCChunkRoundTripsAndReassemblesOutOfOrder() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project().request
+        let request = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
@@ -346,8 +348,10 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testCardStateMachineReadsRequestAndRejectsInvalidWriteSequences() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project().request
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: offer)
+        let request = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request
+        let machine = try KagemushaNFCCardStateMachine(chainDiscriminant: SccpV1.tairaI105DiscriminantV1, receiveRequest: offer)
         let candidatePayment = Data("invalid-candidate".utf8)
         XCTAssertEqual(
             machine.handle(KagemushaNFCProtocol.getInfoCommand()).rejectionReason,
@@ -412,13 +416,15 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testCardStateMachineCommitsTypedPaymentAndTracksEveryAckByte() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project().request
+        let request = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
             payment: payment
         )
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: offer)
+        let machine = try KagemushaNFCCardStateMachine(chainDiscriminant: SccpV1.tairaI105DiscriminantV1, receiveRequest: offer)
         let paymentBytes = payment.archive
         let commands = try KagemushaNFCProtocol.writePayloadCommands(
             kind: .payment,
@@ -481,7 +487,7 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testInvalidDigestCommitDoesNotBecomeTypedPayment() throws {
         let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: request)
+        let machine = try KagemushaNFCCardStateMachine(chainDiscriminant: SccpV1.tairaI105DiscriminantV1, receiveRequest: request)
         let bytes = Data("not-a-valid-archive".utf8)
         var metadata = try KagemushaNFCProtocol.writeMetadataCommand(
             kind: .payment,
@@ -503,7 +509,7 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testSelectingAnotherApplicationClearsSelectionAndPendingWrite() throws {
         let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let machine = try KagemushaNFCCardStateMachine(receiveRequest: request)
+        let machine = try KagemushaNFCCardStateMachine(chainDiscriminant: SccpV1.tairaI105DiscriminantV1, receiveRequest: request)
         let paymentBytes = Data("invalid-candidate".utf8)
         XCTAssertNil(machine.handle(
             try KagemushaNFCProtocol.selectApplicationCommand()

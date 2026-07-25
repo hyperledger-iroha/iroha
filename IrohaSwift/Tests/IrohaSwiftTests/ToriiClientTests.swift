@@ -1715,10 +1715,13 @@ final class ToriiClientTests: XCTestCase {
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
-    private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
+    private func canonicalOwnerLiteral(
+        domain: String = "wonderland",
+        chainDiscriminant: UInt16 = AccountId.defaultNetworkPrefix
+    ) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        let i105 = try address.toI105(networkPrefix: 0x02F1)
+        let i105 = try address.toI105(networkPrefix: chainDiscriminant)
         return i105
     }
 
@@ -3426,6 +3429,35 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(context.debugDescription.contains("payload.account_id"))
             XCTAssertTrue(context.debugDescription.contains("surrounding whitespace"))
         }
+    }
+
+    func testIdentifierReceiptPreservesTairaAccountRoundTrip() throws {
+        let accountId = try canonicalOwnerLiteral(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let json = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(
+            ToriiIdentifierResolutionPayload.self,
+            from: json
+        )
+
+        XCTAssertEqual(decoded.accountId, accountId)
+        XCTAssertEqual(
+            try AccountAddress.inspectI105NetworkPrefix(decoded.accountId)
+                .chainDiscriminant,
+            SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertFalse(
+            try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(decoded)
+                .isEmpty
+        )
     }
 
     func testIdentifierReceiptOpeningSignatureUsesConstVecEncoding() throws {
@@ -8088,6 +8120,32 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsPreservesTairaAccountDiscriminant() async throws {
+        let accountId = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x61, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        StubURLProtocol.handler = { request in
+            self.assertDecodedPath(
+                request,
+                contains: "/v1/accounts/\(accountId)/assets"
+            )
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data("[]".utf8))
+        }
+
+        let balances = try await makeClient().getAssets(
+            accountId: accountId,
+            asset: nil
+        )
+        XCTAssertTrue(balances.isEmpty)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetAssetsRejectsPercentEscapedAccountLiteral() async {
         await XCTAssertThrowsErrorAsync(
             try await makeClient().getAssets(
@@ -10711,10 +10769,14 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     private func onboardingPlanReceipt(
         request: ToriiAccountOnboardingPlanRequest,
-        disposition: AliasPlanDispositionV1 = .create
+        disposition: AliasPlanDispositionV1 = .create,
+        chainDiscriminant: UInt16 = AccountId.defaultNetworkPrefix
     ) throws -> ToriiAccountOnboardingPlanReceipt {
         let authorityKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x51, count: 32))
-        let authority = try AccountId.makeI105(publicKey: authorityKey.publicKey())
+        let authority = try AccountId.makeI105(
+            publicKey: authorityKey.publicKey(),
+            networkPrefix: chainDiscriminant
+        )
         let alias = try ResolvedAccountAliasV1(
             canonicalName: request.alias,
             dataspaceId: 0
@@ -10778,9 +10840,14 @@ final class ToriiClientTests: XCTestCase {
     func testAccountOnboardingReceiptVerifiesDomainHashAndAuthoritySignature() throws {
         let request = try ToriiAccountOnboardingPlanRequest(
             alias: "alice@universal",
-            accountId: canonicalOwnerLiteral()
+            accountId: canonicalOwnerLiteral(
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
         )
-        let receipt = try onboardingPlanReceipt(request: request)
+        let receipt = try onboardingPlanReceipt(
+            request: request,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         let canonicalBody = try encodeTestCanonicalOnboardingBody(receipt.body)
 
         XCTAssertNoThrow(
@@ -12795,6 +12862,67 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsUnknownNestedVerifierIdMember() async throws {
+        let payload = """
+        {
+          \(currentKagemushaReadinessFields)
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 19,
+          "evaluated_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "active_transfer_verifier": {
+            "id": {
+              "backend": "halo2/ipa",
+              "name": "confidential_transfer_v2_verifier_record",
+              "future_field": true
+            },
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha_topup_shield_v2_verifier_record"},
+            "version": 3,
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        do {
+            _ = try await makeClient().getKagemushaReadiness(
+                assetDefinitionId: "xor#wonderland"
+            )
+            XCTFail("expected an unknown nested verifier id member to fail closed")
+        } catch {
+            XCTAssertTrue(
+                String(describing: error).contains("ToriiVerifyingKeyId"),
+                "expected strict nested verifier id rejection, got \(error)"
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessAcceptsMaximumHumanBlockerMessage() async throws {
         let message = String(repeating: "x", count: 1023) + "\u{200E}"
         let encodedMessage = try XCTUnwrap(
@@ -13003,7 +13131,10 @@ final class ToriiClientTests: XCTestCase {
             KagemushaRedeemRequest(noritoArchive: redeemRequestArchive)
         )
         XCTAssertEqual(acceptedRedeem, try reference(.redeem))
-        let operationStatus = try await client.getKagemushaOperationStatus(operationId: operationId)
+        let operationStatus = try await client.getKagemushaOperationStatus(
+            operationId: operationId,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         XCTAssertEqual(
             operationStatus,
             .pending(try .init(
@@ -13037,7 +13168,8 @@ final class ToriiClientTests: XCTestCase {
 
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId
+                operationId: operationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("missing operation status must return typed HTTP failure")
         } catch let error as ToriiClientError {
@@ -13093,6 +13225,7 @@ final class ToriiClientTests: XCTestCase {
             _ = try await KagemushaOperationFinalityCoordinator.resolve(
                 operation: .topUp(request),
                 transport: makeClient(),
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
                 initialState: 0,
                 continuity: .unaccepted,
                 existingDefinitiveSubmissionFailure: { _ in nil },
@@ -13292,7 +13425,8 @@ final class ToriiClientTests: XCTestCase {
         )
         await assertToriiInvalidPayload(contains: "declares more than") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId
+                operationId: operationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
 
@@ -13306,7 +13440,8 @@ final class ToriiClientTests: XCTestCase {
         )
         await assertToriiInvalidPayload(contains: "response exceeded") {
             _ = try await self.makeClient().getKagemushaOperationStatus(
-                operationId: operationId
+                operationId: operationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         }
 
@@ -13320,7 +13455,8 @@ final class ToriiClientTests: XCTestCase {
         )
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId
+                operationId: operationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("exact-limit non-Norito bytes must reach the codec")
         } catch let error as KagemushaOperationError {
@@ -13340,7 +13476,8 @@ final class ToriiClientTests: XCTestCase {
         )
         do {
             _ = try await makeClient().getKagemushaOperationStatus(
-                operationId: operationId
+                operationId: operationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
             XCTFail("oversized 404 must fail before absence classification")
         } catch let error as ToriiClientError {
@@ -13511,7 +13648,10 @@ final class ToriiClientTests: XCTestCase {
             return (response, pendingStatus)
         }
         do {
-            _ = try await makeClient().getKagemushaOperationStatus(operationId: otherOperationId)
+            _ = try await makeClient().getKagemushaOperationStatus(
+                operationId: otherOperationId,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
             XCTFail("expected operation identity mismatch to fail")
         } catch {
             XCTAssertTrue(String(describing: error).contains("operation_id does not match"))
@@ -13531,7 +13671,10 @@ final class ToriiClientTests: XCTestCase {
                 return (response, pendingStatus)
             }
             do {
-                _ = try await makeClient().getKagemushaOperationStatus(operationId: operationId)
+                _ = try await makeClient().getKagemushaOperationStatus(
+                    operationId: operationId,
+                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                )
                 XCTFail("expected invalid operation media type to fail")
             } catch {
                 XCTAssertTrue(

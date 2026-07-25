@@ -204,7 +204,8 @@ public final class AliasPlanVerifier {
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
       final byte[] canonicalBodyNorito,
-      final AliasEnsureInstructionFrameCodec frameCodec) {
+      final AliasEnsureInstructionFrameCodec frameCodec,
+      final int chainDiscriminant) {
     if (request == null || frameCodec == null) {
       throw new IllegalArgumentException("request and frameCodec must not be null");
     }
@@ -214,7 +215,7 @@ public final class AliasPlanVerifier {
         canonicalBodyNorito,
         (wireId, framedPayload) -> {
           final DecodedEnsureAliasFrame result =
-              frameCodec.decodeAndReencode(wireId, framedPayload);
+              frameCodec.decodeAndReencode(wireId, framedPayload, chainDiscriminant);
           if (result == null) throw new IllegalArgumentException("frame codec returned null");
           decoded.add(result.instruction());
           return result.reencodedFrame();
@@ -330,7 +331,8 @@ public final class AliasPlanVerifier {
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
       final byte[] canonicalBodyNorito,
-      final AliasLifecycleInstructionFrameCodec frameCodec) {
+      final AliasLifecycleInstructionFrameCodec frameCodec,
+      final int chainDiscriminant) {
     if (request == null || frameCodec == null) {
       throw new IllegalArgumentException("request and frameCodec must not be null");
     }
@@ -345,7 +347,9 @@ public final class AliasPlanVerifier {
     if (instruction != null) {
       DecodedAliasLifecycleFrame decoded = null;
       try {
-        decoded = frameCodec.decodeAndReencode(instruction.wireId(), instruction.framedPayload());
+        decoded =
+            frameCodec.decodeAndReencode(
+                instruction.wireId(), instruction.framedPayload(), chainDiscriminant);
       } catch (final RuntimeException ignored) {
         // Converted into the stable validation error below.
       }

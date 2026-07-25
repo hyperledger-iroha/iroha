@@ -24,6 +24,32 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
         XCTAssertNoThrow(try restored.validateStatusTransactionHash(fixture.envelope.hashHex))
     }
 
+    func testRehydratesTransactionWithExactTairaSponsorProgram() throws {
+        let sponsor = try FeeSponsorProgramId(
+            "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
+        )
+        let fixture = try makeEnvelope(
+            marker: "taira-sponsor",
+            signatureByte: 0x35,
+            feePayment: .sponsor(
+                programId: sponsor,
+                programRevision: 1,
+                chargeLimits: [],
+                gasLimit: nil
+            )
+        )
+
+        XCTAssertNoThrow(
+            try KagemushaDeviceAttestationSignedTransaction(
+                canonicalNorito: fixture.envelope.norito,
+                expectedRegistrationId: fixture.registration.canonicalRegistrationId,
+                expectedChainId: Self.chainId,
+                expectedAuthority: Self.authority,
+                expectedTransactionHash: fixture.envelope.transactionHash
+            )
+        )
+    }
+
     func testRejectsWireVersionTrailingAndStatusHashSubstitution() throws {
         let fixture = try makeEnvelope(marker: "wire", signatureByte: 0x32)
 
@@ -124,7 +150,8 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
 
     private func makeEnvelope(
         marker: String,
-        signatureByte: UInt8
+        signatureByte: UInt8,
+        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
     ) throws -> (
         registration: KagemushaDeviceAttestationRegistration,
         envelope: SignedTransactionEnvelope
@@ -139,7 +166,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
                 chainId: Self.chainId,
                 authority: Self.authority,
                 registration: registration,
-                feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                feePayment: feePayment,
                 ttlMs: 60_000,
                 nonce: 7,
                 metadata: ["purpose": .string("crash-safe-replay")]
@@ -181,12 +208,15 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
 
     private func alternateAuthority() throws -> String {
         let key = Data(repeating: 0x55, count: 32)
-        return try AccountAddress.fromAccount(publicKey: key).toI105(networkPrefix: 0x02F1)
+        return try AccountAddress.fromAccount(publicKey: key).toI105(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
     }
 
     private static let chainId = "kagemusha-device-registration-test-chain"
-    private static let authority =
-        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+    private static let authority = try! AccountAddress
+        .fromAccount(publicKey: Data(repeating: 0x54, count: 32))
+        .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
     private static let p256Generator =
         "04"
         + "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"

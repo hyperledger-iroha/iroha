@@ -8,16 +8,17 @@ public enum DefaultAliasLifecycleInstructionFrameCodec
 
   @Override
   public DecodedAliasLifecycleFrame decodeAndReencode(
-      final String wireId, final byte[] framedPayload) {
+      final String wireId, final byte[] framedPayload, final int chainDiscriminant) {
     if (RenewAliasLease.WIRE_ID.equals(wireId)) {
-      final RenewAliasLease value = AliasNoritoCodec.decodeRenewAliasLeaseFrame(framedPayload);
+      final RenewAliasLease value =
+          AliasNoritoCodec.decodeRenewAliasLeaseFrame(framedPayload, chainDiscriminant);
       return new DecodedAliasLifecycleFrame(
           new AliasLifecycleOperationV1.RenewLease(value),
           AliasNoritoCodec.encodeRenewAliasLeaseFrame(value));
     }
     if (ConfigureAliasAutoRenew.WIRE_ID.equals(wireId)) {
       final ConfigureAliasAutoRenew value =
-          AliasNoritoCodec.decodeConfigureAutoRenewFrame(framedPayload);
+          AliasNoritoCodec.decodeConfigureAutoRenewFrame(framedPayload, chainDiscriminant);
       return new DecodedAliasLifecycleFrame(
           new AliasLifecycleOperationV1.ConfigureAutoRenew(value),
           AliasNoritoCodec.encodeConfigureAutoRenewFrame(value));

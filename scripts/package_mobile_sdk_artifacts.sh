@@ -6,10 +6,16 @@ usage() {
 Usage:
   scripts/package_mobile_sdk_artifacts.sh [--root <repo-root>] [--version <version>] [--apple] [--android]
 
-Packages built mobile SDK artifacts into dist/mobile-sdk:
-  --apple    Package dist/NoritoBridge.xcframework and its artifact manifest.
+Packages built mobile SDK artifacts into dist/mobile-sdk by default:
+  --apple    Package NoritoBridge.xcframework and its artifact manifest.
   --android  Package Kotlin core/client/offline-wallet Android release outputs,
              generated native bridge bytes, and their embedded provenance.
+
+MOBILE_SDK_APPLE_ARTIFACT_DIR may select an external Apple artifact directory.
+MOBILE_SDK_ANDROID_ARTIFACT_DIR is required for Android release packaging and
+must identify the canonical external Gradle/artifact root.
+MOBILE_SDK_PACKAGE_OUT_DIR may select a dedicated external package directory
+whose final path component contains "mobile-sdk".
 
 When neither --apple nor --android is passed, both platforms are packaged.
 USAGE
@@ -66,11 +72,39 @@ done
 if [[ -z "$ROOT_ARG" ]]; then
   ROOT_ARG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
-ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
+ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
+APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
+if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
+  APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
+fi
 
 if [[ "$PACKAGE_APPLE" == "0" && "$PACKAGE_ANDROID" == "0" ]]; then
   PACKAGE_APPLE=1
   PACKAGE_ANDROID=1
+fi
+
+ANDROID_ARTIFACT_DIR="${MOBILE_SDK_ANDROID_ARTIFACT_DIR:-}"
+ANDROID_KOTLIN_BUILD_ROOT=""
+ANDROID_MAVEN_REPO_DIR=""
+if [[ "$PACKAGE_ANDROID" == "1" ]]; then
+  if [[ -z "$ANDROID_ARTIFACT_DIR" || "$ANDROID_ARTIFACT_DIR" != /* \
+    || ! -d "$ANDROID_ARTIFACT_DIR" || -L "$ANDROID_ARTIFACT_DIR" ]]; then
+    echo "[mobile-sdk-package] ERROR: Android release packaging requires an absolute non-symbolic MOBILE_SDK_ANDROID_ARTIFACT_DIR" >&2
+    exit 66
+  fi
+  canonical_android_artifact_dir="$(cd "$ANDROID_ARTIFACT_DIR" && pwd -P)"
+  if [[ "$canonical_android_artifact_dir" != "$ANDROID_ARTIFACT_DIR" ]]; then
+    echo "[mobile-sdk-package] ERROR: MOBILE_SDK_ANDROID_ARTIFACT_DIR must be canonical" >&2
+    exit 66
+  fi
+  case "$ANDROID_ARTIFACT_DIR/" in
+    "$ROOT_DIR/"*)
+      echo "[mobile-sdk-package] ERROR: MOBILE_SDK_ANDROID_ARTIFACT_DIR must be outside the Iroha source tree" >&2
+      exit 66
+      ;;
+  esac
+  ANDROID_KOTLIN_BUILD_ROOT="$ANDROID_ARTIFACT_DIR/gradle-build/iroha_kotlin_sdk"
+  ANDROID_MAVEN_REPO_DIR="${MOBILE_SDK_ANDROID_MAVEN_REPO_DIR:-$ANDROID_ARTIFACT_DIR/maven}"
 fi
 
 if [[ -z "$VERSION" ]]; then
@@ -99,7 +133,38 @@ if [[ ! "$VERSION" =~ ^[A-Za-z0-9._+-]+$ ]]; then
   exit 65
 fi
 
-OUT_DIR="$ROOT_DIR/dist/mobile-sdk"
+OUT_DIR="${MOBILE_SDK_PACKAGE_OUT_DIR:-$ROOT_DIR/dist/mobile-sdk}"
+if [[ "$OUT_DIR" != /* ]]; then
+  OUT_DIR="$ROOT_DIR/$OUT_DIR"
+fi
+case "$OUT_DIR/" in
+  *"/../"*|*"/./"*|*"//"*)
+    echo "[mobile-sdk-package] ERROR: package output path must be canonical: $OUT_DIR" >&2
+    exit 65
+    ;;
+esac
+OUT_BASENAME="${OUT_DIR##*/}"
+case "$OUT_BASENAME" in
+  *mobile-sdk*) ;;
+  *)
+    echo "[mobile-sdk-package] ERROR: package output must be a dedicated mobile-sdk directory: $OUT_DIR" >&2
+    exit 65
+    ;;
+esac
+OUT_PARENT="${OUT_DIR%/*}"
+mkdir -p "$OUT_PARENT"
+OUT_PARENT="$(cd "$OUT_PARENT" && pwd -P)"
+OUT_DIR="$OUT_PARENT/$OUT_BASENAME"
+if [[ -L "$OUT_DIR" ]]; then
+  echo "[mobile-sdk-package] ERROR: package output must not be a symbolic link: $OUT_DIR" >&2
+  exit 65
+fi
+case "$OUT_DIR" in
+  /|"$ROOT_DIR"|"$ROOT_DIR/dist"|"$APPLE_ARTIFACT_DIR")
+    echo "[mobile-sdk-package] ERROR: refusing broad package output path: $OUT_DIR" >&2
+    exit 65
+    ;;
+esac
 MODE_LABEL="all"
 if [[ "$PACKAGE_APPLE" == "1" && "$PACKAGE_ANDROID" == "0" ]]; then
   MODE_LABEL="apple"
@@ -172,15 +237,15 @@ resolve_core_jar() {
   local candidate
 
   for candidate in \
-    "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-${VERSION}.jar" \
-    "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-${stripped_version}.jar"; do
+    "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-${VERSION}.jar" \
+    "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-${stripped_version}.jar"; do
     if [[ -f "$candidate" ]]; then
       printf '%s' "$candidate"
       return
     fi
   done
 
-  single_match "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
+  single_match "$ANDROID_KOTLIN_BUILD_ROOT/core-jvm/libs/core-jvm-*.jar" "core-jvm built jar"
 }
 
 resolve_android_native_mode() {
@@ -207,7 +272,11 @@ record_artifact() {
 
   require_file "$path" "$kind artifact"
   name="$(basename "$path")"
-  rel="${path#$ROOT_DIR/}"
+  if [[ "$path" == "$OUT_DIR/"* ]]; then
+    rel="${path#"$OUT_DIR/"}"
+  else
+    rel="${path#"$ROOT_DIR/"}"
+  fi
   sha="$(hash_file "$path")"
   bytes="$(wc -c < "$path" | tr -d '[:space:]')"
   printf '%s  %s\n' "$sha" "$rel" >> "$CHECKSUMS"
@@ -255,12 +324,27 @@ write_manifest() {
 }
 
 package_apple() {
-  local xcframework="$ROOT_DIR/dist/NoritoBridge.xcframework"
-  local bridge_manifest="$ROOT_DIR/dist/NoritoBridge.artifacts.json"
+  local artifact_root
+  local xcframework
+  local bridge_manifest
   local apple_zip="$OUT_DIR/NoritoBridge-${VERSION}.xcframework.zip"
   local versioned_manifest="$OUT_DIR/NoritoBridge-${VERSION}.artifacts.json"
 
-  bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+  require_dir "$APPLE_ARTIFACT_DIR" "Apple artifact directory"
+  if [[ -L "$APPLE_ARTIFACT_DIR" ]]; then
+    echo "[mobile-sdk-package] ERROR: Apple artifact directory must not be a symbolic link: $APPLE_ARTIFACT_DIR" >&2
+    exit 66
+  fi
+  artifact_root="$(cd "$APPLE_ARTIFACT_DIR" && pwd -P)"
+  if [[ "$artifact_root" != "$APPLE_ARTIFACT_DIR" ]]; then
+    echo "[mobile-sdk-package] ERROR: Apple artifact directory must be canonical: $APPLE_ARTIFACT_DIR" >&2
+    exit 66
+  fi
+  xcframework="$artifact_root/NoritoBridge.xcframework"
+  bridge_manifest="$artifact_root/NoritoBridge.artifacts.json"
+
+  MOBILE_SDK_APPLE_ARTIFACT_DIR="$artifact_root" \
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
   require_dir "$xcframework" "NoritoBridge XCFramework"
   require_file "$bridge_manifest" "NoritoBridge artifact manifest"
 
@@ -268,7 +352,7 @@ package_apple() {
   if command -v ditto >/dev/null 2>&1; then
     ditto -c -k --sequesterRsrc --keepParent "$xcframework" "$apple_zip"
   else
-    (cd "$ROOT_DIR/dist" && zip -qr "$apple_zip" NoritoBridge.xcframework)
+    (cd "$artifact_root" && zip -qr "$apple_zip" NoritoBridge.xcframework)
   fi
   cp "$bridge_manifest" "$versioned_manifest"
 
@@ -280,18 +364,20 @@ package_android() {
   local stage="$OUT_DIR/iroha-mobile-sdk-android-${VERSION}"
   local stage_checksums="$stage/SHA256SUMS.txt"
   local android_zip="$OUT_DIR/iroha-mobile-sdk-android-${VERSION}.zip"
-  local maven_repo="$ROOT_DIR/dist/mobile-sdk-maven"
-  local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+  local maven_repo="$ANDROID_MAVEN_REPO_DIR"
+  local client_build_root="$ANDROID_KOTLIN_BUILD_ROOT/client-android"
+  local client_aar="$client_build_root/outputs/aar/client-android-release.aar"
   local core_jar
   local native_mode
   local generated_native_root
   local generated_native_provenance
   local rel
 
-  bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --android-only --require-built-android
+  MOBILE_SDK_ANDROID_ARTIFACT_DIR="$ANDROID_ARTIFACT_DIR" \
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --android-only --require-built-android
   native_mode="$(resolve_android_native_mode "$client_aar")"
-  generated_native_root="$ROOT_DIR/kotlin/client-android/build/generated/jniLibs/$native_mode"
-  generated_native_provenance="$ROOT_DIR/kotlin/client-android/build/generated/nativeProvenance/$native_mode/iroha/native-build-provenance-v1.json"
+  generated_native_root="$client_build_root/generated/jniLibs/$native_mode"
+  generated_native_provenance="$client_build_root/generated/nativeProvenance/$native_mode/iroha/native-build-provenance-v1.json"
   rm -rf "$stage" "$android_zip"
   mkdir -p "$stage"
   : > "$stage_checksums"

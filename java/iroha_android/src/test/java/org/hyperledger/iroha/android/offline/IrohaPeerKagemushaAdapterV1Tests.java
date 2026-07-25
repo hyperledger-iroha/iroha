@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -16,8 +17,30 @@ import org.junit.Test;
 
 public final class IrohaPeerKagemushaAdapterV1Tests {
   @Test
-  public void emitsOnlyFixedNativeArchiveSchemaAndPreservesExactBytes() {
+  public void failsClosedWithoutNativeOrPreservesExactBytesThroughNative() {
     final byte[] archive = portableOfferFixture();
+    final boolean nativeAvailable =
+        KagemushaRecursiveSpendProver.isArtifactStreamingAvailable();
+    if ("1".equals(System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE"))) {
+      assertTrue(
+          "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
+          nativeAvailable);
+    }
+    if (!nativeAvailable) {
+      final IllegalArgumentException failure =
+          assertThrows(
+              IllegalArgumentException.class,
+              () ->
+                  KagemushaPeerTransport.Payload.decode(
+                      archive, KagemushaPeerTransport.Kind.RECEIVE_REQUEST));
+      assertEquals("Invalid Kagemusha peer archive", failure.getMessage());
+      assertTrue(failure.getCause() instanceof IllegalStateException);
+      assertEquals(
+          "connect_norito_bridge ABI 21 artifact streaming is unavailable",
+          failure.getCause().getMessage());
+      return;
+    }
+
     final KagemushaPeerTransport.Payload typed =
         KagemushaPeerTransport.Payload.decode(
             archive, KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
@@ -31,8 +54,8 @@ public final class IrohaPeerKagemushaAdapterV1Tests {
     assertEquals(IrohaPeerPayloadKind.RECEIVE_REQUEST, wrapped.canonicalPayload().kind());
     assertArrayEquals(archive, wrapped.canonicalPayload().bytes());
     assertArrayEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive());
-    assertEquals(14_005, archive.length);
-    assertEquals(14_089, wrapped.encode().length);
+    assertEquals(12_306, archive.length);
+    assertEquals(12_390, wrapped.encode().length);
 
     final IrohaPeerWireLimitsV1 tooSmall =
         new IrohaPeerWireLimitsV1(32 * 1024, archive.length - 1, archive.length - 1);

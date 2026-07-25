@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.numeric.NumericV1;
@@ -16,6 +17,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 
 /** Canonical V1 Norito codecs used by alias planners and local apply. */
 public final class AliasNoritoCodec {
+  private static final ThreadLocal<Integer> DECODE_CHAIN_DISCRIMINANT = new ThreadLocal<>();
   private static final String ENSURE_SCHEMA =
       "iroha_data_model::isi::alias_setup::EnsureAlias";
   private static final String RENEW_SCHEMA =
@@ -45,9 +47,12 @@ public final class AliasNoritoCodec {
 
   /** Decodes an exact bare setup-plan body. */
   public static AliasSetupModels.AliasTransactionPlanBodyV1 decodePlanBody(
-      final byte[] payload) {
-    return NoritoCodec.decodeAdaptive(
-        Objects.requireNonNull(payload, "payload"), PLAN_BODY_ADAPTER);
+      final byte[] payload, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () ->
+            NoritoCodec.decodeAdaptive(
+                Objects.requireNonNull(payload, "payload"), PLAN_BODY_ADAPTER));
   }
 
   /** Encodes the exact bare lifecycle-plan body committed by the planner hash. */
@@ -60,9 +65,13 @@ public final class AliasNoritoCodec {
 
   /** Decodes an exact bare lifecycle-plan body. */
   public static AliasLifecycleTransactionPlanBodyV1 decodeLifecyclePlanBody(
-      final byte[] payload) {
-    return NoritoCodec.decodeAdaptive(
-        Objects.requireNonNull(payload, "payload"), LIFECYCLE_PLAN_BODY_ADAPTER);
+      final byte[] payload, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () ->
+            NoritoCodec.decodeAdaptive(
+                Objects.requireNonNull(payload, "payload"),
+                LIFECYCLE_PLAN_BODY_ADAPTER));
   }
 
   /** Encodes the exact bare sponsored-onboarding receipt body signed by Torii. */
@@ -73,9 +82,14 @@ public final class AliasNoritoCodec {
   }
 
   /** Decodes an exact bare sponsored-onboarding receipt body. */
-  public static AccountOnboardingPlanBodyV1 decodeOnboardingPlanBody(final byte[] payload) {
-    return NoritoCodec.decodeAdaptive(
-        Objects.requireNonNull(payload, "payload"), ONBOARDING_PLAN_BODY_ADAPTER);
+  public static AccountOnboardingPlanBodyV1 decodeOnboardingPlanBody(
+      final byte[] payload, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () ->
+            NoritoCodec.decodeAdaptive(
+                Objects.requireNonNull(payload, "payload"),
+                ONBOARDING_PLAN_BODY_ADAPTER));
   }
 
   /** Encodes one typed EnsureAlias instruction. */
@@ -84,8 +98,11 @@ public final class AliasNoritoCodec {
   }
 
   /** Decodes one schema-bound EnsureAlias frame. */
-  public static EnsureAlias decodeEnsureAliasFrame(final byte[] frame) {
-    return NoritoCodec.decode(frame, ENSURE_ADAPTER, ENSURE_SCHEMA);
+  public static EnsureAlias decodeEnsureAliasFrame(
+      final byte[] frame, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> NoritoCodec.decode(frame, ENSURE_ADAPTER, ENSURE_SCHEMA));
   }
 
   /** Encodes one typed renewal instruction. */
@@ -94,8 +111,11 @@ public final class AliasNoritoCodec {
   }
 
   /** Decodes one schema-bound renewal frame. */
-  public static RenewAliasLease decodeRenewAliasLeaseFrame(final byte[] frame) {
-    return NoritoCodec.decode(frame, RENEW_ADAPTER, RENEW_SCHEMA);
+  public static RenewAliasLease decodeRenewAliasLeaseFrame(
+      final byte[] frame, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> NoritoCodec.decode(frame, RENEW_ADAPTER, RENEW_SCHEMA));
   }
 
   /** Encodes one typed auto-renew instruction. */
@@ -104,8 +124,13 @@ public final class AliasNoritoCodec {
   }
 
   /** Decodes one schema-bound auto-renew frame. */
-  public static ConfigureAliasAutoRenew decodeConfigureAutoRenewFrame(final byte[] frame) {
-    return NoritoCodec.decode(frame, CONFIGURE_AUTO_RENEW_ADAPTER, AUTO_RENEW_SCHEMA);
+  public static ConfigureAliasAutoRenew decodeConfigureAutoRenewFrame(
+      final byte[] frame, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () ->
+            NoritoCodec.decode(
+                frame, CONFIGURE_AUTO_RENEW_ADAPTER, AUTO_RENEW_SCHEMA));
   }
 
   /** Encodes one typed account-alias rebind instruction. */
@@ -114,8 +139,11 @@ public final class AliasNoritoCodec {
   }
 
   /** Decodes one schema-bound account-alias rebind frame. */
-  public static RebindAccountAlias decodeRebindAccountAliasFrame(final byte[] frame) {
-    return NoritoCodec.decode(frame, REBIND_ADAPTER, REBIND_SCHEMA);
+  public static RebindAccountAlias decodeRebindAccountAliasFrame(
+      final byte[] frame, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> NoritoCodec.decode(frame, REBIND_ADAPTER, REBIND_SCHEMA));
   }
 
   /** Encodes one typed primary-alias compare-and-set instruction. */
@@ -126,8 +154,10 @@ public final class AliasNoritoCodec {
 
   /** Decodes one schema-bound primary-alias compare-and-set frame. */
   public static CompareAndSetPrimaryAccountAlias decodeCompareAndSetPrimaryAliasFrame(
-      final byte[] frame) {
-    return NoritoCodec.decode(frame, PRIMARY_ADAPTER, PRIMARY_SCHEMA);
+      final byte[] frame, final int chainDiscriminant) {
+    return withDecodeChain(
+        chainDiscriminant,
+        () -> NoritoCodec.decode(frame, PRIMARY_ADAPTER, PRIMARY_SCHEMA));
   }
 
   private static final TypeAdapter<BigInteger> BIG_U64_ADAPTER =
@@ -157,9 +187,42 @@ public final class AliasNoritoCodec {
         @Override
         public String decode(final NoritoDecoder decoder) {
           return TransferWirePayloadEncoder.decodeAccountIdPayload(
-              decoder.readBytes(decoder.remaining()), decoder.flags(), decoder.flagsHint());
+              decoder.readBytes(decoder.remaining()),
+              requiredDecodeChainDiscriminant(),
+              decoder.flags(),
+              decoder.flagsHint());
         }
       };
+
+  private static int requiredDecodeChainDiscriminant() {
+    final Integer value = DECODE_CHAIN_DISCRIMINANT.get();
+    if (value == null) {
+      throw new IllegalStateException(
+          "alias decoding requires an explicit chainDiscriminant");
+    }
+    return value;
+  }
+
+  private static <T> T withDecodeChain(
+      final int chainDiscriminant, final Supplier<T> operation) {
+    if (chainDiscriminant < 0 || chainDiscriminant > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    final Integer previous = DECODE_CHAIN_DISCRIMINANT.get();
+    if (previous != null && previous.intValue() != chainDiscriminant) {
+      throw new IllegalStateException("Conflicting nested chainDiscriminant context");
+    }
+    DECODE_CHAIN_DISCRIMINANT.set(chainDiscriminant);
+    try {
+      return operation.get();
+    } finally {
+      if (previous == null) {
+        DECODE_CHAIN_DISCRIMINANT.remove();
+      } else {
+        DECODE_CHAIN_DISCRIMINANT.set(previous);
+      }
+    }
+  }
 
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER =
       new TypeAdapter<>() {

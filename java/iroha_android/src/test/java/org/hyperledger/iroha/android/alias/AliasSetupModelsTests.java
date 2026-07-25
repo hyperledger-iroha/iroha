@@ -203,7 +203,8 @@ public final class AliasSetupModelsTests {
     final Map<String, Object> setup = vectorNamed(hashes, "setup_account_alias_create");
     final byte[] setupBytes = decodeHex((String) setup.get("canonical_body_norito_hex"));
     final AliasSetupModels.AliasTransactionPlanBodyV1 setupBody =
-        AliasNoritoCodec.decodePlanBody(setupBytes);
+        AliasNoritoCodec.decodePlanBody(
+            setupBytes, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert Arrays.equals(setupBytes, AliasNoritoCodec.encodePlanBody(setupBody));
     assert setup.get("canonical_plan_hash_hex")
         .equals(hex(AliasPlanVerifier.canonicalHash(setupBytes)));
@@ -212,7 +213,8 @@ public final class AliasSetupModelsTests {
     final byte[] lifecycleBytes =
         decodeHex((String) lifecycle.get("canonical_body_norito_hex"));
     final AliasLifecycleTransactionPlanBodyV1 lifecycleBody =
-        AliasNoritoCodec.decodeLifecyclePlanBody(lifecycleBytes);
+        AliasNoritoCodec.decodeLifecyclePlanBody(
+            lifecycleBytes, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert Arrays.equals(
         lifecycleBytes, AliasNoritoCodec.encodeLifecyclePlanBody(lifecycleBody));
     assert lifecycle.get("canonical_plan_hash_hex")
@@ -229,28 +231,33 @@ public final class AliasSetupModelsTests {
         case "ensure_account_alias":
           reencoded =
               AliasNoritoCodec.encodeEnsureAliasFrame(
-                  AliasNoritoCodec.decodeEnsureAliasFrame(original));
+                  AliasNoritoCodec.decodeEnsureAliasFrame(
+                      original, AccountAddress.DEFAULT_I105_DISCRIMINANT));
           break;
         case "renew_account_alias":
           reencoded =
               AliasNoritoCodec.encodeRenewAliasLeaseFrame(
-                  AliasNoritoCodec.decodeRenewAliasLeaseFrame(original));
+                  AliasNoritoCodec.decodeRenewAliasLeaseFrame(
+                      original, AccountAddress.DEFAULT_I105_DISCRIMINANT));
           break;
         case "configure_auto_renew_enable":
         case "configure_auto_renew_disable":
           reencoded =
               AliasNoritoCodec.encodeConfigureAutoRenewFrame(
-                  AliasNoritoCodec.decodeConfigureAutoRenewFrame(original));
+                  AliasNoritoCodec.decodeConfigureAutoRenewFrame(
+                      original, AccountAddress.DEFAULT_I105_DISCRIMINANT));
           break;
         case "rebind_account_alias":
           reencoded =
               AliasNoritoCodec.encodeRebindAccountAliasFrame(
-                  AliasNoritoCodec.decodeRebindAccountAliasFrame(original));
+                  AliasNoritoCodec.decodeRebindAccountAliasFrame(
+                      original, AccountAddress.DEFAULT_I105_DISCRIMINANT));
           break;
         case "compare_and_set_primary_account_alias":
           reencoded =
               AliasNoritoCodec.encodeCompareAndSetPrimaryAliasFrame(
-                  AliasNoritoCodec.decodeCompareAndSetPrimaryAliasFrame(original));
+                  AliasNoritoCodec.decodeCompareAndSetPrimaryAliasFrame(
+                      original, AccountAddress.DEFAULT_I105_DISCRIMINANT));
           break;
         default:
           throw new AssertionError("unexpected shared alias frame: " + name);
@@ -259,7 +266,9 @@ public final class AliasSetupModelsTests {
     }
 
     final EnsureAlias ensure =
-        AliasNoritoCodec.decodeEnsureAliasFrame(setupBody.instructions().get(0).framedPayload());
+        AliasNoritoCodec.decodeEnsureAliasFrame(
+            setupBody.instructions().get(0).framedPayload(),
+            AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final AliasTransactionPlanV1 setupPlan =
         new AliasTransactionPlanV1(
             setupBody, (String) setup.get("canonical_plan_hash_hex"));
@@ -267,6 +276,7 @@ public final class AliasSetupModelsTests {
         AliasPlanApply.buildTransactionPayload(
             new AliasSetupPlanRequestV1(Collections.singletonList(ensure)),
             setupPlan,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
             null,
@@ -283,6 +293,7 @@ public final class AliasSetupModelsTests {
         AliasLifecyclePlanApply.buildTransactionPayload(
             new AliasLeaseRenewPlanRequestV1(renewal.renewal()),
             lifecyclePlan,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
             null,
@@ -366,10 +377,12 @@ public final class AliasSetupModelsTests {
             request,
             parsed,
             ignored -> bodyBytes.clone(),
-            (wireId, frame) -> {
+            (wireId, frame, chainDiscriminant) -> {
               assert EnsureAlias.WIRE_ID.equals(wireId);
+              assert chainDiscriminant == AccountAddress.DEFAULT_I105_DISCRIMINANT;
               return new DecodedEnsureAliasFrame(ensure, frame.clone());
             },
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
             7L,
@@ -401,7 +414,9 @@ public final class AliasSetupModelsTests {
           new AliasSetupPlanRequestV1(Collections.singletonList(intended)),
           plan,
           bodyBytes,
-          (wireId, frame) -> new DecodedEnsureAliasFrame(substituted, frame));
+          (wireId, frame, chainDiscriminant) ->
+              new DecodedEnsureAliasFrame(substituted, frame),
+          AccountAddress.DEFAULT_I105_DISCRIMINANT);
       throw new AssertionError("substituted acquisition terms must fail");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("signed_request_mismatch");
@@ -447,17 +462,20 @@ public final class AliasSetupModelsTests {
         request,
         parsed,
         bodyBytes,
-        (wireId, payload) -> {
+        (wireId, payload, chainDiscriminant) -> {
           assert RenewAliasLease.WIRE_ID.equals(wireId);
+          assert chainDiscriminant == AccountAddress.DEFAULT_I105_DISCRIMINANT;
           return new DecodedAliasLifecycleFrame(request.operation(), payload.clone());
-        });
+        },
+        AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final TransactionPayload transaction =
         AliasLifecyclePlanApply.buildTransactionPayload(
             request,
             parsed,
             ignored -> bodyBytes.clone(),
-            (wireId, payload) ->
+            (wireId, payload, chainDiscriminant) ->
                 new DecodedAliasLifecycleFrame(request.operation(), payload.clone()),
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
             null,
@@ -495,17 +513,19 @@ public final class AliasSetupModelsTests {
         request,
         plan,
         bodyBytes,
-        (wireId, payload) -> {
+        (wireId, payload, chainDiscriminant) -> {
           throw new AssertionError("no-op must not decode an instruction");
-        });
+        },
+        AccountAddress.DEFAULT_I105_DISCRIMINANT);
     try {
       AliasLifecyclePlanApply.buildTransactionPayload(
           request,
           plan,
           ignored -> bodyBytes,
-          (wireId, payload) -> {
+          (wireId, payload, chainDiscriminant) -> {
             throw new AssertionError("unreachable");
           },
+          AccountAddress.DEFAULT_I105_DISCRIMINANT,
           FeePaymentIntent.authority(Collections.emptyList()),
           40_000,
           null,
@@ -720,7 +740,8 @@ public final class AliasSetupModelsTests {
     assert Arrays.equals(
         encoded,
         AliasNoritoCodec.encodeOnboardingPlanBody(
-            AliasNoritoCodec.decodeOnboardingPlanBody(encoded)));
+            AliasNoritoCodec.decodeOnboardingPlanBody(
+                encoded, AccountAddress.DEFAULT_I105_DISCRIMINANT)));
 
     final AccountOnboardingPlanReceiptV1 receipt = signedOnboardingReceipt(body, signer);
     assert AccountOnboardingReceiptVerifier.verify(receipt);
@@ -764,7 +785,8 @@ public final class AliasSetupModelsTests {
     final byte[] bodyBytes =
         decodeHex((String) vector.get("canonical_body_norito_hex"));
     final AccountOnboardingPlanBodyV1 body =
-        AliasNoritoCodec.decodeOnboardingPlanBody(bodyBytes);
+        AliasNoritoCodec.decodeOnboardingPlanBody(
+            bodyBytes, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert Arrays.equals(bodyBytes, AliasNoritoCodec.encodeOnboardingPlanBody(body));
     assert vector.get("canonical_plan_hash_hex")
         .equals(hex(AccountOnboardingReceiptVerifier.canonicalHash(body)));

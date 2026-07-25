@@ -838,6 +838,8 @@ for method in native_methods:
 base_bridge_symbols = (
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
+    "connect_norito_chain_discriminant_scope_enter",
+    "connect_norito_chain_discriminant_scope_exit",
     "connect_norito_encode_transfer_signed_transaction",
     "connect_norito_encode_transfer_instruction_box",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
@@ -882,13 +884,11 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
     "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
@@ -938,7 +938,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 50-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 48-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
@@ -1020,6 +1020,46 @@ swift_symbol_inventory = "\n".join(
 )
 if forbidden_recursive_alias.search(swift_symbol_inventory):
     errors.append(f"{paths['swift']}: required-symbol inventory contains a V2/V3 lifecycle alias")
+
+# The first release has only the query-backed lineage verifier and the two
+# physical authorization finalizers. The fail-only lineage verifier, generic
+# authorization creator, and their JNI creator shims must not reappear in any
+# published source inventory.
+forbidden_first_release_c_exports = (
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+)
+for symbol in forbidden_first_release_c_exports:
+    if re.search(rf"\b{re.escape(symbol)}\s*\(", texts["header"]):
+        errors.append(f"{paths['header']}: first-release compatibility C export {symbol} is forbidden")
+    if re.search(
+        rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(symbol)}\s*\(',
+        texts["rust"],
+    ):
+        errors.append(f"{paths['rust']}: first-release compatibility C export {symbol} is forbidden")
+    if symbol in swift_symbol_inventory or symbol in texts["swift_native"]:
+        errors.append(f"{paths['swift']}: first-release compatibility C export {symbol} is forbidden")
+    if symbol in actual_kagemusha_symbols:
+        errors.append(f"{paths['mobile_check']}: first-release compatibility C export {symbol} is forbidden")
+
+for label in ("kotlin", "java"):
+    if re.search(r"\bnativeCreateAuthorizationV2\s*\(", texts[label]):
+        errors.append(
+            f"{paths[label]}: first-release JNI compatibility method "
+            "nativeCreateAuthorizationV2 is forbidden"
+        )
+for package in (
+    "org_hyperledger_iroha_sdk_offline",
+    "org_hyperledger_iroha_android_offline",
+):
+    forbidden_jni_symbol = (
+        f"Java_{package}_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
+    )
+    if re.search(rf"\bfn\s+{re.escape(forbidden_jni_symbol)}\s*\(", texts["rust"]):
+        errors.append(
+            f"{paths['rust']}: first-release JNI compatibility export "
+            f"{forbidden_jni_symbol} is forbidden"
+        )
 
 for macro in (
     "CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE",
@@ -1137,12 +1177,42 @@ if mode == "--self-test":
         "required bridge symbol order drift is rejected",
         lambda fixture: replace_once(
             fixture / paths["xcframework_build"],
-            '    "connect_norito_free",\n'
-            '    "connect_norito_encode_transfer_signed_transaction",',
-            '    "connect_norito_encode_transfer_signed_transaction",\n'
-            '    "connect_norito_free",',
+            '    "connect_norito_chain_discriminant_scope_enter",\n'
+            '    "connect_norito_chain_discriminant_scope_exit",',
+            '    "connect_norito_chain_discriminant_scope_exit",\n'
+            '    "connect_norito_chain_discriminant_scope_enter",',
         ),
         "exact ordered 61-symbol required bridge inventory mismatch",
+    )
+
+    def inject_lineage_v1_compatibility_export(fixture: Path) -> None:
+        header = fixture / paths["header"]
+        header.write_text(
+            header.read_text(encoding="utf-8")
+            + "\nint32_t "
+            "connect_norito_kagemusha_recipient_registration_lineage_verify_v1(void);\n",
+            encoding="utf-8",
+        )
+
+    run_negative(
+        "fail-only lineage V1 compatibility export is rejected",
+        inject_lineage_v1_compatibility_export,
+        "first-release compatibility C export "
+        "connect_norito_kagemusha_recipient_registration_lineage_verify_v1 is forbidden",
+    )
+
+    def inject_jni_authorization_creator(fixture: Path) -> None:
+        kotlin = fixture / paths["kotlin"]
+        kotlin.write_text(
+            kotlin.read_text(encoding="utf-8")
+            + "\nexternal fun nativeCreateAuthorizationV2()\n",
+            encoding="utf-8",
+        )
+
+    run_negative(
+        "generic JNI authorization creator is rejected",
+        inject_jni_authorization_creator,
+        "first-release JNI compatibility method nativeCreateAuthorizationV2 is forbidden",
     )
 
     def inject_v3_alias(fixture: Path) -> None:

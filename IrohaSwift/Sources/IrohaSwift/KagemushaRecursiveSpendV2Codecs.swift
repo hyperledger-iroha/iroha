@@ -109,7 +109,18 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     static func canonicalAssetID(_ value: String) throws -> String {
-        let canonical = try decodeAssetID(assetID(value))
+        let parts = value.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count == 2 || parts.count == 3 else {
+            throw KagemushaRecursiveSpendError.invalidField("assetID")
+        }
+        let chainDiscriminant = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            String(parts[1]),
+            field: "assetID.accountID"
+        ).chainDiscriminant
+        let canonical = try decodeAssetID(
+            assetID(value),
+            chainDiscriminant: chainDiscriminant
+        )
         guard canonical == value else {
             throw KagemushaRecursiveSpendError.invalidField("assetID")
         }
@@ -380,7 +391,8 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     public static func decodeRecipientRequest(
-        _ archive: Data
+        _ archive: Data,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaRecipientPaymentRequest {
         let payloadData = try payload(
             archive,
@@ -388,7 +400,10 @@ public enum KagemushaRecursiveSpendCodecs {
             field: "recipientRequest"
         )
         var reader = KagemushaV2Reader(payloadData)
-        let signedPayload = try decodeRecipientRequestPayloadFields(&reader)
+        let signedPayload = try decodeRecipientRequestPayloadFields(
+            &reader,
+            chainDiscriminant: chainDiscriminant
+        )
         let signature = try KagemushaDeviceSignatureV2(
             rawBytes: packedFixed(
                 try reader.field(),
@@ -411,9 +426,13 @@ public enum KagemushaRecursiveSpendCodecs {
 
     public static func decodeAndVerifyRecipientRequest(
         _ archive: Data,
+        chainDiscriminant: UInt16,
         atMilliseconds: UInt64
     ) throws -> KagemushaVerifiedRecipientPaymentRequest {
-        try decodeRecipientRequest(archive).verified(atMilliseconds: atMilliseconds)
+        try decodeRecipientRequest(
+            archive,
+            chainDiscriminant: chainDiscriminant
+        ).verified(atMilliseconds: atMilliseconds)
     }
 
     public static func encodeAuthorizationPreparation(
@@ -469,7 +488,8 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     public static func decodeTopUpUnsignedV4(
-        _ archive: Data
+        _ archive: Data,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaRecursiveSpendTopUpUnsignedV4 {
         var reader = KagemushaV2Reader(try payload(
             archive,
@@ -477,7 +497,10 @@ public enum KagemushaRecursiveSpendCodecs {
             field: "topUpUnsignedV4"
         ))
         let version = try scalarUInt16(reader.field(), field: "topUpUnsignedV4.version")
-        let asset = try decodeAssetID(reader.field())
+        let asset = try decodeAssetID(
+            reader.field(),
+            chainDiscriminant: chainDiscriminant
+        )
         let amount = try decodeScaledAmount(reader.field())
         let note = try decodeNote(reader.field())
         let evidence = try decodeTopUpShieldEvidence(reader.field())
@@ -505,7 +528,8 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     public static func decodeTopUpAnchorV4(
-        _ archive: Data
+        _ archive: Data,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaRecursiveSpendTopUpAnchorV4 {
         guard archive.count
                 <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
@@ -518,8 +542,14 @@ public enum KagemushaRecursiveSpendCodecs {
         ))
         let version = try scalarUInt16(reader.field(), field: "topUpAnchorV4.version")
         let chain = try decodeChainID(reader.field())
-        let payer = try decodeAccountID(reader.field())
-        let asset = try decodeAssetID(reader.field())
+        let payer = try decodeAccountID(
+            reader.field(),
+            chainDiscriminant: chainDiscriminant
+        )
+        let asset = try decodeAssetID(
+            reader.field(),
+            chainDiscriminant: chainDiscriminant
+        )
         let scale = try scalarUInt32(reader.field(), field: "topUpAnchorV4.assetScale")
         let amount = try decodeScaledAmount(reader.field())
         let initialRoot = try packedFixed(
@@ -711,12 +741,16 @@ public enum KagemushaRecursiveSpendCodecs {
     }
 
     private static func decodeRecipientRequestPayloadFields(
-        _ reader: inout KagemushaV2Reader
+        _ reader: inout KagemushaV2Reader,
+        chainDiscriminant: UInt16
     ) throws -> KagemushaRecipientPaymentRequestSigningPayload {
         let chain = try decodeChainID(reader.field())
         let asset = try decodeAssetDefinitionID(reader.field())
         let amount = try decodeScaledAmount(reader.field())
-        let recipient = try decodeAccountID(reader.field())
+        let recipient = try decodeAccountID(
+            reader.field(),
+            chainDiscriminant: chainDiscriminant
+        )
         let keyReference = try packedFixed(
             reader.field(), count: 32, field: "recipientKeyReference"
         )
@@ -1066,14 +1100,19 @@ public enum KagemushaRecursiveSpendCodecs {
 
     private static func accountID(_ value: String) throws -> Data {
         do {
-            let address = try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
-            return try address.compactNoritoAccountControllerPayload()
+            return try KagemushaRecursiveSpend.canonicalAccountAddress(
+                value,
+                field: "accountID"
+            ).address.compactNoritoAccountControllerPayload()
         } catch {
             throw KagemushaRecursiveSpendError.invalidField("accountID")
         }
     }
 
-    private static func decodeAccountID(_ data: Data) throws -> String {
+    private static func decodeAccountID(
+        _ data: Data,
+        chainDiscriminant: UInt16
+    ) throws -> String {
         var reader = KagemushaV2Reader(data)
         let tag = try reader.uint32()
         guard tag == 0 else {
@@ -1088,7 +1127,7 @@ public enum KagemushaRecursiveSpendCodecs {
             publicKey: key.payload,
             algorithm: algorithm.wireName
         )
-        return try address.toI105(networkPrefix: 0x02F1)
+        return try address.toI105(networkPrefix: chainDiscriminant)
     }
 
     private static func assetID(_ value: String) throws -> Data {
@@ -1117,9 +1156,15 @@ public enum KagemushaRecursiveSpendCodecs {
         return writer.data
     }
 
-    private static func decodeAssetID(_ data: Data) throws -> String {
+    private static func decodeAssetID(
+        _ data: Data,
+        chainDiscriminant: UInt16
+    ) throws -> String {
         var reader = KagemushaV2Reader(data)
-        let account = try decodeAccountID(reader.field())
+        let account = try decodeAccountID(
+            reader.field(),
+            chainDiscriminant: chainDiscriminant
+        )
         let definition = try decodeAssetDefinitionID(reader.field())
         var scope = KagemushaV2Reader(try reader.field())
         let tag = try scope.uint32()

@@ -289,10 +289,12 @@ public final class ZkAssetMerklePathTests {
               "frontier_len": 2,
               "tree_depth": %d,
               "next_zero_path": null,
-              "paths": [%s]
+              "paths": [%s],
+              "evaluated_block_height": 7,
+              "evaluated_block_hash": "%s"
             }
         """
-        .formatted(hex(root), treeDepth, String.join(",", paths));
+        .formatted(hex(root), treeDepth, String.join(",", paths), "0a".repeat(32));
   }
 
   private static String quotedHexList(final List<byte[]> values) {

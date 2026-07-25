@@ -3,7 +3,7 @@
     "name": "swift_transfer_asset_basic",
     "payload": {
       "chain": "00000042",
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "creation_time_ms": 1736000000000,
       "executable": {
         "Instructions": [
@@ -13,7 +13,7 @@
               "action": "TransferAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "15.75",
-              "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+              "destination": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }
         ]
@@ -33,7 +33,7 @@
     "name": "swift_mint_asset_basic",
     "payload": {
       "chain": "00000043",
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "creation_time_ms": 1736001000000,
       "executable": {
         "Instructions": [
@@ -43,7 +43,7 @@
               "action": "MintAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "42.01",
-              "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+              "destination": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }
         ]
@@ -63,7 +63,7 @@
     "name": "swift_burn_asset_basic",
     "payload": {
       "chain": "00000044",
-      "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+      "authority": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
       "creation_time_ms": 1736002000000,
       "executable": {
         "Instructions": [
@@ -73,7 +73,7 @@
               "action": "BurnAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "5.25",
-              "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+              "destination": "testuﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }
         ]

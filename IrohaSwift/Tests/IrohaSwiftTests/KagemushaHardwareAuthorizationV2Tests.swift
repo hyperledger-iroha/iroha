@@ -4,14 +4,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
-    func testHardwareAuthorizationAbiInventoryIsAppendOnly() {
-        for symbol in [
-            "connect_norito_kagemusha_request_authorization_create_v2",
+    func testHardwareAuthorizationAbiInventoryIsExactAndHasNoCompatibilityFinalizer() {
+        let strictSymbols = [
             "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
             "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
-        ] {
+        ]
+        for symbol in strictSymbols {
             XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(symbol))
         }
+        XCTAssertFalse(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
+            "connect_norito_kagemusha_request_authorization_create_v2"
+        ))
     }
 
     func testPreparationArchiveIsNotAnAuthorizationAndBindsPlatform() throws {

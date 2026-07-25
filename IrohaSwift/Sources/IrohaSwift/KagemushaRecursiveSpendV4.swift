@@ -141,8 +141,14 @@ public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
     public let anchorDigest: Data
     public let noritoArchive: Data
 
-    public init(noritoArchive: Data) throws {
-        self = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(noritoArchive)
+    public init(
+        noritoArchive: Data,
+        chainDiscriminant: UInt16
+    ) throws {
+        self = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
+            noritoArchive,
+            chainDiscriminant: chainDiscriminant
+        )
     }
 
     init(
@@ -330,6 +336,10 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
     }
 
     public func buildUnsigned() throws -> KagemushaRecursiveSpendTopUpUnsignedV4 {
+        let chainDiscriminant = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            payer,
+            field: "topUpShieldBuildRequestV4.payer"
+        ).chainDiscriminant
         var archive = try KagemushaRecursiveSpendCodecs
             .encodeTopUpShieldBuildRequestV4(self)
         defer { archive.resetBytes(in: 0..<archive.count) }
@@ -338,7 +348,10 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
                 .kagemushaTopUpShieldBuildUnsignedV4(requestArchive: archive) else {
                 throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
             }
-            return try KagemushaRecursiveSpendCodecs.decodeTopUpUnsignedV4(result)
+            return try KagemushaRecursiveSpendCodecs.decodeTopUpUnsignedV4(
+                result,
+                chainDiscriminant: chainDiscriminant
+            )
         } catch NativeBridgeError.kagemushaBusy {
             throw KagemushaRecursiveSpendError.proofWorkerBusy
         }
@@ -1035,7 +1048,10 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
         blockHeight: UInt64,
         operationID: Data
     ) throws {
-        _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            recipient,
+            field: "redeemRequestV4.recipient"
+        )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             operationID,
             field: "redeemRequestV4.operationID"

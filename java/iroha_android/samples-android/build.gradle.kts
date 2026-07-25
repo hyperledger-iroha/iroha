@@ -27,7 +27,7 @@ val resolvedRepoDir = repoDirProp ?: sampleRepoDir.get()
 
 android {
     namespace = "org.hyperledger.iroha.android.samples"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.android.samples"
@@ -83,6 +83,6 @@ dependencies {
     } else {
         implementation(project(":android"))
     }
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     testImplementation("junit:junit:4.13.2")
 }

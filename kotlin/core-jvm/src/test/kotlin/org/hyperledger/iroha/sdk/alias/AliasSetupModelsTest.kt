@@ -218,13 +218,21 @@ class AliasSetupModelsTest {
 
         val setup = hashes.first { it["name"] == "setup_account_alias_create" }
         val setupBytes = decodeHex(setup.getValue("canonical_body_norito_hex") as String)
-        val setupBody = AliasNoritoCodec.decodePlanBody(setupBytes)
+        val setupBody =
+            AliasNoritoCodec.decodePlanBody(
+                setupBytes,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         assertContentEquals(setupBytes, AliasNoritoCodec.encodePlanBody(setupBody))
         assertEquals(setup["canonical_plan_hash_hex"], hex(AliasPlanVerifier.canonicalHash(setupBytes)))
 
         val lifecycle = hashes.first { it["name"] == "renew_account_alias" }
         val lifecycleBytes = decodeHex(lifecycle.getValue("canonical_body_norito_hex") as String)
-        val lifecycleBody = AliasNoritoCodec.decodeLifecyclePlanBody(lifecycleBytes)
+        val lifecycleBody =
+            AliasNoritoCodec.decodeLifecyclePlanBody(
+                lifecycleBytes,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         assertContentEquals(lifecycleBytes, AliasNoritoCodec.encodeLifecyclePlanBody(lifecycleBody))
         assertEquals(
             lifecycle["canonical_plan_hash_hex"],
@@ -237,21 +245,36 @@ class AliasSetupModelsTest {
             val original = decodeHex(vector.getValue("framed_payload_hex") as String)
             val reencoded = when (vector.getValue("name")) {
                 "ensure_account_alias" -> AliasNoritoCodec.encodeEnsureAliasFrame(
-                    AliasNoritoCodec.decodeEnsureAliasFrame(original),
+                    AliasNoritoCodec.decodeEnsureAliasFrame(
+                        original,
+                        AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    ),
                 )
                 "renew_account_alias" -> AliasNoritoCodec.encodeRenewAliasLeaseFrame(
-                    AliasNoritoCodec.decodeRenewAliasLeaseFrame(original),
+                    AliasNoritoCodec.decodeRenewAliasLeaseFrame(
+                        original,
+                        AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    ),
                 )
                 "configure_auto_renew_enable", "configure_auto_renew_disable" ->
                     AliasNoritoCodec.encodeConfigureAutoRenewFrame(
-                        AliasNoritoCodec.decodeConfigureAutoRenewFrame(original),
+                        AliasNoritoCodec.decodeConfigureAutoRenewFrame(
+                            original,
+                            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                        ),
                     )
                 "rebind_account_alias" -> AliasNoritoCodec.encodeRebindAccountAliasFrame(
-                    AliasNoritoCodec.decodeRebindAccountAliasFrame(original),
+                    AliasNoritoCodec.decodeRebindAccountAliasFrame(
+                        original,
+                        AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                    ),
                 )
                 "compare_and_set_primary_account_alias" ->
                     AliasNoritoCodec.encodeCompareAndSetPrimaryAliasFrame(
-                        AliasNoritoCodec.decodeCompareAndSetPrimaryAliasFrame(original),
+                        AliasNoritoCodec.decodeCompareAndSetPrimaryAliasFrame(
+                            original,
+                            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                        ),
                     )
                 else -> error("unexpected shared alias frame")
             }
@@ -264,10 +287,12 @@ class AliasSetupModelsTest {
         )
         val ensure = AliasNoritoCodec.decodeEnsureAliasFrame(
             setupBody.instructions.single().framedPayload,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
         )
         val setupTransaction = AliasPlanApply.buildTransactionPayload(
             AliasSetupPlanRequestV1(listOf(ensure)),
             setupPlan,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
         )
@@ -281,6 +306,7 @@ class AliasSetupModelsTest {
         val lifecycleTransaction = AliasLifecyclePlanApply.buildTransactionPayload(
             AliasLeaseRenewPlanRequestV1(renewal),
             lifecyclePlan,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
         )
@@ -362,10 +388,12 @@ class AliasSetupModelsTest {
             request,
             parsed,
             AliasPlanBodyNoritoEncoder { bodyBytes.copyOf() },
-            AliasEnsureInstructionFrameCodec { wireId, frame ->
+            AliasEnsureInstructionFrameCodec { wireId, frame, chainDiscriminant ->
                 assertEquals(EnsureAlias.WIRE_ID, wireId)
+                assertEquals(AccountAddress.DEFAULT_I105_DISCRIMINANT, chainDiscriminant)
                 DecodedEnsureAliasFrame(ensure, frame.copyOf())
             },
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
             nonce = 7,
@@ -398,7 +426,11 @@ class AliasSetupModelsTest {
                 AliasSetupPlanRequestV1(listOf(intended)),
                 plan,
                 bodyBytes,
-            ) { _, frame -> DecodedEnsureAliasFrame(substituted, frame) }
+                AliasEnsureInstructionFrameCodec { _, frame, _ ->
+                    DecodedEnsureAliasFrame(substituted, frame)
+                },
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
     }
 
@@ -438,17 +470,21 @@ class AliasSetupModelsTest {
             request,
             parsed,
             bodyBytes,
-        ) { wireId, payload ->
-            assertEquals(RenewAliasLease.WIRE_ID, wireId)
-            DecodedAliasLifecycleFrame(request.operation, payload.copyOf())
-        }
+            AliasLifecycleInstructionFrameCodec { wireId, payload, chainDiscriminant ->
+                assertEquals(RenewAliasLease.WIRE_ID, wireId)
+                assertEquals(AccountAddress.DEFAULT_I105_DISCRIMINANT, chainDiscriminant)
+                DecodedAliasLifecycleFrame(request.operation, payload.copyOf())
+            },
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        )
         val transaction = AliasLifecyclePlanApply.buildTransactionPayload(
             request,
             parsed,
             AliasLifecyclePlanBodyNoritoEncoder { bodyBytes.copyOf() },
-            AliasLifecycleInstructionFrameCodec { _, payload ->
+            AliasLifecycleInstructionFrameCodec { _, payload, _ ->
                 DecodedAliasLifecycleFrame(request.operation, payload.copyOf())
             },
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(emptyList()),
             creationTimeMs = 40_000,
         )
@@ -485,13 +521,18 @@ class AliasSetupModelsTest {
             request,
             plan,
             bodyBytes,
-        ) { _, _ -> error("no-op must not decode an instruction") }
+            AliasLifecycleInstructionFrameCodec { _, _, _ ->
+                error("no-op must not decode an instruction")
+            },
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
+        )
         assertFailsWith<IllegalArgumentException> {
             AliasLifecyclePlanApply.buildTransactionPayload(
                 request,
                 plan,
                 AliasLifecyclePlanBodyNoritoEncoder { bodyBytes },
-                AliasLifecycleInstructionFrameCodec { _, _ -> error("unreachable") },
+                AliasLifecycleInstructionFrameCodec { _, _, _ -> error("unreachable") },
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 FeePaymentIntent.authority(emptyList()),
                 creationTimeMs = 40_000,
             )
@@ -697,7 +738,10 @@ class AliasSetupModelsTest {
         assertContentEquals(
             encoded,
             AliasNoritoCodec.encodeOnboardingPlanBody(
-                AliasNoritoCodec.decodeOnboardingPlanBody(encoded),
+                AliasNoritoCodec.decodeOnboardingPlanBody(
+                    encoded,
+                    AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                ),
             ),
         )
 
@@ -742,7 +786,11 @@ class AliasSetupModelsTest {
         @Suppress("UNCHECKED_CAST")
         val vector = fixture.getValue("account_onboarding_receipt_vector") as Map<String, Any?>
         val bodyBytes = decodeHex(vector.getValue("canonical_body_norito_hex") as String)
-        val body = AliasNoritoCodec.decodeOnboardingPlanBody(bodyBytes)
+        val body =
+            AliasNoritoCodec.decodeOnboardingPlanBody(
+                bodyBytes,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         assertContentEquals(bodyBytes, AliasNoritoCodec.encodeOnboardingPlanBody(body))
         assertEquals(
             vector.getValue("canonical_plan_hash_hex"),

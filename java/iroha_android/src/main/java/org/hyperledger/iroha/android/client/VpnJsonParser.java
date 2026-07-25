@@ -283,8 +283,11 @@ public final class VpnJsonParser {
   }
 
   private static String requiredString(final Object value, final String path) {
-    if (!(value instanceof String) || ((String) value).isEmpty()) {
-      throw new IllegalStateException(path + " must be a non-empty string");
+    if (!(value instanceof String)
+        || ((String) value).isEmpty()
+        || !((String) value).trim().equals(value)) {
+      throw new IllegalStateException(
+          path + " must be a non-empty string without surrounding whitespace");
     }
     return (String) value;
   }

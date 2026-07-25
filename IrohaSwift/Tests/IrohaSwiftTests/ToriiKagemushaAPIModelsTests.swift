@@ -63,7 +63,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 Data(
                     repeating: 0xa5,
                     count: KagemushaOperationCodec.statusMaximumArchiveBytes + 1
-                )
+                ),
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
             )
         ) { error in
             XCTAssertEqual(
@@ -92,7 +93,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let archive = try XCTUnwrap(Data(hexString: Self.rustPendingStatusArchiveHex))
 
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(
+                archive,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ),
             .pending(try .init(
                 operationId: Self.operationId,
                 kind: .topUp,
@@ -106,7 +110,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let archive = try XCTUnwrap(Data(hexString: Self.rustRejectedStatusArchiveHex))
 
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(
+                archive,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ),
             .rejected(try .init(
                 operationId: Self.operationId,
                 kind: .redeem,
@@ -123,7 +130,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let archive = try XCTUnwrap(Data(hexString: Self.rustAppliedRedeemStatusArchiveHex))
 
         XCTAssertEqual(
-            try KagemushaOperationCodec.decodeStatus(archive),
+            try KagemushaOperationCodec.decodeStatus(
+                archive,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ),
             .applied(try .init(
                 operationId: Self.operationId,
                 result: .redeem(try KagemushaRedeemResult(
@@ -139,12 +149,137 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let referenceArchive = try XCTUnwrap(
             Data(hexString: Self.rustOperationReferenceArchiveHex)
         )
-        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(referenceArchive))
+        XCTAssertThrowsError(try KagemushaOperationCodec.decodeStatus(
+            referenceArchive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
+    }
+
+    func testReceiveOfferBindsProjectionToItsExplicitTairaContext() throws {
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let projected = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+
+        XCTAssertEqual(
+            try AccountAddress.inspectI105NetworkPrefix(
+                projected.request.payload.recipient
+            ).chainDiscriminant,
+            SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertThrowsError(try offer.project(
+            chainDiscriminant: AccountId.defaultNetworkPrefix
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("recipientReceiveOffer.chainDiscriminant")
+            )
+        }
+    }
+
+    func testRecipientLineageQueryRejectsWrongNetworkBeforeNativeProjection() throws {
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+
+        XCTAssertThrowsError(try KagemushaRecipientLineageQueryV2(
+            chainID: request.payload.chainID,
+            recipient: request.payload.recipient,
+            chainDiscriminant: AccountId.defaultNetworkPrefix,
+            receiverDeviceID: request.payload.receiverDeviceID,
+            assetDefinitionID: request.payload.assetDefinitionID,
+            trustedCheckpointHeight: 1
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("lineageQuery.recipient")
+            )
+        }
+    }
+
+    func testRecipientLineageQueryOverridesAmbient753WithExplicitTairaContext() throws {
+        #if canImport(Darwin)
+        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
+            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
+        }
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+
+        let query = try NoritoNativeBridge.shared.withChainDiscriminant(
+            AccountId.defaultNetworkPrefix
+        ) {
+            try KagemushaRecipientLineageQueryV2(
+                chainID: request.payload.chainID,
+                recipient: request.payload.recipient,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1,
+                receiverDeviceID: request.payload.receiverDeviceID,
+                assetDefinitionID: request.payload.assetDefinitionID,
+                trustedCheckpointHeight: 1
+            )
+        }
+
+        XCTAssertFalse(query.noritoArchive.isEmpty)
+        XCTAssertEqual(query.trustedCheckpointHeight, 1)
+        #endif
+    }
+
+    func testRecipientLineageQueriesIsolateConcurrentTairaAndSoraContexts() throws {
+        #if canImport(Darwin)
+        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
+            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
+        }
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
+        let address = try AccountAddress.parseEncodedSwiftOnly(
+            request.payload.recipient,
+            expectedPrefix: SccpV1.tairaI105DiscriminantV1
+        )
+        let chainID = request.payload.chainID
+        let receiverDeviceID = request.payload.receiverDeviceID
+        let assetDefinitionID = request.payload.assetDefinitionID
+        let contexts: [(discriminant: UInt16, recipient: String)] = [
+            (
+                SccpV1.tairaI105DiscriminantV1,
+                try address.toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+            ),
+            (
+                AccountId.defaultNetworkPrefix,
+                try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+            ),
+        ]
+        let expected = try contexts.map { context in
+            try KagemushaRecipientLineageQueryV2(
+                chainID: chainID,
+                recipient: context.recipient,
+                chainDiscriminant: context.discriminant,
+                receiverDeviceID: receiverDeviceID,
+                assetDefinitionID: assetDefinitionID,
+                trustedCheckpointHeight: 1
+            ).noritoArchive
+        }
+
+        DispatchQueue.concurrentPerform(iterations: 128) { index in
+            let contextIndex = index % contexts.count
+            let context = contexts[contextIndex]
+            do {
+                let query = try KagemushaRecipientLineageQueryV2(
+                    chainID: chainID,
+                    recipient: context.recipient,
+                    chainDiscriminant: context.discriminant,
+                    receiverDeviceID: receiverDeviceID,
+                    assetDefinitionID: assetDefinitionID,
+                    trustedCheckpointHeight: 1
+                )
+                XCTAssertEqual(query.noritoArchive, expected[contextIndex])
+            } catch {
+                XCTFail("concurrent lineage query failed: \(error)")
+            }
+        }
+        #endif
     }
 
     func testOfflineTopUpAnchorUsesCurrentPublicNameAndRetainsCanonicalWire() throws {
         let archive = try canonicalTopUpAnchorArchive()
-        let anchor = try KagemushaTopUpAnchor(noritoArchive: archive)
+        let anchor = try KagemushaTopUpAnchor(
+            noritoArchive: archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )
@@ -158,9 +293,15 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertEqual(anchor.finalizedBlockHeight, 1)
         XCTAssertEqual(
             anchor.digest,
-            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(archive).anchorDigest
+            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
+                archive,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            ).anchorDigest
         )
-        XCTAssertEqual(anchor, try KagemushaTopUpAnchor(noritoArchive: archive))
+        XCTAssertEqual(anchor, try KagemushaTopUpAnchor(
+            noritoArchive: archive,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
 
         let result = try KagemushaTopUpResult(
             transactionHash: String(repeating: "d7", count: 32),
@@ -197,7 +338,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             finalityProof: finalityProof
         ))
 
-        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: Data()))
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(
+            noritoArchive: Data(),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
         XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: noritoEncode(
             typeName: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
             payload: Data(
@@ -205,16 +349,19 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
                 count: KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes
             ),
             flags: NoritoHeader.compactLen
-        )))
+        ), chainDiscriminant: SccpV1.tairaI105DiscriminantV1))
         XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: noritoEncode(
             typeName: "wrong.anchor.schema",
             payload: try XCTUnwrap(noritoDecodeFrame(archive)).payload,
             flags: NoritoHeader.compactLen
-        )))
+        ), chainDiscriminant: SccpV1.tairaI105DiscriminantV1))
 
         var corrupted = archive
         corrupted[corrupted.index(before: corrupted.endIndex)] ^= 0xff
-        XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: corrupted))
+        XCTAssertThrowsError(try KagemushaTopUpAnchor(
+            noritoArchive: corrupted,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ))
     }
 
     func testOperationReferencesRequireCanonicalHashAndBoundStatusUri() throws {
@@ -311,7 +458,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             XCTAssertEqual(error as? KagemushaOperationError, .invalidField("transaction_hash"))
         }
 
-        let anchor = try KagemushaTopUpAnchor(noritoArchive: canonicalTopUpAnchorArchive())
+        let anchor = try KagemushaTopUpAnchor(
+            noritoArchive: canonicalTopUpAnchorArchive(),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         let finalityProof = try KagemushaTopUpFinalityProof(
             noritoArchive: canonicalTopUpFinalityProofArchive()
         )

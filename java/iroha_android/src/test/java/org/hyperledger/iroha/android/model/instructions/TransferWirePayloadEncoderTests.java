@@ -7,7 +7,7 @@ import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.numeric.NumericV1;
-import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.CRC64;
@@ -15,7 +15,7 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 
 public final class TransferWirePayloadEncoderTests {
 
-  private static final String ACCOUNT_ID = TestAccountIds.ed25519Authority(0x11);
+  private static final String ACCOUNT_ID = tairaAccountId(0x11);
 
   private TransferWirePayloadEncoderTests() {}
 
@@ -66,11 +66,15 @@ public final class TransferWirePayloadEncoderTests {
         TransferWirePayloadEncoder.encodeAssetTransfer(assetId, "10.5", ACCOUNT_ID);
 
     final TransferWirePayloadEncoder.DecodedAssetTransfer decoded =
-        TransferWirePayloadEncoder.decodeAssetTransferPayload(wirePayloadBytes(box));
+        TransferWirePayloadEncoder.decodeAssetTransferPayload(
+            wirePayloadBytes(box), SccpV1.TAIRA_I105_DISCRIMINANT_V1);
 
     assert assetId.equals(decoded.assetId()) : "decoded asset id mismatch";
     assert "10.5".equals(decoded.amount()) : "decoded amount mismatch";
     assert ACCOUNT_ID.equals(decoded.destinationAccountId()) : "decoded destination mismatch";
+    assert AccountAddress.detectI105Discriminant(decoded.destinationAccountId())
+            == SccpV1.TAIRA_I105_DISCRIMINANT_V1
+        : "decoded destination must retain the exact Taira discriminant";
   }
 
   private static void encodeAssetTransferRejectsNoncanonicalQuantities() {
@@ -105,7 +109,8 @@ public final class TransferWirePayloadEncoderTests {
 
     boolean threw = false;
     try {
-      TransferWirePayloadEncoder.decodeAssetTransferPayload(reframe(decoded.header(), payload));
+      TransferWirePayloadEncoder.decodeAssetTransferPayload(
+          reframe(decoded.header(), payload), SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final IllegalArgumentException expected) {
       threw = true;
     }
@@ -121,7 +126,8 @@ public final class TransferWirePayloadEncoderTests {
                 AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x00)),
                 AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x1F))));
     final String multisigAccountId =
-        AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        AccountAddress.fromMultisigPolicy(policy)
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
 
     final InstructionBox box =
@@ -141,10 +147,13 @@ public final class TransferWirePayloadEncoderTests {
                 AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x00)),
                 AccountAddress.MultisigMemberPayload.of(1, 1, TestEd25519Keys.publicKey(0x1F))));
     final String multisigAccountId =
-        AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+        AccountAddress.fromMultisigPolicy(policy)
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final byte[] payload = TransferWirePayloadEncoder.encodeAccountIdPayload(multisigAccountId);
 
-    assert multisigAccountId.equals(TransferWirePayloadEncoder.decodeAccountIdPayload(payload))
+    assert multisigAccountId.equals(
+            TransferWirePayloadEncoder.decodeAccountIdPayload(
+                payload, SccpV1.TAIRA_I105_DISCRIMINANT_V1))
         : "multisig AccountId payload must decode to canonical I105";
   }
 
@@ -199,7 +208,8 @@ public final class TransferWirePayloadEncoderTests {
 
     boolean threw = false;
     try {
-      TransferWirePayloadEncoder.decodeAssetTransferPayload(reframe(decoded.header(), mutated));
+      TransferWirePayloadEncoder.decodeAssetTransferPayload(
+          reframe(decoded.header(), mutated), SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
@@ -213,7 +223,8 @@ public final class TransferWirePayloadEncoderTests {
     final byte[] withTrailing = Arrays.copyOf(payload, payload.length + 1);
     boolean threw = false;
     try {
-      TransferWirePayloadEncoder.decodeAccountIdPayload(withTrailing);
+      TransferWirePayloadEncoder.decodeAccountIdPayload(
+          withTrailing, SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("Trailing bytes");
     }
@@ -256,7 +267,7 @@ public final class TransferWirePayloadEncoderTests {
     AccountAddress.configureCurveSupport(curveSupport);
     try {
       final AccountAddress address = AccountAddress.fromAccount(key, algorithm);
-      i105AccountId = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      i105AccountId = address.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
       final InstructionBox box =
           TransferWirePayloadEncoder.encodeAssetTransfer(
               definitionAddress + "#" + i105AccountId, "10", i105AccountId);
@@ -279,6 +290,15 @@ public final class TransferWirePayloadEncoderTests {
     final byte[] key = new byte[32];
     Arrays.fill(key, fill);
     return key;
+  }
+
+  private static String tairaAccountId(final int seed) {
+    try {
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")
+          .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("failed to create Taira test account", ex);
+    }
   }
 
   private static String hex(final byte[] bytes) {

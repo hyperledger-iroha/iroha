@@ -3412,10 +3412,15 @@ async fn enforce_preauth(
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, response::IntoResponse};
 
-    let remote_ip = req
+    let transport_ip = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip());
+    // `inject_remote_addr_header` runs before this middleware and replaces any
+    // untrusted caller-supplied value with the accepted transport address.
+    // Use that normalized client address so trusted reverse-proxy traffic does
+    // not collapse into a single pre-auth bucket keyed by the proxy itself.
+    let remote_ip = limits::effective_remote_ip(req.headers(), transport_ip);
     let scheme = ConnScheme::from_request(&req);
     match app.acquire_preauth(remote_ip, scheme).await {
         Ok(guard) => {
@@ -3519,6 +3524,107 @@ mod preauth_connection_lifetime_tests {
             }],
         }));
         app
+    }
+
+    fn app_with_per_ip_cap() -> SharedAppState {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.trusted_proxy_nets = Arc::new(limits::parse_cidrs(&["127.0.0.0/8".to_owned()]));
+        state.preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
+            max_total: None,
+            max_per_ip: Some(1),
+            rate_per_ip: None,
+            burst_per_ip: None,
+            ban_duration: None,
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        }));
+        app
+    }
+
+    fn per_ip_preauth_router(app: SharedAppState) -> Router {
+        Router::new()
+            .route("/hold", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app,
+                inject_remote_addr_header,
+            ))
+    }
+
+    fn request_with_remote(transport_ip: &str, forwarded_ip: &str) -> Request<Body> {
+        use axum::extract::ConnectInfo;
+
+        let mut request = Request::builder()
+            .uri("/hold")
+            .header(limits::REMOTE_ADDR_HEADER, forwarded_ip)
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::new(
+                transport_ip.parse().expect("transport IP"),
+                12_345,
+            )));
+        request
+    }
+
+    #[tokio::test]
+    async fn preauth_uses_distinct_client_buckets_behind_trusted_proxy() {
+        let router = per_ip_preauth_router(app_with_per_ip_cap());
+
+        let first = router
+            .clone()
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
+            .await
+            .expect("first proxied response");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = router
+            .clone()
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.11"))
+            .await
+            .expect("second proxied response");
+        assert_eq!(
+            second.status(),
+            StatusCode::OK,
+            "distinct trusted-proxy clients must not share the loopback bucket"
+        );
+
+        let same_client = router
+            .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
+            .await
+            .expect("same-client response");
+        assert_eq!(same_client.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        drop((first, second, same_client));
+    }
+
+    #[tokio::test]
+    async fn preauth_rejects_untrusted_forwarded_ip_spoofing() {
+        let router = per_ip_preauth_router(app_with_per_ip_cap());
+
+        let first = router
+            .clone()
+            .oneshot(request_with_remote("198.51.100.10", "203.0.113.10"))
+            .await
+            .expect("first untrusted response");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let spoofed = router
+            .oneshot(request_with_remote("198.51.100.10", "203.0.113.11"))
+            .await
+            .expect("spoofed response");
+        assert_eq!(
+            spoofed.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "an untrusted peer must not evade its bucket by changing the forwarded IP"
+        );
+
+        drop((first, spoofed));
     }
 
     const TEST_ONBOARDING_TOKEN: &str = "torii-hbl-onboarding-test-token-32-bytes";
@@ -29294,7 +29400,8 @@ fn validate_queue_plan_synced_acceptance(
     }
     if receipt.payload.entrypoint_hash != expected.entrypoint_hash {
         return Err(
-            "submission receipt entrypoint hash does not match the submitted transaction".to_owned(),
+            "submission receipt entrypoint hash does not match the submitted transaction"
+                .to_owned(),
         );
     }
     if receipt.payload.signed_transaction_hash != expected.signed_transaction_hash {
@@ -29332,8 +29439,7 @@ fn queue_plan_synced_snapshot_to_response(
     });
 
     if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
-        let status =
-            StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
+        let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
         if status.is_success()
             && let Err(reason) = validate_queue_plan_synced_acceptance(&snapshot, expected)
         {
@@ -29912,8 +30018,7 @@ where
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
-    let queue_plan_synced_expectation =
-        queue_plan_synced_acceptance_expectation(&request.request);
+    let queue_plan_synced_expectation = queue_plan_synced_acceptance_expectation(&request.request);
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
@@ -29939,9 +30044,7 @@ where
         match outcome {
             Ok(snapshot) => {
                 let mut response = match queue_plan_synced_expectation.as_ref() {
-                    Some(expected) => {
-                        queue_plan_synced_snapshot_to_response(snapshot, expected)
-                    }
+                    Some(expected) => queue_plan_synced_snapshot_to_response(snapshot, expected),
                     None => torii_proxy_snapshot_to_response(snapshot),
                 };
                 let status = response.status();
@@ -80050,6 +80153,7 @@ mod tests {
         time::Duration,
     };
 
+    use super::*;
     use axum::{
         extract::State,
         http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
@@ -80100,7 +80204,6 @@ mod tests {
     #[cfg(feature = "app_api")]
     use jsonwebtoken::EncodingKey;
     use nonzero_ext::nonzero;
-    use super::*;
 
     fn proof_json_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();

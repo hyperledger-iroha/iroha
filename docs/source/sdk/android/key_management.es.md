@@ -175,7 +175,7 @@ The key manager plugs directly into `TransactionBuilder`:
 
 ```java
 TransactionBuilder builder =
-    new TransactionBuilder(new NoritoJavaCodecAdapter(),
+    new TransactionBuilder(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT),
         IrohaKeyManager.withDefaultProviders());
 
 SignedTransaction tx = builder.encodeAndSign(payload, "governance-primary",

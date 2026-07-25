@@ -33,7 +33,7 @@ import org.hyperledger.iroha.android.util.HashLiteral;
 
 final class TransactionPayloadFixtures {
 
-  private static final NoritoJavaCodecAdapter DECODER = new NoritoJavaCodecAdapter();
+  private static final NoritoJavaCodecAdapter DECODER = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
   private TransactionPayloadFixtures() {}
 

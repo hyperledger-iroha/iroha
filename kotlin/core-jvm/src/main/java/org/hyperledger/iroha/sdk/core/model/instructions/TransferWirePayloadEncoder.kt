@@ -95,23 +95,29 @@ object TransferWirePayloadEncoder {
     @JvmStatic
     internal fun decodeAccountIdPayload(
         payload: ByteArray,
+        chainDiscriminant: Int,
         flags: Int = NoritoCodec.DEFAULT_FLAGS,
         flagsHint: Int = NoritoHeader.MINOR_VERSION,
     ): String {
+        requireChainDiscriminant(chainDiscriminant)
         val decoder = NoritoDecoder(payload, flags, flagsHint)
         val accountId = AccountIdAdapter().decode(decoder)
         require(decoder.remaining() == 0) { "Trailing bytes after AccountId payload" }
-        return accountId.renderI105()
+        return accountId.renderI105(chainDiscriminant)
     }
 
     /** Decodes a Norito-framed `TransferBox::Asset` payload. */
     @JvmStatic
-    internal fun decodeAssetTransferPayload(wirePayload: ByteArray): DecodedAssetTransfer {
+    internal fun decodeAssetTransferPayload(
+        wirePayload: ByteArray,
+        chainDiscriminant: Int,
+    ): DecodedAssetTransfer {
+        requireChainDiscriminant(chainDiscriminant)
         val payload = NoritoCodec.decode(wirePayload, TransferAssetPayloadAdapter(), SCHEMA_PATH)
         return DecodedAssetTransfer(
-            assetId = payload.source.render(),
+            assetId = payload.source.render(chainDiscriminant),
             amount = payload.amount.render(),
-            destinationAccountId = payload.destination.renderI105(),
+            destinationAccountId = payload.destination.renderI105(chainDiscriminant),
         )
     }
 
@@ -185,7 +191,7 @@ object TransferWirePayloadEncoder {
         fun isSingle(): Boolean = publicKeyPayload != null
         fun publicKeyPayload(): ByteArray = publicKeyPayload!!.copyOf()
         fun multisigPolicy(): MultisigPolicyPayload = multisigPolicy!!
-        fun renderI105(): String {
+        fun renderI105(chainDiscriminant: Int): String {
             return if (isSingle()) {
                 val decoded = decodeCompactPublicKeyPayload(publicKeyPayload())
                     ?: throw IllegalArgumentException("Invalid single-key AccountController payload")
@@ -196,7 +202,7 @@ object TransferWirePayloadEncoder {
                 try {
                     AccountAddress
                         .fromAccount(decoded.keyBytes, algorithm)
-                        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+                        .toI105(chainDiscriminant)
                 } catch (ex: AccountAddressException) {
                     throw IllegalArgumentException("Invalid single-key AccountController payload", ex)
                 }
@@ -204,7 +210,7 @@ object TransferWirePayloadEncoder {
                 try {
                     AccountAddress
                         .fromMultisigPolicy(multisigPolicy())
-                        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+                        .toI105(chainDiscriminant)
                 } catch (ex: AccountAddressException) {
                     throw IllegalArgumentException("Invalid multisig AccountController payload", ex)
                 }
@@ -220,7 +226,8 @@ object TransferWirePayloadEncoder {
     }
 
     private class AccountId(val controller: AccountController) {
-        fun renderI105(): String = controller.renderI105()
+        fun renderI105(chainDiscriminant: Int): String =
+            controller.renderI105(chainDiscriminant)
 
         companion object {
             fun parse(accountIdStr: String): AccountId {
@@ -269,9 +276,14 @@ object TransferWirePayloadEncoder {
 
         fun encodedAccountPayload(): ByteArray? = _encodedAccountPayload?.clone()
         fun scopePayload(): ByteArray = _scopePayload.clone()
-        fun render(): String {
-            val accountId = account?.renderI105()
-                ?: decodeAccountIdPayload(_encodedAccountPayload!!, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION)
+        fun render(chainDiscriminant: Int): String {
+            val accountId = account?.renderI105(chainDiscriminant)
+                ?: decodeAccountIdPayload(
+                    _encodedAccountPayload!!,
+                    chainDiscriminant,
+                    NoritoCodec.DEFAULT_FLAGS,
+                    NoritoHeader.MINOR_VERSION,
+                )
             val definitionAddress = AssetDefinitionIdEncoder.encodeFromBytes(definition.definitionBytes())
             val scope = decodeAssetBalanceScopePayload(_scopePayload)
             return if (scope.isGlobal) {
@@ -742,6 +754,11 @@ object TransferWirePayloadEncoder {
         require(length >= 0L) { "$fieldName must be non-negative" }
         require(length <= Int.MAX_VALUE) { "$fieldName too large" }
         return length.toInt()
+    }
+
+    private fun requireChainDiscriminant(value: Int): Int {
+        require(value in 0..0xffff) { "chainDiscriminant must fit in u16" }
+        return value
     }
 
     private fun decodeFixedByteArray(decoder: NoritoDecoder, length: Int, fieldName: String): ByteArray {

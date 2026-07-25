@@ -57,7 +57,9 @@ final class KagemushaNearbyTests: XCTestCase {
 
     func testNearbyEnvelopeRoundTripsEveryTypedMessage() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let request = try offer.project().request
+        let request = try offer.project(
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        ).request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
@@ -70,25 +72,35 @@ final class KagemushaNearbyTests: XCTestCase {
             pairingChallenge: challenge
         )
         XCTAssertEqual(encodedRequest.prefix(5), Data("PKNB1".utf8))
-        XCTAssertEqual(encodedRequest.count, 12 + 84 + 14_005)
-        let decodedRequest = try KagemushaNearbyEnvelopeCodec.decode(encodedRequest)
+        XCTAssertEqual(encodedRequest.count, 12 + 84 + 12_306)
+        let decodedRequest = try KagemushaNearbyEnvelopeCodec.decode(
+            encodedRequest,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         XCTAssertEqual(decodedRequest.messageKind, .receiveRequest)
         XCTAssertEqual(decodedRequest.payload, .receiveRequest(offer))
         XCTAssertEqual(decodedRequest.pairingChallenge, challenge)
 
         let encodedPayment = try KagemushaNearbyEnvelopeCodec.encode(.payment(payment))
         if KagemushaRecursiveSpend.hasRequiredNativeSymbols {
-            let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(encodedPayment)
+            let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(
+                encodedPayment,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
             XCTAssertEqual(decodedPayment.payload, .payment(payment))
             XCTAssertNil(decodedPayment.pairingChallenge)
         } else {
-            XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(encodedPayment)) { error in
+            XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
+                encodedPayment,
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )) { error in
                 XCTAssertEqual(error as? KagemushaNearbyError, .invalidMessage)
             }
         }
 
         let decodedAcknowledgement = try KagemushaNearbyEnvelopeCodec.decode(
-            KagemushaNearbyEnvelopeCodec.encode(.acknowledgement(acknowledgement))
+            KagemushaNearbyEnvelopeCodec.encode(.acknowledgement(acknowledgement)),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         )
         XCTAssertEqual(decodedAcknowledgement.payload, .acknowledgement(acknowledgement))
         XCTAssertNil(decodedAcknowledgement.pairingChallenge)
@@ -112,7 +124,10 @@ final class KagemushaNearbyTests: XCTestCase {
 
     func testCanonicalRejectionEnvelopeIsExactAndTypedPayloadFree() throws {
         let data = try KagemushaNearbyEnvelopeCodec.encodeRejection()
-        let decoded = try KagemushaNearbyEnvelopeCodec.decode(data)
+        let decoded = try KagemushaNearbyEnvelopeCodec.decode(
+            data,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
         XCTAssertEqual(decoded.messageKind, .rejected)
         XCTAssertNil(decoded.payload)
         XCTAssertNil(decoded.pairingChallenge)
@@ -150,7 +165,10 @@ final class KagemushaNearbyTests: XCTestCase {
                 bytes.append(0)
             }
             XCTAssertThrowsError(
-                try KagemushaNearbyEnvelopeCodec.decode(bytes),
+                try KagemushaNearbyEnvelopeCodec.decode(
+                    bytes,
+                    chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+                ),
                 mutation
             )
         }
@@ -159,10 +177,12 @@ final class KagemushaNearbyTests: XCTestCase {
     func testEnvelopeSizeLimitAndTruncatedHeaderFailBeforeModelUse() {
         XCTAssertEqual(KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes, 32_704)
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-            Data(repeating: 0x20, count: KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes + 1)
+            Data(repeating: 0x20, count: KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes + 1),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         ))
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-            Data("PKNB1".utf8)
+            Data("PKNB1".utf8),
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
         ))
     }
 
@@ -212,7 +232,7 @@ final class KagemushaNearbyTests: XCTestCase {
     }
 
     func testClosedAuthenticationGateThrowsBeforeCallbacksOrPermissionWork() async throws {
-        let exchange = KagemushaNearbyExchange()
+        let exchange = KagemushaNearbyExchange(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
         let recorder = InvocationRecorder()
         do {
             try await exchange.requestLocalNetworkAccess()

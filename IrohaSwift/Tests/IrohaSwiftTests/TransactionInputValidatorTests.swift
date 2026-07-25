@@ -274,6 +274,56 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(ids.authorityId, i105)
     }
 
+    func testValidatePreservesTairaAuthorityAndDestinationDiscriminants() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0xB1, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let destination = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0xB2, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+
+        let ids = try TransactionInputValidator.validate(
+            chainId: "taira",
+            authorityId: authority,
+            assetDefinitionId: sampleAid,
+            accountIds: [.init(field: "destination", value: destination)]
+        )
+
+        XCTAssertEqual(ids.authorityId, authority)
+        XCTAssertEqual(ids.accountIds["destination"], destination)
+        XCTAssertEqual(
+            try AccountAddress.inspectI105NetworkPrefix(ids.authorityId).chainDiscriminant,
+            SccpV1.tairaI105DiscriminantV1
+        )
+    }
+
+    func testCanonicalNoritoAccountEncodersPreserveTairaLiteral() throws {
+        let address = try AccountAddress.fromAccount(
+            publicKey: Data(repeating: 0xB3, count: 32)
+        )
+        let taira = try address.toI105(
+            networkPrefix: SccpV1.tairaI105DiscriminantV1
+        )
+        let defaultNetwork = try address.toI105(
+            networkPrefix: AccountId.defaultNetworkPrefix
+        )
+
+        XCTAssertEqual(
+            try CanonicalNorito.encodeCompactAccountId(taira),
+            try CanonicalNorito.encodeCompactAccountId(defaultNetwork)
+        )
+        XCTAssertEqual(
+            try CanonicalNorito.encodeAccountId(taira),
+            try CanonicalNorito.encodeAccountId(defaultNetwork)
+        )
+        XCTAssertThrowsError(
+            try CanonicalNorito.encodeCompactAccountId(" \(taira)")
+        )
+        XCTAssertThrowsError(
+            try CanonicalNorito.encodeAccountId("\(taira) ")
+        )
+    }
+
     func testValidateRejectsI105WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)

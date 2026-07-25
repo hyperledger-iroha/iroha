@@ -86,7 +86,11 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         assertEquals("identity::ClaimIdentifier", instruction.name)
         val wirePayload = assertIs<WirePayload>(instruction.payload)
         val kotlinHex = FixtureGeneratorRunner.bytesToHex(wirePayload.payloadBytes)
-        val decodedClaim = ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes)
+        val decodedClaim =
+            ClaimIdentifierWirePayloadEncoder.decodePayload(
+                wirePayload.payloadBytes,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         val expectedReceiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(payload)
         val expectedAttestationPayload = IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation)
 
@@ -96,6 +100,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
 
         val decodedReceiptPayload = IdentifierReceiptCanonicalEncoder.decodePayload(
             decodedClaim.receiptPayloadBytes,
+            AccountAddress.DEFAULT_I105_DISCRIMINANT,
         )
         assertEquals(payload.policyId, decodedReceiptPayload.policyId)
         assertEquals(payload.execution.programId, decodedReceiptPayload.execution.programId)
@@ -122,12 +127,18 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         )
 
         assertFailsWith<IllegalArgumentException> {
-            ClaimIdentifierWirePayloadEncoder.decodePayload(wirePayload.payloadBytes.copyOf(12))
+            ClaimIdentifierWirePayloadEncoder.decodePayload(
+                wirePayload.payloadBytes.copyOf(12),
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
         val mutated = wirePayload.payloadBytes.copyOf()
         mutated[mutated.lastIndex] = (mutated.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
-            ClaimIdentifierWirePayloadEncoder.decodePayload(mutated)
+            ClaimIdentifierWirePayloadEncoder.decodePayload(
+                mutated,
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            )
         }
     }
 

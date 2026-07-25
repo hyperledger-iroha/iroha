@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Kagemusha V4 candidate generator from one exact clean source tree."""
+"""Build the Kagemusha V4 candidate generator from one reviewed dirty source closure."""
 
 from __future__ import annotations
 
@@ -194,6 +194,53 @@ def _admitted_cargo_executable(cargo: str) -> str:
     return str(requested if stat.S_ISLNK(link_metadata.st_mode) else resolved)
 
 
+def _prepare_fresh_external_target_dir(root: Path, requested: Path) -> Path:
+    """Create one empty canonical target directory strictly outside the source tree."""
+
+    if not requested.is_absolute() or os.path.normpath(os.fspath(requested)) != os.fspath(
+        requested
+    ):
+        raise CandidateBuildError("target directory path must be absolute and normalized")
+    parent = requested.parent
+    try:
+        parent_resolved = parent.resolve(strict=True)
+        parent_metadata = parent.lstat()
+    except OSError as error:
+        raise CandidateBuildError("target directory parent is unavailable") from error
+    if (
+        parent_resolved != parent
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid not in (0, os.geteuid())
+        or parent_metadata.st_mode & 0o022 != 0
+    ):
+        raise CandidateBuildError(
+            "target directory parent must be canonical, owner-controlled, and not a symlink"
+        )
+    try:
+        requested.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise CandidateBuildError("target directory must be outside the source repository")
+    if requested.exists() or requested.is_symlink():
+        raise CandidateBuildError("target directory must be a fresh nonexistent path")
+    try:
+        requested.mkdir(mode=0o700)
+        target_dir = requested.resolve(strict=True)
+        metadata = requested.lstat()
+    except OSError as error:
+        raise CandidateBuildError("could not create fresh external target directory") from error
+    if (
+        target_dir != requested
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o077 != 0
+        or any(requested.iterdir())
+    ):
+        raise CandidateBuildError("fresh external target directory is not exact and empty")
+    return target_dir
+
+
 def _sanitized_build_environment() -> dict[str, str]:
     """Remove ambient compiler, wrapper, target, profile, and flag controls."""
 
@@ -330,21 +377,36 @@ def build_candidate_bundle(
     root: Path,
     cargo: str = "cargo",
     *,
-    identity_reader: Callable[[Path], source_seal.SourceIdentity] = (
+    target_dir: Path,
+    reviewed_source_closure: Path,
+    reviewed_source_closure_sha256: str,
+    identity_reader: Callable[[Path, str, str], source_seal.SourceIdentity] = (
         source_seal.compute_identity
     ),
     command_runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     physical_memory_reader: Callable[[], int] = _physical_memory_bytes,
     build_lock: Callable[[], ContextManager[object]] = _shared_memory_heavy_build_lock,
 ) -> dict[str, object]:
-    """Build once and prove the clean source identity stayed exact throughout."""
+    """Build once and prove the pinned reviewed source closure stayed exact."""
 
     root = root.resolve(strict=True)
+    reviewed_source_closure = reviewed_source_closure.resolve(strict=True)
     physical_memory_bytes = _admitted_physical_memory_bytes(physical_memory_reader)
-    first = identity_reader(root)
+    target_dir = _prepare_fresh_external_target_dir(root, target_dir)
+    first = identity_reader(
+        root,
+        str(reviewed_source_closure),
+        reviewed_source_closure_sha256,
+    )
     environment = _sanitized_build_environment()
     environment["KAGEMUSHA_BUILD_SOURCE_COMMIT"] = first.source_commit
     environment["KAGEMUSHA_BUILD_SOURCE_TREE_SHA256"] = first.source_tree_sha256
+    environment["KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE"] = str(
+        reviewed_source_closure
+    )
+    environment["KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256"] = (
+        first.reviewed_source_closure_descriptor_sha256
+    )
     environment["KAGEMUSHA_SOURCE_SEAL_PYTHON"] = sys.executable
     command = [
         _admitted_cargo_executable(cargo),
@@ -352,7 +414,7 @@ def build_candidate_bundle(
         "--release",
         "--locked",
         "--target-dir",
-        str(root / "target"),
+        str(target_dir),
         "-p",
         "iroha_core",
         "--features",
@@ -378,16 +440,23 @@ def build_candidate_bundle(
         raise CandidateBuildError(
             f"sealed candidate Cargo build failed with status {completed.returncode}"
         )
-    second = identity_reader(root)
+    second = identity_reader(
+        root,
+        str(reviewed_source_closure),
+        reviewed_source_closure_sha256,
+    )
     if second != first:
         raise CandidateBuildError("source identity changed during the candidate build")
 
     if not isinstance(completed.stdout, bytes):
         raise CandidateBuildError("Cargo did not return binary build metadata")
-    target_dir = (root / "target").resolve(strict=True)
     binary = _built_binary_from_cargo_messages(completed.stdout, root, target_dir)
     sha256, size_bytes = _binary_sha256(binary)
-    third = identity_reader(root)
+    third = identity_reader(
+        root,
+        str(reviewed_source_closure),
+        reviewed_source_closure_sha256,
+    )
     if third != first:
         raise CandidateBuildError("source identity changed while sealing the candidate binary")
     return {
@@ -400,8 +469,14 @@ def build_candidate_bundle(
         ),
         "physical_memory_bytes_at_admission": physical_memory_bytes,
         "schema": "iroha.kagemusha.sealed_candidate_build.v1",
+        "reviewed_source_closure": first.reviewed_source_closure,
+        "reviewed_source_closure_descriptor_sha256": (
+            first.reviewed_source_closure_descriptor_sha256
+        ),
         "source_commit": first.source_commit,
+        "source_repo_dirty": first.source_repo_dirty,
         "source_tree_sha256": first.source_tree_sha256,
+        "target_dir": str(target_dir),
     }
 
 
@@ -409,6 +484,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=REPO_ROOT)
     parser.add_argument("--cargo", default="cargo")
+    parser.add_argument("--target-dir", type=Path, required=True)
+    parser.add_argument("--reviewed-source-closure", type=Path, required=True)
+    parser.add_argument("--reviewed-source-closure-sha256", required=True)
     return parser
 
 
@@ -417,7 +495,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = _parser().parse_args(argv)
     try:
-        report = build_candidate_bundle(args.root, args.cargo)
+        report = build_candidate_bundle(
+            args.root,
+            args.cargo,
+            target_dir=args.target_dir,
+            reviewed_source_closure=args.reviewed_source_closure,
+            reviewed_source_closure_sha256=args.reviewed_source_closure_sha256,
+        )
     except (CandidateBuildError, OSError, source_seal.SourceSealError) as error:
         print(f"sealed Kagemusha candidate build failed: {error}", file=sys.stderr)
         return 1

@@ -54,6 +54,8 @@ config rather than wrapper-local defaults:
 - `torii.max_content_len = 1_073_741_824`
 - `torii.deploy_rate_per_origin_per_sec = 4`
 - `torii.deploy_burst_per_origin = 8`
+- `torii.query_rate_per_authority_per_sec = 160`
+- `torii.query_burst_per_authority = 320`
 - `torii.webhooks_enabled = false`
 - `torii.zk_attachments_enabled = false`
 
@@ -107,6 +109,13 @@ config rather than wrapper-local defaults:
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
+- `scripts/migrate_taira_peer_supervision.py`: creates a sealed, read-only
+  adoption plan for an existing four-peer macOS deployment, then performs an
+  explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
+  `launchd-run.sh` to four independent launchd jobs without replacing storage.
+- `scripts/taira_peer_supervisor.py`: launchd-owned single-validator restart
+  loop used by the migration. It guards the planned binary, config, and storage
+  identities and caps exponential child-restart backoff.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
@@ -224,6 +233,61 @@ That avoids the common drift where the copied nginx snippet still points at
 `127.0.0.1:18080..18083` while the live validator listeners have moved to
 different loopback ports such as `127.0.0.1:29080..29083`, which turns
 `GET /v1/mcp` and the generic public API surface into `502 Bad Gateway`.
+
+## Adopt existing macOS storage into independent supervision
+
+A shared shell runner must not be the long-lived production supervisor. Both
+the historical `run-canonical.sh` and generated `launchd-run.sh` own all four
+validator children and run an all-peer cleanup trap when one child or the
+controller exits. Use the guarded migration below to retain the exact existing
+Kura/snapshot state while giving each peer its own launchd failure boundary.
+
+The planning phase only inspects processes and writes a new staging directory:
+
+```bash
+python3 scripts/migrate_taira_peer_supervision.py plan \
+  --base /absolute/path/to/the/deployed/taira-rollout \
+  --output-dir /absolute/path/to/new/taira-supervision-plan
+```
+
+It requires four exact peer PID files, exact `irohad --sora --config ...`
+commands, one common parent whose command names an approved
+`run-canonical.sh` or `launchd-run.sh`, non-symlink configs, and four distinct
+existing storage directories. Each live peer's exact working directory is
+sealed separately from its storage inode; they are intentionally not assumed
+to be the same path. The printed manifest digest seals those process, binary,
+config, PID-file, working-directory, storage, and generated plist identities.
+Review the manifest and plists before scheduling the cutover.
+
+Apply only with no active ledger writer and during an announced maintenance
+window:
+
+```bash
+sudo python3 scripts/migrate_taira_peer_supervision.py apply \
+  --manifest /absolute/path/to/new/taira-supervision-plan/manifest.json \
+  --expected-manifest-sha256 SHA256_PRINTED_BY_PLAN \
+  --confirm ADOPT-EXISTING-TAIRA-STORAGE
+```
+
+`apply` rechecks every sealed identity before mutation, installs one
+`KeepAlive` LaunchDaemon per validator, stops the legacy controller once, and
+starts all four jobs from their exact original working directories while
+retaining their separately identified storage directories. It never deletes,
+moves, truncates, or recreates storage and refuses to use `SIGKILL` if the
+legacy topology does not stop within the configured timeout. Each job runs
+only its own validator from that peer's exact legacy working directory,
+independently rechecks the separate storage inode before every child start,
+forwards shutdown signals, and restarts only that validator with exponential
+backoff capped by
+`--maximum-backoff-seconds` (30 seconds by default). launchd also throttles a
+supervisor-level crash loop.
+
+Binary, config, working-directory, or storage replacement is fail-closed after
+migration. Render a new reviewed plan before an intentional
+binary/config/working-directory/storage change; do not edit the installed
+plist or supervision receipt in place. The shared public nginx origin should
+remain pinned to the chosen canonical validator and be moved only through the
+direct height/state parity gate described below.
 
 ## SCCP V1 on Taira
 
@@ -1031,9 +1095,12 @@ From `../iroha2-block-explorer-web`:
     generic Mon fallback. You can also pass
     `--soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788` directly to
     the renderer for one-off overrides.
-  - keep the shared `taira_public_edge_upstream` wired to every live validator
-    and use it for the generic public API surface, public SoraFS/app-api
-    routes, and the explorer's `/status` fallback.
+  - keep the shared `taira_public_edge_upstream` pinned to one explicitly
+    selected canonical validator. A live but lagging validator still returns
+    HTTP 200, so passive nginx failover cannot safely distinguish it from the
+    current state view. Move the public pin only after direct height and state
+    parity checks pass. The validator-specific hostnames remain available for
+    consensus diagnostics.
   - keep the dedicated `location = /v1/mcp` blocks pinned to the same Torii
     upstream as `/v1/connect/session`, `/v1/connect/status`, and
     `/v1/connect/ws`. MCP exposes Connect session creation and management
@@ -1042,9 +1109,10 @@ From `../iroha2-block-explorer-web`:
     public locations only. Do not add upstream failover to the pinned
     Connect/MCP locations until Connect session state is shared across
     validators.
-  - keep the shared convenience host on `taira_public_edge_upstream` for the
-    public SoraFS and app-api surface as well. The checked-in nginx example now
-    keeps these paths symmetric with the rest of the public edge:
+  - keep the shared convenience host on the same canonical
+    `taira_public_edge_upstream` for the public SoraFS and app-api surface as
+    well. The checked-in nginx example keeps these paths symmetric with the
+    rest of the public edge:
     - `/v1/app-api/`
     - `/v1/sorafs/storage/`
     - `/v1/sorafs/pin/`
@@ -1052,8 +1120,8 @@ From `../iroha2-block-explorer-web`:
     - `/sorafs/cid/`
   - if CID hydration is still inconsistent after the runtime rollout, treat
     that as a provider-capacity/bootstrap problem and inspect
-    `/v1/sorafs/capacity/state`; do not reintroduce a validator-1-only nginx
-    pin as the steady-state fix.
+    `/v1/sorafs/capacity/state`; do not add unchecked multi-validator failover
+    to the canonical public origin.
     - `*.sorafs.taira.sora.org`
     Keep those routes on the same convenience validator that receives
     `POST /v1/sorafs/storage/pin`; otherwise the shared host will flap between

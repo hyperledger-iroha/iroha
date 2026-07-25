@@ -85,18 +85,28 @@ public final class NativeSignerBridge {
   public static NativeSignedTransaction encodeShieldSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final ShieldInstruction instruction,
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     return encodeShieldSignedTransaction(
-        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey, feePayment);
+        algorithm,
+        chainId,
+        chainDiscriminant,
+        authority,
+        creationTimeMs,
+        null,
+        instruction,
+        privateKey,
+        feePayment);
   }
 
   public static NativeSignedTransaction encodeShieldSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final Long ttlMs,
@@ -104,6 +114,7 @@ public final class NativeSignerBridge {
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     requireCreationTime(creationTimeMs);
+    final int validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -121,6 +132,7 @@ public final class NativeSignerBridge {
         nativeEncodeShieldSignedTransaction(
             algorithm.bridgeCode(),
             chainBytes,
+            validatedChainDiscriminant,
             authorityBytes,
             creationTimeMs,
             ttl,
@@ -140,18 +152,28 @@ public final class NativeSignerBridge {
   public static NativeSignedTransaction encodeUnshieldSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final UnshieldInstruction instruction,
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     return encodeUnshieldSignedTransaction(
-        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey, feePayment);
+        algorithm,
+        chainId,
+        chainDiscriminant,
+        authority,
+        creationTimeMs,
+        null,
+        instruction,
+        privateKey,
+        feePayment);
   }
 
   public static NativeSignedTransaction encodeUnshieldSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final Long ttlMs,
@@ -159,6 +181,7 @@ public final class NativeSignerBridge {
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     requireCreationTime(creationTimeMs);
+    final int validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -180,6 +203,7 @@ public final class NativeSignerBridge {
         nativeEncodeUnshieldSignedTransaction(
             algorithm.bridgeCode(),
             chainBytes,
+            validatedChainDiscriminant,
             authorityBytes,
             creationTimeMs,
             ttl,
@@ -199,18 +223,28 @@ public final class NativeSignerBridge {
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final RegisterZkAssetInstruction instruction,
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     return encodeRegisterZkAssetSignedTransaction(
-        algorithm, chainId, authority, creationTimeMs, null, instruction, privateKey, feePayment);
+        algorithm,
+        chainId,
+        chainDiscriminant,
+        authority,
+        creationTimeMs,
+        null,
+        instruction,
+        privateKey,
+        feePayment);
   }
 
   public static NativeSignedTransaction encodeRegisterZkAssetSignedTransaction(
       final SigningAlgorithm algorithm,
       final String chainId,
+      final int chainDiscriminant,
       final String authority,
       final long creationTimeMs,
       final Long ttlMs,
@@ -218,6 +252,7 @@ public final class NativeSignerBridge {
       final byte[] privateKey,
       final FeePaymentIntent feePayment) {
     requireCreationTime(creationTimeMs);
+    final int validatedChainDiscriminant = requireChainDiscriminant(chainDiscriminant);
     if (instruction == null) {
       throw new IllegalArgumentException("instruction must be provided");
     }
@@ -236,6 +271,7 @@ public final class NativeSignerBridge {
         nativeEncodeRegisterZkAssetSignedTransaction(
             algorithm.bridgeCode(),
             chainBytes,
+            validatedChainDiscriminant,
             authorityBytes,
             creationTimeMs,
             ttl,
@@ -325,6 +361,13 @@ public final class NativeSignerBridge {
     return ttlMs;
   }
 
+  private static int requireChainDiscriminant(final int value) {
+    if (value < 0 || value > 0xffff) {
+      throw new IllegalArgumentException("chainDiscriminant must fit in u16");
+    }
+    return value;
+  }
+
   private static byte[] requirePrivateKey(final byte[] privateKey) {
     if (privateKey == null || privateKey.length == 0) {
       throw new IllegalArgumentException("privateKey must not be empty");
@@ -362,6 +405,7 @@ public final class NativeSignerBridge {
   private static native byte[][] nativeEncodeShieldSignedTransaction(
       int algorithmCode,
       byte[] chainId,
+      int chainDiscriminant,
       byte[] authority,
       long creationTimeMs,
       long ttlMs,
@@ -379,6 +423,7 @@ public final class NativeSignerBridge {
   private static native byte[][] nativeEncodeUnshieldSignedTransaction(
       int algorithmCode,
       byte[] chainId,
+      int chainDiscriminant,
       byte[] authority,
       long creationTimeMs,
       long ttlMs,
@@ -396,6 +441,7 @@ public final class NativeSignerBridge {
   private static native byte[][] nativeEncodeRegisterZkAssetSignedTransaction(
       int algorithmCode,
       byte[] chainId,
+      int chainDiscriminant,
       byte[] authority,
       long creationTimeMs,
       long ttlMs,

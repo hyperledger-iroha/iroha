@@ -715,7 +715,44 @@ enum KagemushaDeviceAttestationValidation {
             throw KagemushaDeviceAttestationError.authorityMustBeOneUse
         }
         _ = publicKey
-        _ = try AccountAddress.parseEncoded(accountId, expectedPrefix: 0x02F1)
+        _ = try canonicalAccountAddress(accountId)
+    }
+
+    static func canonicalAccountAddress(_ value: String) throws -> AccountAddress {
+        do {
+            guard !value.isEmpty,
+                  value.utf8.elementsEqual(
+                      value.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+                  ),
+                  !value.contains("@"),
+                  !value.contains("#"),
+                  !value.contains("$") else {
+                throw KagemushaDeviceAttestationError.nonCanonicalField(
+                    field: "account_id"
+                )
+            }
+            let chainDiscriminant = try AccountAddress
+                .inspectI105NetworkPrefix(value).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(
+                value,
+                expectedPrefix: chainDiscriminant
+            )
+            let canonical = try address.toI105(
+                networkPrefix: chainDiscriminant
+            )
+            guard canonical.utf8.elementsEqual(value.utf8) else {
+                throw KagemushaDeviceAttestationError.nonCanonicalField(
+                    field: "account_id"
+                )
+            }
+            return address
+        } catch let error as KagemushaDeviceAttestationError {
+            throw error
+        } catch {
+            throw KagemushaDeviceAttestationError.nonCanonicalField(
+                field: "account_id"
+            )
+        }
     }
 
     static func validateAttestationIdentity(keyId: String, deviceId: String) throws {
@@ -1019,7 +1056,8 @@ enum KagemushaDeviceAttestationEncoding {
 
     private static func encodeAccountId(_ value: String) throws -> Data {
         do {
-            let address = try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
+            let address = try KagemushaDeviceAttestationValidation
+                .canonicalAccountAddress(value)
             return try address.compactNoritoAccountControllerPayload()
         } catch {
             throw CanonicalNoritoError.invalidAccountId(value)
@@ -1467,12 +1505,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
             field(&program, "fee sponsor program name"),
             field: "fee sponsor program name"
         )
-        guard !name.isEmpty,
-              name == name.precomposedStringWithCanonicalMapping,
-              name.unicodeScalars.allSatisfy({ scalar in
-                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
-                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
-              }) else {
+        guard isCanonicalFeeSponsorProgramName(name) else {
             throw invalid("fee sponsor program name")
         }
         try finish(program, "fee sponsor program")

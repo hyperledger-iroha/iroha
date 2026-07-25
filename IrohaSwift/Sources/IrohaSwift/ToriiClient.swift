@@ -164,6 +164,31 @@ public func decodePdpCommitmentHeader(from response: HTTPURLResponse) throws -> 
     return try decodePdpCommitmentHeader(normalized)
 }
 
+fileprivate func exactCanonicalToriiAccountAddress(
+    _ raw: String
+) throws -> (address: AccountAddress, chainDiscriminant: UInt16) {
+    guard !raw.isEmpty,
+          raw.utf8.elementsEqual(
+              raw.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+          ),
+          !raw.contains("@"),
+          !raw.contains("#"),
+          !raw.contains("$") else {
+        throw AccountAddressError.unsupportedAddressFormat
+    }
+    let chainDiscriminant = try AccountAddress
+        .inspectI105NetworkPrefix(raw).chainDiscriminant
+    let address = try AccountAddress.parseEncodedSwiftOnly(
+        raw,
+        expectedPrefix: chainDiscriminant
+    )
+    let canonical = try address.toI105(networkPrefix: chainDiscriminant)
+    guard canonical.utf8.elementsEqual(raw.utf8) else {
+        throw AccountAddressError.unsupportedAddressFormat
+    }
+    return (address, chainDiscriminant)
+}
+
 fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -177,8 +202,10 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
             "\(field) must be an encoded account id (i105)."
         )
     }
-    if let address = try? AccountAddress.parseEncoded(trimmed) {
-        return try address.toI105(networkPrefix: 0x02F1)
+    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
+        )
     }
     throw ToriiClientError.invalidPayload(
         "\(field) must be an encoded account id (i105)."
@@ -212,8 +239,10 @@ fileprivate func normalizeToriiParticipantQueryValue(_ raw: String, field: Strin
     if trimmed.contains("@") {
         return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
     }
-    if let address = try? AccountAddress.parseEncoded(trimmed) {
-        return try address.toI105(networkPrefix: 0x02F1)
+    if let canonical = try? exactCanonicalToriiAccountAddress(trimmed) {
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
+        )
     }
     return trimmed
 }
@@ -1400,7 +1429,7 @@ fileprivate enum ToriiIdentifierReceiptWireValue {
             )
         }
         do {
-            _ = try AccountAddress.parseEncoded(raw, expectedPrefix: 0x02F1)
+            _ = try exactCanonicalToriiAccountAddress(raw)
         } catch {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
@@ -1860,8 +1889,8 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
                     "payload.accountId must be an exact canonical account identifier."
                 )
             }
-            let address = try AccountAddress.parseEncoded(raw, expectedPrefix: 0x02F1)
-            return try address.compactNoritoAccountControllerPayload()
+            return try exactCanonicalToriiAccountAddress(raw).address
+                .compactNoritoAccountControllerPayload()
         } catch {
             throw ToriiClientError.invalidPayload(
                 "payload.accountId must be a canonical account identifier."
@@ -4192,9 +4221,8 @@ public enum ToriiAccountOnboardingReceiptVerifier {
             guard literal == literal.trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw ToriiAccountOnboardingReceiptVerificationError.invalidAuthority
             }
-            let address = try AccountAddress.parseEncoded(literal)
-            guard try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix) == literal,
-                  let controller = address.singleControllerInfo() else {
+            let canonical = try exactCanonicalToriiAccountAddress(literal)
+            guard let controller = canonical.address.singleControllerInfo() else {
                 throw ToriiAccountOnboardingReceiptVerificationError.invalidAuthority
             }
             let keyMaterial = try splitControllerKey(
@@ -10425,12 +10453,17 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
     public let backend: String
     public let name: String
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case backend
         case name
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "ToriiVerifyingKeyId"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawBackend = try container.decode(String.self, forKey: .backend)
         backend = try ToriiValidation.normalizedProductionVerifyBackend(
@@ -13871,11 +13904,10 @@ public struct ToriiContractTriggerDescriptor: Codable, Sendable, Equatable {
 
     private static func isCanonicalAuthority(_ value: String) -> Bool {
         guard isExactContractManifestString(value),
-              let address = try? AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1),
-              let rendered = try? address.toI105(networkPrefix: 0x02F1) else {
+              (try? exactCanonicalToriiAccountAddress(value)) != nil else {
             return false
         }
-        return rendered == value
+        return true
     }
 
     private var isCanonical: Bool {
@@ -18867,17 +18899,14 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
     if trimmed.contains("@") {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
-    let address: AccountAddress
     do {
-        address = try AccountAddress.parseEncoded(
-            trimmed,
-            expectedPrefix: 0x02F1
+        let canonical = try exactCanonicalToriiAccountAddress(trimmed)
+        return try canonical.address.toI105(
+            networkPrefix: canonical.chainDiscriminant
         )
     } catch {
         throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
-    let i105 = try address.toI105(networkPrefix: 0x02F1)
-    return i105
 }
 
 fileprivate func governanceZkHintPresent(_ value: ToriiJSONValue?) -> Bool {
@@ -23947,22 +23976,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaRecipientRegistrationLineage(
-        request: KagemushaRecipientPaymentRequest,
-        readiness: ToriiKagemushaReadiness,
-        verifiedAtMilliseconds: UInt64,
-        completion: @escaping (Result<KagemushaRecipientRegistrationLineage, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.getKagemushaRecipientRegistrationLineage(
-                request: request,
-                readiness: readiness,
-                verifiedAtMilliseconds: verifiedAtMilliseconds
-            )
-        }
-    }
-
-    @discardableResult
     public func submitKagemushaTopUp(
         _ request: KagemushaTopUpRequest,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
@@ -23981,10 +23994,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func getKagemushaOperationStatus(
         operationId: String,
+        chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.getKagemushaOperationStatus(operationId: operationId)
+            try await self.getKagemushaOperationStatus(
+                operationId: operationId,
+                chainDiscriminant: chainDiscriminant
+            )
         }
     }
 
@@ -27439,59 +27456,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return responseData
     }
 
-    @available(*, deprecated, message: "Use the request-independent V2 lineage query and whole receive offer")
-    public func getKagemushaRecipientRegistrationLineage(
-        request requestBody: KagemushaRecipientPaymentRequest,
-        readiness: ToriiKagemushaReadiness,
-        verifiedAtMilliseconds: UInt64
-    ) async throws -> KagemushaRecipientRegistrationLineage {
-        guard verifiedAtMilliseconds > 0 else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha receiver lineage verification time must be positive"
-            )
-        }
-        guard requestBody.payload.assetDefinitionID == readiness.assetDefinitionId else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha readiness asset does not match the recipient request"
-            )
-        }
-        let request = try makeRequest(
-            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
-            method: .post,
-            body: requestBody.archive,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-            ]
-        )
-        let (responseData, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha receiver registration lineage",
-            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !responseData.isEmpty else {
-            throw ToriiClientError.emptyBody
-        }
-        guard let verified = try NoritoNativeBridge.shared
-            .kagemushaRecipientRegistrationLineageVerifyV1(
-                requestArchive: requestBody.archive,
-                lineageArchive: responseData,
-                verifiedAtMilliseconds: verifiedAtMilliseconds,
-                expectedEvaluatedBlockHeight: readiness.evaluatedBlockHeight,
-                expectedEvaluatedBlockHash: readiness.evaluatedBlockHashBytes
-            ) else {
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
-        }
-        guard verified == responseData else {
-            throw ToriiClientError.invalidPayload(
-                "Native receiver lineage verification did not preserve canonical bytes"
-            )
-        }
-        return try KagemushaRecipientRegistrationLineage(verifiedArchive: verified)
-    }
-
     public func submitKagemushaTopUp(
         _ requestBody: KagemushaTopUpRequest
     ) async throws -> KagemushaOperationReference {
@@ -27515,7 +27479,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getKagemushaOperationStatus(
-        operationId: String
+        operationId: String,
+        chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         let path = try KagemushaToriiAPI.operationPath(operationId)
         let request = try makeRequest(
@@ -27532,7 +27497,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard !responseData.isEmpty else {
             throw ToriiClientError.emptyBody
         }
-        let status = try KagemushaOperationCodec.decodeStatus(responseData)
+        let status = try KagemushaOperationCodec.decodeStatus(
+            responseData,
+            chainDiscriminant: chainDiscriminant
+        )
         guard status.operationId == operationId else {
             throw ToriiClientError.invalidPayload(
                 "Kagemusha operation status operation_id does not match the requested resource"

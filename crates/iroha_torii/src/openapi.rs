@@ -2158,10 +2158,7 @@ fn repair_ticket_path_param() -> Value {
     };
     schema.insert("minLength".into(), Value::from(1_u64));
     schema.insert("maxLength".into(), Value::from(256_u64));
-    schema.insert(
-        "pattern".into(),
-        Value::String("^[A-Z0-9_-]+$".to_owned()),
-    );
+    schema.insert("pattern".into(), Value::String("^[A-Z0-9_-]+$".to_owned()));
     Value::Object(param)
 }
 

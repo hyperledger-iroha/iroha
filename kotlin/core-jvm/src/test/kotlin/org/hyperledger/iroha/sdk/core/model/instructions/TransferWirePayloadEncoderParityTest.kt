@@ -1,9 +1,11 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+import org.hyperledger.iroha.sdk.sccp.SccpV1
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -48,7 +50,10 @@ class TransferWirePayloadEncoderParityTest {
         payload[numericOffset + canonicalNumeric.lastIndex] = 1
 
         assertFailsWith<IllegalArgumentException> {
-            TransferWirePayloadEncoder.decodeAssetTransferPayload(reframe(decoded.header, payload))
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                reframe(decoded.header, payload),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
         }
     }
 
@@ -78,11 +83,19 @@ class TransferWirePayloadEncoderParityTest {
         assertEquals("iroha.transfer", instruction.name)
         val wirePayload = assertIs<WirePayload>(instruction.payload)
         val kotlinHex = FixtureGeneratorRunner.bytesToHex(wirePayload.payloadBytes)
-        val decoded = TransferWirePayloadEncoder.decodeAssetTransferPayload(wirePayload.payloadBytes)
+        val decoded =
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                wirePayload.payloadBytes,
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
 
         assertEquals(assetId, decoded.assetId)
         assertEquals(amount, decoded.amount)
         assertEquals(destinationAccountId, decoded.destinationAccountId)
+        assertEquals(
+            SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            AccountAddress.detectI105Discriminant(decoded.destinationAccountId),
+        )
 
         assertContentEquals(
             FixtureGeneratorRunner.hexToBytes(rustHex),
@@ -94,12 +107,18 @@ class TransferWirePayloadEncoderParityTest {
         )
 
         assertFailsWith<IllegalArgumentException> {
-            TransferWirePayloadEncoder.decodeAssetTransferPayload(wirePayload.payloadBytes.copyOf(12))
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                wirePayload.payloadBytes.copyOf(12),
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
         }
         val mutated = wirePayload.payloadBytes.copyOf()
         mutated[mutated.lastIndex] = (mutated.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
-            TransferWirePayloadEncoder.decodeAssetTransferPayload(mutated)
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                mutated,
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
         }
     }
 

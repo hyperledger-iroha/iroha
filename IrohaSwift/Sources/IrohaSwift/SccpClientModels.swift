@@ -575,11 +575,7 @@ enum SccpSubmitValidation {
         guard name.isFinished,
               program.isFinished,
               let value = String(data: nameBytes, encoding: .utf8),
-              value == value.precomposedStringWithCanonicalMapping,
-              value.unicodeScalars.allSatisfy({ scalar in
-                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
-                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
-              }) else {
+              isCanonicalFeeSponsorProgramName(value) else {
             throw SccpV1Error.invalid("fee_payment sponsor program name is invalid")
         }
     }

@@ -28,7 +28,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class TransactionFixtureParityTest {
-    private val adapter = NoritoJavaCodecAdapter()
+    private val adapter = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     @Test
     fun `transaction payload fixtures round-trip with kotlin codec`() {
@@ -307,7 +307,9 @@ class TransactionFixtureParityTest {
 
     @Test
     fun `signed transaction decoder round-trips multisig signatures`() {
-        val payload = AndroidFixtureSupport.loadPayloadFixtures().first().materializePayload(adapter)
+        val payload = AndroidFixtureSupport.loadPayloadFixtures()
+            .single { it.name == "transfer_asset" }
+            .materializePayload(adapter)
         val payloadBytes = adapter.encodeTransaction(payload)
         val memberPublicKey = TestEd25519Keys.publicKey(0x41)
         val memberSignature = ByteArray(64) { ((0x80 + it) and 0xFF).toByte() }
@@ -375,6 +377,12 @@ class TransactionFixtureParityTest {
                     "chain" to "00000001",
                     "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
+                    "fee_payment" to mapOf(
+                        "payer" to "authority",
+                        "value" to mapOf(
+                            "charge_limits" to emptyList<Map<String, Any?>>(),
+                        ),
+                    ),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
