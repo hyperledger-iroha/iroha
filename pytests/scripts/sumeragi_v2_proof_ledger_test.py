@@ -7271,7 +7271,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_reply_source_capacity(",
+            "pub(crate) fn with_limits(",
             "reply_source_capacity,\n            outbound_session_capacity,",
             "reply_source_capacity,\n            outbound_session_capacity: 0,",
             "sidecar source geometry must reject zero and install every checked corridor bound",
@@ -7292,7 +7292,7 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn retire_inactive_outbound_attempts(",
+            "fn park_inactive_outbound_attempts(",
             "gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);",
             "let _ = resume_chunk;",
             "merge-sidecar source-isolated production seam",
@@ -7306,10 +7306,33 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "attempt.queued = true;\n                self.outbound_order.push_back((key, source));",
+            "fn apply_reliable_flush_application(",
+            "attempt.queued = true;\n            transport\n"
+            "                .outbound_order\n"
+            "                .push_back((plan.gate.key.clone(), plan.gate.source.clone()));",
             "let _ = &attempt.queued;",
             "merge-sidecar source-isolated production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_outbound_chunks_durable(",
+            "self.persist_lifecycle_state()?;",
+            "let _ = &lifecycle_changed;",
+            "production sidecar drainage must durably publish every changed pending identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "#[cfg(test)]\n    fn drain_outbound_chunks(",
+            "#[cfg(test)]",
+            "#[cfg(any())]",
+            "raw non-durable sidecar drainage must remain exactly #[cfg(test)]",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV1)",
+            "file.sync_all()",
+            "file.flush()",
+            "lifecycle publication must create and fsync one exclusive temporary file",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -18154,6 +18177,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in error
         for error in errors
     ), errors
+    release_fidelity_path.write_text(canonical_release, encoding="utf-8")
 
     runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     bash = Path(shutil.which("bash") or "").resolve(strict=True)
@@ -18263,7 +18287,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     retirement_item = module.rust_items(
         canonical_lane_geometry,
-        "ensure_first_release_lane_retirement_admissible_locked",
+        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
     )
     assert len(retirement_item) == 1
     retirement_item_source = retirement_item[0].source
@@ -18280,7 +18304,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     def mutate_fixed_progress_pairs(old: str, new: str) -> None:
         assert canonical_fixed_pairs.count(old) == 1, old
         mutate_lane_geometry_item(
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             canonical_fixed_pairs,
             canonical_fixed_pairs.replace(old, new, 1),
         )
@@ -18319,7 +18343,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     lane_geometry_mutations = (
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "    &fixed_progress_pairs,\n",
             "    &fixed_progress_pairs[..4],\n",
             "all fixed retirement progress pairs must recover before the "
@@ -18370,7 +18394,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "per-height names",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """            if !native_amx_retained_windows_are_complete(
                 &native_manifest_heights,
                 &native_receipt_heights,
@@ -18381,14 +18405,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "live Native AMX evidence must form a complete retained suffix",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "match native_receipt_heights.last().copied() {",
             "match native_receipt_heights.first().copied() {",
             "live Native AMX latest lookup must select the highest retained "
             "receipt",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "manifest.leaf.lane_id != entry.lane_id",
             "manifest.leaf.lane_id == entry.lane_id",
             "live Native AMX manifests must join the active route, incarnation, "
@@ -18402,7 +18426,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "and canonical finality",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                return Err(Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -18417,7 +18441,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "artifact after the complete allowlist",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                if Self::parse_native_amx_evidence_path(&path)?.is_some() {
                     continue;
                 }
@@ -18798,7 +18822,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "late_old_exact_item_receipt_completes_reconnected_attempt_once",
                 "later_delivery_updates_pending_work_without_losing_materialized_output",
                 "reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure",
-                "conflicting_server_request_id_reuse_is_rejected_before_materialization",
+                "equal_sequence_with_different_semantic_identity_is_rejected_before_materialization",
                 "failed_materialization_releases_rate_gate_for_exact_retry",
                 "response_materialization_requires_and_consumes_its_exact_admission_gate",
                 "inactive_reply_route_is_rejected_before_server_gate_admission",

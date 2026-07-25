@@ -949,7 +949,7 @@ The sidecar stream regressions keep sequence and cumulative-close metadata out
 of canonical semantic identity, remove wall-clock terminal expiry, and permit
 only an authenticated contiguous close floor to retire covered output.
 The canonical module/test TSV inventory SHA-256 is
-`8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817`.
+`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

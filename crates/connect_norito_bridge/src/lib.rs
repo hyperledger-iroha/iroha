@@ -17699,6 +17699,9 @@ mod kagemusha_bridge_tests {
 
     #[cfg(feature = "privacy-production-enabled")]
     const KAGEMUSHA_V4_GUARD_FD_ENV: &str = "IROHA_KAGEMUSHA_V4_GUARD_FD";
+    const CURRENT_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+    // The runtime alias is exactly `sbd#cbsi`; offline wire objects carry its typed ID.
+    const CBSI_SBD_ASSET_DEFINITION_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
     /// Live phase channel inherited from the Kagemusha resource supervisor.
     #[derive(Debug)]
@@ -18728,12 +18731,14 @@ mod kagemusha_bridge_tests {
             OfflineRecipientReceiveOfferV2, OfflineRecipientRegistrationLineage,
         };
 
-        let base = redemption_change_prepare_request_v4();
-        let sbd_asset = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        let chain_id = CURRENT_TAIRA_CHAIN_ID
+            .parse::<ChainId>()
+            .expect("current Taira chain id");
+        let sbd_asset = CBSI_SBD_ASSET_DEFINITION_ID
             .parse::<AssetDefinitionId>()
             .expect("canonical SBD asset definition");
         let request = peer_split_recipient_request_for_asset_v4(
-            &base.bundle.statement.chain_id,
+            &chain_id,
             &sbd_asset,
             KagemushaScaledAmountV2::new(625, 2).expect("receiver-offer amount"),
             0xE1,
@@ -18928,8 +18933,12 @@ mod kagemusha_bridge_tests {
         };
 
         let one = realistic_recipient_receive_offer_v2(1);
+        assert_eq!(one.request.chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
+        assert_eq!(one.request.asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
+        assert_eq!(one.lineage.selector.chain_id, one.request.chain_id);
+        assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 14_005);
+        assert_eq!(one_bytes.len(), 12_363);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -19024,7 +19033,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            14_089
+            12_447
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES
@@ -20954,7 +20963,8 @@ mod kagemusha_bridge_tests {
         let fresh_recipient_opening = peer_split_recipient_opening_for_request_seed_v4(0xE2);
         let chain_id = receiver_offer.lineage.selector.chain_id.clone();
         let asset = receiver_offer.lineage.selector.asset.clone();
-        assert_eq!(asset.to_string(), "7ZepsJTHCVLKsrFFNZGSRGZgvBhv");
+        assert_eq!(chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
+        assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
         assert_eq!(fresh_recipient_request.asset, asset);
         let (topup_roster, topup_signing_keys) =
             production_topup_finality_roster_v2(&chain_id, generation);

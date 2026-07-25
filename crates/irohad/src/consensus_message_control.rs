@@ -1392,6 +1392,14 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
 }
 
 fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ControlError> {
+    read_stable_private_file_after_open(path, max_bytes, || {})
+}
+
+fn read_stable_private_file_after_open(
+    path: &Path,
+    max_bytes: usize,
+    after_open: impl FnOnce(),
+) -> Result<Vec<u8>, ControlError> {
     let named_before = fs::symlink_metadata(path).map_err(ControlError::Io)?;
     validate_private_file(&named_before)?;
     if usize::try_from(named_before.len())
@@ -1419,6 +1427,7 @@ fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Co
     {
         return Err(ControlError::CommandTooLarge);
     }
+    after_open();
     let mut bytes = Vec::with_capacity(
         usize::try_from(opened_before.len())
             .unwrap_or(max_bytes)
@@ -2378,5 +2387,26 @@ mod tests {
             read_stable_private_file(&symlink_path, MAX_COMMAND_BYTES),
             Err(ControlError::UnsafeFile)
         ));
+    }
+
+    #[test]
+    fn private_reader_treats_safe_atomic_replacement_as_retryable_identity_churn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().expect("temporary directory");
+        let command = directory.path().join("command.json");
+        let replacement = directory.path().join("replacement.json");
+        fs::write(&command, b"{}").expect("write original command");
+        fs::write(&replacement, b"{}").expect("write replacement command");
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o600))
+            .expect("chmod original command");
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600))
+            .expect("chmod replacement command");
+
+        let error = read_stable_private_file_after_open(&command, MAX_COMMAND_BYTES, || {
+            fs::rename(&replacement, &command).expect("atomically replace command");
+        })
+        .expect_err("an atomic pathname replacement must be retried");
+        assert!(matches!(error, ControlError::FileIdentityChanged));
     }
 }

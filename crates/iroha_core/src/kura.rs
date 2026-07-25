@@ -32044,16 +32044,37 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         let _guard = self.sidecar_lock.lock();
-        Ok(self
-            .read_autonomous_lane_block_record_locked(
+        let record = self.read_autonomous_lane_block_record_locked(
+            &entry,
+            lane_id,
+            lane_block_height,
+            expected_chain_id_hash,
+            expected_epoch,
+            true,
+        )?;
+        if record.is_none() {
+            let pointer_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
                 &entry,
-                lane_id,
+                &self.store_root,
                 lane_block_height,
-                expected_chain_id_hash,
-                expected_epoch,
-                true,
-            )?
-            .and_then(|record| record.retirement))
+            );
+            let parent = pointer_path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    pointer_path.clone(),
+                    "autonomous lane latest-attempt pointer has no parent directory",
+                )
+            })?;
+            if self
+                .regular_sidecar_metadata(&pointer_path, parent)?
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    pointer_path,
+                    "autonomous lane retirement pointer does not match the active incarnation marker",
+                ));
+            }
+        }
+        Ok(record.and_then(|record| record.retirement))
     }
 
     /// Persist the availability DELIVER certificate for an autonomous payload.
@@ -33410,7 +33431,7 @@ impl Kura {
         let observed_existing =
             self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height);
         let observed_existing_is_canonical = observed_existing.as_ref().is_some_and(|existing| {
-            self.lane_block_execution_input_matches_canonical_payload(existing)
+            self.lane_block_execution_input_matches_canonical_payload(existing, false)
         });
 
         let _geometry_guard = self.lane_geometry_lock.lock();
@@ -33566,7 +33587,7 @@ impl Kura {
             lane_block_height,
             true,
         )?;
-        if !self.lane_block_execution_input_matches_canonical_payload(&artifact) {
+        if !self.lane_block_execution_input_matches_canonical_payload(&artifact, true) {
             iroha_logger::warn!(
                 lane = %lane_id.as_u32(),
                 lane_block_height,
@@ -33638,13 +33659,14 @@ impl Kura {
     fn lane_block_execution_input_matches_canonical_payload(
         &self,
         artifact: &LaneBlockExecutionInputArtifact,
+        repair_missing_sidecar: bool,
     ) -> bool {
         let recovered = self.recover_lane_block_execution_input_source(
             &artifact.proposal,
             artifact.autonomous_chain_id_hash,
             artifact.autonomous_epoch,
             artifact.autonomous_payload_hash,
-            false,
+            repair_missing_sidecar,
         );
         match recovered {
             Ok(recovered) => LaneBlockExecutionInputArtifact::new(recovered) == *artifact,
@@ -54520,7 +54542,8 @@ mod tests {
             .as_mut()
             .and_then(|batch| batch.lanes.first_mut())
             .expect("merge execution fixture");
-        execution.routing_plans = vec![routing_plan.encode()];
+        execution.routing_plans =
+            vec![norito::to_bytes(&routing_plan).expect("encode canonical pending-route fixture")];
         execution.native_amx_receipts = vec![Some(receipt)];
         retired_entry
             .active_lanes

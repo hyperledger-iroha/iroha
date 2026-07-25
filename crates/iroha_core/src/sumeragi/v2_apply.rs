@@ -1051,10 +1051,15 @@ impl V2ApplyService {
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
-        // Repair or confirm the pre-WSV durable evidence boundary before any
-        // derived publication. Fresh application already crossed this boundary
-        // inside `validate_and_apply`; the calls are deliberately idempotent so
-        // restart can repair each individual artifact.
+        // Publish the post-WSV checkpoint/manifest join before finality. This
+        // order leaves every crash prefix independently recoverable: a staged
+        // checkpoint can replay the exact overlay, a published manifest binds
+        // the committed WSV, and only then may finality-derived sidecars become
+        // visible.
+        self.persist_post_apply_metadata(context, task, &artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
         let receipt = self
             .kura
             .store_v2_finality_artifact(&artifact)
@@ -1063,14 +1068,9 @@ impl V2ApplyService {
             })?;
 
         // The strict restart-repair path authenticates Native AMX evidence
-        // against both finality and the post-WSV Kura metadata join. Publish
-        // that join first on every fresh or recovery attempt, then repair or
+        // against both finality and the post-WSV Kura metadata join. Repair or
         // confirm the exact manifests, receipts, and latest indexes while the
         // prune guard keeps their canonical carrier stable.
-        self.persist_post_apply_metadata(context, task, &artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
-            })?;
         self.kura
             .repair_native_amx_participant_application_evidence(committed_block.as_ref())
             .map_err(|error| {
@@ -1351,9 +1351,6 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::InjectedCrashAfterKuraStore);
             }
-            let _ = self.kura.store_v2_finality_artifact(artifact)?;
-            self.kura
-                .persist_native_amx_participant_application_evidence(committed_block.as_ref())?;
         }
         let commit_topology = context
             .roster
@@ -1376,12 +1373,15 @@ impl V2ApplyService {
         // manifest. A crash before State commit replays the overlay and must
         // reproduce this byte-identical hash; a crash after State commit can
         // authenticate the already-applied tip directly.
-        let staged_checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
-        self.kura
-            .store_wsv_checkpoint(context.height, block_hash, staged_checkpoint)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("pre-WSV recovery checkpoint", &error)
-            })?;
+        if store_block {
+            let staged_checkpoint =
+                crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+            self.kura
+                .store_wsv_checkpoint(context.height, block_hash, staged_checkpoint)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required("pre-WSV recovery checkpoint", &error)
+                })?;
+        }
         #[cfg(test)]
         if self
             .fail_after_wsv_checkpoint
@@ -2015,7 +2015,11 @@ mod tests {
         }
 
         fn assert_complete(&self) {
-            assert_eq!(self.state.committed_height(), 1);
+            self.assert_complete_for_state(self.state.as_ref());
+        }
+
+        fn assert_complete_for_state(&self, state: &State) {
+            assert_eq!(state.committed_height(), 1);
             assert_eq!(self.kura.exact_durable_blocks_count().unwrap(), 1);
             assert_eq!(
                 self.kura
@@ -2062,7 +2066,7 @@ mod tests {
                 "manifest must retain the exact QC roots and complete v2 authority seal"
             );
             assert!(
-                self.state
+                state
                     .world_view()
                     .commit_qcs()
                     .get(&self.body.hash())
@@ -2070,7 +2074,7 @@ mod tests {
                 "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
             );
             assert!(
-                self.state
+                state
                     .commit_roster_snapshot_for_block(self.context.height, self.body.hash())
                     .is_none(),
                 "Sumeragi v2 finality must not populate the legacy commit-roster journal"
@@ -4157,7 +4161,7 @@ mod tests {
                 durable_state_hash,
                 "idempotent retry must not execute the block twice"
             );
-            fixture.assert_complete();
+            fixture.assert_complete_for_state(restarted_state.as_ref());
         }
     );
 

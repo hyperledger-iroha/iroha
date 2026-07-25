@@ -4797,7 +4797,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 582
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817"
+    "bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a"
 )
 _GENESIS_HEADER_BINDING_TEST_SHA256 = (
     "8d847d27cdea09a87f5ee4ec940f60f9fa73fb85ca9a965d2a3fcac19eb3b41e"
@@ -4959,7 +4959,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "merge_sidecar::tests::late_old_exact_item_receipt_completes_reconnected_attempt_once",
     "merge_sidecar::tests::later_delivery_updates_pending_work_without_losing_materialized_output",
     "merge_sidecar::tests::reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure",
-    "merge_sidecar::tests::conflicting_server_request_id_reuse_is_rejected_before_materialization",
+    "merge_sidecar::tests::equal_sequence_with_different_semantic_identity_is_rejected_before_materialization",
     "merge_sidecar::tests::failed_materialization_releases_rate_gate_for_exact_retry",
     "merge_sidecar::tests::response_materialization_requires_and_consumes_its_exact_admission_gate",
     "merge_sidecar::tests::sidecar_admission_matches_the_cached_arc_without_changing_ownership",
@@ -5375,6 +5375,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 # source, or disconnecting a writer-flush receipt elsewhere in the same item.
 _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": "68c84b7900832bd2e5fb1677e80150d91f20390c98fa1e7552435c9b41062df1",
+    "apply_reliable_flush_application": "0",
     "MergeSidecarTransport::with_limits": "0",
     "MergeSidecarTransport::release_unsent_request": "7a6360374a2065e41977fb7849fcf29e058e010b1c550b0f1cd919c07d3b59c4",
     "MergeSidecarTransport::park_authorized_server_request_attempts": "a7f6ad8f3a595fe655f0535b11d2564a2a783d60df1cc6bebeadb704606e96f6",
@@ -5440,6 +5441,7 @@ _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
 _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "e924cea36fcf07aa7498713766a0b8e41cef5b665750c00f8ad8ddca417ca31e",
     "V2LaneWorkAdapter::new_with_output_guard": "725172909f2baea4203795d9b0c56083551b08723828d3570a07602b24feb02f",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport": "0",
     "V2LaneWorkAdapter::accept_relay_message": "8c307167fe5ea486fc509817d12c352fa8a831751e0e7fc1342b6d43b6ef00bf",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "7cf6ba66ba1e4b276ca8bb2c037e68e417b1f0f42a81e51c4f5b43fa5185618d",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_request": "2bf69cb92d46fd8fb4e97656246b2a783871a4d31cc87f7126b34d2e156eecc5",
@@ -5449,6 +5451,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::drain_effects": "5c81ff34454e28928de8f9181efc51e316b7be73b19c034bc314856fa8aca88a",
     "V2LaneWorkAdapter::push_effect": "cc9f8f5b9469904d0ba6584db2ef13b8aa9ce2f6ed941b5b34e8b7eec3e7717e",
     "V2LaneWorkAdapter::schedule_retransmission": "61e6f9ac06468d53ceed967d91ddd1cb79c4a2f828ce94186a3ffde2fe66f4ab",
+    "V2LaneWorkAdapter::schedule_retransmission_at": "0",
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "c317de07d30e9a73ae021981d7d6eabf75d40eabceebc52c274917af5cd8cad1",
     "V2LaneWorkAdapter::sidecar_effect_slots": "cb0582cbb1c5a95bfb4a0777208cdb0db3a0d4aece920d3c0f1ee6544bdf5d8e",
     "V2LaneWorkAdapter::push_merge_sidecar_post": "ae20b174b0777d554f1bfe731c025b24b2cd41cd3ff5bbba89ab6fdf52e33a7c",
@@ -29463,20 +29466,36 @@ def _exact_output_production_source_fidelity_errors(
             count=1,
         )
 
-    _require_rust_source_token_sequence(
-        config_defaults_path,
-        config_defaults_source,
-        """
+    for expected, description in (
+        (
+            """
 pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE: NonZeroUsize =
     nonzero!(2_usize);
+""",
+            "certified sidecar per-source sessions must remain exactly two",
+        ),
+        (
+            """
 pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE: NonZeroUsize =
     nonzero!(16_usize * 1024 * 1024);
+""",
+            "certified sidecar per-source bytes must remain exactly 16 MiB",
+        ),
+        (
+            """
 pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize =
     nonzero!(4_usize);
 """,
-        "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
-        errors,
-    )
+            "certified sidecar per-source request gates must remain exactly four",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            config_defaults_path,
+            config_defaults_source,
+            expected,
+            description,
+            errors,
+        )
 
     _require_rust_source_token_sequence(
         config_defaults_path,
@@ -30191,8 +30210,21 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
             "from_admitted_reply",
             errors,
             "sidecar admission identity production item",
-        )
+        ),
+        "apply_reliable_flush_application": _require_rust_item(
+            merge_path,
+            merge_source,
+            "apply_reliable_flush_application",
+            errors,
+        ),
     }
+    _require_rust_item_context(
+        merge_path,
+        merge_ack_items["apply_reliable_flush_application"],
+        (),
+        "sidecar reliable-flush application production item",
+        errors,
+    )
     for item_name in (
         "with_limits",
         "release_unsent_request",
@@ -30352,6 +30384,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
     }
     for item_name in (
         "new_with_output_guard",
+        "new_with_output_guard_and_transport",
         "accept_relay_message",
         "accept_certified_merge_sidecar",
         "accept_certified_merge_sidecar_request",
@@ -30361,6 +30394,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         "drain_effects",
         "push_effect",
         "schedule_retransmission",
+        "schedule_retransmission_at",
         "prune_finalized_merge_sidecars",
         "sidecar_effect_slots",
         "push_merge_sidecar_post",
@@ -30378,7 +30412,8 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 errors,
                 f"lane sidecar ACK bridge {item_name} production item",
                 expected_attributes=("#[allow(clippy::too_many_arguments)]",)
-                if item_name == "new_with_output_guard"
+                if item_name
+                in ("new_with_output_guard", "new_with_output_guard_and_transport")
                 else (),
             )
         )
@@ -30547,6 +30582,210 @@ enum ServerResponseCursor {
         errors,
         count=0,
     )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecycleSnapshotV1 {
+    version: u8,
+    geometry: MergeSidecarLifecycleGeometryV1,
+    request_streams: Vec<RequestStreamLifecycleV1>,
+    server_closed_through: Vec<PeerSequenceLifecycleV1>,
+    server_highest_sequence: Vec<PeerSequenceLifecycleV1>,
+    server_request_gates: Vec<ServerRequestGateLifecycleV1>,
+}
+""",
+        "the durable sidecar snapshot must use canonical Norito and contain only stable bounded semantic lifecycle state",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("ServerRequestSource::budget_source"),
+        """
+match self {
+    Self::Synthetic(peer) => ServerRequestBudgetSource::Synthetic(peer.clone()),
+    Self::Authenticated(source) => {
+        ServerRequestBudgetSource::Authenticated(
+            source.authenticated_source_peer().clone()
+        )
+    }
+    Self::RecoveredAuthenticated(peer) => {
+        ServerRequestBudgetSource::Authenticated(peer.clone())
+    }
+}
+""",
+        "live and recovered source capabilities must project to the same stable authenticated-peer budget",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("ServerRequestSource::shares_budget_with"),
+        "self.budget_source() == other.budget_source()",
+        "every per-source corridor must compare stable budget ownership rather than process-local capability identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::load"),
+        """
+if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "unsafe lifecycle journal state artifact".to_owned(),
+    ));
+}
+""",
+        "lifecycle recovery must reject symlinks and non-files before reading state",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::load"),
+        """
+let snapshot = norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV1>(&bytes)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+let canonical = norito::to_bytes(&snapshot)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+if canonical != bytes {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle journal is not canonical Norito".to_owned(),
+    ));
+}
+""",
+        "lifecycle recovery must accept only a byte-for-byte canonical Norito snapshot",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::persist"),
+        """
+let mut file = OpenOptions::new()
+    .create_new(true)
+    .write(true)
+    .open(&temp)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+file.write_all(&bytes)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+file.sync_all()
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+""",
+        "lifecycle publication must create and fsync one exclusive temporary file",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::persist"),
+        """
+fs::rename(&temp, self.state_path())
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+Self::sync_directory(&self.directory)
+""",
+        "lifecycle publication must atomically rename and fsync the containing directory",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::restore_lifecycle_snapshot"
+        ),
+        """
+let recovered = RequestStreamState {
+    next_sequence: stream.next_sequence,
+    closed_through: stream.next_sequence,
+    acknowledged_through: stream.acknowledged_through,
+    last_close_sent_at: None,
+    open_sequences: BTreeSet::new(),
+};
+""",
+        "requester recovery must conservatively close every sequence that could have been allocated before the crash",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::restore_lifecycle_snapshot"
+        ),
+        """
+DurableServerRequestSourceV1::Authenticated(peer) => {
+    ServerRequestSource::RecoveredAuthenticated(peer)
+}
+""",
+        "responder recovery must restore authenticated peer ownership without fabricating a live route capability",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::restore_lifecycle_snapshot"
+        ),
+        """
+self.outbound.clear();
+self.outbound_order.clear();
+self.pending_server_closures.clear();
+Ok(())
+""",
+        "responder recovery must discard process-local output and route queues while retaining semantic gates",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarTransport::open_durable"),
+        """
+let mut transport = Self::with_limits(reply_source_capacity, limits)?;
+let journal = MergeSidecarLifecycleJournal::open(
+    store_root,
+    transport.lifecycle_max_snapshot_bytes()?,
+)?;
+if let Some(snapshot) = journal.load()? {
+    transport.restore_lifecycle_snapshot(snapshot, Instant::now())?;
+}
+transport.lifecycle_journal = Some(journal);
+transport.persist_lifecycle_state()?;
+Ok(transport)
+""",
+        "live sidecar construction must validate, restore, attach, and republish its exact lifecycle before service",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarTransport::begin_request"),
+        """
+self.inbound_cursor = Some(key);
+self.persist_lifecycle_state()?;
+Ok(Some(MergeSidecarPost {
+""",
+        "request allocation must be durable before the semantic occurrence can reach output",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("MergeSidecarTransport::tick_bounded"),
+        """
+if lifecycle_changed {
+    self.persist_lifecycle_state()?;
+}
+Ok(posts)
+""",
+        "bounded mixed service must durably publish response pending identities before returning posts",
+        errors,
+    )
+    raw_drain_items = [
+        item
+        for item in rust_items(merge_source, "drain_outbound_chunks")
+        if item.brace_context == (("impl", "MergeSidecarTransport"),)
+    ]
+    if len(raw_drain_items) != 1:
+        errors.append(
+            f"{merge_path}: raw non-durable sidecar drainage must have exactly "
+            f"one test-only item; found {len(raw_drain_items)}"
+        )
+    elif raw_drain_items[0].attributes != ("#[cfg(test)]",):
+        errors.append(
+            f"{merge_path}:{raw_drain_items[0].line}: raw non-durable sidecar "
+            "drainage must remain exactly #[cfg(test)]; found "
+            f"{raw_drain_items[0].attributes!r}"
+        )
     _require_rust_token_sequence(
         merge_path,
         merge_ack_items.get(
@@ -30579,6 +30818,7 @@ let projection = CertifiedMergeSidecarChunkFlushProjection {
     canonical_request_digest: flush_identity.canonical_request_digest(),
     stream_wire_bytes: flush_identity.ticket_stream_wire_bytes(),
     request_id: chunk.request_id,
+    semantic_sequence: chunk.semantic_sequence,
     entry_hash: chunk.entry_hash,
     encoded_len: chunk.encoded_len,
     epoch_id: chunk.epoch_id,
@@ -30943,6 +31183,9 @@ if reply_route.is_some_and(|route| !route.is_active()) {
         merge_ack_items.get("MergeSidecarTransport::admit_server_request"),
         """
 if existing.request_hash != request_hash {
+    return Err(MergeSidecarError::UnsolicitedResponse);
+}
+if existing.semantic_sequence != request.semantic_sequence {
     return Err(MergeSidecarError::UnsolicitedResponse);
 }
 if existing.source_capacity != source_capacity {
@@ -31358,6 +31601,8 @@ if completed {
 } else if let Some(identity) = emitted_chunk_identity {
     gate_attempt.pending_flush_chunk = Some(identity);
 }
+lifecycle_changed |= gate_attempt.cursor != cursor_before
+    || gate_attempt.pending_flush_chunk != pending_flush_before;
 if inactive || identity_mismatch || completed {
     gate_attempt.inserted = now;
 }
@@ -31501,9 +31746,24 @@ if !production_reliable_flush_two_phase_link_kernel(worker_trace, application) {
         "writer flush application disconnected from its accepted worker transition",
     ));
 }
+self.persist_lifecycle_state()?;
 Ok(true)
 """,
         "the clone-shared writer claim must be the sole linearization point before application-kernel and exact-link postchecks",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_ack_items.get("apply_reliable_flush_application"),
+        """
+if !attempt.queued {
+    attempt.queued = true;
+    transport
+        .outbound_order
+        .push_back((plan.gate.key.clone(), plan.gate.source.clone()));
+}
+""",
+        "a successful non-terminal writer flush must requeue the exact source occurrence at its successor cursor",
         errors,
     )
     _require_rust_token_sequence(
@@ -31787,13 +32047,15 @@ let sidecar_reply = match (&post.data, &route) {
         NetworkMessage::CertifiedMergeSidecar(message),
         ExactTargetRoute::Reply(reply_route),
     ) => match message.as_ref() {
-        CertifiedMergeSidecarMessage::Chunk(_) => Some((
-            post.clone(),
-            reply_route.clone(),
-            message_cursor_before,
-            message_cursor_after,
-        )),
-        CertifiedMergeSidecarMessage::Request(_) => None,
+                    CertifiedMergeSidecarMessage::Chunk(_) => Some((
+                        post.clone(),
+                        reply_route.clone(),
+                        message_cursor_before,
+                        message_cursor_after,
+                    )),
+                    CertifiedMergeSidecarMessage::Request(_)
+                    | CertifiedMergeSidecarMessage::Close(_)
+                    | CertifiedMergeSidecarMessage::CloseAck(_) => None,
     },
     _ => None,
 };
@@ -32325,6 +32587,18 @@ Self {
     native_request_capacity,
     reply_source_capacity,
     merge_share_frame_capacity,
+    historical_recovery_response_frame_capacity,
+    authenticated_merge_qc_capacity,
+    merge_leader_body_frame_headroom_bytes,
+    autonomous_carrier_headroom_bytes,
+    autonomous_producer_recheck,
+    historical_recovery_stuck_attempts,
+    historical_recovery_retry_tier_attempts,
+    historical_recovery_max_retry_tier,
+    sidecar_service_burst,
+    merge_sidecar_limits,
+    merge_signing_guard_limits,
+    native_amx_signing_guard_limits,
 }
 """,
         "lane limits must retain the exact configured reply-source geometry",
@@ -32332,9 +32606,11 @@ Self {
     )
     _require_rust_token_sequence(
         lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::new_with_output_guard"),
+        lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
         """
-merge_sidecars: match retained_merge_sidecars {
+let merge_sidecars = match retained_merge_sidecars {
     Some(transport) => transport.rehydrate_with_exact_geometry(
         limits.reply_source_capacity.get(),
         limits.merge_sidecar_limits,
@@ -32345,7 +32621,7 @@ merge_sidecars: match retained_merge_sidecars {
         limits.merge_sidecar_limits,
     ),
 }
-.map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?,
+.map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
 """,
         "lane construction must restore or open only the exact durable reply-source geometry",
         errors,
@@ -32691,7 +32967,7 @@ if self.sidecar_effect_slots() == 0 {
     )
     _require_rust_token_sequence(
         lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission"),
+        lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission_at"),
         """
 let operation = output_guard
     .begin_fail_stop_operation()
@@ -32702,13 +32978,12 @@ let operation = output_guard
     )
     _require_rust_token_sequence(
         lane_path,
-        lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission"),
+        lane_ack_items.get("V2LaneWorkAdapter::schedule_retransmission_at"),
         """
-let sidecar_posts = self.merge_sidecars.tick_bounded(
-    &self.local_peer,
-    Instant::now(),
-    self.sidecar_effect_slots(),
-);
+let sidecar_posts = self
+    .merge_sidecars
+    .tick_bounded(&self.local_peer, now, self.sidecar_effect_slots())
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
 for post in sidecar_posts {
     self.push_merge_sidecar_post_or_restart(post)?;
 }
@@ -32724,7 +32999,8 @@ self.merge_entries.clear();
 self.merge_claims.clear();
 self.purge_queued_merge_broadcasts();
 self.merge_sidecars
-    .retain_pending_blocks(&BTreeSet::new(), self.context.height);
+    .retain_pending_blocks(&BTreeSet::new(), self.context.height)
+    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
 self.kura
     .prune_finalized_pending_certified_merge_entries(self.context.height)
     .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
@@ -32851,6 +33127,7 @@ lane_work_limits(
     &shared_config,
     network.reply_route_source_capacity(),
     consensus_frame_byte_capacity,
+    block_sync_frame_byte_capacity,
 )?
 """,
         "runner construction must pass the exact P2P source geometry into lane work",
@@ -33011,7 +33288,9 @@ apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
         runner_ack_items.get("dispatch_lane_work_effect"),
         """
 let route_shape_is_valid = match message.as_ref() {
-    CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+    CertifiedMergeSidecarMessage::Request(_)
+    | CertifiedMergeSidecarMessage::Close(_)
+    | CertifiedMergeSidecarMessage::CloseAck(_) => reply_routes.is_none(),
     CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
 };
 if !route_shape_is_valid {
@@ -36193,7 +36472,7 @@ def _kura_retirement_progress_production_source_fidelity_errors(
         lane_geometry_path,
         source,
         "Kura",
-        "ensure_first_release_lane_retirement_admissible_locked",
+        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
         errors,
         "production first-release lane-retirement scanner",
     )
@@ -36564,7 +36843,7 @@ sync_dir(lane_artifacts)
         lane_geometry_path,
         source,
         "Kura",
-        "ensure_first_release_lane_retirement_admissible_locked",
+        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
         errors,
         "live standalone Native AMX retirement evidence join",
     )

@@ -33255,6 +33255,9 @@ impl State {
                 .unapplied_lane_block_artifact_heights_snapshot_cached()
                 .contains_key(&(lane_id, dataspace_id))
             || self
+                .unapplied_certified_lane_block_heights_snapshot_cached()
+                .contains_key(&(lane_id, dataspace_id))
+            || self
                 .unrepaired_direct_lane_application_marker_height(lane_id)
                 .is_some()
             || self

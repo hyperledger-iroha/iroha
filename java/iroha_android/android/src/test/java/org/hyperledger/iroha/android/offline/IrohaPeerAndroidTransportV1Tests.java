@@ -4,8 +4,11 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerIsoDepLimitsV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcApduResponseV1;
@@ -41,7 +44,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
   }
 
   @Test
-  public void commitResponseWaitsForExactDurableAcknowledgement() {
+  public void commitResponseWaitsForExactDurableAcknowledgement() throws InterruptedException {
     final byte[] session = repeat(16, 0x21);
     final IrohaPeerWireMessageV1 request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x31, 120);
     final IrohaPeerWireMessageV1 payment = message(IrohaPeerPayloadKind.PAYMENT, 0x32, 360);
@@ -72,6 +75,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
     final AtomicReference<IrohaPeerNfcCommitContextV1> pendingContext = new AtomicReference<>();
     final AtomicReference<IrohaPeerNfcDurableCommitCompletionV1> pendingCompletion =
         new AtomicReference<>();
+    final CountDownLatch durableCommitRequested = new CountDownLatch(1);
     final IrohaPeerNfcReceiverApduBridgeV1 bridge =
         IrohaPeerAndroidNfcV1.receiverBridge(
             receiver,
@@ -81,25 +85,38 @@ public final class IrohaPeerAndroidTransportV1Tests {
             (context, completion) -> {
               pendingContext.set(context);
               pendingCompletion.set(completion);
+              durableCommitRequested.countDown();
             });
     final AtomicReference<IrohaPeerNfcApduResponseV1> response = new AtomicReference<>();
+    final CountDownLatch responseDelivered = new CountDownLatch(1);
     bridge.handle(
         IrohaPeerNfcCommandV1.commit(
             session, request.canonicalHash(), payment.wireHash()),
-        response::set);
+        value -> {
+          response.set(value);
+          responseDelivered.countDown();
+        });
     assertNull(response.get());
+    assertTrue(
+        "durable commit callback was not dispatched",
+        durableCommitRequested.await(5, TimeUnit.SECONDS));
     assertNotNull(pendingContext.get());
     assertNotNull(pendingCompletion.get());
+    assertNull(response.get());
 
     final IrohaPeerNfcDurableAcknowledgementV1 durable =
         IrohaPeerNfcV1.durableAcknowledgement(
             pendingContext.get(), acknowledgement.encode(), limits);
     pendingCompletion.get().complete(durable, null);
+    assertTrue(
+        "commit response was not delivered after durable acknowledgement",
+        responseDelivered.await(5, TimeUnit.SECONDS));
     assertEquals(IrohaPeerNfcStatusWordV1.SUCCESS, response.get().getStatusWord());
   }
 
   @Test
-  public void storageFailureNeverReturnsSuccessOrInstallsAcknowledgement() {
+  public void storageFailureNeverReturnsSuccessOrInstallsAcknowledgement()
+      throws InterruptedException {
     final byte[] session = repeat(16, 0x41);
     final IrohaPeerWireMessageV1 request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x51, 20);
     final IrohaPeerWireMessageV1 payment = message(IrohaPeerPayloadKind.PAYMENT, 0x52, 20);
@@ -125,10 +142,18 @@ public final class IrohaPeerAndroidTransportV1Tests {
             },
             (context, completion) -> completion.complete(null, new Exception("disk")));
     final AtomicReference<IrohaPeerNfcApduResponseV1> response = new AtomicReference<>();
+    final CountDownLatch responseDelivered = new CountDownLatch(1);
     bridge.handle(
         IrohaPeerNfcCommandV1.commit(
             session, request.canonicalHash(), payment.wireHash()),
-        response::set);
+        value -> {
+          response.set(value);
+          responseDelivered.countDown();
+        });
+    assertTrue(
+        "storage-failure response was not delivered",
+        responseDelivered.await(5, TimeUnit.SECONDS));
+    assertNotNull(response.get());
     assertEquals(IrohaPeerNfcStatusWordV1.STORAGE_FAILURE, response.get().getStatusWord());
   }
 

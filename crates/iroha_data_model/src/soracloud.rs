@@ -10353,6 +10353,45 @@ impl SoraHfResourceProfileV1 {
     }
 }
 
+/// Return the exact first-release maximum compute reservation charge for an
+/// HF shared-lease window.
+///
+/// Host reservation tariffs are nominal per-window charges in V1, so the
+/// amount does not scale with `lease_term_ms`. The lease term is nevertheless
+/// part of this function's contract so callers cannot accidentally quote a
+/// zero-duration window and so a future version cannot silently change the
+/// signed arithmetic.
+///
+/// The cap is the adaptive placement target multiplied by the greatest
+/// permitted V1 host-class tariff for the profile's model-size bucket:
+///
+/// - small: 3 hosts × 0.0000025 XOR;
+/// - medium: 2 hosts × 0.000004 XOR;
+/// - large: 2 hosts × 0.000006 XOR.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the profile is invalid or the lease
+/// term is zero.
+pub fn hf_shared_lease_max_compute_reservation_fee_v1(
+    resource_profile: &SoraHfResourceProfileV1,
+    lease_term_ms: u64,
+) -> Result<Quantity, SoracloudManifestError> {
+    resource_profile.validate()?;
+    if lease_term_ms == 0 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease compute reservation cap",
+            field: "lease_term_ms",
+            reason: "must be greater than zero".to_string(),
+        });
+    }
+    let nanos: u128 = match resource_profile.size_bucket() {
+        SoraHfModelSizeBucketV1::Small => 7_500,
+        SoraHfModelSizeBucketV1::Medium => 8_000,
+        SoraHfModelSizeBucketV1::Large => 12_000,
+    };
+    Ok(xor_quantity_from_nanos(nanos))
+}
+
 /// Active opt-in validator host capability advert for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -16030,6 +16069,39 @@ mod tests {
             ram_bytes_floor: 4 * 1024 * 1024 * 1024,
             vram_bytes_floor: 0,
         }
+    }
+
+    #[test]
+    fn hf_shared_lease_compute_reservation_caps_are_exact_for_each_size_bucket() {
+        let profile = |required_model_bytes, disk_cache_bytes_floor, ram_bytes_floor| {
+            SoraHfResourceProfileV1 {
+                required_model_bytes,
+                backend_family: SoraHfBackendFamilyV1::Transformers,
+                model_format: SoraHfModelFormatV1::Safetensors,
+                disk_cache_bytes_floor,
+                ram_bytes_floor,
+                vram_bytes_floor: 0,
+            }
+        };
+        let gib = 1024_u64 * 1024 * 1024;
+        let cases = [
+            (profile(2 * gib, 2 * gib, 4 * gib), 7_500_u128),
+            (profile(3 * gib, 4 * gib, 4 * gib), 8_000_u128),
+            (profile(9 * gib, 12 * gib, 16 * gib), 12_000_u128),
+        ];
+        for (profile, expected_nanos) in cases {
+            let cap = hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
+                .expect("maximal non-zero lease term is admitted");
+            assert_eq!(cap, xor_quantity_from_nanos(expected_nanos));
+        }
+    }
+
+    #[test]
+    fn hf_shared_lease_compute_reservation_cap_rejects_zero_term() {
+        let error =
+            hf_shared_lease_max_compute_reservation_fee_v1(&sample_hf_resource_profile(), 0)
+                .expect_err("zero lease term must fail");
+        assert!(error.to_string().contains("lease_term_ms"));
     }
 
     fn sample_hf_source_record() -> SoraHfSourceRecordV1 {

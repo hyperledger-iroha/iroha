@@ -1158,7 +1158,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::late_old_exact_item_receipt_completes_reconnected_attempt_once
   merge_sidecar::tests::later_delivery_updates_pending_work_without_losing_materialized_output
   merge_sidecar::tests::reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure
-  merge_sidecar::tests::conflicting_server_request_id_reuse_is_rejected_before_materialization
+  merge_sidecar::tests::equal_sequence_with_different_semantic_identity_is_rejected_before_materialization
   merge_sidecar::tests::failed_materialization_releases_rate_gate_for_exact_retry
   merge_sidecar::tests::response_materialization_requires_and_consumes_its_exact_admission_gate
   merge_sidecar::tests::inactive_reply_route_is_rejected_before_server_gate_admission
@@ -1303,10 +1303,10 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueue
   sumeragi::v2_lane_work::tests::direct_decision_quiesces_losing_lane_and_retransmission_work
   sumeragi::v2_lane_work::tests::applied_lane_certificate_retires_alternative_qc_replays_without_weakening_conflicts
-  sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_small_product
+  sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_explicit_runtime_bound
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_exact_hard_boundary
-  sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_caps_deployed_localnet_oversized_product
-  sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_rejects_usize_overflow
+  sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_rejects_above_hard_bound_without_clipping
+  sumeragi::v2_lane_work::tests::native_amx_signing_guard_limits_reject_oversized_record_and_anchor_bytes
   sumeragi::v2_lane_work::tests::native_amx_adapter_opens_with_bounded_production_like_limits
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_inactive_reply_route_before_signing
   sumeragi::v2_lane_work::tests::persisted_lane_session_uses_only_selected_qc_signer_pops

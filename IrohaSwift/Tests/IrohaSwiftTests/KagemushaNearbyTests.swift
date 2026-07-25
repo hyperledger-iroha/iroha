@@ -72,7 +72,7 @@ final class KagemushaNearbyTests: XCTestCase {
             pairingChallenge: challenge
         )
         XCTAssertEqual(encodedRequest.prefix(5), Data("PKNB1".utf8))
-        XCTAssertEqual(encodedRequest.count, 12 + 84 + 12_306)
+        XCTAssertEqual(encodedRequest.count, 12 + 84 + 12_363)
         let decodedRequest = try KagemushaNearbyEnvelopeCodec.decode(
             encodedRequest,
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1

@@ -406,10 +406,12 @@ fn inbound_sumeragi_topic(
     let (tag, remaining) = inbound_enum_parts(view.as_bytes())?;
     let field = inbound_enum_field(remaining, view.flags())?;
     match tag {
-        19 | 22 | 23 | 26 | 27 | 28 => Ok(Topic::Consensus),
-        20 | 21 => Ok(Topic::ConsensusPayload),
-        29 => inbound_consensus_v2_topic(field, view.flags()),
-        0..=27 => Ok(Topic::Other),
+        // Keep these discriminants synchronized with `BlockMessage`. They are
+        // inspected before allocating or decoding the nested consensus value.
+        19 | 21 | 22 | 25..=28 => Ok(Topic::Consensus),
+        20 | 29 => Ok(Topic::ConsensusPayload),
+        30 => inbound_consensus_v2_topic(field, view.flags()),
+        0..=29 => Ok(Topic::Other),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi block discriminant".to_owned(),
         )),
@@ -1195,14 +1197,14 @@ mod tests {
 
     #[test]
     fn raw_lane_and_decode_only_block_tags_use_exact_transport_classes() {
-        for tag in [19, 22, 23, 26, 27, 28] {
+        for tag in [19, 21, 22, 25, 26, 27, 28] {
             assert_eq!(
                 raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane control tag"),
                 NetworkTopic::Consensus,
                 "lane control discriminant {tag} must stay on reliable consensus transport"
             );
         }
-        for tag in [20, 21] {
+        for tag in [20, 29] {
             assert_eq!(
                 raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane payload tag"),
                 NetworkTopic::ConsensusPayload,
@@ -1218,6 +1220,10 @@ mod tests {
         }
         assert!(
             raw_sumeragi_topic_for_synthetic_tag(30).is_err(),
+            "a malformed global-v2 field must fail closed"
+        );
+        assert!(
+            raw_sumeragi_topic_for_synthetic_tag(31).is_err(),
             "an unknown block-message tag must fail closed"
         );
     }

@@ -993,7 +993,7 @@ reproposal, runner/worker, sidecar, and daemon closure yields the current
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 The canonical module/test TSV inventory SHA-256 is
-`8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817`.
+`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

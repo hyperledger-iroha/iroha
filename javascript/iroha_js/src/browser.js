@@ -66,6 +66,7 @@ export {
 export {
   noritoDecodeBlockProofs,
   noritoDecodeInstruction,
+  inspectSubscriptionTriggerAction,
   noritoEncodeInstruction,
   noritoEncodeMultisigContractCallApproveRequest,
   noritoEncodeMultisigContractCallProposeRequest,

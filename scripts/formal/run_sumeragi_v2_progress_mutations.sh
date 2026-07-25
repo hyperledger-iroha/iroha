@@ -274,6 +274,12 @@ run_case reply-route-fixed \
   SumeragiV2ReplyRouteOwnershipMutation.tla reply_route_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
   "16 states generated, 16 distinct states found"
+run_case reply-route-close-lifecycle-fixed \
+  SumeragiV2ReplyRouteOwnershipMutation.tla \
+  reply_route_close_lifecycle_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "21 states generated, 21 distinct states found" \
+  "depth of the complete state graph search is 21"
 run_case reply-route-cursor-reset-bug \
   SumeragiV2ReplyRouteOwnershipMutation.tla \
   reply_route_cursor_reset_bug.cfg 12 \

@@ -3228,6 +3228,114 @@ baseTest("proof builders reject padded inline verifier-key metadata", () => {
   }
 });
 
+baseTest("private Kaigi fee spend forwards canonical fractional Numeric fees", () => {
+  const capturedFeeAmounts = [];
+  const verifyingKey = {
+    id: { backend: "halo2/ipa" },
+    record: { circuit_id: "private-kaigi-fee-v1" },
+    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+  };
+  withNativeBinding(
+    {
+      buildPrivateKaigiFeeSpend: (
+        _chainId,
+        assetDefinitionId,
+        _actionHash,
+        _anchorRootHex,
+        feeAmount,
+      ) => {
+        capturedFeeAmounts.push(feeAmount);
+        return {
+          assetDefinitionId,
+          anchorRoot: Buffer.alloc(32, 0x11),
+          nullifiers: [],
+          outputCommitments: [],
+          encryptedChangePayloads: [],
+          proof: Buffer.from("proof"),
+        };
+      },
+    },
+    () => {
+      for (const feeAmount of [
+        "0",
+        "7",
+        "0.001",
+        "0.00005",
+        "0.0000000000000000000000000001",
+      ]) {
+        buildPrivateKaigiFeeSpend({
+          chainId: "test-chain",
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          actionHash: Buffer.alloc(32, 0xaa),
+          anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
+          feeAmount,
+          verifyingKey,
+        });
+      }
+    },
+  );
+  assert.deepEqual(capturedFeeAmounts, [
+    "0",
+    "7",
+    "0.001",
+    "0.00005",
+    "0.0000000000000000000000000001",
+  ]);
+});
+
+baseTest("private Kaigi fee spend rejects noncanonical Numeric fees before native dispatch", () => {
+  let nativeCalls = 0;
+  const verifyingKey = {
+    id: { backend: "halo2/ipa" },
+    record: { circuit_id: "private-kaigi-fee-v1" },
+    inlineKey: { bytesBase64: Buffer.from([1, 2, 3]).toString("base64") },
+  };
+  const build = (feeAmount) =>
+    buildPrivateKaigiFeeSpend({
+      chainId: "test-chain",
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      actionHash: Buffer.alloc(32, 0xaa),
+      anchorRootHex: Buffer.alloc(32, 0xbb).toString("hex"),
+      feeAmount,
+      verifyingKey,
+    });
+
+  withNativeBinding(
+    {
+      buildPrivateKaigiFeeSpend: () => {
+        nativeCalls += 1;
+        throw new Error("invalid fee must fail before native dispatch");
+      },
+    },
+    () => {
+      for (const feeAmount of [
+        "",
+        "1.0",
+        "0.0",
+        "01",
+        ".5",
+        "1.",
+        "-0.1",
+        "+1",
+        "1e-3",
+        "0.00000000000000000000000000001",
+        "9".repeat(155),
+      ]) {
+        assert.throws(
+          () => build(feeAmount),
+          /privateKaigiFeeSpend\.feeAmount must be a canonical non-negative Numeric string/u,
+          `feeAmount=${feeAmount}`,
+        );
+      }
+      assert.throws(
+        () => build(" 0.001"),
+        /privateKaigiFeeSpend\.feeAmount must not contain surrounding whitespace/u,
+      );
+    },
+  );
+  assert.equal(nativeCalls, 0);
+});
+
 baseTest("confidential proof builders reject padded chain IDs and hex fields before native dispatch", () => {
   const calls = [];
   const verifyingKey = {

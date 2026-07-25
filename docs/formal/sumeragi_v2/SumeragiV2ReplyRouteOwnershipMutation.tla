@@ -39,6 +39,14 @@ VARIABLES
   connectionTenure,
   sourceActive,
   nextServiceIndex,
+  semanticSequence,
+  semanticHash,
+  requesterNextSequence,
+  requesterClosedThrough,
+  closePendingThrough,
+  closeSentThrough,
+  closeAcknowledgedThrough,
+  closeRetryGeneration,
   acceptedInvalidCapability,
   phase
 
@@ -58,13 +66,32 @@ MutationRoute ==
     rrNextDeliveryOrdinal <- nextDeliveryOrdinal,
     rrConnectionTenure <- connectionTenure,
     rrSourceActive <- sourceActive,
-    rrNextServiceIndex <- nextServiceIndex
+    rrNextServiceIndex <- nextServiceIndex,
+    rrSemanticSequence <- semanticSequence,
+    rrSemanticHash <- semanticHash,
+    rrRequesterNextSequence <- requesterNextSequence,
+    rrRequesterClosedThrough <- requesterClosedThrough,
+    rrClosePendingThrough <- closePendingThrough,
+    rrCloseSentThrough <- closeSentThrough,
+    rrCloseAcknowledgedThrough <- closeAcknowledgedThrough,
+    rrCloseRetryGeneration <- closeRetryGeneration
 
 MutationRouteVars == MutationRoute!ReplyRouteVars
+MutationLifecycleVars ==
+  <<semanticSequence, semanticHash, requesterNextSequence,
+    requesterClosedThrough, closePendingThrough, closeSentThrough,
+    closeAcknowledgedThrough, closeRetryGeneration>>
 MutationVars == <<MutationRouteVars, acceptedInvalidCapability, phase>>
 
 RequestA == "request-a"
 RequestB == "request-b"
+CloseThroughRequestA == 1
+CloseRequestA ==
+  MutationRoute!ReplyCanonicalCloseWitness(
+    0, 0, CloseThroughRequestA)
+CloseRequestAAcknowledgement ==
+  MutationRoute!ReplyCanonicalCloseAcknowledgement(
+    0, 0, CloseThroughRequestA)
 
 SourceAttempt(semantic, source) ==
   MutationRoute!ReplyAttemptFor(0, semantic, source)
@@ -97,6 +124,7 @@ BuggyReconnectResetsCursor ==
           [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<payloads, nextServiceIndex,
                     acceptedInvalidCapability>>
+     /\ UNCHANGED MutationLifecycleVars
      /\ phase' = 14
 
 BuggyLaterDeliveryReplacesAlternateSource ==
@@ -113,6 +141,7 @@ BuggyLaterDeliveryReplacesAlternateSource ==
           [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<payloads, connectionTenure, sourceActive,
                     nextServiceIndex, acceptedInvalidCapability>>
+     /\ UNCHANGED MutationLifecycleVars
      /\ phase' = 15
 
 SourceAsTargetCapability(semantic, source) ==
@@ -167,6 +196,7 @@ BuggyAcceptSourceAsSemanticTarget ==
   /\ SourceAsTargetCapabilityRejected
   /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                  connectionTenure, sourceActive, nextServiceIndex>>
+  /\ UNCHANGED MutationLifecycleVars
   /\ acceptedInvalidCapability' = TRUE
   /\ phase' = 16
 
@@ -175,6 +205,7 @@ BuggyAcceptIntrinsicTenureSubstitution ==
   /\ IntrinsicTenureSubstitutionRejected
   /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                  connectionTenure, sourceActive, nextServiceIndex>>
+  /\ UNCHANGED MutationLifecycleVars
   /\ acceptedInvalidCapability' = TRUE
   /\ phase' = 20
 
@@ -183,6 +214,7 @@ BuggyAcceptSourceCapacitySubstitution ==
   /\ SourceCapacitySubstitutionRejected
   /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                  connectionTenure, sourceActive, nextServiceIndex>>
+  /\ UNCHANGED MutationLifecycleVars
   /\ acceptedInvalidCapability' = TRUE
   /\ phase' = 21
 
@@ -207,6 +239,7 @@ BuggyReuseTicketForNextPayload ==
      /\ UNCHANGED <<payloads, nextDeliveryOrdinal,
                     connectionTenure, sourceActive,
                     acceptedInvalidCapability>>
+     /\ UNCHANGED MutationLifecycleVars
      /\ phase' = 3
 
 (***************************************************************************
@@ -235,6 +268,7 @@ BuggyReconnectRetainsSiblingTicket ==
           [nextDeliveryOrdinal EXCEPT ![0] = @ + 1]
      /\ UNCHANGED <<payloads, sourceActive, nextServiceIndex,
                     acceptedInvalidCapability>>
+     /\ UNCHANGED MutationLifecycleVars
      /\ phase' = 18
 
 RetiredOrdinalCollisionCapability ==
@@ -256,6 +290,7 @@ BuggyAcceptRetiredOrdinalCollision ==
   /\ RetiredOrdinalCollisionRejected
   /\ UNCHANGED <<attempts, payloads, nextDeliveryOrdinal,
                  connectionTenure, sourceActive, nextServiceIndex>>
+  /\ UNCHANGED MutationLifecycleVars
   /\ acceptedInvalidCapability' = TRUE
   /\ phase' = 19
 
@@ -263,6 +298,19 @@ RouteMutationInit ==
   /\ MutationRoute!ReplyRouteInit
   /\ acceptedInvalidCapability = FALSE
   /\ phase = 0
+
+ClosePendingRetryStep ==
+  /\ phase = 22
+  /\ RouteMutationMode = "CloseLifecycleFixed"
+  /\ AdvancePhase(
+       MutationRoute!RetryCloseSemanticRequest(CloseRequestA), 23)
+
+CloseAcknowledgementStep ==
+  /\ phase = 23
+  /\ RouteMutationMode = "CloseLifecycleFixed"
+  /\ AdvancePhase(
+       MutationRoute!AcknowledgeCloseSemanticRequest(
+         CloseRequestAAcknowledgement), 24)
 
 RouteMutationNext ==
   \/ /\ phase = 0
@@ -312,7 +360,8 @@ RouteMutationNext ==
           MutationRoute!ServiceReplyRoute(0, RequestA), 11)
   \/ /\ phase = 11
      /\ RouteMutationMode \in
-          {"Fixed", "CursorReset", "RetiredOrdinalCollision"}
+          {"Fixed", "CloseLifecycleFixed", "CursorReset",
+           "RetiredOrdinalCollision"}
      /\ AdvancePhase(
           MutationRoute!ObserveLaterReplyDelivery(0, RequestA, 0), 12)
   \/ /\ RouteMutationMode = "SourceReplacement"
@@ -325,28 +374,49 @@ RouteMutationNext ==
      /\ BuggyReconnectRetainsSiblingTicket
   \/ /\ phase = 12
      /\ RouteMutationMode \in
-          {"Fixed", "CursorReset", "RetiredOrdinalCollision"}
+          {"Fixed", "CloseLifecycleFixed", "CursorReset",
+           "RetiredOrdinalCollision"}
      /\ AdvancePhase(MutationRoute!RetireReplySource(0, 0), 13)
   \/ /\ phase = 13
-     /\ RouteMutationMode \in {"Fixed", "RetiredOrdinalCollision"}
+     /\ RouteMutationMode
+          \in {"Fixed", "CloseLifecycleFixed",
+               "RetiredOrdinalCollision"}
      /\ AdvancePhase(
           MutationRoute!ReconnectReplySource(0, RequestA, 0), 14)
   \/ /\ RouteMutationMode = "CursorReset"
      /\ BuggyReconnectResetsCursor
   \/ /\ phase = 14
-     /\ RouteMutationMode \in {"Fixed", "CursorReset"}
+     /\ RouteMutationMode \in {"Fixed", "CloseLifecycleFixed",
+                               "CursorReset"}
      /\ AdvancePhase(
           MutationRoute!ObserveLaterReplyDelivery(0, RequestB, 0), 15)
   \/ /\ RouteMutationMode = "RetiredOrdinalCollision"
      /\ BuggyAcceptRetiredOrdinalCollision
+  \/ /\ phase = 15
+     /\ RouteMutationMode = "CloseLifecycleFixed"
+     /\ AdvancePhase(
+          MutationRoute!CloseSemanticRequest(CloseRequestA), 22)
+  \/ ClosePendingRetryStep
+  \/ CloseAcknowledgementStep
+  \/ /\ phase = 24
+     /\ RouteMutationMode = "CloseLifecycleFixed"
+     /\ AdvancePhase(
+          MutationRoute!RetryCloseSemanticRequest(CloseRequestA), 25)
+  \/ /\ phase = 25
+     /\ RouteMutationMode = "CloseLifecycleFixed"
+     /\ AdvancePhase(
+          MutationRoute!AcknowledgeCloseSemanticRequest(
+            CloseRequestAAcknowledgement), 26)
 
 BothSemanticAttemptsRetained ==
   phase < 4
+    \/ phase >= 22
     \/ /\ MutationRoute!ReplyAttemptOwned(0, RequestA, 0)
        /\ MutationRoute!ReplyAttemptOwned(0, RequestB, 0)
 
 BothSourcesRetained ==
   phase < 9
+    \/ phase >= 22
     \/ /\ MutationRoute!ReplyAttemptOwned(0, RequestA, 0)
        /\ MutationRoute!ReplyAttemptOwned(0, RequestA, 1)
 
@@ -363,6 +433,7 @@ NewAlternateStartsAtZero ==
 
 ReconnectPreservesCurrentCursor ==
   phase < 14
+    \/ phase >= 22
     \/ connectionTenure[0][0] = 1
     \/ /\ SourceAttempt(RequestA, 0).messageCursor = 1
        /\ SourceAttempt(RequestA, 0).chunkCursor = 0
@@ -377,6 +448,7 @@ PerAttemptRebindPreservesCurrentCursor ==
       attemptsB ==
         MutationRoute!ReplyAttemptsForSource(0, RequestB, 0)
   IN phase < 15
+       \/ phase >= 22
        \/ phase \in {17, 18, 19}
        \/ /\ Cardinality(attemptsA) = 1
           /\ Cardinality(attemptsB) = 1
@@ -390,6 +462,7 @@ PerAttemptRebindPreservesCurrentCursor ==
 
 ConsumedTicketCannotAuthorizeNextPayload ==
   phase < 3
+    \/ phase >= 22
     \/ phase = 16
     \/ MutationRoute!ReplyAttemptHasNoTicket(
          SourceAttempt(RequestA, 0))
@@ -419,8 +492,28 @@ ReconnectInvalidatesEverySemanticTicket ==
   phase # 18
     \/ MutationRoute!ReplySourceHasNoTickets(0, 0)
 
+CloseLifecycleIsCumulativeAndIdempotent ==
+  RouteMutationMode # "CloseLifecycleFixed"
+    \/ phase < 22
+    \/ /\ requesterClosedThrough[0] = CloseThroughRequestA
+       /\ MutationRoute!ReplySemanticClosed(0, RequestA)
+       /\ MutationRoute!ReplySemanticActive(0, RequestB)
+       /\ ~MutationRoute!ReplyAttemptOwned(0, RequestA, 0)
+       /\ ~MutationRoute!ReplyAttemptOwned(0, RequestA, 1)
+       /\ MutationRoute!ReplyAttemptOwned(0, RequestB, 0)
+       /\ closePendingThrough[0][0] = CloseThroughRequestA
+       /\ closeSentThrough[0][0] = CloseThroughRequestA
+       /\ IF phase < 24
+          THEN closeAcknowledgedThrough[0][0] = 0
+          ELSE /\ closeAcknowledgedThrough[0][0] =
+                    CloseThroughRequestA
+               /\ ~MutationRoute!ReplyCloseWorkPending(0, 0)
+       /\ IF phase < 23
+          THEN closeRetryGeneration[0][0] = 0
+          ELSE closeRetryGeneration[0][0] = 1
+
 RouteMutationSafety ==
-  /\ MutationRoute!ReplyRouteSafetyInvariant
+  /\ MutationRoute!ReplyRouteFullSafetyInvariant
   /\ SourceAsSemanticTargetNeverAccepted
   /\ IntrinsicTenureSubstitutionNeverAccepted
   /\ SourceCapacitySubstitutionNeverAccepted
@@ -433,9 +526,18 @@ RouteMutationSafety ==
   /\ NewAlternateStartsAtZero
   /\ ReconnectPreservesCurrentCursor
   /\ PerAttemptRebindPreservesCurrentCursor
+  /\ CloseLifecycleIsCumulativeAndIdempotent
 
 RouteMutationTemporalProperties ==
   /\ MutationRoute!ReplyTenureAwareReplay
   /\ MutationRoute!ReplySourceIsolation
+  /\ MutationRoute!ReplyLifecycleJournal
+  /\ MutationRoute!ReplyCloseWorkEventuallyTerminates(0, 0)
+
+RouteMutationCloseSpec ==
+  /\ RouteMutationInit
+  /\ [][RouteMutationNext]_MutationVars
+  /\ WF_MutationVars(ClosePendingRetryStep)
+  /\ WF_MutationVars(CloseAcknowledgementStep)
 
 =============================================================================

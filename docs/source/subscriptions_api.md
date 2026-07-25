@@ -224,14 +224,15 @@ Alternative:
 ## Torii API Surface
 - `POST /v1/subscriptions/plans` - register plan (AssetDefinition metadata).
 - `GET /v1/subscriptions/plans` - list plans by provider.
-- `POST /v1/subscriptions` - create subscription + billing trigger.
+- `POST /v1/subscriptions` - build an unsigned subscription-creation draft.
 - `GET /v1/subscriptions` - list subscriptions with optional filters.
 - `GET /v1/subscriptions/{subscription_id}` - fetch one subscription.
-- `POST /v1/subscriptions/{subscription_id}/pause` - set `status=paused`, cancel triggers.
-- `POST /v1/subscriptions/{subscription_id}/resume` - set `status=active`, re-schedule.
-- `POST /v1/subscriptions/{subscription_id}/cancel` - set `status=canceled`, unregister trigger.
+- `POST /v1/subscriptions/{subscription_id}/pause` - build an unsigned pause draft.
+- `POST /v1/subscriptions/{subscription_id}/resume` - build an unsigned resume draft.
+- `POST /v1/subscriptions/{subscription_id}/cancel` - build an unsigned cancellation draft.
+- `POST /v1/subscriptions/{subscription_id}/keep` - build an unsigned keep-active draft.
 - `POST /v1/subscriptions/{subscription_id}/usage` - record usage (by-call trigger).
-- `POST /v1/subscriptions/{subscription_id}/charge-now` - execute billing immediately.
+- `POST /v1/subscriptions/{subscription_id}/charge-now` - build an unsigned charge-now draft.
 
 ### POST /v1/subscriptions/plans
 Registers a plan on an asset definition. `authority` must match `plan.provider`.
@@ -258,11 +259,13 @@ Response:
 ```
 
 ### POST /v1/subscriptions
-Creates a subscription NFT and billing trigger. `authority` must be the subscriber (NFT owner).
+Validates a subscription mutation and returns canonical framed instructions for the named
+`authority` to sign locally. Torii does not accept a private key, sign a transaction, enqueue the
+draft, or mutate subscription state. `authority` is the subscriber encoded in the projected NFT
+state.
 ```json
 {
   "authority": "<i105-account-id>",
-  "private_key": "<hex>",
   "subscription_id": "sub-6f3a9c$subscriptions",
   "plan_id": "aws_compute#subscriptions",
   "billing_trigger_id": "optional",
@@ -281,14 +284,37 @@ Defaults:
 Response:
 ```json
 {
-  "ok": true,
+  "version": 1,
+  "authority": "<i105-account-id>",
+  "action": "create",
   "subscription_id": "sub-6f3a9c$subscriptions",
+  "plan_id": "aws_compute#subscriptions",
   "billing_trigger_id": "sub_bill_<hash>",
   "usage_trigger_id": "sub_usage_<hash>",
   "first_charge_ms": 1704067200000,
-  "tx_hash_hex": "<hex>"
+  "provider_usage_grant_included": true,
+  "resulting_subscription": {
+    "plan_id": "aws_compute#subscriptions",
+    "provider": "<provider-i105-account-id>",
+    "subscriber": "<i105-account-id>",
+    "status": { "status": "active", "value": null },
+    "current_period_start_ms": 1704067200000,
+    "current_period_end_ms": 1706745600000,
+    "next_charge_ms": 1704067200000,
+    "cancel_at_period_end": false,
+    "cancel_at_ms": null,
+    "failure_count": 0,
+    "usage_accumulated": {},
+    "billing_trigger_id": "sub_bill_<hash>"
+  },
+  "tx_instructions": [
+    { "wire_id": "<registered-instruction-id>", "payload_hex": "<lowercase-framed-hex>" }
+  ]
 }
 ```
+The caller must verify `version`, `authority`, `action`, the returned identifiers and projected
+state, reconstruct a transaction with exactly `tx_instructions`, sign it locally under
+`authority`, and submit it through the normal transaction pipeline.
 
 ### GET /v1/subscriptions
 Query params:
@@ -316,35 +342,66 @@ Returns the subscription state, latest invoice (if any), and plan metadata (if p
 
 ### POST /v1/subscriptions/{subscription_id}/pause
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>" }
+{ "authority": "<i105-account-id>" }
 ```
-Sets `status=paused` and unregisters the billing trigger.
+Returns a draft that projects `status=paused` and unregisters the billing trigger when it exists.
 
 ### POST /v1/subscriptions/{subscription_id}/resume
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+{ "authority": "<i105-account-id>", "charge_at_ms": 1704067200000 }
 ```
-Sets `status=active`, resets `failure_count`, recomputes the current period, and re-schedules billing.
+Returns a draft that projects `status=active`, resets `failure_count`, recomputes the current
+period, and re-schedules billing.
 `charge_at_ms` follows the same defaults as `first_charge_ms` when omitted.
 
 ### POST /v1/subscriptions/{subscription_id}/cancel
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>", "cancel_mode": "immediate" }
+{
+  "authority": "<i105-account-id>",
+  "cancel_mode": { "mode": "immediate", "value": null }
+}
 ```
 or
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>", "cancel_mode": "period_end" }
+{
+  "authority": "<i105-account-id>",
+  "cancel_mode": { "mode": "period_end", "value": null }
+}
 ```
-`cancel_mode=immediate` sets `status=canceled` and unregisters the billing trigger.
-`cancel_mode=period_end` keeps the subscription active until the current period ends, then stops
-future billing without charging the next period.
+`cancel_mode` is required; string aliases and omitted-mode defaults are not accepted. `immediate`
+projects `status=canceled` and unregisters the billing trigger. `period_end` keeps the subscription
+active until the current period ends, then stops future billing without charging the next period.
 
 ### POST /v1/subscriptions/{subscription_id}/keep
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>" }
+{ "authority": "<i105-account-id>" }
 ```
-Clears `cancel_at_period_end` and keeps the subscription active for future billing cycles. Returns
-an error if the subscription is not scheduled to cancel at period end.
+Returns a draft that clears `cancel_at_period_end` and keeps the subscription active for future
+billing cycles. Returns an error if the subscription is not scheduled to cancel at period end.
+
+All five action-draft routes return this exact envelope:
+```json
+{
+  "version": 1,
+  "authority": "<i105-account-id>",
+  "action": "pause",
+  "subscription_id": "sub-6f3a9c$subscriptions",
+  "details": {
+    "billing_trigger_id": "sub_bill_<hash>",
+    "billing_trigger_operation": "unregister",
+    "effective_charge_ms": null,
+    "cancel_mode": null,
+    "resulting_subscription": { "...exact SubscriptionState fields...": "..." }
+  },
+  "tx_instructions": [
+    { "wire_id": "<registered-instruction-id>", "payload_hex": "<lowercase-framed-hex>" }
+  ]
+}
+```
+`action` is exactly one of `pause`, `resume`, `cancel`, `keep`, or `charge_now`.
+`billing_trigger_operation` is exactly one of `none`, `register`, `unregister`, or `replace`.
+`effective_charge_ms` is non-null only for `resume` and `charge_now`; `cancel_mode` is non-null
+only for `cancel`. Draft generation never signs, queues, or commits these instructions.
 
 ### POST /v1/subscriptions/{subscription_id}/usage
 ```json
@@ -360,10 +417,10 @@ Executes the usage trigger with `SubscriptionUsageDelta`. `delta` must be non-ne
 
 ### POST /v1/subscriptions/{subscription_id}/charge-now
 ```json
-{ "authority": "<i105-account-id>", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+{ "authority": "<i105-account-id>", "charge_at_ms": 1704067200000 }
 ```
-Updates `next_charge_ms` and re-registers the billing trigger to execute at `charge_at_ms`
-(defaults to current network time when omitted).
+Returns a draft that updates `next_charge_ms` and re-registers the billing trigger to execute at
+`charge_at_ms` (defaults to current network time when omitted).
 
 ## CLI Helpers
 The CLI mirrors the Torii endpoints for plan and subscription management.

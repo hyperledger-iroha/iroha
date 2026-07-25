@@ -7271,6 +7271,17 @@ PROOF
   <1> QED BY <1>3, PTL
        DEF ReplyRouteLifecycleInductiveInvariant
 
+THEOREM ReplyRouteSpecAlwaysLifecycleInductiveInvariant ==
+  ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
+PROOF
+  <1>1. ReplyRouteInit => ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteInitEstablishesLifecycleInvariant
+  <1>2. /\ ReplyRouteLifecycleInductiveInvariant
+           /\ [ReplyRouteNext]_ReplyRouteVars
+          => ReplyRouteLifecycleInductiveInvariant'
+    BY ReplyRouteLifecycleBracketPreservesInvariant
+  <1> QED BY <1>1, <1>2, PTL DEF ReplyRouteSpec
+
 (***************************************************************************
 The durable sequence/hash journal is append-only, and the requester close
 floor is monotone.  Only first observation may bind an empty slot; the close
@@ -13671,6 +13682,14 @@ THEOREM ReplyCloseFloorPersistenceObligationsHold ==
 BY ReplyRouteBracketPersistsOrTerminatesFloorWork
    DEF ReplyCloseFloorPersistenceObligation
 
+THEOREM ReplyCloseFloorPersistenceObligationHoldsAt ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         NEW closedThrough \in 0..ReplyDeliveryOrdinalLimit
+  PROVE ReplyCloseFloorPersistenceObligation(
+          requester, responder, closedThrough)
+BY ReplyCloseFloorPersistenceObligationsHold
+
 ReplyCloseFloorEnablementObligation(
     requester, responder, closedThrough) ==
   /\ ReplyRouteFullSafetyInvariant
@@ -13687,6 +13706,14 @@ THEOREM ReplyCloseFloorEnablementObligationsHold ==
       requester, responder, closedThrough)
 BY ReplyCloseWorkAtFloorEnablesExactAcknowledgement
    DEF ReplyCloseFloorEnablementObligation
+
+THEOREM ReplyCloseFloorEnablementObligationHoldsAt ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         NEW closedThrough \in 0..ReplyDeliveryOrdinalLimit
+  PROVE ReplyCloseFloorEnablementObligation(
+          requester, responder, closedThrough)
+BY ReplyCloseFloorEnablementObligationsHold
 
 ReplyCloseFloorOutcomeObligation(
     requester, responder, closedThrough) ==
@@ -13705,6 +13732,14 @@ THEOREM ReplyCloseFloorOutcomeObligationsHold ==
 BY ReplyExactAcknowledgementTerminatesFloorWork
    DEF ReplyCloseFloorOutcomeObligation
 
+THEOREM ReplyCloseFloorOutcomeObligationHoldsAt ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         NEW closedThrough \in 0..ReplyDeliveryOrdinalLimit
+  PROVE ReplyCloseFloorOutcomeObligation(
+          requester, responder, closedThrough)
+BY ReplyCloseFloorOutcomeObligationsHold
+
 THEOREM ReplyCloseFloorPersistenceBracketProjects ==
   \A requester \in ReplyOwners, responder \in ReplySources,
      closedThrough \in 0..ReplyDeliveryOrdinalLimit:
@@ -13720,6 +13755,77 @@ THEOREM ReplyCloseFloorOutcomeBracketProjects ==
       => [ReplyCloseFloorOutcomeObligation(
             requester, responder, closedThrough)]_ReplyRouteVars
 BY Isa
+
+THEOREM ReplyCloseAcknowledgementWeakFairnessDefinition ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         NEW closedThrough \in 0..ReplyDeliveryOrdinalLimit
+  PROVE WF_ReplyRouteVars(
+          AcknowledgeCloseSemanticRequest(
+            ReplyCanonicalCloseAcknowledgement(
+              requester, responder, closedThrough)))
+        <=> (<>[]ENABLED
+                   <<AcknowledgeCloseSemanticRequest(
+                       ReplyCanonicalCloseAcknowledgement(
+                         requester, responder,
+                         closedThrough))>>_ReplyRouteVars
+               => []<>
+                    <<AcknowledgeCloseSemanticRequest(
+                        ReplyCanonicalCloseAcknowledgement(
+                          requester, responder,
+                          closedThrough))>>_ReplyRouteVars)
+BY PTL
+
+THEOREM ReplyCloseFloorLifecycleWorkLeadsToTermination ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources,
+         NEW closedThrough \in 0..ReplyDeliveryOrdinalLimit
+  PROVE /\ [][ReplyRouteNext]_ReplyRouteVars
+         /\ WF_ReplyRouteVars(
+              AcknowledgeCloseSemanticRequest(
+                ReplyCanonicalCloseAcknowledgement(
+                  requester, responder, closedThrough)))
+         => ((/\ ReplyRouteLifecycleInductiveInvariant
+                 /\ ReplyCloseWorkAtFloor(
+                      requester, responder, closedThrough))
+               ~> ~ReplyCloseWorkPending(requester, responder))
+PROOF
+  <1>1. /\ ReplyRouteLifecycleInductiveInvariant
+          /\ ReplyCloseWorkAtFloor(
+               requester, responder, closedThrough)
+          /\ [ReplyRouteNext]_ReplyRouteVars
+         => \/ (/\ ReplyRouteLifecycleInductiveInvariant
+                    /\ ReplyCloseWorkAtFloor(
+                         requester, responder, closedThrough))'
+            \/ ~ReplyCloseWorkPending(requester, responder)'
+    BY ReplyRouteLifecycleBracketPreservesInvariant,
+       ReplyRouteBracketPersistsOrTerminatesFloorWork,
+       IsaM("blast")
+       DEF ReplyRouteLifecycleInductiveInvariant
+  <1>2. /\ ReplyRouteLifecycleInductiveInvariant
+          /\ ReplyCloseWorkAtFloor(
+               requester, responder, closedThrough)
+          /\ [ReplyRouteNext]_ReplyRouteVars
+          /\ <<AcknowledgeCloseSemanticRequest(
+                  ReplyCanonicalCloseAcknowledgement(
+                    requester, responder,
+                    closedThrough))>>_ReplyRouteVars
+         => ~ReplyCloseWorkPending(requester, responder)'
+    BY ReplyExactAcknowledgementTerminatesFloorWork
+       DEF ReplyRouteLifecycleInductiveInvariant
+  <1>3. /\ ReplyRouteLifecycleInductiveInvariant
+          /\ ReplyCloseWorkAtFloor(
+               requester, responder, closedThrough)
+          /\ [ReplyRouteNext]_ReplyRouteVars
+         => ENABLED
+              <<AcknowledgeCloseSemanticRequest(
+                  ReplyCanonicalCloseAcknowledgement(
+                    requester, responder,
+                    closedThrough))>>_ReplyRouteVars
+    BY ReplyCloseWorkAtFloorEnablesExactAcknowledgement
+       DEF ReplyRouteLifecycleInductiveInvariant
+  <1> QED BY <1>1, <1>2, <1>3,
+       ReplyCloseAcknowledgementWeakFairnessDefinition, PTL
 
 THEOREM ReplyRouteSpecTerminatesCloseWorkAtFloor ==
   \A requester \in ReplyOwners, responder \in ReplySources,
@@ -13737,23 +13843,11 @@ PROOF
          PROVE ReplyCloseWorkAtFloor(
                  requester, responder, closedThrough)
                  ~> ~ReplyCloseWorkPending(requester, responder)
-    <2>1. ReplyCloseFloorPersistenceObligation(
-             requester, responder, closedThrough)
-      BY <1>1, ReplyRouteBracketPersistsOrTerminatesFloorWork
-         DEF ReplyCloseFloorPersistenceObligation
-    <2>2. ReplyCloseFloorEnablementObligation(
-             requester, responder, closedThrough)
-      BY <1>1, ReplyCloseWorkAtFloorEnablesExactAcknowledgement
-         DEF ReplyCloseFloorEnablementObligation
-    <2>3. ReplyCloseFloorOutcomeObligation(
-             requester, responder, closedThrough)
-      BY <1>1, ReplyExactAcknowledgementTerminatesFloorWork
-         DEF ReplyCloseFloorOutcomeObligation
-    <2>4. []ReplyRouteFullSafetyInvariant
-      BY <1>1, ReplyRouteSpecAlwaysFullSafetyInvariant
-    <2>5. [][ReplyRouteNext]_ReplyRouteVars
+    <2>1. []ReplyRouteLifecycleInductiveInvariant
+      BY <1>1, ReplyRouteSpecAlwaysLifecycleInductiveInvariant
+    <2>2. [][ReplyRouteNext]_ReplyRouteVars
       BY <1>1, PTL DEF ReplyRouteSpec
-    <2>6. WF_ReplyRouteVars(
+    <2>3. WF_ReplyRouteVars(
              AcknowledgeCloseSemanticRequest(
                ReplyCanonicalCloseAcknowledgement(
                  requester, responder, closedThrough)))
@@ -13763,35 +13857,19 @@ PROOF
         BY <1>1, ReplyCanonicalCloseAcknowledgementIsValid
       <3> QED BY <1>1, <3>1, IsaM("blast")
            DEF ReplyRouteSpec, ReplyRouteFairness
-    <2>7. [][ReplyCloseWorkAtFloor(
-                    requester, responder, closedThrough)
-                  /\ [ReplyRouteNext]_ReplyRouteVars
-                 => \/ ReplyCloseWorkAtFloor(
-                         requester, responder, closedThrough)'
-                    \/ ~ReplyCloseWorkPending(
-                         requester, responder)']_ReplyRouteVars
-      BY <1>1, <2>4, <2>5,
-         ReplyRouteBracketPersistsOrTerminatesFloorWork, PTL
-    <2>8. [](ReplyCloseWorkAtFloor(
-                   requester, responder, closedThrough)
-                 => ENABLED
-                      <<AcknowledgeCloseSemanticRequest(
-                          ReplyCanonicalCloseAcknowledgement(
-                            requester, responder,
-                            closedThrough))>>_ReplyRouteVars)
-      BY <1>1, <2>4,
-         ReplyCloseWorkAtFloorEnablesExactAcknowledgement, PTL
-    <2>9. [][/\ ReplyCloseWorkAtFloor(
-                        requester, responder, closedThrough)
-                   /\ <<AcknowledgeCloseSemanticRequest(
-                           ReplyCanonicalCloseAcknowledgement(
-                             requester, responder,
-                             closedThrough))>>_ReplyRouteVars
-                  => ~ReplyCloseWorkPending(
-                        requester, responder)']_ReplyRouteVars
-      BY <1>1, <2>4,
-         ReplyExactAcknowledgementTerminatesFloorWork, PTL
-    <2> QED BY <2>5, <2>6, <2>7, <2>8, <2>9, PTL
+    <2>4. (/\ ReplyRouteLifecycleInductiveInvariant
+              /\ ReplyCloseWorkAtFloor(
+                   requester, responder, closedThrough))
+             ~> ~ReplyCloseWorkPending(requester, responder)
+      BY <1>1, <2>2, <2>3,
+         ReplyCloseFloorLifecycleWorkLeadsToTermination
+    <2>5. ReplyCloseWorkAtFloor(
+             requester, responder, closedThrough)
+             ~> (/\ ReplyRouteLifecycleInductiveInvariant
+                    /\ ReplyCloseWorkAtFloor(
+                         requester, responder, closedThrough))
+      BY <2>1, PTL
+    <2> QED BY <2>4, <2>5, PTL
   <1> QED BY <1>1
 
 THEOREM ReplyPendingCloseHasTrackedFloor ==
@@ -13865,6 +13943,14 @@ BY IsaM("blast")
    DEF ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold,
        ReplyCloseFloorExistentialEquivalenceObligation
 
+THEOREM ReplyCloseFloorExistentialEquivalenceHoldsAt ==
+  ASSUME NEW requester \in ReplyOwners,
+         NEW responder \in ReplySources
+  PROVE ReplyCloseFloorExistentialEquivalenceObligation(
+          requester, responder, 0..ReplyDeliveryOrdinalLimit)
+BY IsaM("blast")
+   DEF ReplyCloseFloorExistentialEquivalenceObligation
+
 THEOREM ReplyCloseFloorExistentialLift ==
   ASSUME NEW requester \in ReplyOwners,
          NEW responder \in ReplySources,
@@ -13897,18 +13983,10 @@ PROOF
                     ReplyCloseWorkAtFloor(
                       requester, responder, closedThrough))
                  => <>~ReplyCloseWorkPending(requester, responder))
-    <2>1. []ReplyCloseFloorCarrierExistentialEquivalenceObligationsHold
-      BY ReplyCloseFloorCarrierExistentialEquivalenceObligationsHoldProof,
-         PTL
-    <2>2. [](\A allResponder \in ReplySources:
-                  ReplyCloseFloorExistentialEquivalenceObligation(
-                    requester, allResponder,
-                    0..ReplyDeliveryOrdinalLimit))
-      BY <2>1, IsaM("blast")
-    <2>3. []ReplyCloseFloorExistentialEquivalenceObligation(
+    <2>1. []ReplyCloseFloorExistentialEquivalenceObligation(
                requester, responder, 0..ReplyDeliveryOrdinalLimit)
-      BY <2>2, IsaM("blast")
-    <2> QED BY <2>3, PTL
+      BY ReplyCloseFloorExistentialEquivalenceHoldsAt, PTL
+    <2> QED BY <2>1, PTL
          DEF ReplyCloseFloorExistentialEquivalenceObligation
   <1> QED BY <1>1, <1>2, PTL
 

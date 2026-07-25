@@ -101,10 +101,12 @@ use crate::{
         decode_certified_merge_sidecar,
     },
     native_amx::{
-        MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD, NativeAmxAttestationRequestV2,
-        NativeAmxCommitRequestV2, NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError,
-        NativeAmxSessionKey, NativeAmxSigningGuard, NativeAmxSigningGuardLimits, NativeAmxVoteV2,
-        aggregate_votes_to_qc, validate_native_amx_qc,
+        MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD,
+        MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD, MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+        NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
+        NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxSigningGuard,
+        NativeAmxSigningGuardLimits, NativeAmxVoteV2, aggregate_votes_to_qc,
+        validate_native_amx_qc,
     },
     queue::{
         LaneQueueReservationKeyV2, LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
@@ -3068,16 +3070,11 @@ impl V2LaneWorkAdapter {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> Result<GlobalBodyLockOutcome, V2LaneWorkError> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard
-            .begin_fail_stop_operation()
-            .ok_or(V2LaneWorkError::RestartRequired)?;
         if round.context_id != self.context.id() || round.height != self.context.height {
             return Err(V2LaneWorkError::InvalidGlobalBodyLock);
         }
         let superseded_subject = if let Some(existing) = self.globally_locked_body {
             if existing == (GlobalBodyLock { round, subject }) {
-                operation.complete();
                 return Ok(GlobalBodyLockOutcome::Duplicate);
             }
             if round.view <= existing.round.view {
@@ -3087,6 +3084,10 @@ impl V2LaneWorkAdapter {
         } else {
             None
         };
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
         self.globally_locked_body = Some(GlobalBodyLock { round, subject });
         if let Some(superseded_subject) = superseded_subject
             && superseded_subject.block_hash == subject.block_hash
@@ -7618,9 +7619,9 @@ impl V2LaneWorkAdapter {
             .filter(|_| self.merge_parent_frontier_is_exact());
         if let Some(view) = active_merge_view {
             // Revisit the exact leader-selected value on the bounded
-            // retransmission cadence. Autonomous execution remains filtered
-            // before authorization until the global proposal binds the
-            // control-only carrier marker described in `refresh_merge_candidates`.
+            // retransmission cadence. Autonomous execution candidates remain
+            // subject to exact carrier-context validation and deterministic
+            // follower re-execution before authorization.
             self.refresh_merge_candidates(view)?;
         } else {
             self.purge_queued_merge_broadcasts();
@@ -8650,7 +8651,14 @@ impl V2LaneWorkAdapter {
         if !nexus.enabled
             || !proposal_lookahead_enabled(&nexus, proposal.descriptor.proposal_height)
         {
-            let proposal_view = proposal.payload_block_hint?.proposal_view;
+            // Hint-free autonomous proposals exist before the global carrier
+            // view is known. Their producer is therefore the deterministic
+            // lane author; an attached ordinary proposal remains authored by
+            // the global leader for its finalized carrier view.
+            let Some(proposal_view) = proposal.payload_block_hint.map(|hint| hint.proposal_view)
+            else {
+                return lane_proposal_author(proposal);
+            };
             let index = usize::try_from(self.context.leader(proposal_view)).ok()?;
             return self.context.roster.get(index).map(|entry| &entry.validator);
         }
@@ -10979,9 +10987,7 @@ impl V2LaneWorkAdapter {
                     .to_owned(),
             );
         }
-        self.state
-            .validate_merge_candidate_for_global_round(&candidate, parent_header, active_view)
-            .map_err(|error| error.to_string())?;
+        self.validate_merge_candidate_for_active_round(&candidate, parent_header, active_view)?;
         let digest = crate::merge::merge_qc_message_digest(
             &self.context.chain_id,
             &candidate,
@@ -10992,6 +10998,30 @@ impl V2LaneWorkAdapter {
             return Err("merge leader candidate body differs from its signed digest".to_owned());
         }
         Ok(candidate)
+    }
+
+    fn validate_merge_candidate_for_active_round(
+        &self,
+        candidate: &crate::merge::MergeLedgerCandidate,
+        parent_header: &BlockHeader,
+        active_view: wire::View,
+    ) -> Result<(), String> {
+        if let Some(batch) = candidate.execution_batch.as_ref() {
+            let expected_header =
+                self.merge_carrier_context_header(active_view)
+                    .map_err(|error| {
+                        format!("cannot derive the exact execution carrier context header: {error}")
+                    })?;
+            if batch.application_block_header != expected_header {
+                return Err(
+                    "execution candidate is not bound to the exact deterministic carrier context header"
+                        .to_owned(),
+                );
+            }
+        }
+        self.state
+            .validate_merge_candidate_for_global_round(candidate, parent_header, active_view)
+            .map_err(|error| error.to_string())
     }
 
     fn local_merge_share(
@@ -11171,9 +11201,8 @@ impl V2LaneWorkAdapter {
                 "merge signing parent header differs from the frozen context".to_owned(),
             ));
         }
-        self.state
-            .validate_merge_candidate_for_global_round(candidate, &parent_header, active_view)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+        self.validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
+            .map_err(MergeSidecarError::SigningGuard)?;
         self.merge_signing_guard
             .authorize(durable_context, message_digest, candidate)?;
         self.merge_claims.entry(claim_key).or_insert(message_digest);
@@ -11304,8 +11333,7 @@ impl V2LaneWorkAdapter {
             if *digest != recomputed
                 || *bytes != candidate.canonical_bytes()
                 || self
-                    .state
-                    .validate_merge_candidate_for_global_round(
+                    .validate_merge_candidate_for_active_round(
                         candidate,
                         &parent_header,
                         active_view,
@@ -11328,8 +11356,7 @@ impl V2LaneWorkAdapter {
                         && candidate.carrier_height == self.context.height
                         && candidate.carrier_parent_hash == expected_parent
                         && self
-                            .state
-                            .validate_merge_candidate_for_global_round(
+                            .validate_merge_candidate_for_active_round(
                                 candidate,
                                 &parent_header,
                                 active_view,
@@ -13291,6 +13318,9 @@ pub(super) mod tests {
         let drain_body = drain_body_for(&drain_first, &proposal);
         let committee = proposal.descriptor.validator_set.clone();
         drain_first
+            .lane_drain_votes
+            .retain_body(Some(drain_body.clone()));
+        drain_first
             .authorize_and_insert_local_lane_drain_vote(&drain_body, &committee)
             .expect("drain crosses the shared durable signing fence");
         assert!(
@@ -13329,6 +13359,27 @@ pub(super) mod tests {
             crate::native_amx::NativeAmxSigningGuardError::InvalidInput(message)
                 if message.contains("exceeds its implementation maximum")
         ));
+    }
+
+    #[test]
+    fn native_amx_signing_guard_limits_reject_oversized_record_and_anchor_bytes() {
+        let one = NonZeroUsize::new(1).expect("non-zero");
+        for (record_bytes, anchor_bytes) in [
+            (MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD + 1, 1),
+            (1, MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD + 1),
+        ] {
+            let error = NativeAmxSigningGuardLimits::new(
+                one,
+                NonZeroUsize::new(record_bytes).expect("non-zero"),
+                NonZeroUsize::new(anchor_bytes).expect("non-zero"),
+            )
+            .expect_err("an oversized byte ceiling must fail closed");
+            assert!(matches!(
+                error,
+                crate::native_amx::NativeAmxSigningGuardError::InvalidInput(message)
+                    if message.contains("exceeds its implementation maximum")
+            ));
+        }
     }
 
     #[test]
@@ -21154,7 +21205,9 @@ pub(super) mod tests {
             .kura
             .get_block(NonZeroUsize::new(1).expect("non-zero historical height"))
             .expect("historical canonical body");
-        let finality_artifact = finality_artifact_for_block(&adapter, &keys, block.as_ref());
+        let (historical_adapter, _) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let finality_artifact =
+            finality_artifact_for_block(&historical_adapter, &keys, block.as_ref());
         let certificate = LaneBlockCertificateV1 {
             proposal: proposal.clone(),
             prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
@@ -23856,6 +23909,33 @@ pub(super) mod tests {
         }
     }
 
+    fn synthetic_merge_execution_batch_for_test(
+        adapter: &V2LaneWorkAdapter,
+        application_block_header: BlockHeader,
+    ) -> iroha_data_model::merge::MergeExecutionBatch {
+        iroha_data_model::merge::MergeExecutionBatch {
+            version: 1,
+            base_state_height: adapter.context.height.saturating_sub(1),
+            base_state_hash: adapter.state.lane_execution_state_hash(),
+            application_block_header,
+            lanes: Vec::new(),
+            entrypoint_count: 0,
+            entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                b"synthetic execution entrypoints",
+            )),
+            result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
+                b"synthetic execution results",
+            )),
+            execution_root: Hash::new(b"synthetic execution root"),
+            application_write_set_root: Hash::new(b"synthetic execution application writes"),
+            write_set_root: Hash::new(b"synthetic execution writes"),
+            expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"synthetic execution post state",
+            )),
+            batch_hash: Hash::new(b"synthetic execution batch"),
+        }
+    }
+
     #[test]
     fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() {
         let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
@@ -24074,39 +24154,35 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn authenticated_execution_candidate_stays_blocked_without_carrier_marker() {
+    fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header() {
         let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let view = remote_merge_leader_view(&adapter);
-        let mut candidate =
-            record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
-        candidate.execution_batch = Some(iroha_data_model::merge::MergeExecutionBatch {
-            version: 1,
-            base_state_height: adapter.context.height.saturating_sub(1),
-            base_state_hash: adapter.state.lane_execution_state_hash(),
-            application_block_header: BlockHeader::new(
-                NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
-                Some(candidate.carrier_parent_hash),
-                None,
-                None,
-                1,
-                candidate.view,
-            ),
-            lanes: Vec::new(),
-            entrypoint_count: 0,
-            entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
-                b"blocked execution entrypoints",
-            )),
-            result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(
-                b"blocked execution results",
-            )),
-            execution_root: Hash::new(b"blocked execution root"),
-            application_write_set_root: Hash::new(b"blocked execution application writes"),
-            write_set_root: Hash::new(b"blocked execution writes"),
-            expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(
-                b"blocked execution post state",
-            )),
-            batch_hash: Hash::new(b"blocked execution batch"),
-        });
+        let mut candidate = merge_candidate_for_persistence_retry(&adapter, view);
+        let expected_header = adapter
+            .merge_carrier_context_header(view)
+            .expect("derive exact deterministic carrier context");
+        let wrong_creation_time = u64::try_from(expected_header.creation_time().as_millis())
+            .expect("fixture carrier time fits u64")
+            .checked_add(1)
+            .expect("fixture carrier time can advance");
+        let wrong_header = BlockHeader::new(
+            expected_header.height(),
+            expected_header.prev_block_hash(),
+            None,
+            None,
+            wrong_creation_time,
+            expected_header.view_change_index(),
+        );
+        assert_ne!(wrong_header, expected_header);
+        candidate.execution_batch = Some(synthetic_merge_execution_batch_for_test(
+            &adapter,
+            wrong_header,
+        ));
+        assert!(
+            candidate.lane_snapshots.is_empty(),
+            "the carrier-context test must not be preempted by mixed candidate forms"
+        );
+
         let leader = adapter.context.leader(view);
         let share = signed_merge_share_for_test(&adapter, &keys, &candidate, leader);
         adapter
@@ -24117,10 +24193,57 @@ pub(super) mod tests {
             .state
             .latest_block_header_fast()
             .expect("fixture has exact committed parent");
+        let reason = adapter
+            .decode_and_validate_leader_candidate(&share, view, &parent)
+            .expect_err("wrong-time execution candidate must not obtain a follower share");
         assert!(
+            reason.contains("exact deterministic carrier context header"),
+            "unexpected carrier-context rejection: {reason}"
+        );
+        assert_eq!(
             adapter
-                .decode_and_validate_leader_candidate(&share, view, &parent)
-                .is_err_and(|reason| reason.contains("control-only carrier marker"))
+                .accept_merge_signature(share, view)
+                .expect("reject execution candidate for an uncarryable header"),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert_eq!(
+            adapter
+                .merge_signing_guard
+                .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
+                .expect("read untouched signing guard"),
+            None
+        );
+    }
+
+    #[test]
+    fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        let view = remote_merge_leader_view(&adapter);
+        let mut candidate =
+            record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+        let exact_header = adapter
+            .merge_carrier_context_header(view)
+            .expect("derive exact deterministic carrier context");
+        candidate.execution_batch = Some(synthetic_merge_execution_batch_for_test(
+            &adapter,
+            exact_header,
+        ));
+        let leader = adapter.context.leader(view);
+        let share = signed_merge_share_for_test(&adapter, &keys, &candidate, leader);
+        adapter
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install exact unlocked follower directive");
+        adapter.drain_effects(usize::MAX);
+        let parent = adapter
+            .state
+            .latest_block_header_fast()
+            .expect("fixture has exact committed parent");
+        let reason = adapter
+            .decode_and_validate_leader_candidate(&share, view, &parent)
+            .expect_err("relay snapshots cannot be relabeled as autonomous execution");
+        assert!(
+            reason.contains("execution candidates must not mix relay snapshots"),
+            "unexpected authenticated execution rejection: {reason}"
         );
         assert_eq!(
             adapter

@@ -6142,7 +6142,25 @@ async fn dispatch_iroha_subscriptions_create(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_object_body_or_default(arguments)?;
+    reject_unknown_arguments(
+        arguments,
+        &["body", "headers", "accept"],
+        "subscription creation draft",
+    )?;
+    let body = build_required_exact_object_body(
+        arguments,
+        &[
+            "authority",
+            "subscription_id",
+            "plan_id",
+            "billing_trigger_id",
+            "usage_trigger_id",
+            "first_charge_ms",
+            "grant_usage_to_provider",
+        ],
+        &["authority", "subscription_id", "plan_id"],
+        "subscription creation draft body",
+    )?;
     let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
     dispatch_route(
         app,
@@ -6191,7 +6209,7 @@ async fn dispatch_iroha_subscriptions_cancel(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_subscription_action(app, inbound_headers, arguments, "cancel").await
+    dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "cancel").await
 }
 
 async fn dispatch_iroha_subscriptions_pause(
@@ -6199,7 +6217,7 @@ async fn dispatch_iroha_subscriptions_pause(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_subscription_action(app, inbound_headers, arguments, "pause").await
+    dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "pause").await
 }
 
 async fn dispatch_iroha_subscriptions_resume(
@@ -6207,7 +6225,7 @@ async fn dispatch_iroha_subscriptions_resume(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_subscription_action(app, inbound_headers, arguments, "resume").await
+    dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "resume").await
 }
 
 async fn dispatch_iroha_subscriptions_keep(
@@ -6215,7 +6233,7 @@ async fn dispatch_iroha_subscriptions_keep(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_subscription_action(app, inbound_headers, arguments, "keep").await
+    dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "keep").await
 }
 
 async fn dispatch_iroha_subscriptions_usage(
@@ -6231,7 +6249,55 @@ async fn dispatch_iroha_subscriptions_charge_now(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_subscription_action(app, inbound_headers, arguments, "charge-now").await
+    dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "charge-now").await
+}
+
+async fn dispatch_iroha_subscription_draft_action(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    action: &str,
+) -> Result<Value, String> {
+    reject_unknown_arguments(
+        arguments,
+        &["subscription_id", "body", "headers", "accept"],
+        "subscription action draft",
+    )?;
+    let subscription_id = extract_exact_subscription_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("subscription_id".into(), Value::String(subscription_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template(
+        format!("/v1/subscriptions/{{subscription_id}}/{action}").as_str(),
+        Some(&path_value),
+    )?;
+    let (body_fields, required_fields): (&[&str], &[&str]) = match action {
+        "pause" | "keep" => (&["authority"], &["authority"]),
+        "resume" | "charge-now" => (&["authority", "charge_at_ms"], &["authority"]),
+        "cancel" => (&["authority", "cancel_mode"], &["authority", "cancel_mode"]),
+        _ => return Err(format!("unsupported subscription draft action `{action}`")),
+    };
+    let body = build_required_exact_object_body(
+        arguments,
+        body_fields,
+        required_fields,
+        "subscription action draft body",
+    )?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route.as_str(),
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
 }
 
 async fn dispatch_iroha_subscription_action(
@@ -7635,6 +7701,21 @@ fn extract_subscription_id_argument(arguments: &Map) -> Result<String, String> {
         })
 }
 
+fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, String> {
+    if arguments.contains_key("id") || arguments.contains_key("path") {
+        return Err(
+            "subscription draft actions accept only the exact top-level `subscription_id` field"
+                .to_owned(),
+        );
+    }
+    arguments
+        .get("subscription_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "non-empty `subscription_id` is required".to_owned())
+}
+
 fn extract_iso20022_message_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -8085,6 +8166,33 @@ fn build_object_body_or_default(arguments: &Map) -> Result<Value, String> {
             .ok_or_else(|| "`body` must be an object".to_owned());
     }
     Ok(Value::Object(Map::new()))
+}
+
+fn build_required_object_body(arguments: &Map) -> Result<Value, String> {
+    arguments
+        .get("body")
+        .ok_or_else(|| "`body` is required".to_owned())?
+        .as_object()
+        .map(|body| Value::Object(body.clone()))
+        .ok_or_else(|| "`body` must be an object".to_owned())
+}
+
+fn build_required_exact_object_body(
+    arguments: &Map,
+    allowed_fields: &[&str],
+    required_fields: &[&str],
+    context: &str,
+) -> Result<Value, String> {
+    let body = build_required_object_body(arguments)?;
+    let body = body.as_object().expect("required object body");
+    reject_unknown_arguments(body, allowed_fields, context)?;
+    if let Some(field) = required_fields
+        .iter()
+        .find(|field| !body.contains_key(**field))
+    {
+        return Err(format!("`{field}` is required for {context}"));
+    }
+    Ok(Value::Object(body.clone()))
 }
 
 fn build_object_body_or_flat_shortcuts(
@@ -12664,17 +12772,30 @@ fn iroha_subscriptions_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.create".to_owned(),
         effect: manual_tool_effect_from_name("iroha.subscriptions.create"),
-        description: "Create a subscription (`body` payload).".to_owned(),
+        description:
+            "Build an unsigned subscription creation draft for local signing (`body` required)."
+                .to_owned(),
         method: Method::POST,
         path_template: "/v1/subscriptions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["body"],
             "properties": {
                 "body": {
                     "type": "object",
-                    "additionalProperties": true,
-                    "description": "Subscription create payload. When omitted, `{}` is submitted."
+                    "additionalProperties": false,
+                    "required": ["authority", "subscription_id", "plan_id"],
+                    "properties": {
+                        "authority": { "type": "string", "minLength": 1 },
+                        "subscription_id": { "type": "string", "minLength": 1 },
+                        "plan_id": { "type": "string", "minLength": 1 },
+                        "billing_trigger_id": { "type": "string", "minLength": 1 },
+                        "usage_trigger_id": { "type": "string", "minLength": 1 },
+                        "first_charge_ms": { "type": "integer", "minimum": 0 },
+                        "grant_usage_to_provider": { "type": "boolean" }
+                    },
+                    "description": "Exact first-release subscription creation draft request. Private keys are forbidden."
                 },
                 "headers": {
                     "type": "object",
@@ -12725,38 +12846,34 @@ fn iroha_subscriptions_get_tool() -> ToolSpec {
 }
 
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
-    iroha_subscription_action_tool(
+    iroha_subscription_draft_action_tool(
         "iroha.subscriptions.cancel",
-        "Cancel a subscription (`subscription_id` shortcut supported).",
+        "Build an unsigned subscription cancellation draft for local signing.",
         "cancel",
-        "Optional cancellation payload. When omitted, `{}` is submitted.",
     )
 }
 
 fn iroha_subscriptions_pause_tool() -> ToolSpec {
-    iroha_subscription_action_tool(
+    iroha_subscription_draft_action_tool(
         "iroha.subscriptions.pause",
-        "Pause a subscription (`subscription_id` shortcut supported).",
+        "Build an unsigned subscription pause draft for local signing.",
         "pause",
-        "Optional pause payload. When omitted, `{}` is submitted.",
     )
 }
 
 fn iroha_subscriptions_resume_tool() -> ToolSpec {
-    iroha_subscription_action_tool(
+    iroha_subscription_draft_action_tool(
         "iroha.subscriptions.resume",
-        "Resume a subscription (`subscription_id` shortcut supported).",
+        "Build an unsigned subscription resume draft for local signing.",
         "resume",
-        "Optional resume payload. When omitted, `{}` is submitted.",
     )
 }
 
 fn iroha_subscriptions_keep_tool() -> ToolSpec {
-    iroha_subscription_action_tool(
+    iroha_subscription_draft_action_tool(
         "iroha.subscriptions.keep",
-        "Keep a subscription active (`subscription_id` shortcut supported).",
+        "Build an unsigned subscription keep-active draft for local signing.",
         "keep",
-        "Optional keep payload. When omitted, `{}` is submitted.",
     )
 }
 
@@ -12770,12 +12887,90 @@ fn iroha_subscriptions_usage_tool() -> ToolSpec {
 }
 
 fn iroha_subscriptions_charge_now_tool() -> ToolSpec {
-    iroha_subscription_action_tool(
+    iroha_subscription_draft_action_tool(
         "iroha.subscriptions.charge_now",
-        "Trigger immediate billing for a subscription (`subscription_id` shortcut supported).",
+        "Build an unsigned subscription charge-now draft for local signing.",
         "charge-now",
-        "Optional charge-now payload. When omitted, `{}` is submitted.",
     )
+}
+
+fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &str) -> ToolSpec {
+    let mut body_properties = Map::new();
+    body_properties.insert(
+        "authority".to_owned(),
+        norito::json!({ "type": "string", "minLength": 1 }),
+    );
+    let mut body_required = vec![Value::String("authority".to_owned())];
+    match action {
+        "resume" | "charge-now" => {
+            body_properties.insert(
+                "charge_at_ms".to_owned(),
+                norito::json!({ "type": "integer", "minimum": 0 }),
+            );
+        }
+        "cancel" => {
+            body_required.push(Value::String("cancel_mode".to_owned()));
+            body_properties.insert(
+                "cancel_mode".to_owned(),
+                norito::json!({
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["mode", "value"],
+                            "properties": {
+                                "mode": { "const": "immediate" },
+                                "value": { "type": "null" }
+                            }
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["mode", "value"],
+                            "properties": {
+                                "mode": { "const": "period_end" },
+                                "value": { "type": "null" }
+                            }
+                        }
+                    ]
+                }),
+            );
+        }
+        "pause" | "keep" => {}
+        _ => unreachable!("subscription draft action tool uses a closed action set"),
+    }
+
+    ToolSpec {
+        name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
+        description: description.to_owned(),
+        method: Method::POST,
+        path_template: format!("/v1/subscriptions/{{subscription_id}}/{action}"),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subscription_id", "body"],
+            "properties": {
+                "subscription_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Exact subscription NFT identifier."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": body_required,
+                    "properties": body_properties,
+                    "description": "Exact first-release subscription action draft request. Private keys are forbidden."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
 }
 
 fn iroha_subscription_action_tool(
@@ -16576,6 +16771,115 @@ mod tests {
         let subscription_id = extract_subscription_id_argument(args.as_object().expect("object"))
             .expect("subscription");
         assert_eq!(subscription_id, "sub-001");
+    }
+
+    #[test]
+    fn subscription_draft_arguments_reject_aliases_and_missing_body() {
+        for args in [
+            norito::json!({ "id": "sub-001", "body": { "authority": TEST_ACCOUNT_I105 } }),
+            norito::json!({
+                "path": { "subscription_id": "sub-001" },
+                "body": { "authority": TEST_ACCOUNT_I105 }
+            }),
+        ] {
+            assert!(
+                extract_exact_subscription_id_argument(args.as_object().expect("object")).is_err()
+            );
+        }
+
+        let exact = norito::json!({
+            "subscription_id": "sub-001",
+            "body": { "authority": TEST_ACCOUNT_I105 }
+        });
+        let exact = exact.as_object().expect("object");
+        assert_eq!(
+            extract_exact_subscription_id_argument(exact).unwrap(),
+            "sub-001"
+        );
+        assert!(build_required_object_body(exact).is_ok());
+        assert!(
+            build_required_exact_object_body(
+                exact,
+                &["authority"],
+                &["authority"],
+                "subscription action draft body",
+            )
+            .is_ok()
+        );
+
+        let missing_body = norito::json!({ "subscription_id": "sub-001" });
+        assert!(build_required_object_body(missing_body.as_object().expect("object")).is_err());
+        let private_key = norito::json!({
+            "subscription_id": "sub-001",
+            "body": {
+                "authority": TEST_ACCOUNT_I105,
+                "private_key": "forbidden"
+            }
+        });
+        assert!(
+            build_required_exact_object_body(
+                private_key.as_object().expect("object"),
+                &["authority"],
+                &["authority"],
+                "subscription action draft body",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn subscription_draft_tools_publish_exact_secret_free_inputs() {
+        let create = iroha_subscriptions_create_tool();
+        let create_schema = create.input_schema.as_object().expect("create schema");
+        let create_required = create_schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("create required");
+        assert_eq!(create_required, &[Value::String("body".to_owned())]);
+        let create_body = create_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("body"))
+            .and_then(Value::as_object)
+            .expect("create body schema");
+        assert_eq!(
+            create_body.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert!(
+            !create_body
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("create body properties")
+                .contains_key("private_key")
+        );
+
+        for tool in [
+            iroha_subscriptions_pause_tool(),
+            iroha_subscriptions_resume_tool(),
+            iroha_subscriptions_cancel_tool(),
+            iroha_subscriptions_keep_tool(),
+            iroha_subscriptions_charge_now_tool(),
+        ] {
+            assert!(tool.description.contains("unsigned"));
+            let schema = tool.input_schema.as_object().expect("action schema");
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("action properties");
+            assert!(properties.contains_key("subscription_id"));
+            assert!(properties.contains_key("body"));
+            assert!(!properties.contains_key("id"));
+            assert!(!properties.contains_key("path"));
+            let body_properties = properties
+                .get("body")
+                .and_then(Value::as_object)
+                .and_then(|body| body.get("properties"))
+                .and_then(Value::as_object)
+                .expect("action body properties");
+            assert!(body_properties.contains_key("authority"));
+            assert!(!body_properties.contains_key("private_key"));
+        }
     }
 
     #[test]

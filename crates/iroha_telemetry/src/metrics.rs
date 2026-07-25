@@ -20303,6 +20303,45 @@ mod test {
     }
 
     #[test]
+    fn gateway_compliance_metrics_are_registered_and_exposable() {
+        let metrics = Metrics::default();
+        metrics
+            .torii_sorafs_gateway_compliance_requests_total
+            .with_label_values(&["status", "success"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_serving_decisions_total
+            .with_label_values(&["cid", "deny", "legal_safety_hold"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_failures_total
+            .with_label_values(&["serving", "expired_catalog"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_serving_catalog_sequence
+            .set(7);
+        metrics
+            .torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+            .set(1_800_000_000);
+        metrics.torii_sorafs_gateway_compliance_ready.set(1);
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_gateway_compliance_requests_total",
+            "torii_sorafs_gateway_compliance_serving_decisions_total",
+            "torii_sorafs_gateway_compliance_failures_total",
+            "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+            "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+            "torii_sorafs_gateway_compliance_ready",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing gateway compliance metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
     fn orderbook_metric_labels_are_bounded_and_fail_closed() {
         let metrics = Metrics::default();
 

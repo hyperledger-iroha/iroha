@@ -991,7 +991,7 @@ per-source route-attempt, exact PrepareQC recovery, locked-body reproposal,
 runner/worker, sidecar, and daemon closure brings the current source-bound
 inventory to 582 exact tests across 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`8ae2fabed11325345848027d232e88d6f175c928cd11b0734f072378c9a44817`.
+`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
 Nine of those legs execute the separate 256-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `f45d6752f3dc449415446abc7340a3531ed48db5e9e744bccc6c1bba0d7a8957`.

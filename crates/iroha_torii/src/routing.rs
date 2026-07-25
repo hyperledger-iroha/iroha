@@ -470,6 +470,8 @@ pub(crate) struct PipelinePreflightPipeline {
     pub signature_batch_max_pqc: u64,
     pub signature_batch_max_bls: u64,
     pub overlay_max_instructions: u64,
+    pub ivm_max_cycles_upper_bound: u64,
+    pub ivm_admission_cycle_limit: u64,
     pub ivm_max_decoded_instructions: u64,
 }
 
@@ -9558,6 +9560,8 @@ pub(crate) fn build_pipeline_preflight_response(
             signature_batch_max_pqc: usize_to_u64(pipeline.signature_batch_max_pqc),
             signature_batch_max_bls: usize_to_u64(pipeline.signature_batch_max_bls),
             overlay_max_instructions: usize_to_u64(pipeline.overlay_max_instructions),
+            ivm_max_cycles_upper_bound: pipeline.ivm_max_cycles_upper_bound.get(),
+            ivm_admission_cycle_limit: state.ivm_admission_cycle_limit().get(),
             ivm_max_decoded_instructions: pipeline.ivm_max_decoded_instructions,
         },
         queue: PipelinePreflightQueue {
@@ -31381,6 +31385,28 @@ struct PreparedContractCall {
 // ---------------------- Subscription API DTOs ----------------------
 
 #[cfg(feature = "app_api")]
+/// First-release subscription mutation draft layout version.
+pub const SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1: u16 = 1;
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One canonical framed instruction returned for local transaction signing.
+pub struct SubscriptionInstructionDraftDto {
+    /// Registered instruction wire identifier.
+    pub wire_id: String,
+    /// Lowercase hexadecimal canonical framed instruction bytes.
+    pub payload_hex: String,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(
     Clone,
     Debug,
@@ -31465,12 +31491,11 @@ pub struct SubscriptionPlanListResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for creating a subscription.
 pub struct SubscriptionCreateDto {
     /// Account authorizing the transaction (subscriber).
     pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Subscription NFT id to register.
     pub subscription_id: iroha_data_model::nft::NftId,
     /// Asset definition id for the subscription plan.
@@ -31491,12 +31516,18 @@ pub struct SubscriptionCreateDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload returned after creating a subscription.
+/// Exact unsigned subscription creation draft.
 pub struct SubscriptionCreateResponseDto {
-    /// Whether the subscription creation succeeded.
-    pub ok: bool,
+    /// Response layout version.
+    pub version: u16,
+    /// Account that must be used as the transaction authority.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Exact mutation action (`create`).
+    pub action: String,
     /// Subscription NFT id.
     pub subscription_id: iroha_data_model::nft::NftId,
+    /// Plan asset definition bound to the subscription.
+    pub plan_id: iroha_data_model::asset::AssetDefinitionId,
     /// Billing trigger id assigned to the subscription.
     pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
     /// Usage trigger id (present for usage plans).
@@ -31504,8 +31535,12 @@ pub struct SubscriptionCreateResponseDto {
     pub usage_trigger_id: Option<iroha_data_model::trigger::TriggerId>,
     /// First charge time in UTC milliseconds.
     pub first_charge_ms: u64,
-    /// Hex-encoded transaction hash submitted to the queue.
-    pub tx_hash_hex: String,
+    /// Whether the draft includes a provider `CanExecuteTrigger` grant.
+    pub provider_usage_grant_included: bool,
+    /// Exact subscription state produced when the draft instructions commit.
+    pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
+    /// Canonical instructions the authority must sign and submit.
+    pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -31586,12 +31621,11 @@ pub struct SubscriptionGetResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for subscription status updates.
 pub struct SubscriptionActionDto {
     /// Account authorizing the transaction (subscriber).
     pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Optional charge time override in UTC milliseconds.
     #[norito(default)]
     pub charge_at_ms: Option<u64>,
@@ -31612,7 +31646,12 @@ pub struct SubscriptionActionDto {
     PartialEq,
     Eq,
 )]
-#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "mode",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 /// Cancelation mode for subscription cancel requests.
 pub enum SubscriptionCancelMode {
     Immediate,
@@ -31645,8 +31684,44 @@ pub struct SubscriptionUsageRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for subscription actions.
+/// Exact details projected by a subscription action draft.
+pub struct SubscriptionActionDraftDetailsDto {
+    /// Billing trigger affected by the action.
+    pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
+    /// Exact trigger operation (`none`, `register`, `unregister`, or `replace`).
+    pub billing_trigger_operation: String,
+    /// Resolved charge time for resume and charge-now actions.
+    #[norito(default)]
+    pub effective_charge_ms: Option<u64>,
+    /// Explicit cancellation mode for cancel actions.
+    #[norito(default)]
+    pub cancel_mode: Option<SubscriptionCancelMode>,
+    /// Exact subscription state produced when the draft instructions commit.
+    pub resulting_subscription: iroha_data_model::subscription::SubscriptionState,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Exact unsigned subscription action draft.
 pub struct SubscriptionActionResponseDto {
+    /// Response layout version.
+    pub version: u16,
+    /// Account that must be used as the transaction authority.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Exact route action (`pause`, `resume`, `cancel`, `keep`, or `charge_now`).
+    pub action: String,
+    /// Subscription NFT id.
+    pub subscription_id: iroha_data_model::nft::NftId,
+    /// Exact projected action details.
+    pub details: SubscriptionActionDraftDetailsDto,
+    /// Canonical instructions the authority must sign and submit.
+    pub tx_instructions: Vec<SubscriptionInstructionDraftDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a server-submitted subscription usage action.
+pub struct SubscriptionUsageResponseDto {
     /// Whether the action succeeded.
     pub ok: bool,
     /// Subscription NFT id.
@@ -75623,6 +75698,75 @@ fn resolve_trigger_id(
 }
 
 #[cfg(feature = "app_api")]
+fn subscription_instruction_drafts(
+    instructions: impl IntoIterator<Item = InstructionBox>,
+) -> Result<Vec<SubscriptionInstructionDraftDto>> {
+    use iroha_data_model::isi::Instruction;
+
+    instructions
+        .into_iter()
+        .map(|instruction| {
+            let wire_id = Instruction::id(&*instruction);
+            let payload = Instruction::dyn_encode(&*instruction);
+            let framed = iroha_data_model::isi::frame_instruction_payload(wire_id, &payload)
+                .map_err(|error| {
+                    conversion_error(format!(
+                        "failed to frame subscription draft instruction `{wire_id}`: {error}"
+                    ))
+                })?;
+            Ok(SubscriptionInstructionDraftDto {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(framed),
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_billing_trigger_operation(existed: bool, included: bool) -> &'static str {
+    match (existed, included) {
+        (false, false) => "none",
+        (false, true) => "register",
+        (true, false) => "unregister",
+        (true, true) => "replace",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn subscription_action_draft_response(
+    authority: AccountId,
+    action: &'static str,
+    subscription_id: NftId,
+    resulting_subscription: SubscriptionState,
+    billing_trigger_existed: bool,
+    billing_trigger_included: bool,
+    effective_charge_ms: Option<u64>,
+    cancel_mode: Option<SubscriptionCancelMode>,
+    instructions: Vec<InstructionBox>,
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
+    let billing_trigger_id = resulting_subscription.billing_trigger_id.clone();
+    let tx_instructions = subscription_instruction_drafts(instructions)?;
+    Ok(JsonBody(SubscriptionActionResponseDto {
+        version: SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
+        authority,
+        action: action.to_owned(),
+        subscription_id,
+        details: SubscriptionActionDraftDetailsDto {
+            billing_trigger_id,
+            billing_trigger_operation: subscription_billing_trigger_operation(
+                billing_trigger_existed,
+                billing_trigger_included,
+            )
+            .to_owned(),
+            effective_charge_ms,
+            cancel_mode,
+            resulting_subscription,
+        },
+        tx_instructions,
+    }))
+}
+
+#[cfg(feature = "app_api")]
 fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
@@ -75847,17 +75991,13 @@ pub async fn handle_v1_subscription_plans(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_create(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<SubscriptionCreateDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionCreateResponseDto>> {
     use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
 
     let SubscriptionCreateDto {
         authority,
-        private_key,
         subscription_id,
         plan_id,
         billing_trigger_id,
@@ -75921,7 +76061,7 @@ pub async fn handle_post_v1_subscription_create(
     let mut metadata = Metadata::default();
     metadata.insert(
         (*SUBSCRIPTION_KEY).clone(),
-        IrohaJson::new(subscription_state),
+        IrohaJson::new(subscription_state.clone()),
     );
 
     let mut instructions = Vec::new();
@@ -75947,58 +76087,40 @@ pub async fn handle_post_v1_subscription_create(
                 state.ivm_admission_cycle_limit(),
             ),
         )));
-        let grant_provider = grant_usage_to_provider.unwrap_or(true);
-        if grant_provider && plan.provider != authority {
-            let perm: Permission = CanExecuteTrigger {
-                trigger: usage_trigger_id.clone(),
-            }
-            .into();
-            instructions.push(InstructionBox::from(Grant::account_permission(
-                perm,
-                plan.provider.clone(),
-            )));
-        }
     }
 
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+    let provider_usage_grant_included = usage_trigger_id.is_some()
+        && grant_usage_to_provider.unwrap_or(true)
+        && plan.provider != authority;
+    if provider_usage_grant_included {
+        let usage_trigger_id = usage_trigger_id
+            .clone()
+            .expect("provider usage grant requires a usage trigger");
+        let perm: Permission = CanExecuteTrigger {
+            trigger: usage_trigger_id,
+        }
+        .into();
+        instructions.push(InstructionBox::from(Grant::account_permission(
+            perm,
+            plan.provider.clone(),
+        )));
+    }
 
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
+    let tx_instructions = subscription_instruction_drafts(instructions)?;
 
-    let payload = SubscriptionCreateResponseDto {
-        ok: true,
+    Ok(JsonBody(SubscriptionCreateResponseDto {
+        version: SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
+        authority,
+        action: "create".to_owned(),
         subscription_id,
+        plan_id,
         billing_trigger_id,
         usage_trigger_id,
         first_charge_ms: charge_at_ms,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        provider_usage_grant_included,
+        resulting_subscription: subscription_state,
+        tx_instructions,
+    }))
 }
 
 #[iroha_futures::telemetry_future]
@@ -76161,18 +76283,20 @@ pub async fn handle_v1_subscription_get(
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_pause(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
     let SubscriptionActionDto {
         authority,
-        private_key,
-        ..
+        charge_at_ms,
+        cancel_mode,
     } = req;
+    if charge_at_ms.is_some() || cancel_mode.is_some() {
+        return Err(conversion_error(
+            "pause accepts exactly `authority`".to_string(),
+        ));
+    }
     let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
@@ -76219,59 +76343,36 @@ pub async fn handle_post_v1_subscription_pause(
         )));
     }
 
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionActionResponseDto {
-        ok: true,
+    subscription_action_draft_response(
+        authority,
+        "pause",
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        subscription_state,
+        billing_trigger_exists,
+        false,
+        None,
+        None,
+        instructions,
+    )
 }
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_resume(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
     let SubscriptionActionDto {
         authority,
-        private_key,
         charge_at_ms,
-        ..
+        cancel_mode,
     } = req;
+    if cancel_mode.is_some() {
+        return Err(conversion_error(
+            "resume does not accept `cancel_mode`".to_string(),
+        ));
+    }
     let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, plan, billing_trigger_exists) = {
@@ -76333,59 +76434,36 @@ pub async fn handle_post_v1_subscription_resume(
             state.ivm_admission_cycle_limit(),
         ),
     )));
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionActionResponseDto {
-        ok: true,
+    subscription_action_draft_response(
+        authority,
+        "resume",
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        subscription_state,
+        billing_trigger_exists,
+        true,
+        Some(next_charge_ms),
+        None,
+        instructions,
+    )
 }
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_cancel(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
     let SubscriptionActionDto {
         authority,
-        private_key,
+        charge_at_ms,
         cancel_mode,
-        ..
     } = req;
+    if charge_at_ms.is_some() {
+        return Err(conversion_error(
+            "cancel does not accept `charge_at_ms`".to_string(),
+        ));
+    }
     let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
@@ -76409,7 +76487,8 @@ pub async fn handle_post_v1_subscription_cancel(
             "subscription owner must match authority".to_string(),
         ));
     }
-    let cancel_mode = cancel_mode.unwrap_or(SubscriptionCancelMode::Immediate);
+    let cancel_mode = cancel_mode
+        .ok_or_else(|| conversion_error("cancel requires an explicit `cancel_mode`".to_string()))?;
     let mut instructions = Vec::new();
     match cancel_mode {
         SubscriptionCancelMode::Immediate => {
@@ -76423,7 +76502,7 @@ pub async fn handle_post_v1_subscription_cancel(
             )));
             if billing_trigger_exists {
                 instructions.push(InstructionBox::from(Unregister::trigger(
-                    subscription_state.billing_trigger_id,
+                    subscription_state.billing_trigger_id.clone(),
                 )));
             }
         }
@@ -76446,58 +76525,38 @@ pub async fn handle_post_v1_subscription_cancel(
         }
     }
 
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionActionResponseDto {
-        ok: true,
+    let unregisters_billing_trigger =
+        cancel_mode == SubscriptionCancelMode::Immediate && billing_trigger_exists;
+    subscription_action_draft_response(
+        authority,
+        "cancel",
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        subscription_state,
+        unregisters_billing_trigger,
+        false,
+        None,
+        Some(cancel_mode),
+        instructions,
+    )
 }
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_keep(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
     let SubscriptionActionDto {
         authority,
-        private_key,
-        ..
+        charge_at_ms,
+        cancel_mode,
     } = req;
+    if charge_at_ms.is_some() || cancel_mode.is_some() {
+        return Err(conversion_error(
+            "keep accepts exactly `authority`".to_string(),
+        ));
+    }
     let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner) = {
@@ -76538,59 +76597,36 @@ pub async fn handle_post_v1_subscription_keep(
         IrohaJson::new(subscription_state.clone()),
     ))];
 
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionActionResponseDto {
-        ok: true,
+    subscription_action_draft_response(
+        authority,
+        "keep",
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        subscription_state,
+        false,
+        false,
+        None,
+        None,
+        instructions,
+    )
 }
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_subscription_charge_now(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     subscription_id: NftId,
     NoritoJson(req): NoritoJson<SubscriptionActionDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<JsonBody<SubscriptionActionResponseDto>> {
     let SubscriptionActionDto {
         authority,
-        private_key,
         charge_at_ms,
-        ..
+        cancel_mode,
     } = req;
+    if cancel_mode.is_some() {
+        return Err(conversion_error(
+            "charge-now does not accept `cancel_mode`".to_string(),
+        ));
+    }
     let authority: AccountId = authority.into();
 
     let (mut subscription_state, owner, billing_trigger_exists) = {
@@ -76646,41 +76682,17 @@ pub async fn handle_post_v1_subscription_charge_now(
             state.ivm_admission_cycle_limit(),
         ),
     )));
-    let tx = quote_and_sign_app_api_transaction(
-        TransactionBuilder::new(
-            (*chain_id).clone(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(instructions),
-        &private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        ENDPOINT_SUBSCRIPTIONS_LIST,
-    )
-    .await?;
-
-    let payload = SubscriptionActionResponseDto {
-        ok: true,
+    subscription_action_draft_response(
+        authority,
+        "charge_now",
         subscription_id,
-        tx_hash_hex,
-    };
-    let body = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+        subscription_state,
+        billing_trigger_exists,
+        true,
+        Some(charge_at_ms),
+        None,
+        instructions,
+    )
 }
 
 #[iroha_futures::telemetry_future]
@@ -76732,7 +76744,7 @@ pub async fn handle_post_v1_subscription_usage(
     )
     .await?;
 
-    let payload = SubscriptionActionResponseDto {
+    let payload = SubscriptionUsageResponseDto {
         ok: true,
         subscription_id,
         tx_hash_hex,
@@ -77068,12 +77080,36 @@ mod subscription_api_tests {
         norito::json::from_slice(&body).unwrap()
     }
 
-    async fn assert_action_ok(resp: Response, expected_id: &NftId) {
+    async fn assert_action_draft(
+        resp: Response,
+        expected_id: &NftId,
+        expected_authority: &AccountId,
+        expected_action: &str,
+        expected_trigger_operation: &str,
+    ) -> Value {
         assert_eq!(resp.status(), StatusCode::OK);
         let json = response_json(resp).await;
-        assert_eq!(json["ok"].as_bool(), Some(true));
+        assert_eq!(
+            json["version"].as_u64(),
+            Some(u64::from(SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1))
+        );
         let id_str = expected_id.to_string();
         assert_eq!(json["subscription_id"].as_str(), Some(id_str.as_str()));
+        let authority = expected_authority.to_string();
+        assert_eq!(json["authority"].as_str(), Some(authority.as_str()));
+        assert_eq!(json["action"].as_str(), Some(expected_action));
+        assert_eq!(
+            json["details"]["billing_trigger_operation"].as_str(),
+            Some(expected_trigger_operation)
+        );
+        assert!(
+            json["tx_instructions"]
+                .as_array()
+                .is_some_and(|instructions| !instructions.is_empty())
+        );
+        assert!(json.get("ok").is_none());
+        assert!(json.get("tx_hash_hex").is_none());
+        json
     }
 
     fn state_with_plans_and_subscriptions(
@@ -77522,7 +77558,7 @@ mod subscription_api_tests {
     }
 
     #[tokio::test]
-    async fn handle_post_v1_subscription_create_enqueues_transaction() {
+    async fn handle_post_v1_subscription_create_returns_exact_unsigned_draft() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
         let plan_id: AssetDefinitionId =
@@ -77534,41 +77570,50 @@ mod subscription_api_tests {
             vec![(plan_id.clone(), plan)],
             Vec::new(),
         );
-        let (queue, chain_id, telemetry) = test_queue_components();
         let subscription_id: NftId = "sub-create$wonderland.universal".parse().unwrap();
         let req = SubscriptionCreateDto {
-            authority: subscriber,
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            authority: subscriber.clone(),
             subscription_id: subscription_id.clone(),
-            plan_id,
+            plan_id: plan_id.clone(),
             billing_trigger_id: None,
             usage_trigger_id: None,
             first_charge_ms: Some(1_000),
             grant_usage_to_provider: None,
         };
 
-        let resp = handle_post_v1_subscription_create(
-            chain_id,
-            queue.clone(),
-            state,
-            telemetry,
-            NoritoJson(req),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
+        let resp = handle_post_v1_subscription_create(state, NoritoJson(req))
+            .await
+            .expect("handler ok")
+            .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(queue.queued_len(), 1);
 
         let json = response_json(resp).await;
-        assert_eq!(json["ok"].as_bool(), Some(true));
+        assert_eq!(json["version"].as_u64(), Some(1));
+        assert_eq!(json["action"].as_str(), Some("create"));
+        assert_eq!(
+            json["authority"].as_str(),
+            Some(subscriber.to_string().as_str())
+        );
         let sub_id_str = subscription_id.to_string();
         assert_eq!(json["subscription_id"].as_str(), Some(sub_id_str.as_str()));
+        assert_eq!(json["plan_id"].as_str(), Some(plan_id.to_string().as_str()));
         assert_eq!(json["first_charge_ms"].as_u64(), Some(1_000));
+        assert_eq!(json["provider_usage_grant_included"].as_bool(), Some(false));
+        assert_eq!(
+            json["resulting_subscription"]["subscriber"].as_str(),
+            Some(subscriber.to_string().as_str())
+        );
+        assert!(
+            json["tx_instructions"]
+                .as_array()
+                .is_some_and(|instructions| instructions.len() == 2)
+        );
+        assert!(json.get("ok").is_none());
+        assert!(json.get("tx_hash_hex").is_none());
     }
 
     #[tokio::test]
-    async fn handle_post_v1_subscription_actions_enqueue_transactions() {
+    async fn handle_post_v1_subscription_actions_return_exact_unsigned_drafts() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
         let plan_id: AssetDefinitionId =
@@ -77610,108 +77655,96 @@ mod subscription_api_tests {
                 (keep_id.clone(), keep_state, None),
             ],
         );
-        let (queue, chain_id, telemetry) = test_queue_components();
-
         let pause_req = SubscriptionActionDto {
             authority: subscriber.clone(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: None,
             cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_pause(
-            chain_id.clone(),
-            queue.clone(),
             state.clone(),
-            telemetry.clone(),
             active_id.clone(),
             NoritoJson(pause_req),
         )
         .await
         .expect("pause ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 1);
-        assert_action_ok(resp, &active_id).await;
+        let pause = assert_action_draft(resp, &active_id, &subscriber, "pause", "none").await;
+        assert_eq!(
+            pause["details"]["resulting_subscription"]["status"]["status"].as_str(),
+            Some("paused")
+        );
 
         let resume_req = SubscriptionActionDto {
             authority: subscriber.clone(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: Some(5_000),
             cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_resume(
-            chain_id.clone(),
-            queue.clone(),
             state.clone(),
-            telemetry.clone(),
             paused_id.clone(),
             NoritoJson(resume_req),
         )
         .await
         .expect("resume ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 2);
-        assert_action_ok(resp, &paused_id).await;
+        let resume = assert_action_draft(resp, &paused_id, &subscriber, "resume", "register").await;
+        assert_eq!(
+            resume["details"]["effective_charge_ms"].as_u64(),
+            Some(5_000)
+        );
 
         let cancel_req = SubscriptionActionDto {
             authority: subscriber.clone(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: None,
-            cancel_mode: None,
+            cancel_mode: Some(SubscriptionCancelMode::Immediate),
         };
         let resp = handle_post_v1_subscription_cancel(
-            chain_id.clone(),
-            queue.clone(),
             state.clone(),
-            telemetry.clone(),
             active_id.clone(),
             NoritoJson(cancel_req),
         )
         .await
         .expect("cancel ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 3);
-        assert_action_ok(resp, &active_id).await;
+        let cancel = assert_action_draft(resp, &active_id, &subscriber, "cancel", "none").await;
+        assert_eq!(
+            cancel["details"]["resulting_subscription"]["status"]["status"].as_str(),
+            Some("canceled")
+        );
 
         let keep_req = SubscriptionActionDto {
             authority: subscriber.clone(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: None,
             cancel_mode: None,
         };
-        let resp = handle_post_v1_subscription_keep(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry.clone(),
-            keep_id.clone(),
-            NoritoJson(keep_req),
-        )
-        .await
-        .expect("keep ok")
-        .into_response();
-        assert_eq!(queue.queued_len(), 4);
-        assert_action_ok(resp, &keep_id).await;
+        let resp =
+            handle_post_v1_subscription_keep(state.clone(), keep_id.clone(), NoritoJson(keep_req))
+                .await
+                .expect("keep ok")
+                .into_response();
+        assert_action_draft(resp, &keep_id, &subscriber, "keep", "none").await;
 
         let charge_req = SubscriptionActionDto {
             authority: subscriber.clone(),
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
             charge_at_ms: Some(9_000),
             cancel_mode: None,
         };
         let resp = handle_post_v1_subscription_charge_now(
-            chain_id.clone(),
-            queue.clone(),
             state.clone(),
-            telemetry.clone(),
             active_id.clone(),
             NoritoJson(charge_req),
         )
         .await
         .expect("charge-now ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 5);
-        assert_action_ok(resp, &active_id).await;
+        let charge =
+            assert_action_draft(resp, &active_id, &subscriber, "charge_now", "register").await;
+        assert_eq!(
+            charge["details"]["effective_charge_ms"].as_u64(),
+            Some(9_000)
+        );
 
+        let (queue, chain_id, telemetry) = test_queue_components();
         let usage_req = SubscriptionUsageRequestDto {
             authority: subscriber,
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
@@ -77730,8 +77763,15 @@ mod subscription_api_tests {
         .await
         .expect("usage ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 6);
-        assert_action_ok(resp, &active_id).await;
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let usage = response_json(resp).await;
+        assert_eq!(usage["ok"].as_bool(), Some(true));
+        assert_eq!(
+            usage["subscription_id"].as_str(),
+            Some(active_id.to_string().as_str())
+        );
+        assert!(usage["tx_hash_hex"].as_str().is_some());
     }
 
     #[tokio::test]
@@ -77758,31 +77798,30 @@ mod subscription_api_tests {
             vec![(plan_id, plan)],
             vec![(subscription_id.clone(), subscription_state, None)],
         );
-        let (queue, chain_id, telemetry) = test_queue_components();
 
         let req = SubscriptionActionDto {
-            authority: subscriber,
-            private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
+            authority: subscriber.clone(),
             charge_at_ms: None,
             cancel_mode: Some(SubscriptionCancelMode::PeriodEnd),
         };
         let resp = handle_post_v1_subscription_cancel(
-            chain_id.clone(),
-            queue.clone(),
             state.clone(),
-            telemetry,
             subscription_id.clone(),
             NoritoJson(req),
         )
         .await
         .expect("cancel at period end ok")
         .into_response();
-        assert_eq!(queue.queued_len(), 1);
-        assert_action_ok(resp, &subscription_id).await;
-
-        let applied =
-            crate::test_utils::apply_queued_in_one_block(&state, &queue, chain_id.as_ref(), 1);
-        assert_eq!(applied, 1, "cancel transaction should apply");
+        let draft =
+            assert_action_draft(resp, &subscription_id, &subscriber, "cancel", "none").await;
+        assert_eq!(
+            draft["details"]["resulting_subscription"]["cancel_at_period_end"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            draft["details"]["resulting_subscription"]["cancel_at_ms"].as_u64(),
+            Some(expected_cancel_at_ms)
+        );
 
         let view = state.view();
         let nft = view
@@ -77793,8 +77832,117 @@ mod subscription_api_tests {
             .unwrap()
             .expect("subscription metadata present");
         assert_eq!(updated_state.status, SubscriptionStatus::Active);
-        assert!(updated_state.cancel_at_period_end);
-        assert_eq!(updated_state.cancel_at_ms, Some(expected_cancel_at_ms));
+        assert!(!updated_state.cancel_at_period_end);
+        assert_eq!(updated_state.cancel_at_ms, None);
+    }
+
+    #[test]
+    fn subscription_mutation_requests_reject_private_key_and_unknown_fields() {
+        let create = SubscriptionCreateDto {
+            authority: BOB_ID.clone(),
+            subscription_id: "sub-strict-create$wonderland.universal".parse().unwrap(),
+            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554404fa"),
+            billing_trigger_id: None,
+            usage_trigger_id: None,
+            first_charge_ms: Some(1_000),
+            grant_usage_to_provider: None,
+        };
+        let mut create_value = norito::json::to_value(&create)
+            .unwrap()
+            .as_object()
+            .cloned()
+            .unwrap();
+        create_value.insert(
+            "private_key".to_owned(),
+            Value::String("forbidden".to_owned()),
+        );
+        assert!(
+            norito::json::from_value::<SubscriptionCreateDto>(Value::Object(create_value)).is_err()
+        );
+
+        let action = SubscriptionActionDto {
+            authority: BOB_ID.clone(),
+            charge_at_ms: None,
+            cancel_mode: None,
+        };
+        let mut action_value = norito::json::to_value(&action)
+            .unwrap()
+            .as_object()
+            .cloned()
+            .unwrap();
+        action_value.insert(
+            "legacy_action".to_owned(),
+            Value::String("pause".to_owned()),
+        );
+        assert!(
+            norito::json::from_value::<SubscriptionActionDto>(Value::Object(action_value)).is_err()
+        );
+    }
+
+    #[test]
+    fn subscription_cancel_mode_has_one_exact_tagged_shape() {
+        assert_eq!(
+            norito::json::to_value(&SubscriptionCancelMode::PeriodEnd).unwrap(),
+            norito::json!({
+                "mode": "period_end",
+                "value": null
+            })
+        );
+        assert!(
+            norito::json::from_str::<SubscriptionCancelMode>(r#""period_end""#).is_err(),
+            "legacy string cancellation modes must not decode"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscription_action_routes_reject_irrelevant_or_defaulted_options() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554405fa");
+        let subscription_id: NftId = "sub-strict-action$wonderland.universal".parse().unwrap();
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            subscriber.clone(),
+            vec![(plan_id.clone(), sample_plan(provider.clone()))],
+            vec![(
+                subscription_id.clone(),
+                sample_subscription_state(
+                    plan_id,
+                    provider,
+                    subscriber.clone(),
+                    SubscriptionStatus::Active,
+                    "bill_strict_action".parse().unwrap(),
+                ),
+                None,
+            )],
+        );
+
+        let pause = handle_post_v1_subscription_pause(
+            state.clone(),
+            subscription_id.clone(),
+            NoritoJson(SubscriptionActionDto {
+                authority: subscriber.clone(),
+                charge_at_ms: Some(1_000),
+                cancel_mode: None,
+            }),
+        )
+        .await;
+        assert!(pause.is_err(), "pause must reject charge options");
+
+        let cancel = handle_post_v1_subscription_cancel(
+            state,
+            subscription_id,
+            NoritoJson(SubscriptionActionDto {
+                authority: subscriber,
+                charge_at_ms: None,
+                cancel_mode: None,
+            }),
+        )
+        .await;
+        assert!(
+            cancel.is_err(),
+            "cancel must not default an omitted cancellation mode"
+        );
     }
 }
 
