@@ -360,6 +360,75 @@ def test_fixture_file_size_fstat_error_is_sanitized(
         raise AssertionError("fixture file size ignored fstat failure")
 
 
+def test_fixture_file_bytes_uses_no_follow_descriptor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = tmp_path / "payload.bin"
+    payload.write_bytes(b"fixture payload")
+    original_open = os.open
+    opened: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == payload:
+            opened["flags"] = flags
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    assert MODULE.fixture_file_bytes(payload, "chunker payload") == b"fixture payload"
+    assert opened["flags"] == MODULE.read_open_flags()
+    if hasattr(os, "O_NOFOLLOW"):
+        assert opened["flags"] & os.O_NOFOLLOW
+
+
+def test_main_emits_deterministic_payload_bound_v1_plan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = b"fixture payload"
+    payload_path = tmp_path / "fuzz" / "sorafs_chunker" / "sf1_profile_v1_input.bin"
+    payload_path.parent.mkdir(parents=True)
+    payload_path.write_bytes(payload)
+
+    fixture_path = (
+        tmp_path / "fixtures" / "sorafs_chunker" / "sf1_profile_v1.json"
+    )
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "chunk_lengths": [len(payload)],
+                "chunk_offsets": [0],
+                "chunk_digests_blake3": [MODULE.blake3.blake3(payload).hexdigest()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "generated"
+    monkeypatch.setattr(MODULE, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", [str(MODULE_PATH), "--output", str(output)])
+
+    MODULE.main()
+    first = (output / "plan.json").read_bytes()
+    MODULE.main()
+    second = (output / "plan.json").read_bytes()
+
+    assert second == first
+    assert json.loads(first) == {
+        "schema": "sorafs.chunk_fetch_plan.v1",
+        "payload_digest_blake3_hex": MODULE.blake3.blake3(payload).hexdigest(),
+        "chunk_fetch_specs": [
+            {
+                "chunk_index": 0,
+                "offset": 0,
+                "length": len(payload),
+                "digest_blake3": MODULE.blake3.blake3(payload).hexdigest(),
+            }
+        ],
+    }
+
+
 def test_build_telemetry_includes_reputation_score() -> None:
     telemetry = MODULE.build_telemetry([{"provider_id": "fixture-provider-0"}])
 

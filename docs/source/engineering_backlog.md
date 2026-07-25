@@ -6025,8 +6025,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  `R` parser before backend verification, SoraFS CLI detached
 			  manifest signature verification now uses dalek `verify_strict` for the same
 					  malformed-`R` boundary, SoraFS PoTR receipt validation routes Ed25519
-					  receipt signatures, provider-admission council signatures, and repair
-					  signed-auditor signatures through the same malformed-`R` preflight,
+						  receipt signatures and provider-admission council signatures through the
+						  same malformed-`R` preflight,
 					  transaction submission receipt verification now pins all-zero, short,
 					  small-order-`R`, and noncanonical-`R` receipt-signature rejection before
 					  receipt signing-byte verification, while generic RAM-LFE execution
@@ -6054,7 +6054,7 @@ redistributable schemas, and official trust/revocation bundles.
 					  RAM-LFE receipts/openings, Torii app-auth single-signature/witness
 					  payloads, Torii Offline V1/V2 JSON signatures, Torii DA receipt operator
 					  signatures, Torii DA Taikai SSM publisher signatures, Torii signed query
-					  requests, Torii SoraFS repair-worker signatures, SoraFS orchestrator Taikai
+						  requests, caller-signed Torii SoraFS repair command transactions, SoraFS orchestrator Taikai
 					  cache-admission envelope/gossip signatures, Core oracle observation
 					  signatures, Core SoraDNS directory-builder signatures, runtime-upgrade
 					  provenance signatures, Offline note key-certificate issuer signatures,
@@ -6064,7 +6064,7 @@ redistributable schemas, and official trust/revocation bundles.
 					  verification,
 					  governance-policy verification, moderation summary acceptance, transport
 					  accounting, provenance-payload, app-auth wrapping/validation, offline JSON,
-					  DA receipt, Taikai signing-manifest, query-payload, repair-worker-payload,
+						  DA receipt, Taikai signing-manifest, query-payload, repair-transaction-payload,
 					  cache-admission payload, observation-payload,
 					  directory-record, runtime-upgrade-provenance, offline-certificate, attestation-hash,
 					  consensus-preimage, or trust-book mutation, and the final signer-admission
@@ -10221,8 +10221,8 @@ redistributable schemas, and official trust/revocation bundles.
     Ed25519/secp256k1 key generation before draft/finalize regressions consume
     them;
     high-level `iroha` client multisig, account-read, Sumeragi mismatch,
-    operator-header, and SoraFS repair worker fixtures now use checked random
-    key generation plus checked repair-worker signatures before
+	    operator-header, and SoraFS repair transaction fixtures now use checked
+	    random key generation plus checked transaction signatures before
     request/response regressions consume them;
     high-level `iroha` DA request-signing and rent-ledger account fixtures now
     use checked deterministic Ed25519 seed expansion before request digest and
@@ -10716,19 +10716,19 @@ redistributable schemas, and official trust/revocation bundles.
     `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
     WSV-grace success and wrong-key, tampered, malformed, replayed, and
     substituted receipt/voucher cases;
-    Torii SoraFS repair worker and discovery alias-proof fixtures now use
+    Torii SoraFS repair transaction and discovery alias-proof fixtures now use
     checked `SignatureOf::try_new` / `Signature::try_new`, with repair positive,
-    invalid-signature, fresh-alias, and expired-alias regressions rerun under
+    invalid-transaction-signature, fresh-alias, and expired-alias regressions rerun under
     `app_api`; Torii `lib.rs` routed-read escrow, push identity, EVM DA receipt
-    signer, RAM-LFE output-opening, and SoraFS repair-worker auth fixtures now use
+    signer, RAM-LFE output-opening, and SoraFS repair transaction auth fixtures now use
     checked seed derivation and `SignatureOf::try_new`, with push, identifier,
     repair, and routed-read regressions rerun;
     Torii grouped core/Nexus/governance test fixtures now use checked
     `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
     bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
     gated governance VRF ordering regressions rerun;
-    Torii routing overlong multisig selector, contract bundle, repair-worker
-    action, and account transaction filter fixtures now use checked seed and
+    Torii routing overlong multisig selector, contract bundle, repair native
+    action transaction, and account transaction filter fixtures now use checked seed and
     signature constructors before selector, receipt, repair, and filter
     regressions consume them;
     integration App API canonical request and DA/Taikai ingest fixtures now use

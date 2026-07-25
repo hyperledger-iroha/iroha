@@ -74,7 +74,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     addr::SocketAddr,
-    numeric::{Numeric, Quantity, XorQuantity},
+    numeric::{Numeric, Quantity},
     unique_vec::UniqueVec,
 };
 use norito::{codec::Encode, streaming::EntropyMode};
@@ -2323,8 +2323,6 @@ pub struct Governance {
     pub sorafs_pricing: PricingScheduleRecord,
     /// SoraFS under-delivery penalty policy applied to provider credits.
     pub sorafs_penalty: SorafsPenaltyPolicy,
-    /// Repair escalation governance policy for SoraFS incidents.
-    pub sorafs_repair_escalation: RepairEscalationPolicyV1,
     /// SoraFS telemetry authentication/replay safeguards.
     pub sorafs_telemetry: SorafsTelemetryPolicy,
     /// Static provider→owner bindings seeded at startup.
@@ -2436,7 +2434,6 @@ impl Default for Governance {
                 defaults::governance::sorafs_pin_fee::treasury_account_id(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
-            sorafs_repair_escalation: RepairEscalationPolicyV1::default(),
             sorafs_telemetry: SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: BTreeMap::new(),
             conviction_step_blocks: 100,
@@ -5664,6 +5661,120 @@ impl Default for SumeragiQueues {
     }
 }
 
+/// Shared finite runtime bounds for Sumeragi v2 lane, merge, and Native AMX services.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiV2RuntimeLimits {
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    pub authenticated_merge_qc_capacity: NonZeroUsize,
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    pub merge_leader_body_frame_headroom_bytes: NonZeroUsize,
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    pub autonomous_carrier_headroom_bytes: NonZeroUsize,
+    /// Cadence for retrying durable autonomous queue reservation.
+    pub autonomous_producer_recheck: Duration,
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    pub historical_recovery_stuck_attempts: NonZeroU32,
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    pub historical_recovery_retry_tier_attempts: NonZeroU32,
+    /// Highest exponential historical-recovery retry tier.
+    pub historical_recovery_max_retry_tier: NonZeroU32,
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    pub sidecar_service_burst: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies retained globally.
+    pub merge_sidecar_inbound_session_capacity: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
+    pub merge_sidecar_inbound_sessions_per_peer: NonZeroUsize,
+    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes: NonZeroUsize,
+    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes_per_peer: NonZeroUsize,
+    /// Deferred global blocks waiting for exact certified sidecars.
+    pub merge_sidecar_deferred_block_capacity: NonZeroUsize,
+    /// Maximum future carrier-height distance admitted for deferred sidecars.
+    pub merge_sidecar_future_block_distance: NonZeroU64,
+    /// Base timeout before retrying an incomplete certified sidecar request.
+    pub merge_sidecar_request_timeout: Duration,
+    /// Concurrent response sessions retained for one authenticated source.
+    pub merge_sidecar_outbound_sessions_per_source: NonZeroUsize,
+    /// Response bytes retained for one authenticated source.
+    pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
+    /// Idempotency request gates retained for one authenticated source.
+    pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
+    /// Certified merge entries retained in Kura before canonical carrier commitment.
+    pub pending_certified_merge_entry_capacity: NonZeroUsize,
+    /// QueuePlan admission certificates retained before canonical carrier commitment.
+    pub pending_queue_plan_admission_capacity: NonZeroUsize,
+    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    pub pending_control_sidecar_bytes: NonZeroUsize,
+    /// Durable merge-signing decisions retained before committed-frontier GC.
+    pub merge_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical merge-signing decision.
+    pub merge_signing_guard_record_bytes: NonZeroUsize,
+    /// Aggregate bytes retained in the merge-signing journal.
+    pub merge_signing_guard_total_bytes: NonZeroUsize,
+    /// Durable Native AMX signing decisions retained at one height.
+    pub native_amx_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    pub native_amx_signing_guard_record_bytes: NonZeroUsize,
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
+}
+
+impl Default for SumeragiV2RuntimeLimits {
+    fn default() -> Self {
+        Self {
+            authenticated_merge_qc_capacity: defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            merge_leader_body_frame_headroom_bytes:
+                defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            autonomous_carrier_headroom_bytes:
+                defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            autonomous_producer_recheck: defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            historical_recovery_stuck_attempts:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            historical_recovery_retry_tier_attempts:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            historical_recovery_max_retry_tier:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            sidecar_service_burst: defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            merge_sidecar_inbound_session_capacity:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY,
+            merge_sidecar_inbound_sessions_per_peer:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER,
+            merge_sidecar_inbound_assembly_bytes:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES,
+            merge_sidecar_inbound_assembly_bytes_per_peer:
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER,
+            merge_sidecar_deferred_block_capacity:
+                defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY,
+            merge_sidecar_future_block_distance:
+                defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE,
+            merge_sidecar_request_timeout: defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT,
+            merge_sidecar_outbound_sessions_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE,
+            merge_sidecar_outbound_bytes_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
+            merge_sidecar_server_request_gates_per_source:
+                defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
+            pending_certified_merge_entry_capacity:
+                defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+            pending_queue_plan_admission_capacity:
+                defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
+            pending_control_sidecar_bytes: defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES,
+            merge_signing_guard_record_capacity:
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY,
+            merge_signing_guard_record_bytes:
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES,
+            merge_signing_guard_total_bytes: defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES,
+            native_amx_signing_guard_record_capacity:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+            native_amx_signing_guard_record_bytes:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            native_amx_signing_guard_anchor_bytes:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+        }
+    }
+}
+
 /// Consensus key-rotation and HSM policy.
 #[derive(Debug, Clone)]
 pub struct SumeragiKeys {
@@ -5711,6 +5822,8 @@ pub struct Sumeragi {
     pub block: SumeragiBlock,
     /// Bounded asynchronous adapter queues.
     pub queues: SumeragiQueues,
+    /// Shared finite lane, merge, recovery, and Native AMX service bounds.
+    pub limits: SumeragiV2RuntimeLimits,
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
 }
@@ -5721,6 +5834,7 @@ impl Default for Sumeragi {
             role: NodeRole::Validator,
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
+            limits: SumeragiV2RuntimeLimits::default(),
             keys: SumeragiKeys::default(),
         }
     }
@@ -5877,6 +5991,256 @@ impl Sumeragi {
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 ready-body byte capacity",
             ))?;
+        let authenticated_merge_qc_capacity = canonical_bounded_size(
+            "sumeragi.limits.authenticated_merge_qc_capacity",
+            self.limits.authenticated_merge_qc_capacity.get(),
+            defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY_MAX,
+        )?;
+        let merge_leader_body_frame_headroom_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_leader_body_frame_headroom_bytes",
+            self.limits.merge_leader_body_frame_headroom_bytes.get(),
+            defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES_MAX,
+        )?;
+        let autonomous_carrier_headroom_bytes = canonical_bounded_size(
+            "sumeragi.limits.autonomous_carrier_headroom_bytes",
+            self.limits.autonomous_carrier_headroom_bytes.get(),
+            defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES_MAX,
+        )?;
+        if autonomous_carrier_headroom_bytes >= max_payload_bytes {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.autonomous_carrier_headroom_bytes",
+                actual: autonomous_carrier_headroom_bytes,
+                maximum: max_payload_bytes - 1,
+            });
+        }
+        let autonomous_producer_recheck_ms = canonical_duration_ms(
+            "sumeragi.limits.autonomous_producer_recheck_ms",
+            self.limits.autonomous_producer_recheck,
+        )?;
+        if autonomous_producer_recheck_ms
+            > defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS
+        {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.autonomous_producer_recheck_ms",
+                actual: autonomous_producer_recheck_ms,
+                maximum: defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS,
+            });
+        }
+        let historical_recovery_stuck_attempts = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_stuck_attempts",
+            self.limits.historical_recovery_stuck_attempts,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX,
+        )?;
+        let historical_recovery_retry_tier_attempts = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_retry_tier_attempts",
+            self.limits.historical_recovery_retry_tier_attempts,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX,
+        )?;
+        let historical_recovery_max_retry_tier = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_max_retry_tier",
+            self.limits.historical_recovery_max_retry_tier,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_MAX,
+        )?;
+        let sidecar_service_burst = canonical_bounded_size(
+            "sumeragi.limits.sidecar_service_burst",
+            self.limits.sidecar_service_burst.get(),
+            defaults::sumeragi::V2_SIDECAR_SERVICE_BURST_MAX,
+        )?;
+        let maximum_service_burst = runtime_completion_reserve.min(chunk_queue_capacity);
+        if sidecar_service_burst > maximum_service_burst {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.sidecar_service_burst",
+                actual: sidecar_service_burst,
+                maximum: maximum_service_burst,
+            });
+        }
+        let merge_sidecar_inbound_session_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+            self.limits.merge_sidecar_inbound_session_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+            merge_sidecar_inbound_session_capacity,
+            2,
+        )?;
+        let merge_sidecar_inbound_sessions_per_peer = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            self.limits.merge_sidecar_inbound_sessions_per_peer.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            merge_sidecar_inbound_sessions_per_peer,
+            2,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+            merge_sidecar_inbound_sessions_per_peer,
+            merge_sidecar_inbound_session_capacity,
+        )?;
+        let merge_sidecar_inbound_assembly_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+            self.limits.merge_sidecar_inbound_assembly_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+            merge_sidecar_inbound_assembly_bytes,
+            canonical_size(
+                "Sumeragi v2 merge-sidecar inbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+            )?,
+        )?;
+        let merge_sidecar_inbound_assembly_bytes_per_peer = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            self.limits
+                .merge_sidecar_inbound_assembly_bytes_per_peer
+                .get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            merge_sidecar_inbound_assembly_bytes_per_peer,
+            canonical_size(
+                "Sumeragi v2 per-peer merge-sidecar inbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+            )?,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+            merge_sidecar_inbound_assembly_bytes_per_peer,
+            merge_sidecar_inbound_assembly_bytes,
+        )?;
+        let merge_sidecar_deferred_block_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+            self.limits.merge_sidecar_deferred_block_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+            merge_sidecar_deferred_block_capacity,
+            2,
+        )?;
+        let merge_sidecar_future_block_distance = canonical_bounded_u64(
+            "sumeragi.limits.merge_sidecar_future_block_distance",
+            self.limits.merge_sidecar_future_block_distance.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX,
+        )?;
+        let merge_sidecar_request_timeout_ms = canonical_duration_ms(
+            "sumeragi.limits.merge_sidecar_request_timeout_ms",
+            self.limits.merge_sidecar_request_timeout,
+        )?;
+        require_maximum(
+            "sumeragi.limits.merge_sidecar_request_timeout_ms",
+            merge_sidecar_request_timeout_ms,
+            defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS,
+        )?;
+        let merge_sidecar_outbound_sessions_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_outbound_sessions_per_source",
+            self.limits.merge_sidecar_outbound_sessions_per_source.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE_MAX,
+        )?;
+        let merge_sidecar_outbound_bytes_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+            self.limits.merge_sidecar_outbound_bytes_per_source.get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+            merge_sidecar_outbound_bytes_per_source,
+            canonical_size(
+                "Sumeragi v2 merge-sidecar outbound byte minimum",
+                defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN,
+            )?,
+        )?;
+        let merge_sidecar_server_request_gates_per_source = canonical_bounded_size(
+            "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+            self.limits
+                .merge_sidecar_server_request_gates_per_source
+                .get(),
+            defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+            merge_sidecar_server_request_gates_per_source,
+            merge_sidecar_outbound_sessions_per_source,
+        )?;
+        let pending_certified_merge_entry_capacity = canonical_bounded_size(
+            "sumeragi.limits.pending_certified_merge_entry_capacity",
+            self.limits.pending_certified_merge_entry_capacity.get(),
+            defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX,
+        )?;
+        let pending_queue_plan_admission_capacity = canonical_bounded_size(
+            "sumeragi.limits.pending_queue_plan_admission_capacity",
+            self.limits.pending_queue_plan_admission_capacity.get(),
+            defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
+        )?;
+        let pending_control_sidecar_bytes = canonical_bounded_size(
+            "sumeragi.limits.pending_control_sidecar_bytes",
+            self.limits.pending_control_sidecar_bytes.get(),
+            defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.pending_control_sidecar_bytes",
+            pending_control_sidecar_bytes,
+            u64::try_from(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MIN)
+                .expect("static pending-control sidecar byte minimum fits u64"),
+        )?;
+        let merge_signing_guard_record_capacity = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_record_capacity",
+            self.limits.merge_signing_guard_record_capacity.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX,
+        )?;
+        let merge_signing_guard_record_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_record_bytes",
+            self.limits.merge_signing_guard_record_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MAX,
+        )?;
+        require_minimum(
+            "sumeragi.limits.merge_signing_guard_record_bytes",
+            merge_signing_guard_record_bytes,
+            canonical_size(
+                "Sumeragi v2 merge-signing record byte minimum",
+                defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN,
+            )?,
+        )?;
+        let merge_signing_guard_total_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_signing_guard_total_bytes",
+            self.limits.merge_signing_guard_total_bytes.get(),
+            defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX,
+        )?;
+        let merge_signing_guard_minimum_total_bytes = merge_signing_guard_record_bytes
+            .checked_add(
+                u64::try_from(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES)
+                    .expect("static merge-signing metadata headroom fits u64"),
+            )
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 merge-signing aggregate byte minimum",
+            ))?;
+        require_minimum(
+            "sumeragi.limits.merge_signing_guard_total_bytes",
+            merge_signing_guard_total_bytes,
+            merge_signing_guard_minimum_total_bytes.max(
+                u64::try_from(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MIN)
+                    .expect("static merge-signing minimum fits u64"),
+            ),
+        )?;
+        let native_amx_signing_guard_record_capacity = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_record_capacity",
+            self.limits.native_amx_signing_guard_record_capacity.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX,
+        )?;
+        let native_amx_signing_guard_record_bytes = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_record_bytes",
+            self.limits.native_amx_signing_guard_record_bytes.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_MAX,
+        )?;
+        let native_amx_signing_guard_anchor_bytes = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_anchor_bytes",
+            self.limits.native_amx_signing_guard_anchor_bytes.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_MAX,
+        )?;
 
         if self.keys.allowed_algorithms.is_empty()
             || !self.keys.allowed_algorithms.contains(&Algorithm::BlsNormal)
@@ -5924,6 +6288,33 @@ impl Sumeragi {
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
+                authenticated_merge_qc_capacity,
+                merge_leader_body_frame_headroom_bytes,
+                autonomous_carrier_headroom_bytes,
+                autonomous_producer_recheck_ms,
+                historical_recovery_stuck_attempts,
+                historical_recovery_retry_tier_attempts,
+                historical_recovery_max_retry_tier,
+                sidecar_service_burst,
+                merge_sidecar_inbound_session_capacity,
+                merge_sidecar_inbound_sessions_per_peer,
+                merge_sidecar_inbound_assembly_bytes,
+                merge_sidecar_inbound_assembly_bytes_per_peer,
+                merge_sidecar_deferred_block_capacity,
+                merge_sidecar_future_block_distance,
+                merge_sidecar_request_timeout_ms,
+                merge_sidecar_outbound_sessions_per_source,
+                merge_sidecar_outbound_bytes_per_source,
+                merge_sidecar_server_request_gates_per_source,
+                pending_certified_merge_entry_capacity,
+                pending_queue_plan_admission_capacity,
+                pending_control_sidecar_bytes,
+                merge_signing_guard_record_capacity,
+                merge_signing_guard_record_bytes,
+                merge_signing_guard_total_bytes,
+                native_amx_signing_guard_record_capacity,
+                native_amx_signing_guard_record_bytes,
+                native_amx_signing_guard_anchor_bytes,
             },
             key_policy: SumeragiV2KeyPolicy {
                 activation_lead_blocks: self.keys.activation_lead_blocks,
@@ -5938,10 +6329,11 @@ impl Sumeragi {
 }
 /// Version of the canonical Norito shared-config projection.
 ///
-/// Version 3 additionally binds the authenticated non-validator fair-ingress geometry.
-/// Nodes with incompatible source isolation or the retired fixed pacemaker
-/// deadline therefore derive a different handshake fingerprint.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;
+/// Version 6 additionally binds Kura's pending certified-merge and QueuePlan
+/// admission stores, including their shared aggregate byte budget. Nodes with
+/// incompatible pre-carrier persistence geometry therefore derive a different
+/// handshake fingerprint.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;
 
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
@@ -6046,6 +6438,60 @@ pub struct SumeragiV2Limits {
     pub ready_body_bytes: u64,
     /// Maximum certified body-fetch requests in flight.
     pub certified_request_capacity: u64,
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    pub authenticated_merge_qc_capacity: u64,
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    pub merge_leader_body_frame_headroom_bytes: u64,
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    pub autonomous_carrier_headroom_bytes: u64,
+    /// Cadence for retrying durable autonomous queue reservation.
+    pub autonomous_producer_recheck_ms: u64,
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    pub historical_recovery_stuck_attempts: u64,
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    pub historical_recovery_retry_tier_attempts: u64,
+    /// Highest exponential historical-recovery retry tier.
+    pub historical_recovery_max_retry_tier: u64,
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    pub sidecar_service_burst: u64,
+    /// Concurrent certified merge-sidecar assemblies retained globally.
+    pub merge_sidecar_inbound_session_capacity: u64,
+    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
+    pub merge_sidecar_inbound_sessions_per_peer: u64,
+    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes: u64,
+    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
+    pub merge_sidecar_inbound_assembly_bytes_per_peer: u64,
+    /// Deferred global blocks waiting for exact certified sidecars.
+    pub merge_sidecar_deferred_block_capacity: u64,
+    /// Maximum future carrier-height distance admitted for deferred sidecars.
+    pub merge_sidecar_future_block_distance: u64,
+    /// Base timeout before retrying an incomplete certified sidecar request.
+    pub merge_sidecar_request_timeout_ms: u64,
+    /// Concurrent response sessions retained for one authenticated source.
+    pub merge_sidecar_outbound_sessions_per_source: u64,
+    /// Response bytes retained for one authenticated source.
+    pub merge_sidecar_outbound_bytes_per_source: u64,
+    /// Idempotency request gates retained for one authenticated source.
+    pub merge_sidecar_server_request_gates_per_source: u64,
+    /// Certified merge entries retained in Kura before canonical carrier commitment.
+    pub pending_certified_merge_entry_capacity: u64,
+    /// QueuePlan admission certificates retained before canonical carrier commitment.
+    pub pending_queue_plan_admission_capacity: u64,
+    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    pub pending_control_sidecar_bytes: u64,
+    /// Durable merge-signing decisions retained before committed-frontier GC.
+    pub merge_signing_guard_record_capacity: u64,
+    /// Runtime byte ceiling for one canonical merge-signing decision.
+    pub merge_signing_guard_record_bytes: u64,
+    /// Aggregate bytes retained in the merge-signing journal.
+    pub merge_signing_guard_total_bytes: u64,
+    /// Durable Native AMX signing decisions retained at one height.
+    pub native_amx_signing_guard_record_capacity: u64,
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    pub native_amx_signing_guard_record_bytes: u64,
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    pub native_amx_signing_guard_anchor_bytes: u64,
 }
 
 /// Canonical consensus signing-key policy.
@@ -6146,6 +6592,27 @@ pub enum SumeragiV2ConfigError {
     /// A duration or size exceeded its fixed-width canonical representation.
     #[error("{0} exceeds the canonical u64 representation")]
     LimitOverflow(&'static str),
+    /// A finite runtime limit exceeded its fixed implementation ceiling or
+    /// the configured resource budget which contains it.
+    #[error("{field} is {actual}, above the admitted maximum {maximum}")]
+    LimitAboveMaximum {
+        /// Fully-qualified configuration field.
+        field: &'static str,
+        /// Configured value.
+        actual: u64,
+        /// Greatest admitted value.
+        maximum: u64,
+    },
+    /// A finite runtime limit cannot provide its mandatory protocol corridor.
+    #[error("{field} is {actual}, below the admitted minimum {minimum}")]
+    LimitBelowMinimum {
+        /// Fully-qualified configuration field.
+        field: &'static str,
+        /// Configured value.
+        actual: u64,
+        /// Smallest admitted value.
+        minimum: u64,
+    },
     /// The serialized reducer FIFO cannot admit its reserved traffic classes.
     #[error("Sumeragi v2 command queue capacity {actual} is below minimum {minimum}")]
     CommandQueueTooSmall {
@@ -6237,6 +6704,79 @@ fn canonical_size(
     value: usize,
 ) -> core::result::Result<u64, SumeragiV2ConfigError> {
     u64::try_from(value).map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))
+}
+
+fn canonical_bounded_size(
+    field: &'static str,
+    value: usize,
+    maximum: usize,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    let value = canonical_size(field, value)?;
+    let maximum = canonical_size(field, maximum)?;
+    if value > maximum {
+        return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+            field,
+            actual: value,
+            maximum,
+        });
+    }
+    Ok(value)
+}
+
+fn canonical_bounded_u32(
+    field: &'static str,
+    value: NonZeroU32,
+    maximum: u32,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    let value = u64::from(value.get());
+    let maximum = u64::from(maximum);
+    if value > maximum {
+        return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+            field,
+            actual: value,
+            maximum,
+        });
+    }
+    Ok(value)
+}
+
+fn canonical_bounded_u64(
+    field: &'static str,
+    value: u64,
+    maximum: u64,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    require_maximum(field, value, maximum)?;
+    Ok(value)
+}
+
+fn require_maximum(
+    field: &'static str,
+    value: u64,
+    maximum: u64,
+) -> core::result::Result<(), SumeragiV2ConfigError> {
+    if value > maximum {
+        return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+            field,
+            actual: value,
+            maximum,
+        });
+    }
+    Ok(())
+}
+
+fn require_minimum(
+    field: &'static str,
+    value: u64,
+    minimum: u64,
+) -> core::result::Result<(), SumeragiV2ConfigError> {
+    if value < minimum {
+        return Err(SumeragiV2ConfigError::LimitBelowMinimum {
+            field,
+            actual: value,
+            minimum,
+        });
+    }
+    Ok(())
 }
 
 /// Trusted peers configuration: the local peer and its peers.
@@ -7687,48 +8227,29 @@ pub struct SorafsPublishDiscovery {
     pub pin_torii_urls: Vec<String>,
 }
 
-/// Repair scheduler configuration.
-#[derive(Debug, Clone)]
+/// Native repair worker and durable transaction-forwarder configuration.
+#[derive(Debug, Clone, Copy)]
 pub struct SorafsRepair {
-    /// Enable the repair scheduler.
+    /// Enable native repair processing.
     pub enabled: bool,
-    /// Optional directory for durable repair state.
-    pub state_dir: Option<PathBuf>,
-    /// Claim TTL for repair tickets (seconds).
+    /// Lease duration requested by native repair claims (seconds).
     pub claim_ttl_secs: u64,
-    /// Heartbeat interval/TTL for active claims (seconds).
+    /// Renewal lead time for native repair claims (seconds).
     pub heartbeat_interval_secs: u64,
-    /// Maximum number of attempts before escalation.
+    /// Maximum transaction forwarding attempts before dead-lettering.
     pub max_attempts: u32,
-    /// Concurrent repair workers per node.
+    /// Concurrent native repair executions per node.
     pub worker_concurrency: usize,
-    /// Initial retry backoff for failed repairs (seconds).
-    pub backoff_initial_secs: u64,
-    /// Maximum retry backoff for failed repairs (seconds).
-    pub backoff_max_secs: u64,
-    /// Default penalty used for scheduler-generated repair slash proposals.
-    pub default_slash_penalty: XorQuantity,
-    /// Per-auditor signed report/slash request rate (tokens/sec).
-    pub auditor_rate_per_sec: Option<NonZeroU32>,
-    /// Per-auditor signed report/slash request burst capacity.
-    pub auditor_burst: Option<NonZeroU32>,
 }
 
 impl Default for SorafsRepair {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::repair::ENABLED,
-            state_dir: defaults::sorafs::repair::state_dir(),
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
             max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
-            backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
-            backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
-            default_slash_penalty: defaults::sorafs::repair::default_slash_penalty(),
-            auditor_rate_per_sec: defaults::sorafs::repair::AUDITOR_RATE_PER_SEC
-                .and_then(NonZeroU32::new),
-            auditor_burst: defaults::sorafs::repair::AUDITOR_BURST.and_then(NonZeroU32::new),
         }
     }
 }
@@ -7746,8 +8267,6 @@ pub struct SorafsGc {
     pub max_deletions_per_run: u32,
     /// Grace window for retention expiry (seconds).
     pub retention_grace_secs: u64,
-    /// Attempt a GC sweep before rejecting new pins when storage is full.
-    pub pre_admission_sweep: bool,
 }
 
 impl Default for SorafsGc {
@@ -7758,7 +8277,6 @@ impl Default for SorafsGc {
             interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
             max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
             retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
-            pre_admission_sweep: defaults::sorafs::gc::PRE_ADMISSION_SWEEP,
         }
     }
 }
@@ -7924,8 +8442,10 @@ pub struct SorafsStorage {
     pub metering_smoothing: SorafsMeteringSmoothing,
     /// Stream-token issuance configuration for chunk-range gateways.
     pub stream_tokens: SorafsTokenConfig,
-    /// Local orderbook admission policy.
-    pub orderbook: SorafsOrderbook,
+    /// Durable native orderbook transaction worker policy.
+    pub orderbook_worker: SorafsOrderbookWorker,
+    /// Durable native reserve/rent transaction worker policy.
+    pub reserve_worker: SorafsReserveWorker,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     pub reputation_trust_policy_path: Option<PathBuf>,
     /// Canonical Norito trust-policy file required for governed pricing admission.
@@ -7936,8 +8456,6 @@ pub struct SorafsStorage {
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
     pub evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule,
-    /// Local SFM-6 reserve lifecycle advancement scheduler.
-    pub reserve_lifecycle: SorafsReserveLifecycleSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
@@ -8153,7 +8671,7 @@ pub struct SorafsModerationOrchestrator {
     pub max_outbox_entries: usize,
     /// Maximum stable operation identities and terminal dead letters.
     pub max_idempotency_records: usize,
-    /// Maximum settlement/publication handoff identities.
+    /// Independent retention ceiling for downstream handoffs and panel notifications.
     pub max_handoffs: usize,
     /// Safe attempts under one unchanged operation identity.
     pub max_submit_attempts: u32,
@@ -8165,13 +8683,69 @@ pub struct SorafsModerationOrchestrator {
     pub maintenance_batch_limit: usize,
 }
 
-/// SoraFS local orderbook admission policy.
+/// Operational policy for the durable native orderbook transaction worker.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsOrderbookWorker {
+    /// Whether finalized-state scanning and transaction forwarding are enabled.
+    pub enabled: bool,
+    /// Finalized-state scan cadence.
+    pub scan_interval: Duration,
+    /// Maximum fills requested by one native match transaction.
+    pub match_batch_limit: u32,
+    /// Maximum expiries/closures requested by one native maintenance transaction.
+    pub maintenance_batch_limit: u32,
+    /// Maximum pending semantic operations retained durably.
+    pub max_pending: u32,
+    /// Maximum finalized idempotency tombstones retained durably.
+    pub max_completed: u32,
+    /// Maximum terminal dead letters retained durably.
+    pub max_dead_letters: u32,
+    /// Maximum signing/submission attempts under one semantic identity.
+    pub max_attempts: u32,
+    /// Maximum canonical durable checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+/// Operational policy for the durable native reserve/rent transaction worker.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsReserveWorker {
+    /// Whether generation of new supervised reserve/rent work is enabled.
+    ///
+    /// Finalized reconciliation and drain of the durable outbox remain active
+    /// when this is false.
+    pub enabled: bool,
+    /// Finalized-state scan cadence.
+    pub scan_interval: Duration,
+    /// Maximum durable operations inspected in one fair scan.
+    pub scan_batch_limit: u32,
+    /// Maximum pending semantic operations retained durably.
+    pub max_pending: u32,
+    /// Maximum finalized idempotency tombstones retained durably.
+    pub max_completed: u32,
+    /// Maximum terminal dead letters retained durably.
+    pub max_dead_letters: u32,
+    /// Maximum signing/submission attempts under one semantic identity.
+    pub max_attempts: u32,
+    /// Maximum canonical durable checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+/// Local SFM-4c privacy aggregate publication scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsOrderbook {
-    /// Minimum accepted order quantity in GiB.
-    pub min_order_gib: u64,
-    /// Accepted XOR price tick per GiB.
-    pub price_tick: Quantity,
+pub struct SorafsPrivacyAggregatePopulation {
+    /// Stable public population label.
+    pub label: String,
+    /// Governed selector digest.
+    pub digest: [u8; 32],
+}
+
+/// One fixed metric coordinate in the governed privacy query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPrivacyAggregateMetric {
+    /// Stable metric key.
+    pub key: String,
+    /// Stable public unit.
+    pub unit: String,
 }
 
 /// Local SFM-4c privacy aggregate publication scheduler.
@@ -8181,10 +8755,18 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub enabled: bool,
     /// Width of each privacy aggregate cycle, in seconds.
     pub cycle_seconds: u64,
+    /// Governed inclusive start of the first releasable cycle.
+    pub first_cycle_start_unix: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
     /// Public aggregate identifier prefix.
     pub aggregate_id_prefix: String,
+    /// Stable governed query identity, unchanged across policy rotations.
+    pub query_id: Option<[u8; 32]>,
+    /// Fixed, sorted public population universe.
+    pub population_inventory: Vec<SorafsPrivacyAggregatePopulation>,
+    /// Fixed, sorted public metric schema.
+    pub metric_schema: Vec<SorafsPrivacyAggregateMetric>,
     /// Governed privacy mode.
     pub privacy_mode: String,
     /// Reduced governed epsilon numerator.
@@ -8214,17 +8796,6 @@ pub struct SorafsEvidenceViewerAuditSchedule {
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
-}
-
-/// Local SFM-6 reserve lifecycle advancement scheduler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SorafsReserveLifecycleSchedule {
-    /// Whether config-backed lifecycle advancement is enabled.
-    pub enabled: bool,
-    /// Interval between lifecycle advancement ticks, in seconds.
-    pub interval_seconds: u64,
-    /// Delay before the first lifecycle advancement tick, in seconds.
-    pub initial_delay_seconds: u64,
 }
 
 /// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
@@ -8264,13 +8835,13 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
-            orderbook: SorafsOrderbook::default(),
+            orderbook_worker: SorafsOrderbookWorker::default(),
+            reserve_worker: SorafsReserveWorker::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
             hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
-            reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
@@ -8349,11 +8920,37 @@ impl Default for SorafsPdpProviderPolicy {
     }
 }
 
-impl Default for SorafsOrderbook {
+impl Default for SorafsOrderbookWorker {
     fn default() -> Self {
+        use defaults::sorafs::storage::orderbook_worker as worker;
+
         Self {
-            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
-            price_tick: defaults::sorafs::storage::orderbook::price_tick(),
+            enabled: worker::ENABLED,
+            scan_interval: Duration::from_millis(worker::SCAN_INTERVAL_MS.get()),
+            match_batch_limit: worker::MATCH_BATCH_LIMIT.get(),
+            maintenance_batch_limit: worker::MAINTENANCE_BATCH_LIMIT.get(),
+            max_pending: worker::MAX_PENDING.get(),
+            max_completed: worker::MAX_COMPLETED.get(),
+            max_dead_letters: worker::MAX_DEAD_LETTERS.get(),
+            max_attempts: worker::MAX_ATTEMPTS.get(),
+            checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl Default for SorafsReserveWorker {
+    fn default() -> Self {
+        use defaults::sorafs::storage::reserve_worker as worker;
+
+        Self {
+            enabled: worker::ENABLED,
+            scan_interval: Duration::from_millis(worker::SCAN_INTERVAL_MS.get()),
+            scan_batch_limit: worker::SCAN_BATCH_LIMIT.get(),
+            max_pending: worker::MAX_PENDING.get(),
+            max_completed: worker::MAX_COMPLETED.get(),
+            max_dead_letters: worker::MAX_DEAD_LETTERS.get(),
+            max_attempts: worker::MAX_ATTEMPTS.get(),
+            checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
         }
     }
 }
@@ -8363,10 +8960,15 @@ impl Default for SorafsPrivacyAggregateSchedule {
         Self {
             enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            first_cycle_start_unix:
+                defaults::sorafs::storage::privacy_aggregates::FIRST_CYCLE_START_UNIX,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
             aggregate_id_prefix:
                 defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string(),
+            query_id: None,
+            population_inventory: Vec::new(),
+            metric_schema: Vec::new(),
             privacy_mode:
                 defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string(),
             epsilon_numerator:
@@ -8395,17 +8997,6 @@ impl Default for SorafsEvidenceViewerAuditSchedule {
             cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
-        }
-    }
-}
-
-impl Default for SorafsReserveLifecycleSchedule {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
-            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
-            initial_delay_seconds:
-                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
         }
     }
 }
@@ -8461,34 +9052,6 @@ impl Default for SorafsPenaltyPolicy {
             cooldown_windows: defaults::governance::sorafs_penalty::COOLDOWN_WINDOWS,
             max_pdp_failures: defaults::governance::sorafs_penalty::MAX_PDP_FAILURES,
             max_potr_breaches: defaults::governance::sorafs_penalty::MAX_POTR_BREACHES,
-        }
-    }
-}
-
-/// Governance policy for repair escalation and slashing decisions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepairEscalationPolicyV1 {
-    /// Approval quorum (basis points) required for escalation/slash decisions.
-    pub quorum_bps: u16,
-    /// Minimum number of distinct voters required.
-    pub minimum_voters: u32,
-    /// Dispute window in seconds after escalation before governance finalizes.
-    pub dispute_window_secs: u64,
-    /// Appeal window in seconds after approval before a decision is final.
-    pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations.
-    pub max_penalty: XorQuantity,
-}
-
-impl Default for RepairEscalationPolicyV1 {
-    fn default() -> Self {
-        Self {
-            quorum_bps: defaults::governance::sorafs_repair_escalation::QUORUM_BPS,
-            minimum_voters: defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS,
-            dispute_window_secs:
-                defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
-            appeal_window_secs: defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
-            max_penalty: defaults::governance::sorafs_repair_escalation::max_penalty(),
         }
     }
 }
@@ -9094,6 +9657,10 @@ pub struct SorafsGatewayCompliance {
     pub checkpoint_path: PathBuf,
     /// Non-zero governance policy identity.
     pub policy_id: [u8; 32],
+    /// Canonical region identity for this gateway.
+    pub region_id: String,
+    /// Canonical gateway identity bound to one active gateway signer.
+    pub gateway_id: String,
     /// Required distinct catalog approvals.
     pub catalog_threshold: u16,
     /// Canonically ordered catalog signers.
@@ -9173,6 +9740,30 @@ impl Default for SorafsAdvertOverrides {
     }
 }
 
+/// One governed Ed25519 signer authorized to approve SoraFS pin manifests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPinApprovalSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Governed Ed25519 verifying key.
+    pub public_key: PublicKey,
+    /// First executing block height at which this key may approve manifests.
+    pub valid_from_block_height: u64,
+    /// First executing block height at which this key is revoked.
+    pub revoked_at_block_height: Option<u64>,
+}
+
+impl SorafsPinApprovalSigner {
+    /// Return whether this signer is authorized at `block_height`.
+    #[must_use]
+    pub fn is_active_at(&self, block_height: u64) -> bool {
+        block_height >= self.valid_from_block_height
+            && self
+                .revoked_at_block_height
+                .is_none_or(|revoked_at| block_height < revoked_at)
+    }
+}
+
 /// Governance-defined constraints enforced on SoraFS pin policies.
 #[derive(Debug, Clone)]
 pub struct SorafsPinPolicyConstraints {
@@ -9186,6 +9777,10 @@ pub struct SorafsPinPolicyConstraints {
     pub allowed_storage_classes: Option<BTreeSet<SorafsStorageClass>>,
     /// Whether manifest validation requires council signatures.
     pub require_council_signatures: bool,
+    /// Required number of distinct active trusted approval signatures.
+    pub approval_quorum: u16,
+    /// Canonically signer-id-ordered trusted Ed25519 approval roster.
+    pub approval_signers: Vec<SorafsPinApprovalSigner>,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -9199,6 +9794,8 @@ impl Default for SorafsPinPolicyConstraints {
             allowed_storage_classes: None,
             require_council_signatures:
                 super::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
+            approval_quorum: super::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
+            approval_signers: Vec::new(),
         }
     }
 }
@@ -11410,6 +12007,43 @@ mod tests {
         assert_eq!(shared.limits.authenticated_non_validator_source_capacity, 2);
         assert_eq!(shared.limits.body_bytes, 231 * 1024 * 1024);
         assert_eq!(shared.limits.body_source_bytes, 33 * 1024 * 1024);
+        assert_eq!(shared.limits.merge_sidecar_inbound_session_capacity, 32);
+        assert_eq!(shared.limits.merge_sidecar_inbound_sessions_per_peer, 4);
+        assert_eq!(
+            shared.limits.merge_sidecar_inbound_assembly_bytes,
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            shared.limits.merge_sidecar_inbound_assembly_bytes_per_peer,
+            32 * 1024 * 1024
+        );
+        assert_eq!(shared.limits.merge_sidecar_deferred_block_capacity, 128);
+        assert_eq!(shared.limits.merge_sidecar_future_block_distance, 64);
+        assert_eq!(shared.limits.merge_sidecar_request_timeout_ms, 10_000);
+        assert_eq!(shared.limits.merge_sidecar_outbound_sessions_per_source, 2);
+        assert_eq!(
+            shared.limits.merge_sidecar_outbound_bytes_per_source,
+            16 * 1024 * 1024
+        );
+        assert_eq!(
+            shared.limits.merge_sidecar_server_request_gates_per_source,
+            4
+        );
+        assert_eq!(shared.limits.pending_certified_merge_entry_capacity, 1_024);
+        assert_eq!(shared.limits.pending_queue_plan_admission_capacity, 1_024);
+        assert_eq!(
+            shared.limits.pending_control_sidecar_bytes,
+            256 * 1024 * 1024
+        );
+        assert_eq!(shared.limits.merge_signing_guard_record_capacity, 1_024);
+        assert_eq!(
+            shared.limits.merge_signing_guard_record_bytes,
+            16 * 1024 * 1024 + 64 * 1024
+        );
+        assert_eq!(
+            shared.limits.merge_signing_guard_total_bytes,
+            256 * 1024 * 1024
+        );
         assert_eq!(
             shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
             "outstanding effect work must fit the trusted completion reserve",
@@ -11507,6 +12141,165 @@ mod tests {
         assert_config_change!("ready-body queue", |config: &mut Sumeragi| {
             config.queues.ready_bodies =
                 NonZeroUsize::new(config.queues.ready_bodies.get() + 1).expect("non-zero");
+        });
+        assert_config_change!("authenticated merge-QC cache", |config: &mut Sumeragi| {
+            config.limits.authenticated_merge_qc_capacity =
+                NonZeroUsize::new(config.limits.authenticated_merge_qc_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-leader headroom", |config: &mut Sumeragi| {
+            config.limits.merge_leader_body_frame_headroom_bytes =
+                NonZeroUsize::new(config.limits.merge_leader_body_frame_headroom_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("autonomous carrier headroom", |config: &mut Sumeragi| {
+            config.limits.autonomous_carrier_headroom_bytes =
+                NonZeroUsize::new(config.limits.autonomous_carrier_headroom_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("autonomous producer cadence", |config: &mut Sumeragi| {
+            config.limits.autonomous_producer_recheck += Duration::from_millis(1);
+        });
+        assert_config_change!("recovery stuck threshold", |config: &mut Sumeragi| {
+            config.limits.historical_recovery_stuck_attempts =
+                NonZeroU32::new(config.limits.historical_recovery_stuck_attempts.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("recovery retry tier attempts", |config: &mut Sumeragi| {
+            config.limits.historical_recovery_retry_tier_attempts =
+                NonZeroU32::new(config.limits.historical_recovery_retry_tier_attempts.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("recovery maximum retry tier", |config: &mut Sumeragi| {
+            config.limits.historical_recovery_max_retry_tier =
+                NonZeroU32::new(config.limits.historical_recovery_max_retry_tier.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("sidecar service burst", |config: &mut Sumeragi| {
+            config.limits.sidecar_service_burst =
+                NonZeroUsize::new(config.limits.sidecar_service_burst.get() + 1).expect("non-zero");
+        });
+        assert_config_change!("merge-sidecar inbound sessions", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_inbound_session_capacity =
+                NonZeroUsize::new(config.limits.merge_sidecar_inbound_session_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!(
+            "merge-sidecar per-peer inbound sessions",
+            |config: &mut Sumeragi| {
+                config.limits.merge_sidecar_inbound_sessions_per_peer = NonZeroUsize::new(
+                    config.limits.merge_sidecar_inbound_sessions_per_peer.get() + 1,
+                )
+                .expect("non-zero");
+            }
+        );
+        assert_config_change!("merge-sidecar inbound bytes", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_inbound_assembly_bytes =
+                NonZeroUsize::new(config.limits.merge_sidecar_inbound_assembly_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!(
+            "merge-sidecar per-peer inbound bytes",
+            |config: &mut Sumeragi| {
+                config.limits.merge_sidecar_inbound_assembly_bytes_per_peer = NonZeroUsize::new(
+                    config
+                        .limits
+                        .merge_sidecar_inbound_assembly_bytes_per_peer
+                        .get()
+                        + 1,
+                )
+                .expect("non-zero");
+            }
+        );
+        assert_config_change!("merge-sidecar deferred blocks", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_deferred_block_capacity =
+                NonZeroUsize::new(config.limits.merge_sidecar_deferred_block_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-sidecar future distance", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_future_block_distance =
+                NonZeroU64::new(config.limits.merge_sidecar_future_block_distance.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-sidecar request timeout", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_request_timeout -= Duration::from_millis(1);
+        });
+        assert_config_change!(
+            "merge-sidecar outbound sessions",
+            |config: &mut Sumeragi| {
+                config.limits.merge_sidecar_outbound_sessions_per_source = NonZeroUsize::new(
+                    config
+                        .limits
+                        .merge_sidecar_outbound_sessions_per_source
+                        .get()
+                        + 1,
+                )
+                .expect("non-zero");
+            }
+        );
+        assert_config_change!("merge-sidecar outbound bytes", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_outbound_bytes_per_source =
+                NonZeroUsize::new(config.limits.merge_sidecar_outbound_bytes_per_source.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-sidecar request gates", |config: &mut Sumeragi| {
+            config.limits.merge_sidecar_server_request_gates_per_source = NonZeroUsize::new(
+                config
+                    .limits
+                    .merge_sidecar_server_request_gates_per_source
+                    .get()
+                    + 1,
+            )
+            .expect("non-zero");
+        });
+        assert_config_change!(
+            "pending certified merge entries",
+            |config: &mut Sumeragi| {
+                config.limits.pending_certified_merge_entry_capacity = NonZeroUsize::new(
+                    config.limits.pending_certified_merge_entry_capacity.get() + 1,
+                )
+                .expect("non-zero");
+            }
+        );
+        assert_config_change!("pending QueuePlan admissions", |config: &mut Sumeragi| {
+            config.limits.pending_queue_plan_admission_capacity =
+                NonZeroUsize::new(config.limits.pending_queue_plan_admission_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("pending control-sidecar bytes", |config: &mut Sumeragi| {
+            config.limits.pending_control_sidecar_bytes =
+                NonZeroUsize::new(config.limits.pending_control_sidecar_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-signing record capacity", |config: &mut Sumeragi| {
+            config.limits.merge_signing_guard_record_capacity =
+                NonZeroUsize::new(config.limits.merge_signing_guard_record_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-signing record bytes", |config: &mut Sumeragi| {
+            config.limits.merge_signing_guard_record_bytes =
+                NonZeroUsize::new(config.limits.merge_signing_guard_record_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("merge-signing aggregate bytes", |config: &mut Sumeragi| {
+            config.limits.merge_signing_guard_total_bytes =
+                NonZeroUsize::new(config.limits.merge_signing_guard_total_bytes.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("Native AMX record capacity", |config: &mut Sumeragi| {
+            config.limits.native_amx_signing_guard_record_capacity =
+                NonZeroUsize::new(config.limits.native_amx_signing_guard_record_capacity.get() + 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("Native AMX record bytes", |config: &mut Sumeragi| {
+            config.limits.native_amx_signing_guard_record_bytes =
+                NonZeroUsize::new(config.limits.native_amx_signing_guard_record_bytes.get() - 1)
+                    .expect("non-zero");
+        });
+        assert_config_change!("Native AMX anchor bytes", |config: &mut Sumeragi| {
+            config.limits.native_amx_signing_guard_anchor_bytes =
+                NonZeroUsize::new(config.limits.native_amx_signing_guard_anchor_bytes.get() - 1)
+                    .expect("non-zero");
         });
         assert_config_change!("key activation", |config: &mut Sumeragi| {
             config.keys.activation_lead_blocks += 1;
@@ -11659,6 +12452,232 @@ mod tests {
         let mut config = default_v2_sumeragi();
         config.keys.allowed_hsm_providers.insert("   ".to_owned());
         assert_error(&config, SumeragiV2ConfigError::EmptyHsmProvider);
+    }
+
+    #[test]
+    fn sumeragi_v2_config_rejects_merge_runtime_limit_boundaries() {
+        let mode = consensus_v2::ConsensusMode::Permissioned;
+        macro_rules! assert_invalid {
+            ($config:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {
+                assert!(matches!(
+                    $config
+                        .v2_config(Duration::from_secs(1), mode)
+                        .expect_err("invalid merge runtime geometry must fail closed"),
+                    $pattern $(if $guard)?
+                ));
+            };
+        }
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_inbound_session_capacity = NonZeroUsize::new(
+            defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX + 1,
+        )
+        .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_inbound_sessions_per_peer =
+            config.limits.merge_sidecar_inbound_session_capacity;
+        config.limits.merge_sidecar_inbound_session_capacity =
+            NonZeroUsize::new(config.limits.merge_sidecar_inbound_session_capacity.get() - 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_inbound_assembly_bytes =
+            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN - 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_inbound_assembly_bytes_per_peer =
+            config.limits.merge_sidecar_inbound_assembly_bytes;
+        config.limits.merge_sidecar_inbound_assembly_bytes =
+            NonZeroUsize::new(config.limits.merge_sidecar_inbound_assembly_bytes.get() - 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_deferred_block_capacity =
+            NonZeroUsize::new(1).expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_future_block_distance =
+            NonZeroU64::new(defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX + 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_sidecar_future_block_distance",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_request_timeout =
+            Duration::from_millis(defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS + 1);
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_sidecar_request_timeout_ms",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_outbound_bytes_per_source = NonZeroUsize::new(
+            defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN - 1,
+        )
+        .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_sidecar_server_request_gates_per_source =
+            NonZeroUsize::new(1).expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.pending_certified_merge_entry_capacity = NonZeroUsize::new(
+            defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX + 1,
+        )
+        .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.pending_certified_merge_entry_capacity",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.pending_queue_plan_admission_capacity =
+            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX + 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.pending_queue_plan_admission_capacity",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.pending_control_sidecar_bytes =
+            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MIN - 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.pending_control_sidecar_bytes",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.pending_control_sidecar_bytes =
+            NonZeroUsize::new(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MAX + 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.pending_control_sidecar_bytes",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_signing_guard_record_capacity =
+            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX + 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_signing_guard_record_capacity",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_signing_guard_record_bytes =
+            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN - 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_signing_guard_record_bytes",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_signing_guard_total_bytes = NonZeroUsize::new(
+            config.limits.merge_signing_guard_record_bytes.get()
+                + defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES
+                - 1,
+        )
+        .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitBelowMinimum {
+                field: "sumeragi.limits.merge_signing_guard_total_bytes",
+                ..
+            }
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.limits.merge_signing_guard_total_bytes =
+            NonZeroUsize::new(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX + 1)
+                .expect("non-zero");
+        assert_invalid!(
+            config,
+            SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.merge_signing_guard_total_bytes",
+                ..
+            }
+        );
     }
 
     #[test]

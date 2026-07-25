@@ -274,10 +274,14 @@ pub struct DaIngestReceipt {
   ཡིག་རྒྱུན་ཚུ་ `policy_source` གནས་གོང་ཚུ་ སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ནང་ དོན་དག་ཅན་སྦེ་བཞག་དགོ། མཐོང
   `crates/iroha_cli/src/commands/da.rs` འདི་ ཡན་ལག་བཀོད་ཁྱབ་དང་ `docs/source/da/rent_policy.md`
   སྲིད་བྱུས་ལས་དོན་གྱི་དོན་ལུ།【【ཧ་_ཀི་ལི/སི་ཨར་སི་/ཀམ་མན་ཌི་/ད.1】ཐོན་ཁུངས་/དཱ་/རནཊི་_པོརཊི་_པོརཊི་.ཨེམ་ཌི་:1】།
-- པིན་ཐོ་བཀོད་ཆ་སྙོམས་འདི་ ད་ལྟོ་ ཨེསི་ཌི་ཀེ་ཨེསི་ལུ་རྒྱ་བསྐྱེད་འབདཝ་ཨིན།
-  ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་གིས་ `iroha app sorafs pin register` གིས་ལག་ལེན་འཐབ་མི་ པེ་ལོཌི་ངོ་མ་འདི་བཟོ་བསྐྲུན་འབདཝ་ཨིནམ་དང་ དེ་གིས་ ཀེ་ནོ་ཀཱལ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
-  ཆུར་ཀར་མེ་ཊ་ཌེ་ཊ་ པིན་སྲིད་བྱུས་ ཨེ་ལི་ཡས་བདེན་དཔང་དང་ ཤུལ་འཛིན་པ་ཚུ་ པི་ཨོ་ཨེསི་ཊི་རིང་ལུ་ མ་འབད་བའི་ཧེ་མ་ བཞུ་བཅུགཔ་ཨིན།
-  `/v1/sorafs/pin/register`. འདི་གིས་ CI bots དང་ རང་བཞིན་གྱིས་ CLI ལུ་ འཕུར་འཕུརཝ་སྦེ་ བཞགཔ་ཨིན།
+- པིན་ཐོ་བཀོད་ཆ་སྙོམས་འདི་ ད་ལྟོ་ SDKs ལུ་རྒྱ་བསྐྱེད་འབདཝ་ཨིན།
+  `ToriiClient.registerSorafsPinManifest(...)` གིས་ `manifest_payload` ནང་
+  ཏག་ཏག་ canonical padded-base64 `ManifestV1` ཡོད་པའི་ ཁ་བསྡམས་པའི་
+  JSON V1 ཞུ་བ་བཟོཝ་ཨིན། Torii གིས་ digest, chunker, content length,
+  pin policy དང་ fee inputs ཚུ་ decoded manifest རྐྱངམ་ཅིག་ལས་བཟོ་སྟེ་
+  duplicate summaries ངོས་ལེན་མི་འབད། optional alias དང་ nonzero
+  predecessor ཡོད་མུས་རང་ཨིན། `/v1/sorafs/pin/register` ལག་ལེན་འཐབ་
+  པའི་སྐབས་ CI bots དང་ automation གིས་ CLI ལུ་མི་འགྱོ།
   བརྗོད་སྒྲའི་ཐོ་བཀོད་ཚུ་སྒྲ་བཟུང་འབདཝ་ཨིནམ་དང་ གྲོགས་རམ་པ་དེ་ ཊའིཔ་སི་ཀིརིཔཊི་/རིཌ་ཨེམ་ཁྱབ་ཁོངས་དང་གཅིག་ཁར་ བཏངམ་ཨིན།
   “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` གོང་འཁོད་ཆ་མཉམ་གྱི་རིམ་སྒྲིག་ཚུ་: གསོག་འཇོག་གི་ཤོག་འཛིན་འགོརཝ་ད་ ཕབ་ལེན་འབདཝ་ཨིན།

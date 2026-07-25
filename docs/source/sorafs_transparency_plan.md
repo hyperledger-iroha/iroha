@@ -95,50 +95,80 @@ moderation ledger publication service described by the original plan.
   tamper/ordering validation coverage.
 - `ModerationPrivacyAggregateV1` and `ModerationPrivacyParametersV1` define a
   canonical privacy-safe aggregate payload with explicit
-  differential-privacy and suppression parameters, sorted public metrics and
-  metadata, a domain-separated aggregate hash, and conversion into a
-  `PrivacyAggregate` transparency ledger entry.
+  differential-privacy and suppression parameters, one governed population
+  selector, sorted fixed-schema public metrics and metadata, a typed
+  threshold-PRF commitment, a domain-separated aggregate hash, and conversion
+  into a `PrivacyAggregate` transparency ledger entry. Retired exact source
+  counts and public source-payload digests are rejected on decode.
 - `sorafs_node::NodeHandle::record_privacy_aggregate_source_event(...)` and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
   are the sole production worker path. They enforce duplicate rejection,
-  cycle-window filtering, distinct-subject suppression, per-subject clipping,
-  exact integer discrete-Laplace sampling, source-payload digest binding, and
-  atomic composition-budget/cycle/outbox persistence. Caller-supplied
+  cycle-window filtering, a fixed governed population inventory and metric
+  schema, one population per private subject per cycle, per-subject clipping,
+  conservative joint-vector sensitivity, exact integer discrete-Laplace
+  sampling, and atomic composition-budget/release-chain/cycle/source-removal/
+  outbox persistence. The sampler constructs the normalized zero mass, fair
+  conditional sign, and geometric magnitude with integer-only XOF rejection
+  sampling. Its geometric and rejection loops terminate almost surely and have
+  no finite retry or random-draw cutoff. Governed epsilon/sensitivity and
+  complete release dimensions are admitted against conservative expected-work
+  bounds before publication; those per-release input bounds do not truncate the
+  unbounded support of the noise distribution. Mapping the latent signed noise
+  into the public `u64` metric range is deterministic differential-privacy
+  post-processing: once a tail reaches either public boundary, every further
+  magnitude maps to that same boundary. DP modes always emit the full configured
+  population inventory; DP-with-suppression replaces sub-threshold contributions
+  with the fixed zero vector before noise, while suppression-only mode is
+  explicitly non-DP and may omit sub-threshold buckets. Caller-supplied
   aggregate payload and policy publication helpers exist only in unit-test
   builds.
 - `PrivacyAggregateScheduleConfig` provides due-cycle scheduling for the
   aggregate worker. The configured method derives
-  deterministic cycle ids from due windows, catches up the oldest due
-  unpublished window with retained source events before considering the latest
-  due window empty, skips not-due/empty/already published/fully suppressed
-  windows explicitly, and publishes each due cycle at most once per node
-  runtime.
+  deterministic release ids from the stable governed query id plus exact cycle
+  window, independent of publish delay and policy rotation. It catches up the
+  oldest due unpublished window with retained source events before considering
+  the latest due window empty and skips
+  not-due/empty/already-published/fully-suppressed windows explicitly.
+  A durable append-only hash-chained release record binds the private tagged
+  source digest, governed policy, inventory/schema digests, PRF request and
+  commitment, budget charge, publication digest, and terminal status.
 - `iroha_config` exposes the dormant-by-default
   `[sorafs.storage.privacy_aggregates]` scheduler and governed policy: cadence,
-  aggregate-id prefix, privacy mode, reduced rational epsilon, per-subject
-  contribution cap, suppression threshold, policy digest, and bounded
-  composition budget. Delta is fixed at zero. `sorafs_node::StorageConfig`
-  validates and projects that single production policy, and
+  aggregate-id prefix, stable query id, fixed sorted population inventory,
+  fixed sorted metric schema, privacy mode, reduced rational epsilon,
+  per-subject contribution cap, suppression threshold, policy digest, and
+  bounded composition budget keyed by the stable query id. Delta is fixed at
+  zero. `sorafs_node::StorageConfig` validates and projects that single
+  production policy, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
   accepts only the evaluation timestamp and predecessor block hash.
 - Differential-privacy publication requires a deployment-owned
-  `PrivacyCyclePrfProviderV1`. Node startup fails closed when the configured
-  aggregate policy requires noise and no provider is injected. For every due
-  window, including catch-up windows, the node constructs a fresh canonical
-  request bound to the governed policy digest plus the exact cycle id, start,
-  end, and due timestamps. All-zero outputs and fixed provider failure classes
-  fail closed without exposing provider diagnostics; provider shares, seeds,
-  and raw outputs never enter configuration, requests, logs, or durable state.
-  Only the domain-separated output commitment enters the public aggregate
-  metadata and source digest. The standard daemon does not ship a file- or
-  environment-backed substitute for the production threshold service.
+  `PrivacyCyclePrfProviderV1` and an independently administered finalized
+  `PrivacyReleaseAnchorV1`. Node startup fails closed when the configured
+  aggregate policy requires noise and either dependency is absent. For every
+  due window, including catch-up windows, the node constructs a fresh canonical
+  request bound to the stable query id, governed policy digest, exact cycle
+  window, population-inventory digest, and metric-schema digest. All-zero
+  outputs and fixed provider failure classes fail closed without exposing
+  provider diagnostics; provider shares, seeds, and raw outputs never enter
+  configuration, requests, logs, or durable state. The raw output is held by a
+  non-copying redacted wrapper and zeroed on drop. Only its domain-separated
+  commitment enters the public aggregate. Startup and restore reconcile the
+  complete local release chain against the finalized external head: a lagging
+  anchor advances only through the exact durable suffix (and exact publication
+  outbox entries), while an anchor ahead of the local checkpoint or a
+  same-height conflict fails closed. The
+  standard daemon exposes runtime-only injection boundaries but does not ship a
+  file/environment fallback or an in-tree production implementation of either
+  external service.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
   requires a private-subject digest, records one source event in the
   duplicate-checked aggregate worker for per-subject clipping and configured
-  cycle publication, and returns only event ids, digests, and counts rather
-  than raw metric values.
+  cycle publication, and returns only the event identity, governed bindings,
+  and fixed-schema metric count rather than raw metric values. It does not
+  disclose the exact retained-source-event count.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` for
   canonical-authenticated local configured aggregate publication. The handler
@@ -146,10 +176,12 @@ moderation ledger publication service described by the original plan.
   rejects caller-supplied policy or PRF material, accepts only `now_unix` and an
   optional previous block hash, obtains fresh hidden randomness through the
   runtime provider, uses exact integer discrete-Laplace sampling, and atomically
-  commits the composition-budget charge, processed-cycle state, source-event
-  removal, and durable Governance DAG outbox entry. It returns structured
-  published/skipped/already-published outcomes with cycle hashes when a cycle is
-  published.
+  commits the composition-budget charge, append-only release record,
+  processed-cycle state, source-event removal, and durable Governance DAG
+  outbox entry. It reconciles the release record to the finalized external head
+  before and after the commit, and returns structured
+  published/skipped/already-published outcomes with cycle hashes when a cycle
+  is published without returning retained-source counts.
 - `iroha::Client` and
   `iroha sorafs transparency privacy-aggregate source-event|publish-due
   --payload PATH` wrap the signed source-event and publish-due routes for
@@ -420,7 +452,7 @@ verify the same canonical payloads used for publication.
 | Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, signed runtime DAG external payloads, payload-free publication readback canary tooling, and the rollout evidence verifier are shipped; deployed anchoring and captured service rollout evidence remain open. |
 | Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, payload-free explorer canary tooling, and rollout evidence summary validation; deployed service hardening and captured public rollout evidence are not shipped. |
 | Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, `iroha sorafs transparency explorer-canary` rollout-evidence tooling, and summary-gate validation are shipped; captured deployed public rollout evidence is not shipped. |
-| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, fail-closed runtime threshold-PRF boundary with exact per-window request binding and commitment-only publication, canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; a reviewed production threshold-service adapter remains open, and captured deployed source-event producer and scheduler rollout evidence remains open. |
+| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical fixed-population/fixed-schema aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, per-subject clipping and exact integer discrete-Laplace worker, stable query/window release identity, durable composition-budget and hash-chained release ledgers, finalized-head reconciliation, fail-closed runtime threshold-PRF and release-anchor boundaries, canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI tooling, privacy aggregate canary evidence, and rollout summary validation are shipped. Reviewed independently administered production implementations of the threshold service and finalized release anchor plus live Governance DAG anchoring remain open, and captured deployed source-event producer and scheduler rollout evidence remains open. |
 
 Document only the local `/v1/sorafs/transparency/*` readback,
 canonical-authenticated source-entry ingest, privacy aggregate source-event
@@ -449,9 +481,12 @@ shipped until the live builder, deployment, and explorer paths exist.
   client/CLI producer and scheduler trigger tooling,
   `NodeHandle::record_privacy_aggregate_source_event(...)`, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`.
-  Inject the reviewed runtime threshold-PRF service adapter on every
-  DP-enabled node; no file, environment, request, or deterministic fallback is
-  permitted.
+  Inject the reviewed runtime threshold-PRF service and independently
+  administered finalized release-anchor adapters on every DP-enabled node; no
+  file, environment, request, process-local head, or deterministic fallback is
+  permitted. Exercise multi-replica byte identity, full-checkpoint rollback,
+  anchor-ahead/behind/equivocation, policy rotation, budget exhaustion, and
+  crash-before/after-checkpoint negatives against those external services.
 - Finish deployed proof API hardening and capture public receipt explorer
   rollout evidence by running the shipped `iroha sorafs transparency
   explorer-canary` tooling beyond the local token-verifier throttle, bounded

@@ -106,8 +106,7 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.subject = request.qc.subject
        /\ request.qc.phase = "Prepare"
        /\ request.qc \in prepareQCs
-       /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
-          \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
+       /\ CurrentOpenPrepareForCommit(request.node, request.qc)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
                      request.vote.context, request.vote.view,
@@ -232,29 +231,29 @@ DurableTimeoutsProtectCommits ==
   TimeoutIntentProtectsCommits(timeoutIntents, commitIntents)
 
 (***************************************************************************
-If an honest durable Commit is not strictly protected by one of that node's
-older timeout reports, the Commit must have the exact PrepareQC selected by a
-durably installed TC.  This is the retained provenance needed when a node
-learned the lock through the TC and validated its body only afterward.
+Every pending LockAndCommit is for the durable current round, and every
+timeout/Commit pair is protected directly. Installed TC state cannot authorize
+new historical Commit creation.
 ***************************************************************************)
-HistoricalLockedCommitAuthorizationInvariant ==
+SameRoundLockAndCommitAuthorizationInvariant ==
   /\ \A request \in pendingLockCommit:
-       request.vote.view < nodeView[request.node]
-         => HistoricalLockedPrepareForCommit(request.node, request.qc)
+       /\ request.vote.view = nodeView[request.node]
+       /\ CurrentOpenPrepareForCommit(request.node, request.qc)
   /\ \A timeoutVote \in timeoutIntents, commitVote \in commitIntents:
        (/\ timeoutVote.signer \in Honest
         /\ commitVote.signer = timeoutVote.signer
         /\ commitVote.context = timeoutVote.context
         /\ commitVote.phase = "Commit"
-        /\ commitVote.view <= timeoutVote.view
-        /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
-         => InstalledTcAuthorizesCommitVote(commitVote)
+        /\ commitVote.view <= timeoutVote.view)
+         => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
 
-\* Legacy release-ledger alias.  The canonical invariant name is source
-\* neutral because recovery itself also accepts an exact durable Commit
-\* intent carried through a later no-high TC.
+\* Compatibility aliases retain parser stability for the older proof module;
+\* both now denote the exact same-round invariant above.
+HistoricalLockedCommitAuthorizationInvariant ==
+  SameRoundLockAndCommitAuthorizationInvariant
+
 HistoricalTcLockedCommitAuthorizationInvariant ==
-  HistoricalLockedCommitAuthorizationInvariant
+  SameRoundLockAndCommitAuthorizationInvariant
 
 (***************************************************************************
 This authorization invariant is a derived consequence of

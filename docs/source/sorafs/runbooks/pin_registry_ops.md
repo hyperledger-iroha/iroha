@@ -132,10 +132,14 @@ Follow this staged procedure when enabling or tightening the alias cache policy 
    - Deploy the config change to a staging cluster that mirrors production topology.
    - Run `cargo xtask sorafs-pin-fixtures` to confirm the canonical alias fixtures still decode and
      round-trip; any mismatch implies upstream manifest drift that must be addressed first.
-   - Exercise the `/v1/sorafs/pin/{digest}` and `/v1/sorafs/aliases` endpoints with synthetic proofs
-     covering fresh, refresh-window, expired, and hard-expired cases. Validate the HTTP status codes,
-     headers (`Sora-Proof-Status`, `Retry-After`, `Warning`), and JSON body fields against this
-     runbook.
+   - Exercise `/v1/sorafs/pin/{digest_hex}` with no cursor, a matching paired
+     `expected_finalized_height`/`expected_finalized_block_hash_hex`, and a
+     stale pair. Require exact `PinManifestFinalizedRecordV1` JSON, `no-store`,
+     and HTTP 409 for the stale cursor.
+   - Exercise `/v1/sorafs/aliases` separately with synthetic proofs covering
+     fresh, refresh-window, expired, and hard-expired cases. Validate its HTTP
+     status codes, `Sora-Proof-Status`, `Retry-After`, `Warning`, and JSON body
+     fields against this runbook.
 3. **Enable in production**
    - Roll out the new configuration via the standard change window. Apply it to Torii first, then
      restart gateways/SDK services once the node confirms the new policy in logs.

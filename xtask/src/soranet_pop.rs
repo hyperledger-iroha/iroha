@@ -28,6 +28,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::workspace_root;
 
+const ACTIONS_CHECKOUT_V4_COMMIT: &str = "11d5960a326750d5838078e36cf38b85af677262";
+
 /// Options for producing a PoP provisioning bundle.
 #[derive(Debug)]
 pub struct PopBundleOptions {
@@ -2054,7 +2056,11 @@ fn write_ci_stub(
     writeln!(contents, "      POP_NAME: {}", pop.pop_name).unwrap();
     writeln!(contents, "    runs-on: ubuntu-latest").unwrap();
     writeln!(contents, "    steps:").unwrap();
-    writeln!(contents, "      - uses: actions/checkout@v4").unwrap();
+    writeln!(
+        contents,
+        "      - uses: actions/checkout@{ACTIONS_CHECKOUT_V4_COMMIT} # v4"
+    )
+    .unwrap();
     writeln!(contents, "      - name: Generate bundle").unwrap();
     writeln!(
         contents,

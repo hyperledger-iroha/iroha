@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Validate multilane TLA+ model/config inventory and Rust source bindings.
+"""Validate multilane model/config and static/differential source bindings.
 
 This is a structural gate. It verifies that every finite model, positive
-configuration, named mutation, and production item still exists with the
-reviewed semantic anchors. It does not treat TLC output as deductive proof.
+configuration, conceptual mutation mapping, production item, and release-only
+check still exists with the reviewed semantic anchors. It does not treat TLC
+output as deductive proof.
 """
 
 from __future__ import annotations
@@ -20,6 +21,10 @@ from typing import Any
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 FORMAL_RELATIVE = Path("docs/formal/sumeragi_v2")
 BINDINGS_FILENAME = "multilane_source_bindings.json"
+PROOF_COVERAGE_RELATIVE = FORMAL_RELATIVE / "proof_coverage.json"
+CLOSURE_LEDGER_RELATIVE = Path(
+    "docs/source/sumeragi_v2_multilane_closure_ledger.md"
+)
 APALACHE_RUNNER_RELATIVE = Path(
     "scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
 )
@@ -91,7 +96,199 @@ EXPECTED_CLOSURE_INVARIANTS = {
         "MLRestartOwnershipPartition",
         "MLStageEvidenceMonotonic",
     ),
+    "SumeragiV2QueuePlanAdmissionRegistry": (
+        "MLAdmissionCasUnique",
+        "MLCertificateDurable",
+        "MLPublic202Exact",
+        "MLExecutionRequiresExactBinding",
+        "MLQueueEligibilityExact",
+        "MLAdmissionAtMostOnceExecution",
+        "MLImmutableAdmissionTombstone",
+        "MLCancellationStopsExecution",
+    ),
 }
+TLA_COUNTEREXAMPLE = "tla_counterexample"
+STATIC_RELEASE = "static_release"
+DIFFERENTIAL_RELEASE = "differential_release"
+RELEASE_INVARIANT_CLASSIFICATIONS = frozenset(
+    (STATIC_RELEASE, DIFFERENTIAL_RELEASE)
+)
+EXPECTED_CLOSURE_MUTATIONS = {
+    "ML-MUT-NAT-01": (
+        TLA_COUNTEREXAMPLE,
+        "MLSeparateParticipantApplication",
+        ("multilane_native_same_route_marker_bug.cfg",),
+    ),
+    "ML-MUT-NAT-02": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeSourceClaimInjective",
+        ("multilane_native_source_claim_equivocation_bug.cfg",),
+    ),
+    "ML-MUT-NAT-03": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeContiguousActiveRoute",
+        ("multilane_native_noncontiguous_route_bug.cfg",),
+    ),
+    "ML-MUT-NAT-04": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeGroupExactCover",
+        ("multilane_native_partial_group_application_bug.cfg",),
+    ),
+    "ML-MUT-NAT-05": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeManifestAuthenticates",
+        ("multilane_native_forged_manifest_leaf_bug.cfg",),
+    ),
+    "ML-MUT-NAT-06": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeDurabilityPrecedesFrontier",
+        (
+            "multilane_native_frontier_before_sidecars_bug.cfg",
+            "multilane_native_hash_only_pruning_bug.cfg",
+            "multilane_native_dropped_startup_repair_bug.cfg",
+        ),
+    ),
+    "ML-MUT-NAT-07": (
+        TLA_COUNTEREXAMPLE,
+        "MLNativeLatestIndexExact",
+        ("multilane_native_ambiguous_latest_index_bug.cfg",),
+    ),
+    "ML-MUT-QUEUE-01": (
+        TLA_COUNTEREXAMPLE,
+        "QueuePlanAdmissionRegistryProductionRefinementObligation",
+        (
+            "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
+            "multilane_queue_plan_execution_before_global_cas_bug.cfg",
+            "multilane_queue_plan_conflicting_cas_bug.cfg",
+            "multilane_queue_plan_restart_aba_bug.cfg",
+            "multilane_queue_plan_local_expiry_clears_tombstone_bug.cfg",
+            "multilane_queue_plan_deferred_bypass_bug.cfg",
+            "multilane_queue_plan_cancellation_bypass_bug.cfg",
+            "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
+            "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
+            "multilane_queue_plan_duplicate_execution_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-01": (
+        TLA_COUNTEREXAMPLE,
+        "MLReservationSingleOwner",
+        ("multilane_autonomous_reserve_before_durable_bug.cfg",),
+    ),
+    "ML-MUT-AUT-02": (
+        TLA_COUNTEREXAMPLE,
+        "MLReservationIdentityStable",
+        ("multilane_autonomous_carrier_drift_bug.cfg",),
+    ),
+    "ML-MUT-AUT-03": (
+        TLA_COUNTEREXAMPLE,
+        "MLCertifiedBundleDurable",
+        ("multilane_autonomous_digest_only_authorization_bug.cfg",),
+    ),
+    "ML-MUT-AUT-04": (
+        TLA_COUNTEREXAMPLE,
+        "MLMergeCandidateExactPrefix",
+        ("multilane_autonomous_noncanonical_merge_prefix_bug.cfg",),
+    ),
+    "ML-MUT-AUT-05": (
+        TLA_COUNTEREXAMPLE,
+        "MLCarrierExactlyOnce",
+        (
+            "multilane_autonomous_duplicate_application_bug.cfg",
+            "multilane_autonomous_release_after_apply_bug.cfg",
+            "multilane_autonomous_release_before_barrier_bug.cfg",
+            "multilane_autonomous_ordinary_anchor_execution_bug.cfg",
+            "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
+        ),
+    ),
+    "ML-MUT-AUT-06": (
+        TLA_COUNTEREXAMPLE,
+        "MLRestartOwnershipPartition",
+        (
+            "multilane_autonomous_aba_release_bug.cfg",
+            "multilane_autonomous_restart_drops_ownership_bug.cfg",
+        ),
+    ),
+    "ML-MUT-LIFE-01": (
+        TLA_COUNTEREXAMPLE,
+        "MLActivationAfterAtomicCreate",
+        ("multilane_autoscale_activation_before_storage_bug.cfg",),
+    ),
+    "ML-MUT-LIFE-02": (
+        TLA_COUNTEREXAMPLE,
+        "MLDrainImpliesNoOwnedWork",
+        ("multilane_autoscale_early_drain_bug.cfg",),
+    ),
+    "ML-MUT-LIFE-03": (
+        TLA_COUNTEREXAMPLE,
+        "MLDrainCertificateMonotonic",
+        ("multilane_autoscale_weak_drain_certificate_bug.cfg",),
+    ),
+    "ML-MUT-LIFE-04": (
+        TLA_COUNTEREXAMPLE,
+        "MLRetirementConsumesExactIncarnation",
+        (
+            "multilane_autoscale_destroy_before_archive_bug.cfg",
+            "multilane_autoscale_incarnation_reuse_bug.cfg",
+            "multilane_autoscale_cleanup_by_lane_id_bug.cfg",
+        ),
+    ),
+    "ML-MUT-LIFE-05": (
+        TLA_COUNTEREXAMPLE,
+        "MLStageEvidenceMonotonic",
+        ("multilane_autonomous_volatile_stage_diagnostics_bug.cfg",),
+    ),
+    "ML-MUT-API-01": (
+        STATIC_RELEASE,
+        "MLDiagnosticsAreDerived",
+        (),
+    ),
+    "ML-MUT-API-02": (
+        DIFFERENTIAL_RELEASE,
+        "MLApiAuthoritySeparation",
+        (),
+    ),
+    "ML-MUT-API-03": (
+        DIFFERENTIAL_RELEASE,
+        "MLSdkAcceptSetEqualsRust",
+        (),
+    ),
+    "ML-MUT-API-04": (
+        DIFFERENTIAL_RELEASE,
+        "MLFixtureHasOneCanonicalOwner",
+        (),
+    ),
+    "ML-MUT-WIRE-01": (
+        STATIC_RELEASE,
+        "MLConsensusLayoutAgreement",
+        (),
+    ),
+}
+EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
+    "ML-MUT-API-01": (
+        "crates/iroha_core/src/state.rs",
+        "crates/iroha_torii/src/routing.rs",
+    ),
+    "ML-MUT-API-02": (
+        "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
+        "python/iroha_torii_client/tests/test_client.py",
+        "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+        "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+    ),
+    "ML-MUT-API-03": (
+        "ci/run_native_amx_v2_grouped_sdk_parity.sh",
+        "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+    ),
+    "ML-MUT-API-04": (
+        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+        "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
+        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+    ),
+    "ML-MUT-WIRE-01": (
+        "scripts/check_no_legacy_codec.sh",
+        "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+    ),
+}
+CLOSURE_MUTATION_ID_RE = re.compile(r"`(ML-MUT-[A-Z]+-[0-9]{2})`")
 FORBIDDEN_PRODUCTION_TOKENS = {
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -208,6 +405,250 @@ def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _validate_closure_mutation_ledger(
+    root: Path,
+    formal_dir: Path,
+    closure_mutations: Any,
+    models: Any,
+    errors: list[str],
+) -> None:
+    """Bind every conceptual closure mutation to TLC configs or release checks."""
+
+    if not isinstance(closure_mutations, list):
+        errors.append("closure_mutations must be an array")
+        return
+    expected_ids = tuple(EXPECTED_CLOSURE_MUTATIONS)
+    actual_ids = tuple(
+        item.get("id") for item in closure_mutations if isinstance(item, dict)
+    )
+    if actual_ids != expected_ids:
+        errors.append(
+            "closure_mutations must contain the exact reviewed conceptual IDs "
+            "in closure-ledger order"
+        )
+
+    seen_ids: set[str] = set()
+    mapped_configs: list[str] = []
+    release_obligations: list[str] = []
+    for item in closure_mutations:
+        if not isinstance(item, dict) or set(item) != {
+            "id",
+            "classification",
+            "obligation",
+            "mutation_configs",
+            "source_checks",
+        }:
+            errors.append(
+                "each closure mutation must contain only id, classification, "
+                "obligation, mutation_configs, and source_checks"
+            )
+            continue
+        mutation_id = item.get("id")
+        classification = item.get("classification")
+        obligation = item.get("obligation")
+        mutation_configs = item.get("mutation_configs")
+        source_checks = item.get("source_checks")
+        if (
+            not _nonempty_string(mutation_id)
+            or not _nonempty_string(classification)
+            or not _nonempty_string(obligation)
+            or not isinstance(mutation_configs, list)
+            or not all(_nonempty_string(config) for config in mutation_configs)
+            or not isinstance(source_checks, list)
+        ):
+            errors.append(f"malformed closure mutation {item!r}")
+            continue
+        if mutation_id in seen_ids:
+            errors.append(f"duplicate conceptual closure mutation {mutation_id}")
+        seen_ids.add(mutation_id)
+
+        expected = EXPECTED_CLOSURE_MUTATIONS.get(mutation_id)
+        if expected is None:
+            errors.append(f"unreviewed conceptual closure mutation {mutation_id}")
+            continue
+        expected_classification, expected_obligation, expected_configs = expected
+        if (
+            classification,
+            obligation,
+            tuple(mutation_configs),
+        ) != (
+            expected_classification,
+            expected_obligation,
+            expected_configs,
+        ):
+            errors.append(
+                f"{mutation_id}: classification, obligation, or exact ordered "
+                "mutation-config mapping differs from the reviewed contract"
+            )
+
+        if len(set(mutation_configs)) != len(mutation_configs):
+            errors.append(f"{mutation_id}: duplicate mutation config")
+        mapped_configs.extend(mutation_configs)
+
+        if classification == TLA_COUNTEREXAMPLE:
+            if not mutation_configs:
+                errors.append(
+                    f"{mutation_id}: TLA counterexample mappings must be non-empty"
+                )
+            if source_checks:
+                errors.append(
+                    f"{mutation_id}: TLA counterexamples must not masquerade as "
+                    "static/differential release checks"
+                )
+            continue
+        if classification not in RELEASE_INVARIANT_CLASSIFICATIONS:
+            errors.append(
+                f"{mutation_id}: unsupported closure classification {classification!r}"
+            )
+            continue
+        release_obligations.append(obligation)
+        if mutation_configs:
+            errors.append(
+                f"{mutation_id}: release invariant must own zero TLA mutation configs"
+            )
+        expected_paths = EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS.get(mutation_id)
+        if expected_paths is None:
+            errors.append(f"{mutation_id}: no reviewed release source-check contract")
+            continue
+        actual_paths = tuple(
+            check.get("path") for check in source_checks if isinstance(check, dict)
+        )
+        if actual_paths != expected_paths:
+            errors.append(
+                f"{mutation_id}: source checks differ from the exact reviewed paths"
+            )
+        seen_paths: set[str] = set()
+        for check in source_checks:
+            if not isinstance(check, dict) or set(check) != {
+                "path",
+                "required_tokens",
+            }:
+                errors.append(
+                    f"{mutation_id}: every source check must contain only path "
+                    "and required_tokens"
+                )
+                continue
+            relative = check.get("path")
+            tokens = check.get("required_tokens")
+            if (
+                not _nonempty_string(relative)
+                or not isinstance(tokens, list)
+                or not tokens
+                or not all(_nonempty_string(token) for token in tokens)
+                or len(set(tokens)) != len(tokens)
+            ):
+                errors.append(f"{mutation_id}: malformed source check {check!r}")
+                continue
+            if Path(relative).is_absolute() or ".." in Path(relative).parts:
+                errors.append(
+                    f"{mutation_id}: source-check path must stay within repo: {relative}"
+                )
+                continue
+            if relative in seen_paths:
+                errors.append(f"{mutation_id}: duplicate source-check path {relative}")
+            seen_paths.add(relative)
+            path = root / relative
+            if not _regular_file(path, "release invariant source check", errors):
+                continue
+            source = path.read_text(encoding="utf-8")
+            for token in tokens:
+                if token not in source:
+                    errors.append(
+                        f"{path}: release invariant {obligation} is missing "
+                        f"source-binding token {token!r}"
+                    )
+
+    model_configs: list[str] = []
+    if isinstance(models, list):
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            for mutation in model.get("mutations", ()):
+                if isinstance(mutation, dict) and _nonempty_string(
+                    mutation.get("config")
+                ):
+                    model_configs.append(mutation["config"])
+    if len(mapped_configs) != len(set(mapped_configs)):
+        errors.append("one TLA mutation config maps to multiple conceptual IDs")
+    if len(model_configs) != len(set(model_configs)):
+        errors.append("model inventory contains duplicate TLA mutation configs")
+    if set(mapped_configs) != set(model_configs):
+        errors.append(
+            "conceptual closure mappings must cover every and only the model "
+            "mutation configs"
+        )
+    if len(model_configs) != 37:
+        errors.append(
+            f"reviewed multilane mutation inventory must contain 37 configs, "
+            f"found {len(model_configs)}"
+        )
+
+    closure_path = root / CLOSURE_LEDGER_RELATIVE
+    if _regular_file(closure_path, "multilane closure ledger", errors):
+        closure_source = closure_path.read_text(encoding="utf-8")
+        documented_ids = tuple(CLOSURE_MUTATION_ID_RE.findall(closure_source))
+        if documented_ids != expected_ids:
+            errors.append(
+                f"{closure_path}: conceptual ML-MUT IDs must occur exactly once "
+                "in machine-ledger order"
+            )
+        queue_heading = (
+            "### ML-QUEUE-01 — globally unique durable admission before "
+            "autonomous ownership"
+        )
+        if closure_source.count(queue_heading) != 1:
+            errors.append(
+                f"{closure_path}: must contain the exact QueuePlan closure row"
+            )
+        for mutation_id, (
+            classification,
+            obligation,
+            _,
+        ) in EXPECTED_CLOSURE_MUTATIONS.items():
+            if classification not in RELEASE_INVARIANT_CLASSIFICATIONS:
+                continue
+            label = (
+                "Static"
+                if classification == STATIC_RELEASE
+                else "Differential"
+            )
+            contract_re = re.compile(
+                rf"\*\*{label} release invariant and negative control\.\*\*"
+                rf"\s+`{re.escape(obligation)}`"
+            )
+            if contract_re.search(closure_source) is None:
+                errors.append(
+                    f"{closure_path}: {mutation_id} must classify {obligation} "
+                    f"as a {classification} invariant"
+                )
+
+    if release_obligations:
+        tla_sources: list[tuple[Path, str]] = []
+        if isinstance(models, list):
+            for model in models:
+                if not isinstance(model, dict):
+                    continue
+                module = model.get("module")
+                if _nonempty_string(module):
+                    path = formal_dir / f"{module}.tla"
+                    if path.is_file() and not path.is_symlink():
+                        tla_sources.append(
+                            (path, path.read_text(encoding="utf-8"))
+                        )
+        for obligation in release_obligations:
+            for path, source in tla_sources:
+                declaration_re = re.compile(
+                    TLA_DECLARATION_TEMPLATE.format(
+                        symbol=re.escape(obligation)
+                    )
+                )
+                if declaration_re.search(source) is not None:
+                    errors.append(
+                        f"{path}: release-only invariant {obligation} must not "
+                        "be declared as a TLA+ invariant"
+                    )
+
+
 def _extract_rust_binding_items(
     source: str, kind: str, symbol: str
 ) -> tuple[str, ...]:
@@ -322,9 +763,9 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "Checker reports no error up to computation length ${length}"',
         'echo "multilane formal or production sources changed during the Apalache run"',
-        "printf 'result_count\\t3\\n'",
+        "printf 'result_count\\t4\\n'",
         'mv -- "$evidence_tmp" "$EVIDENCE_PATH"',
-        "[apalache] all 3 source-bound multilane kernels passed pinned",
+        "[apalache] all 4 source-bound multilane kernels passed pinned",
     )
     for token in required_once:
         count = source.count(token)
@@ -360,13 +801,19 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$NATIVE_MODULE" \\
   multilane_native_application_evidence_fixed.cfg \\
   5 \\
-  "NativeEvidenceTypeInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
+  "NativeEvidenceTypeInvariant, NativeStandaloneEvidenceInvariant, NativeEvidenceRetentionBoundInvariant, NativeNoClobberPublicationInvariant, NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
         """run_positive \\
   autonomous-reservation-carrier \\
   "$AUTONOMOUS_MODULE" \\
   multilane_autonomous_reservation_carrier_fixed.cfg \\
   10 \\
   "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLStageEvidenceMonotonic\"""",
+        """run_positive \\
+  queue-plan-admission-registry \\
+  "$QUEUE_PLAN_ADMISSION_MODULE" \\
+  multilane_queue_plan_admission_registry_fixed.cfg \\
+  8 \\
+  "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -405,6 +852,16 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
         "multilane_autonomous_restart_drops_ownership_bug.cfg",
         "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
+        "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
+        "multilane_queue_plan_execution_before_global_cas_bug.cfg",
+        "multilane_queue_plan_conflicting_cas_bug.cfg",
+        "multilane_queue_plan_restart_aba_bug.cfg",
+        "multilane_queue_plan_local_expiry_clears_tombstone_bug.cfg",
+        "multilane_queue_plan_deferred_bypass_bug.cfg",
+        "multilane_queue_plan_cancellation_bypass_bug.cfg",
+        "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
+        "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
+        "multilane_queue_plan_duplicate_execution_bug.cfg",
     ):
         if forbidden in source:
             errors.append(
@@ -482,6 +939,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "| autoscale lifecycle | `multilane_autoscale_lifecycle_fixed.cfg` | 8 |",
             "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |",
             "| autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |",
+            "| QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |",
             "they are not TLAPS",
             "cross-tool proof evidence",
             "do not change proof-ledger status",
@@ -502,6 +960,8 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     relative_paths = {
         FORMAL_RELATIVE / BINDINGS_FILENAME,
+        PROOF_COVERAGE_RELATIVE,
+        CLOSURE_LEDGER_RELATIVE,
         README_RELATIVE,
         APALACHE_RUNNER_RELATIVE,
         APALACHE_RUNNER_TEST_RELATIVE,
@@ -511,6 +971,9 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
     }
+    for closure_mutation in ledger["closure_mutations"]:
+        for source_check in closure_mutation["source_checks"]:
+            relative_paths.add(Path(source_check["path"]))
     for model in ledger["models"]:
         relative_paths.add(FORMAL_RELATIVE / f"{model['module']}.tla")
         relative_paths.add(FORMAL_RELATIVE / model["positive_config"])
@@ -745,15 +1208,20 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         ledger = json.loads(bindings_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         return (f"cannot load {bindings_path}: {error}",)
-    if not isinstance(ledger, dict) or set(ledger) != {"schema_version", "models"}:
+    if not isinstance(ledger, dict) or set(ledger) != {
+        "schema_version",
+        "closure_mutations",
+        "models",
+    }:
         return (
-            "multilane binding ledger must contain exactly schema_version and models",
+            "multilane binding ledger must contain exactly schema_version, "
+            "closure_mutations, and models",
         )
-    if ledger.get("schema_version") != 1:
-        errors.append("multilane binding ledger schema_version must equal 1")
+    if ledger.get("schema_version") != 2:
+        errors.append("multilane binding ledger schema_version must equal 2")
     models = ledger.get("models")
-    if not isinstance(models, list) or len(models) != 3:
-        errors.append("multilane binding ledger must contain exactly three models")
+    if not isinstance(models, list) or len(models) != 4:
+        errors.append("multilane binding ledger must contain exactly four models")
         return tuple(errors)
     modules = [model.get("module") for model in models if isinstance(model, dict)]
     if len(set(modules)) != len(modules):
@@ -765,6 +1233,13 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         )
     for model in models:
         _validate_model(root, formal_dir, model, errors)
+    _validate_closure_mutation_ledger(
+        root,
+        formal_dir,
+        ledger.get("closure_mutations"),
+        models,
+        errors,
+    )
     _validate_mutation_runner(root, models, errors)
     _validate_apalache_gate(root, errors)
     return tuple(errors)

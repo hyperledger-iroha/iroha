@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_-ի միջոցով
 
-Հղումների ընդհանուր թիվը՝ **505** · Եզակի փոփոխականներ՝ **137**
+Հղումների ընդհանուր թիվը՝ **502** · Եզակի փոփոխականներ՝ **137**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (արդյունք՝ 1)
 
@@ -265,9 +265,6 @@ _Վերջին անգամ թարմացվել է `python3 scripts/inventory_env_to
 - թեստ՝ crates/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - թեստ՝ crates/sorafs_manifest/tests/provider_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - թեստ՝ crates/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
-- արդ.՝ crates/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- արդ.՝ crates/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- փորձարկում՝ crates/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - փորձարկում՝ crates/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - փորձարկում՝ crates/sorafs_node/tests/gateway.rs:14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - փորձարկում՝ crates/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

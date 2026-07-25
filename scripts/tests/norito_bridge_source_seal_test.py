@@ -35,6 +35,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                 "public struct Nfc {}\n",
             "scripts/build_norito_xcframework.sh": "#!/bin/sh\n",
             "scripts/check_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
+            "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
             "kotlin/client-android/build.gradle.kts": "// android\n",
         }.items():
@@ -72,10 +73,12 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("IrohaSwift/Package.resolved", apple)
         self.assertIn("IrohaSwift/Sources/IrohaSwift", apple)
         self.assertIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", apple)
+        self.assertIn("scripts/exec_with_file_lock.py", apple)
 
         android = self.inputs("android")
         self.assertNotIn("IrohaSwift/Package.resolved", android)
         self.assertNotIn("IrohaSwift/Sources/IrohaSwiftMobileTransports", android)
+        self.assertNotIn("scripts/exec_with_file_lock.py", android)
 
     def test_apple_fingerprint_and_dirty_state_bind_mobile_transport_bytes(self) -> None:
         inputs = self.inputs("apple")

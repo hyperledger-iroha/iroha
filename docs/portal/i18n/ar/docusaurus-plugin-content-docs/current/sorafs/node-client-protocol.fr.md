@@ -127,10 +127,12 @@ métadonnées des adverts.
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` حاصروا الملفات
   نقاط النهاية REST du pin-registry et impriment du Norito JSON brut avec blocks
   شهادة للتدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` مقبول
-  بيانات Norito ou JSON، بالإضافة إلى إثباتات الأسماء المستعارة للخيارات والخلفاء؛
-  البراهين النموذجية غير الصحيحة `400`، البراهين القديمة المكشوفة `503` مع
-  `Warning: 110`، والإثباتات منتهية الصلاحية مرة أخرى `412`.
+- يقبل `torii /v1/sorafs/pin/register` طلب JSON V1 المغلق. يجب أن يكون
+  `manifest_payload` ترميز base64 مبطنًا canonical ودقيقًا لبايتات
+  `ManifestV1` canonical بنمط Norito. يشتق Torii الـ digest والـ chunker وطول
+  المحتوى وسياسة pin ومدخلات الرسوم حصريًا من الـ manifest المفكوك، ويرفض
+  حقول الملخص المكررة المتقاعدة. يبقى `alias` وسلف `successor_of_hex` غير
+  الصفري اختياريين.
 - نقاط النهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`،
   `/v1/sorafs/replication`) تتضمن هياكل المصادقة التي ستساعدك
   يتحقق العملاء من البيانات باستخدام آخر رؤوس الكتلة قبل البدء.

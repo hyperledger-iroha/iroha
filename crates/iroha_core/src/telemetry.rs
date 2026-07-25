@@ -6521,11 +6521,59 @@ impl Telemetry {
         }
     }
 
-    /// Set the `SoraFS` orderbook API error ratio for a routed endpoint.
-    pub fn set_sorafs_orderbook_api_error_ratio(&self, route: &str, ratio: f64) {
+    /// Record one `SoraFS` orderbook API response for a routed endpoint.
+    pub fn record_sorafs_orderbook_api_request(&self, route: &str, is_error: bool) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics
-                .set_sorafs_orderbook_api_error_ratio(route, ratio);
+                .record_sorafs_orderbook_api_request(route, is_error);
+        }
+    }
+
+    /// Mark the finalized `SoraFS` orderbook projection unready while
+    /// retaining the last complete metric values for diagnosis.
+    pub fn mark_sorafs_orderbook_finalized_projection_unready(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .mark_sorafs_orderbook_finalized_projection_unready();
+        }
+    }
+
+    /// Record one fail-closed finalized `SoraFS` orderbook projection failure.
+    pub fn record_sorafs_orderbook_finalized_projection_failure(&self, reason: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_orderbook_finalized_projection_failure(reason);
+        }
+    }
+
+    /// Publish one complete finalized `SoraFS` orderbook metric projection.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sorafs_orderbook_finalized_projection(
+        &self,
+        finalized_height: u64,
+        finalized_timestamp_seconds: u64,
+        event_count_deltas: [u64; 8],
+        open_depth_gib: [[u64; 2]; 3],
+        matcher_lag_seconds: u64,
+        settlement_backlog: u64,
+        oldest_settlement_age_seconds: u64,
+        escrow_runway_seconds: u64,
+        book_revision: u64,
+        matcher_scan_book_revision: u64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_sorafs_orderbook_finalized_projection(
+                finalized_height,
+                finalized_timestamp_seconds,
+                event_count_deltas,
+                open_depth_gib,
+                matcher_lag_seconds,
+                settlement_backlog,
+                oldest_settlement_age_seconds,
+                escrow_runway_seconds,
+                book_revision,
+                matcher_scan_book_revision,
+            );
         }
     }
 
@@ -9633,29 +9681,80 @@ mod tests {
     }
 
     #[test]
-    fn direct_sorafs_orderbook_api_error_ratio_records_without_actor() {
+    fn direct_sorafs_orderbook_api_request_records_without_actor() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
         let route = "/v1/sorafs/orderbook/orders";
 
-        telemetry.set_sorafs_orderbook_api_error_ratio(route, 0.25);
+        telemetry.record_sorafs_orderbook_api_request(route, true);
 
         assert_eq!(
             metrics
-                .torii_sorafs_orderbook_api_error_ratio
-                .with_label_values(&[route])
+                .torii_sorafs_orderbook_api_requests_total
+                .with_label_values(&["orders", "error"])
                 .get(),
-            0.25
+            1
         );
 
         telemetry.disable();
-        telemetry.set_sorafs_orderbook_api_error_ratio(route, 0.75);
+        telemetry.record_sorafs_orderbook_api_request(route, true);
         assert_eq!(
             metrics
-                .torii_sorafs_orderbook_api_error_ratio
-                .with_label_values(&[route])
+                .torii_sorafs_orderbook_api_requests_total
+                .with_label_values(&["orders", "error"])
                 .get(),
-            0.25
+            1
+        );
+    }
+
+    #[test]
+    fn direct_sorafs_orderbook_projection_records_and_fails_closed_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.record_sorafs_orderbook_finalized_projection(
+            42,
+            1_800_000_000,
+            [1, 2, 0, 3, 0, 0, 0, 4],
+            [[42, 5], [6, 7], [8, 9]],
+            1,
+            7,
+            120,
+            86_400,
+            12,
+            11,
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_finalized_projection_ready
+                .get(),
+            1
+        );
+
+        telemetry.record_sorafs_orderbook_finalized_projection_failure("query_failed");
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_finalized_projection_ready
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_finalized_projection_failures_total
+                .with_label_values(&["query_failed"])
+                .get(),
+            1
+        );
+
+        telemetry.disable();
+        telemetry.mark_sorafs_orderbook_finalized_projection_unready();
+        telemetry.record_sorafs_orderbook_finalized_projection_failure("query_failed");
+        assert_eq!(
+            metrics
+                .torii_sorafs_orderbook_finalized_projection_failures_total
+                .with_label_values(&["query_failed"])
+                .get(),
+            1
         );
     }
 

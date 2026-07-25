@@ -43,49 +43,67 @@ SF-4 提供 Pin 註冊合同和支持服務，存儲
 
 |結構|描述 |領域 |
 |--------|-------------|--------|
-| `PinRecordV1` |規范清單條目。 | `manifest_cid`、`chunk_plan_digest`、`por_root`、`profile_handle`、`approved_at`、`retention_epoch`、`pin_policy`、`successor_of`、 `governance_envelope_hash`。 |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` |映射別名 -> 清單 CID。 | `alias`、`manifest_cid`、`bound_at`、`expiry_epoch`。 |
 | `ReplicationOrderV1` |提供者固定清單的說明。 | `order_id`、`manifest_cid`、`providers`、`redundancy`、`deadline`、`policy_hash`。 |
 | `ReplicationReceiptV1` |提供商確認。 | `order_id`、`provider_id`、`status`、`timestamp`、`por_sample_digest`。 |
 | `ManifestPolicyV1` |治理政策快照。 | `min_replicas`、`max_retention_epochs`、`allowed_profiles`、`pin_fee_basis_points`。 |
 
-實現參考：參見 `crates/sorafs_manifest/src/pin_registry.rs`
-Rust Norito 模式和支持這些記錄的驗證助手。驗證
-鏡像清單工具（分塊註冊表查找、引腳策略門控），因此
-契約、Torii 外觀和 CLI 共享相同的不變量。
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-任務：
-- 最終確定 `crates/sorafs_manifest/src/pin_registry.rs` 中的 Norito 架構。
-- 使用 Norito 宏生成代碼（Rust + 其他 SDK）。
-- 一旦架構落地，更新文檔（`sorafs_architecture_rfc.md`）。
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## 合同執行
+## Contract Implementation
 
-|任務|所有者 |筆記|
-|------|----------|--------|
-|實施註冊表存儲（sled/sqlite/鏈下）或智能合約模塊。 |核心基礎設施/智能合約團隊|提供確定性哈希，避免浮點。 |
-|入口點：`submit_manifest`、`approve_manifest`、`bind_alias`、`issue_replication_order`、`complete_replication`、`evict_manifest`。 |核心基礎設施|利用驗證計劃中的 `ManifestValidator`。別名綁定現在通過 `RegisterPinManifest`（Torii DTO 表面處理）流動，而專用 `bind_alias` 仍計劃進行連續更新。 |
-|狀態轉換：強制繼承（清單 A -> B）、保留紀元、別名唯一性。 |治理委員會/核心基礎設施|別名唯一性、保留限制和前任批准/停用檢查現在位於 `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` 中；多跳連續檢測和復制簿記保持開放。 |
-|治理參數：從配置/治理狀態加載 `ManifestPolicyV1`；允許通過治理事件進行更新。 |治理委員會|提供用於策略更新的 CLI。 |
-|事件發射：發射 Norito 事件以進行遙測（`ManifestApproved`、`ReplicationOrderIssued`、`AliasBound`）。 |可觀察性|定義事件模式+日誌記錄。 |
+| Task | Owner(s) | Notes |
+|------|----------|-------|
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-測試：
-- 每個入口點的單元測試（正面+拒絕）。
-- 繼承鏈的屬性測試（無循環，單調時期）。
-- 通過生成隨機清單（有界）進行模糊驗證。
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-## 服務外觀（Torii/SDK 集成）
+## Service Facade (Torii/SDK Integration)
 
-|組件|任務|所有者 |
-|------------|------|----------|
-| Torii 服務 |公開 `/v1/sorafs/pin`（提交）、`/v1/sorafs/pin/{cid}`（查找）、`/v1/sorafs/aliases`（列表/綁定）、`/v1/sorafs/replication`（訂單/收據）。提供分頁+過濾。 |網絡 TL/核心基礎設施 |
-|認證|在響應中包含註冊表高度/哈希值；添加 SDK 使用的 Norito 證明結構。 |核心基礎設施|
-|命令行|使用 `pin submit`、`alias bind`、`order issue`、`registry export` 擴展 `sorafs_manifest_builder` 或新的 `sorafs_pin` CLI。 |工具工作組 |
-| SDK |從 Norito 模式生成客戶端綁定 (Rust/Go/TS)；添加集成測試。 | SDK 團隊 |
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
-操作：
-- 為 GET 端點添加緩存層/ETag。
-- 提供與 Torii 策略一致的速率限制/身份驗證。
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## 賽程和 CI
 
@@ -135,9 +153,8 @@ Rust Norito 模式和支持這些記錄的驗證助手。驗證
 SF-4 下的每個路線圖清單項目在取得進展時都應參考該計劃。
 REST 外觀現在附帶經過驗證的列表端點：
 
-- `GET /v1/sorafs/pin` 和 `GET /v1/sorafs/pin/{digest}` 返回清單
-  別名綁定、複製順序和從派生的證明對象
-  最新的塊哈希。
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` 和 `GET /v1/sorafs/replication` 暴露活動
   別名目錄和復制訂單積壓具有一致的分頁和
   狀態過濾器。

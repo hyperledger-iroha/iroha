@@ -167,6 +167,18 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for probe in MODULE.REQUIRED_APPEAL_POLICY_PROBES:
             args.extend(["--appeal-probe", probe])
     elif kind == "metrics_alerts":
+        args.extend(
+            [
+                "--metrics-scrape-blake3-hex",
+                ROUTE_BODY_DIGEST,
+                "--metrics-scraped-at-unix",
+                str(GENERATED_AT),
+                "--finalized-projection-height",
+                "42",
+                "--finalized-projection-failure-increase-5m",
+                "0",
+            ]
+        )
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
     elif kind == "provider_bake":

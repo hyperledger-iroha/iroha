@@ -318,11 +318,12 @@ verification_json="$(
     --trusted-signing-fingerprint "$trusted_signing_fingerprint" \
     --signature-output "$signature_out" \
     --public-key-output "$public_key_out" \
+    --verification-summary-output "$verification_summary_out" \
     --release-manifest-verifier "$release_manifest_verifier" \
     --trusted-release-manifest-verifier-sha256 \
       "$trusted_release_manifest_verifier_sha256"
 )"
-printf '%s\n' "$verification_json" | tee "$verification_summary_out"
+printf '%s\n' "$verification_json"
 
 validate_existing_file_path \
   "release verification summary output" \

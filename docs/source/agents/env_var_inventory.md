@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_
 
-Total references: **745** · Unique variables: **194**
+Total references: **741** · Unique variables: **194**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (prod: 1)
 
@@ -360,10 +360,6 @@ Total references: **745** · Unique variables: **194**
 - test: crates/sorafs_manifest/tests/provider_admission_fixtures.rs:21 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/sorafs_manifest/tests/sorafs_validate_cli.rs:23 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/sorafs_node/src/gateway.rs:3326 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
-- test: crates/sorafs_node/src/gateway.rs:3688 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
-- test: crates/sorafs_node/src/gateway.rs:3708 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
-- test: crates/sorafs_node/src/gateway.rs:3751 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - test: crates/sorafs_node/tests/cli.rs:133 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_node/tests/cli.rs:203 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_node/tests/gateway.rs:24 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

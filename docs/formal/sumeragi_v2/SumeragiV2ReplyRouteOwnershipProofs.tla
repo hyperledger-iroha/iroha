@@ -5643,6 +5643,171 @@ PROOF
              ReplyRouteSafetyInvariant
   <1> QED BY <1>1
 
+THEOREM ReplyAttemptSubsetPreservesInductiveInvariant ==
+  /\ ReplyRouteInductiveInvariant
+  /\ rrAttempts' \subseteq rrAttempts
+  /\ rrPayloads' = ReplyPayloadsForAttempts(rrAttempts')
+  /\ UNCHANGED <<rrNextDeliveryOrdinal, rrConnectionTenure,
+                 rrSourceActive, rrNextServiceIndex>>
+  => ReplyRouteInductiveInvariant'
+PROOF
+  <1>1. ASSUME ReplyRouteInductiveInvariant,
+                rrAttempts' \subseteq rrAttempts,
+                rrPayloads' = ReplyPayloadsForAttempts(rrAttempts'),
+                UNCHANGED <<rrNextDeliveryOrdinal, rrConnectionTenure,
+                            rrSourceActive, rrNextServiceIndex>>
+         PROVE ReplyRouteInductiveInvariant'
+    <2>1. ReplyRouteConfiguration'
+      BY <1>1 DEF ReplyRouteInductiveInvariant
+    <2>2. ReplyRouteTypeInvariant'
+      <3>1. rrAttempts' \subseteq ReplyAttemptSet
+        BY <1>1
+           DEF ReplyRouteInductiveInvariant,
+               ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+      <3>2. rrPayloads' \subseteq ReplySemantics
+        BY <1>1, SMTT(30)
+           DEF ReplyPayloadsForAttempts,
+               ReplyRouteInductiveInvariant,
+               ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant,
+               ReplyAttemptSet
+      <3>3. /\ rrNextDeliveryOrdinal' = rrNextDeliveryOrdinal
+             /\ rrConnectionTenure' = rrConnectionTenure
+             /\ rrSourceActive' = rrSourceActive
+             /\ rrNextServiceIndex' = rrNextServiceIndex
+        BY <1>1
+      <3> QED BY <1>1, <3>1, <3>2, <3>3
+           DEF ReplyRouteInductiveInvariant,
+               ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+    <2>3. \A owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+             /\ IsFiniteSet(
+                  ReplyAttemptsForSource(owner, semantic, source))'
+             /\ Cardinality(
+                  ReplyAttemptsForSource(owner, semantic, source))' <= 1
+      <3>1. ASSUME NEW owner \in ReplyOwners,
+                    NEW semantic \in ReplySemantics,
+                    NEW source \in ReplySources
+             PROVE /\ IsFiniteSet(
+                          ReplyAttemptsForSource(
+                            owner, semantic, source))'
+                   /\ Cardinality(
+                          ReplyAttemptsForSource(
+                            owner, semantic, source))' <= 1
+        <4>1. ReplyAttemptsForSource(owner, semantic, source)'
+                   \subseteq
+                 ReplyAttemptsForSource(owner, semantic, source)
+          BY <1>1, SMTT(20)
+             DEF ReplyAttemptsForSource, ReplyAttemptsFor
+        <4>2. /\ IsFiniteSet(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source))
+               /\ Cardinality(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source)) <= 1
+          BY <1>1, <3>1
+             DEF ReplyRouteInductiveInvariant,
+                 ReplyRouteSafetyInvariant,
+                 ReplyRouteOwnershipInvariant
+        <4>3. /\ IsFiniteSet(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source))'
+               /\ Cardinality(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source))'
+                    <= Cardinality(
+                         ReplyAttemptsForSource(
+                           owner, semantic, source))
+          BY <4>1, <4>2, FS_Subset
+        <4>4. /\ Cardinality(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source)) \in Nat
+               /\ Cardinality(
+                      ReplyAttemptsForSource(
+                        owner, semantic, source))' \in Nat
+          BY <4>2, <4>3, FS_CardinalityType
+        <4> QED BY <4>2, <4>3, <4>4, SMTT(5)
+      <3> QED BY <3>1
+    <2>4. \A owner \in ReplyOwners, semantic \in ReplySemantics:
+             /\ Cardinality(ReplyAttemptSources(owner, semantic))'
+                  <= ReplySourceCapacity
+             /\ Cardinality(
+                  ReplyRetiredDeliverySources(owner, semantic))'
+                  <= ReplySourceCapacity
+      BY <2>1, <2>2, ReplyNextTypeBoundsSourceGeometry
+    <2>5. \A owner \in ReplyOwners, semantic \in ReplySemantics:
+             ReplyAttemptsFor(owner, semantic)' # {} =>
+               semantic \in rrPayloads'
+      BY <1>1, SMTT(30)
+         DEF ReplyPayloadsForAttempts, ReplyAttemptsFor
+    <2>6. \A attempt \in rrAttempts':
+             /\ attempt.deliveryOrdinal
+                  < rrNextDeliveryOrdinal'[attempt.owner]
+             /\ ReplyAttemptRetiredDeliveryWellFormed(attempt)
+             /\ IF attempt.ticketTenure = NoReplyTicketTenure
+                THEN ReplyAttemptHasNoTicket(attempt)
+                ELSE ReplyTicketValidForAttempt(attempt)'
+      <3>1. ASSUME NEW attempt \in rrAttempts'
+             PROVE /\ attempt.deliveryOrdinal
+                          < rrNextDeliveryOrdinal'[attempt.owner]
+                   /\ ReplyAttemptRetiredDeliveryWellFormed(attempt)
+                   /\ IF attempt.ticketTenure = NoReplyTicketTenure
+                      THEN ReplyAttemptHasNoTicket(attempt)
+                      ELSE ReplyTicketValidForAttempt(attempt)'
+        <4>1. attempt \in rrAttempts
+          BY <1>1, <3>1
+        <4>2. /\ rrNextDeliveryOrdinal' = rrNextDeliveryOrdinal
+               /\ rrConnectionTenure' = rrConnectionTenure
+               /\ rrSourceActive' = rrSourceActive
+          BY <1>1
+        <4> QED BY <1>1, <4>1, <4>2,
+             ReplyUnchangedRouteMapsPreserveAttemptMetadata
+             DEF ReplyRouteInductiveInvariant,
+                 ReplyRouteSafetyInvariant
+      <3> QED BY <3>1
+    <2>7. ReplyRouteOwnershipInvariant'
+      BY <2>3, <2>4, <2>5, <2>6
+         DEF ReplyRouteOwnershipInvariant
+    <2> QED BY <2>1, <2>2, <2>7
+         DEF ReplyRouteInductiveInvariant, ReplyRouteSafetyInvariant
+  <1> QED BY <1>1
+
+THEOREM CloseSemanticRequestPreservesInductiveInvariant ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteInductiveInvariant
+    /\ CloseSemanticRequest(witness)
+    => ReplyRouteInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteInductiveInvariant,
+                CloseSemanticRequest(witness)
+         PROVE ReplyRouteInductiveInvariant'
+    <2>1. /\ rrAttempts' \subseteq rrAttempts
+           /\ rrPayloads' = ReplyPayloadsForAttempts(rrAttempts')
+           /\ UNCHANGED <<rrNextDeliveryOrdinal,
+                          rrConnectionTenure, rrSourceActive,
+                          rrNextServiceIndex>>
+      BY <1>1, SMTT(30)
+         DEF CloseSemanticRequest, ReplyAttemptsAfterClose
+    <2> QED BY <1>1, <2>1,
+         ReplyAttemptSubsetPreservesInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM PiggybackCloseSemanticRequestPreservesInductiveInvariant ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteInductiveInvariant
+    /\ PiggybackCloseSemanticRequest(witness)
+    => ReplyRouteInductiveInvariant'
+BY CloseSemanticRequestPreservesInductiveInvariant
+   DEF PiggybackCloseSemanticRequest
+
+THEOREM RecoverReplyRouteStatePreservesInductiveInvariant ==
+  \A owner \in ReplyOwners, source \in ReplySources:
+    /\ ReplyRouteInductiveInvariant
+    /\ RecoverReplyRouteState(owner, source)
+    => ReplyRouteInductiveInvariant'
+BY RetireReplySourcePreservesInductiveInvariant
+   DEF RecoverReplyRouteState
+
 THEOREM ReplyRouteNextPreservesInductiveInvariant ==
   /\ ReplyRouteInductiveInvariant
   /\ ReplyRouteNext
@@ -5674,7 +5839,25 @@ PROOF
   <1>7. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics:
                ServiceReplyRoute(owner, semantic)
     BY <1>7, ServiceReplyRoutePreservesInductiveInvariant
-  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6, <1>7
+  <1>8. CASE \E witness \in ReplyCloseWitnessSet:
+               CloseSemanticRequest(witness)
+    BY <1>8, CloseSemanticRequestPreservesInductiveInvariant
+  <1>9. CASE \E witness \in ReplyCloseWitnessSet:
+               PiggybackCloseSemanticRequest(witness)
+    BY <1>9, PiggybackCloseSemanticRequestPreservesInductiveInvariant
+  <1>10. CASE \E witness \in ReplyCloseWitnessSet:
+                RetryCloseSemanticRequest(witness)
+    BY <1>10, ReplyRouteStateIdentityPreservesInductiveInvariant
+       DEF RetryCloseSemanticRequest, ReplyRouteVars
+  <1>11. CASE \E acknowledgement \in ReplyCloseAcknowledgementSet:
+                AcknowledgeCloseSemanticRequest(acknowledgement)
+    BY <1>11, ReplyRouteStateIdentityPreservesInductiveInvariant
+       DEF AcknowledgeCloseSemanticRequest
+  <1>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                RecoverReplyRouteState(owner, source)
+    BY <1>12, RecoverReplyRouteStatePreservesInductiveInvariant
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6, <1>7,
+       <1>8, <1>9, <1>10, <1>11, <1>12
        DEF ReplyRouteNext
 
 THEOREM ReplyRouteStutterPreservesInductiveInvariant ==
@@ -5720,6 +5903,916 @@ THEOREM ReplyRouteSpecAlwaysSafetyInvariant ==
   ReplyRouteSpec => []ReplyRouteSafetyInvariant
 BY ReplyRouteSpecAlwaysInductiveInvariant, PTL
    DEF ReplyRouteInductiveInvariant
+
+(***************************************************************************
+Durable semantic lifecycle and close-channel safety.  This invariant is kept
+separate from the historical route-only invariant above so refinements which
+consume only route typing retain their narrow boundary.
+***************************************************************************)
+ReplyRouteLifecycleInductiveInvariant ==
+  /\ ReplyRouteConfiguration
+  /\ ReplyRouteFullSafetyInvariant
+
+THEOREM ReplyNextCloseRetryGenerationTyped ==
+  \A generation \in 0..ReplyDeliveryOrdinalLimit:
+    ReplyRouteConfiguration =>
+      NextReplyCloseRetryGeneration(generation)
+        \in 0..ReplyDeliveryOrdinalLimit
+BY SMTT(10)
+   DEF ReplyRouteConfiguration, NextReplyCloseRetryGeneration
+
+THEOREM ReplyRouteInitEstablishesLifecycleInvariant ==
+  ReplyRouteInit => ReplyRouteLifecycleInductiveInvariant
+PROOF
+  <1>1. ASSUME ReplyRouteInit
+         PROVE ReplyRouteLifecycleInductiveInvariant
+    <2>1. ReplyRouteInductiveInvariant
+      BY <1>1, ReplyRouteInitEstablishesInductiveInvariant
+    <2>2. ReplyLifecycleTypeInvariant
+      BY <1>1, SMTT(30)
+         DEF ReplyRouteInit, ReplyRouteConfiguration,
+             ReplyLifecycleTypeInvariant
+    <2>3. ReplyLifecycleOwnershipInvariant
+      BY <1>1, FS_EmptySet, SMTT(45)
+         DEF ReplyRouteInit, ReplyRouteConfiguration,
+             ReplyLifecycleOwnershipInvariant,
+             ReplySemanticActive, ReplySemanticBound,
+             ReplyPayloadsForAttempts,
+             ReplyCanonicalSemanticHash
+    <2> QED BY <2>1, <2>2, <2>3
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant,
+             ReplyRouteInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM ReplySemanticCarrierPreservationPreservesLifecycle ==
+  /\ ReplyRouteLifecycleInvariant
+  /\ UNCHANGED <<rrSemanticSequence, rrSemanticHash,
+                 rrRequesterNextSequence, rrRequesterClosedThrough,
+                 rrClosePendingThrough, rrCloseSentThrough,
+                 rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
+  /\ \A nextAttempt \in rrAttempts':
+       \E oldAttempt \in rrAttempts:
+         /\ nextAttempt.owner = oldAttempt.owner
+         /\ nextAttempt.semantic = oldAttempt.semantic
+  /\ ReplyPayloadsForAttempts(rrAttempts') =
+       ReplyPayloadsForAttempts(rrAttempts)
+  /\ rrPayloads' = rrPayloads
+  => ReplyRouteLifecycleInvariant'
+BY SMTT(90)
+   DEF ReplyRouteLifecycleInvariant, ReplyLifecycleTypeInvariant,
+       ReplyLifecycleOwnershipInvariant, ReplySemanticActive,
+       ReplySemanticBound
+
+THEOREM ReplyIdentityReplacementPreservesLifecycle ==
+  \A oldAttempt, newAttempt:
+    /\ ReplyRouteLifecycleInvariant
+    /\ oldAttempt \in rrAttempts
+    /\ SameReplyAttemptIdentity(oldAttempt, newAttempt)
+    /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, newAttempt)
+    /\ rrPayloads' = rrPayloads
+    /\ UNCHANGED <<rrSemanticSequence, rrSemanticHash,
+                   rrRequesterNextSequence, rrRequesterClosedThrough,
+                   rrClosePendingThrough, rrCloseSentThrough,
+                   rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
+    => ReplyRouteLifecycleInvariant'
+PROOF
+  <1>1. ASSUME NEW oldAttempt,
+                NEW newAttempt,
+                ReplyRouteLifecycleInvariant,
+                oldAttempt \in rrAttempts,
+                SameReplyAttemptIdentity(oldAttempt, newAttempt),
+                rrAttempts' =
+                  ReplaceReplyAttempt(oldAttempt, newAttempt),
+                rrPayloads' = rrPayloads,
+                UNCHANGED <<rrSemanticSequence, rrSemanticHash,
+                            rrRequesterNextSequence,
+                            rrRequesterClosedThrough,
+                            rrClosePendingThrough, rrCloseSentThrough,
+                            rrCloseAcknowledgedThrough,
+                            rrCloseRetryGeneration>>
+         PROVE ReplyRouteLifecycleInvariant'
+    <2>1. \A nextAttempt \in rrAttempts':
+             \E priorAttempt \in rrAttempts:
+               /\ nextAttempt.owner = priorAttempt.owner
+               /\ nextAttempt.semantic = priorAttempt.semantic
+      BY <1>1, SMTT(20)
+         DEF ReplaceReplyAttempt, SameReplyAttemptIdentity
+    <2>2. ReplyPayloadsForAttempts(rrAttempts') =
+             ReplyPayloadsForAttempts(rrAttempts)
+      BY <1>1, SMTT(20)
+         DEF ReplyPayloadsForAttempts, ReplaceReplyAttempt,
+             SameReplyAttemptIdentity
+    <2> QED BY <1>1, <2>1, <2>2,
+         ReplySemanticCarrierPreservationPreservesLifecycle
+  <1> QED BY <1>1
+
+THEOREM ReplyIdentityImagePreservesLifecycle ==
+  ASSUME NEW Transform(_),
+         ReplyRouteLifecycleInvariant,
+         \A attempt \in rrAttempts:
+           SameReplyAttemptIdentity(attempt, Transform(attempt)),
+         rrAttempts' = {Transform(attempt): attempt \in rrAttempts},
+         rrPayloads' = rrPayloads,
+         UNCHANGED <<rrSemanticSequence, rrSemanticHash,
+                      rrRequesterNextSequence,
+                      rrRequesterClosedThrough,
+                      rrClosePendingThrough, rrCloseSentThrough,
+                      rrCloseAcknowledgedThrough,
+                      rrCloseRetryGeneration>>
+  PROVE ReplyRouteLifecycleInvariant'
+PROOF
+  <1>1. \A nextAttempt \in rrAttempts':
+           \E priorAttempt \in rrAttempts:
+             /\ nextAttempt.owner = priorAttempt.owner
+             /\ nextAttempt.semantic = priorAttempt.semantic
+    BY SMTT(20) DEF SameReplyAttemptIdentity
+  <1>2. ReplyPayloadsForAttempts(rrAttempts') =
+           ReplyPayloadsForAttempts(rrAttempts)
+    BY SMTT(20)
+       DEF ReplyPayloadsForAttempts, SameReplyAttemptIdentity
+  <1> QED BY <1>1, <1>2,
+       ReplySemanticCarrierPreservationPreservesLifecycle
+
+THEOREM ReplyClosedSemanticHasNoAttempts ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics:
+    /\ ReplyRouteLifecycleInvariant
+    /\ ReplySemanticClosed(owner, semantic)
+    => ReplyAttemptsFor(owner, semantic) = {}
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                ReplyRouteLifecycleInvariant,
+                ReplySemanticClosed(owner, semantic)
+         PROVE ReplyAttemptsFor(owner, semantic) = {}
+    <2>1. \A attempt:
+             attempt \notin ReplyAttemptsFor(owner, semantic)
+      <3>1. ASSUME NEW attempt,
+                    attempt \in ReplyAttemptsFor(owner, semantic)
+             PROVE FALSE
+        <4>1. /\ attempt \in rrAttempts
+               /\ attempt.owner = owner
+               /\ attempt.semantic = semantic
+          BY <3>1 DEF ReplyAttemptsFor
+        <4>2. ReplySemanticActive(
+                 attempt.owner, attempt.semantic)
+          BY <1>1, <4>1
+             DEF ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4>3. /\ rrSemanticSequence[owner][semantic] \in Nat
+               /\ rrRequesterClosedThrough[owner] \in Nat
+          BY <1>1
+             DEF ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleTypeInvariant
+        <4>4. /\ rrSemanticSequence[owner][semantic]
+                    > rrRequesterClosedThrough[owner]
+               /\ rrSemanticSequence[owner][semantic]
+                    <= rrRequesterClosedThrough[owner]
+          BY <1>1, <4>1, <4>2
+             DEF ReplySemanticActive, ReplySemanticClosed
+        <4> QED BY <4>3, <4>4, SMT
+      <3> QED BY <3>1
+    <2> QED BY <2>1, SMT
+  <1> QED BY <1>1
+
+THEOREM ObserveNewReplySourcePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ ObserveNewReplySource(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                ReplyRouteLifecycleInductiveInvariant,
+                ObserveNewReplySource(owner, semantic, source)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, ObserveNewReplySourcePreservesInductiveInvariant
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+    <2>2. CASE ReplySemanticBound(owner, semantic)
+      <3>1. ReplyRouteLifecycleInvariant'
+        BY <1>1, <2>2, SMTT(120)
+           DEF ObserveNewReplySource, ReplyAttempt,
+               ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant,
+               ReplyLifecycleOwnershipInvariant,
+               ReplySemanticActive, ReplySemanticBound,
+               ReplyPayloadsForAttempts
+      <3> QED BY <2>1, <3>1
+           DEF ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteInductiveInvariant
+    <2>3. CASE ~ReplySemanticBound(owner, semantic)
+      <3>1. /\ ReplyLifecycleTypeInvariant
+             /\ ReplyLifecycleOwnershipInvariant
+             /\ rrRequesterNextSequence[owner]
+                  \in ReplySemanticSequences
+             /\ rrRequesterNextSequence[owner]
+                  > rrRequesterClosedThrough[owner]
+             /\ rrRequesterNextSequence[owner]
+                  <= rrRequesterClosedThrough[owner]
+                       + ReplyActiveWindowCapacity
+             /\ rrSemanticSequence[owner][semantic] = 0
+             /\ rrSemanticHash[owner][semantic] = {}
+        BY <1>1, <2>3, SMTT(30)
+           DEF ObserveNewReplySource,
+               ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteLifecycleInvariant,
+               ReplyLifecycleTypeInvariant,
+               ReplyLifecycleOwnershipInvariant,
+               ReplySemanticBound
+      <3>15. /\ rrSemanticSequence' =
+                    [rrSemanticSequence EXCEPT
+                       ![owner][semantic] =
+                         rrRequesterNextSequence[owner]]
+                /\ rrSemanticHash' =
+                    [rrSemanticHash EXCEPT
+                       ![owner][semantic] =
+                         ReplyCanonicalSemanticHash(semantic)]
+                /\ rrRequesterNextSequence' =
+                    [rrRequesterNextSequence EXCEPT
+                       ![owner] =
+                         rrRequesterNextSequence[owner] + 1]
+                /\ rrRequesterClosedThrough' =
+                     rrRequesterClosedThrough
+        BY <1>1, <2>3
+           DEF ObserveNewReplySource
+      <3>2. rrSemanticSequence'
+               \in [ReplyOwners ->
+                     [ReplySemantics ->
+                       0..ReplyDeliveryOrdinalLimit]]
+        BY <3>1, <3>15,
+           ReplyNestedFunctionalUpdatePreservesType,
+           SMTT(5)
+           DEF ReplyLifecycleTypeInvariant,
+               ReplySemanticSequences
+      <3>3. rrSemanticHash'
+               \in [ReplyOwners ->
+                     [ReplySemantics -> SUBSET ReplySemantics]]
+        BY <1>1, <3>1, <3>15,
+           ReplyNestedFunctionalUpdatePreservesType,
+           SMTT(5)
+           DEF ReplyLifecycleTypeInvariant,
+               ReplyCanonicalSemanticHash
+      <3>4. rrRequesterNextSequence'
+               \in [ReplyOwners ->
+                     1..(ReplyDeliveryOrdinalLimit + 1)]
+        <4>1. rrRequesterNextSequence[owner] + 1
+                 \in 1..(ReplyDeliveryOrdinalLimit + 1)
+          BY <3>1, SMT
+             DEF ReplySemanticSequences
+        <4> QED BY <3>1, <3>15, <4>1,
+             ReplyFunctionalUpdatePreservesType
+             DEF ReplyLifecycleTypeInvariant
+      <3>5. /\ rrRequesterClosedThrough'
+                    \in [ReplyOwners ->
+                          0..ReplyDeliveryOrdinalLimit]
+               /\ rrClosePendingThrough'
+                    \in [ReplyOwners ->
+                          [ReplySources ->
+                            0..ReplyDeliveryOrdinalLimit]]
+               /\ rrCloseSentThrough'
+                    \in [ReplyOwners ->
+                          [ReplySources ->
+                            0..ReplyDeliveryOrdinalLimit]]
+               /\ rrCloseAcknowledgedThrough'
+                    \in [ReplyOwners ->
+                          [ReplySources ->
+                            0..ReplyDeliveryOrdinalLimit]]
+               /\ rrCloseRetryGeneration'
+                    \in [ReplyOwners ->
+                          [ReplySources ->
+                            0..ReplyDeliveryOrdinalLimit]]
+        BY <1>1, <3>1
+           DEF ObserveNewReplySource,
+               ReplyLifecycleTypeInvariant
+      <3>6. ReplyLifecycleTypeInvariant'
+        BY <3>2, <3>3, <3>4, <3>5
+           DEF ReplyLifecycleTypeInvariant
+      <3>7. \A nextOwner \in ReplyOwners:
+               /\ rrRequesterClosedThrough'[nextOwner]
+                    < rrRequesterNextSequence'[nextOwner]
+               /\ \A nextSemantic \in ReplySemantics:
+                    /\ (rrSemanticSequence'[
+                          nextOwner][nextSemantic] = 0)
+                         <=>
+                         (rrSemanticHash'[
+                            nextOwner][nextSemantic] = {})
+                    /\ rrSemanticSequence'[
+                         nextOwner][nextSemantic] # 0 =>
+                         /\ rrSemanticHash'[
+                              nextOwner][nextSemantic] =
+                              ReplyCanonicalSemanticHash(
+                                nextSemantic)
+                         /\ rrSemanticSequence'[
+                              nextOwner][nextSemantic] <
+                              rrRequesterNextSequence'[nextOwner]
+                    /\ ReplySemanticActive(
+                         nextOwner, nextSemantic)' =>
+                         rrSemanticSequence'[
+                           nextOwner][nextSemantic] <=
+                           rrRequesterClosedThrough'[nextOwner]
+                             + ReplyActiveWindowCapacity
+               /\ \A left, right \in ReplySemantics:
+                    /\ rrSemanticSequence'[nextOwner][left] # 0
+                    /\ rrSemanticSequence'[nextOwner][left] =
+                         rrSemanticSequence'[nextOwner][right]
+                    => left = right
+        BY <1>1, <2>3, <3>1,
+           ReplyNestedFunctionalUpdateAtKey,
+           ReplyNestedFunctionalUpdateAwayFromKey,
+           ReplyFunctionalUpdateAtKey,
+           ReplyFunctionalUpdateAwayFromKey,
+           SMTT(120)
+           DEF ObserveNewReplySource,
+               ReplyLifecycleTypeInvariant,
+               ReplyLifecycleOwnershipInvariant,
+               ReplySemanticActive, ReplySemanticBound,
+               ReplyCanonicalSemanticHash
+      <3>8. \A attempt \in rrAttempts:
+               ReplySemanticActive(
+                 attempt.owner, attempt.semantic)'
+        <4>1. ASSUME NEW attempt \in rrAttempts
+               PROVE ReplySemanticActive(
+                       attempt.owner, attempt.semantic)'
+          <5>1. ReplySemanticActive(
+                   attempt.owner, attempt.semantic)
+            BY <1>1, <4>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteLifecycleInvariant,
+                   ReplyLifecycleOwnershipInvariant
+          <5>2. ~(/\ attempt.owner = owner
+                    /\ attempt.semantic = semantic)
+            BY <2>3, <3>1, <5>1, SMT
+               DEF ReplySemanticActive, ReplySemanticBound
+          <5>3. /\ attempt.owner \in ReplyOwners
+                 /\ attempt.semantic \in ReplySemantics
+            BY <1>1, <4>1
+               DEF ReplyRouteLifecycleInductiveInvariant,
+                   ReplyRouteFullSafetyInvariant,
+                   ReplyRouteSafetyInvariant,
+                   ReplyRouteTypeInvariant, ReplyAttemptSet
+          <5>4. /\ rrSemanticSequence'[
+                        attempt.owner][attempt.semantic] =
+                       rrSemanticSequence[
+                         attempt.owner][attempt.semantic]
+                 /\ rrSemanticHash'[
+                        attempt.owner][attempt.semantic] =
+                       rrSemanticHash[
+                         attempt.owner][attempt.semantic]
+                 /\ rrRequesterClosedThrough'[attempt.owner] =
+                       rrRequesterClosedThrough[attempt.owner]
+            BY <3>1, <3>15, <5>2, <5>3,
+               ReplyNestedFunctionalUpdateAwayFromKey,
+               ReplyFunctionalUpdateAwayFromKey,
+               SMTT(5)
+               DEF ReplyLifecycleTypeInvariant
+          <5> QED BY <5>1, <5>4
+               DEF ReplySemanticActive, ReplySemanticBound
+        <4> QED BY <4>1
+      <3>16. /\ rrSemanticSequence'[owner][semantic] =
+                    rrRequesterNextSequence[owner]
+                /\ rrSemanticHash'[owner][semantic] =
+                    ReplyCanonicalSemanticHash(semantic)
+                /\ rrRequesterClosedThrough'[owner] =
+                    rrRequesterClosedThrough[owner]
+        BY <1>1, <3>1, <3>15,
+           ReplyNestedFunctionalUpdateAtKey,
+           ReplyFunctionalUpdateAtKey,
+           SMTT(5)
+           DEF ReplyLifecycleTypeInvariant
+      <3>9. ReplySemanticActive(owner, semantic)'
+        BY <3>1, <3>16
+           DEF ReplySemanticActive, ReplySemanticBound
+      <3>10. \A attempt \in rrAttempts':
+                ReplySemanticActive(
+                  attempt.owner, attempt.semantic)'
+        BY <1>1, <3>8, <3>9, SMTT(30)
+           DEF ObserveNewReplySource, ReplyAttempt
+      <3>11. rrPayloads' =
+               ReplyPayloadsForAttempts(rrAttempts')
+        BY <1>1, <2>3, <3>1, SMTT(30)
+           DEF ObserveNewReplySource, ReplyAttempt,
+               ReplyLifecycleOwnershipInvariant,
+               ReplyPayloadsForAttempts
+      <3>12. \A nextOwner \in ReplyOwners,
+                 responder \in ReplySources:
+               /\ rrCloseSentThrough'[
+                    nextOwner][responder] =
+                    rrClosePendingThrough'[
+                      nextOwner][responder]
+               /\ rrCloseAcknowledgedThrough'[
+                    nextOwner][responder] <=
+                    rrClosePendingThrough'[
+                      nextOwner][responder]
+               /\ rrClosePendingThrough'[
+                    nextOwner][responder] <=
+                    rrRequesterClosedThrough'[nextOwner]
+        BY <1>1, <2>3, <3>1
+           DEF ObserveNewReplySource,
+               ReplyLifecycleOwnershipInvariant
+      <3>13. ReplyLifecycleOwnershipInvariant'
+        BY <3>7, <3>10, <3>11, <3>12
+           DEF ReplyLifecycleOwnershipInvariant
+      <3>14. ReplyRouteLifecycleInvariant'
+        BY <3>6, <3>13 DEF ReplyRouteLifecycleInvariant
+      <3> QED BY <2>1, <3>14
+           DEF ReplyRouteLifecycleInductiveInvariant,
+               ReplyRouteFullSafetyInvariant,
+               ReplyRouteInductiveInvariant
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM ObserveLaterReplyDeliveryPreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ ObserveLaterReplyDelivery(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY ObserveLaterReplyDeliveryPreservesInductiveInvariant,
+   ReplyOwnedAttemptIdentity,
+   ReplyRouteRefreshPreservesIdentityAndCursor,
+   ReplyIdentityReplacementPreservesLifecycle,
+   SMTT(60)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, ObserveLaterReplyDelivery,
+       ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+
+THEOREM RetryExactReplySourcePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ RetryExactReplySource(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY RetryExactReplySourcePreservesInductiveInvariant,
+   ReplySemanticCarrierPreservationPreservesLifecycle,
+   SMTT(30)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, RetryExactReplySource,
+       ReplyRouteVars
+
+THEOREM RetireReplySourcePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ RetireReplySource(owner, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW source \in ReplySources,
+                ReplyRouteLifecycleInductiveInvariant,
+                RetireReplySource(owner, source)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, RetireReplySourcePreservesInductiveInvariant
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+    <2>2. \A attempt \in rrAttempts:
+             SameReplyAttemptIdentity(
+               attempt,
+               ReplyAttemptAfterRetire(owner, source, attempt))
+      BY <1>1, ReplyRetireTransformTypedAndIdentity
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+    <2>3. /\ rrAttempts' =
+                 {ReplyAttemptAfterRetire(owner, source, attempt):
+                    attempt \in rrAttempts}
+           /\ rrPayloads' = rrPayloads
+           /\ UNCHANGED <<rrSemanticSequence, rrSemanticHash,
+                          rrRequesterNextSequence,
+                          rrRequesterClosedThrough,
+                          rrClosePendingThrough, rrCloseSentThrough,
+                          rrCloseAcknowledgedThrough,
+                          rrCloseRetryGeneration>>
+      BY <1>1 DEF RetireReplySource, ReplyAttemptAfterRetire
+    <2>4. ReplyRouteLifecycleInvariant'
+      BY <1>1, <2>2, <2>3,
+         ReplyIdentityImagePreservesLifecycle
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant
+    <2> QED BY <2>1, <2>4
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM ReconnectReplySourcePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ ReconnectReplySource(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW owner \in ReplyOwners,
+                NEW semantic \in ReplySemantics,
+                NEW source \in ReplySources,
+                ReplyRouteLifecycleInductiveInvariant,
+                ReconnectReplySource(owner, semantic, source)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, ReconnectReplySourcePreservesInductiveInvariant
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+    <2>2. LET oldAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)
+                 routed ==
+                   ReplyAttemptWithRoute(
+                     oldAttempt,
+                     rrNextDeliveryOrdinal[owner],
+                     rrConnectionTenure[owner][source] + 1)
+             IN \A attempt \in rrAttempts:
+                  SameReplyAttemptIdentity(
+                    attempt,
+                    ReplyAttemptAfterReconnectTransform(
+                      oldAttempt, routed, attempt))
+      <3>1. ASSUME NEW attempt \in rrAttempts
+             PROVE LET oldAttempt ==
+                         ReplyAttemptFor(owner, semantic, source)
+                       routed ==
+                         ReplyAttemptWithRoute(
+                           oldAttempt,
+                           rrNextDeliveryOrdinal[owner],
+                           rrConnectionTenure[owner][source] + 1)
+                   IN SameReplyAttemptIdentity(
+                        attempt,
+                        ReplyAttemptAfterReconnectTransform(
+                          oldAttempt, routed, attempt))
+        <4>1. attempt \in ReplyAttemptSet
+          BY <1>1, <3>1
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+        <4>2. LET oldAttempt ==
+                     ReplyAttemptFor(owner, semantic, source)
+                   routed ==
+                     ReplyAttemptWithRoute(
+                       oldAttempt,
+                       rrNextDeliveryOrdinal[owner],
+                       rrConnectionTenure[owner][source] + 1)
+               IN SameReplyAttemptIdentity(oldAttempt, routed)
+          BY <1>1, ReplyOwnedAttemptIdentity,
+             ReplyRouteRefreshPreservesIdentityAndCursor
+             DEF ReconnectReplySource,
+                 ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+        <4>3. SameReplyAttemptIdentity(
+                 attempt, ReplyAttemptWithoutTicket(attempt))
+          BY <4>1, ReplyTicketRemovalPreservesIdentityAndCursor
+        <4>4. CASE attempt =
+                    ReplyAttemptFor(owner, semantic, source)
+          BY <4>2, <4>4
+             DEF ReplyAttemptAfterReconnectTransform
+        <4>5. CASE /\ attempt #
+                         ReplyAttemptFor(owner, semantic, source)
+                    /\ attempt.owner =
+                         ReplyAttemptFor(
+                           owner, semantic, source).owner
+                    /\ attempt.source =
+                         ReplyAttemptFor(
+                           owner, semantic, source).source
+          BY <4>3, <4>5
+             DEF ReplyAttemptAfterReconnectTransform
+        <4>6. CASE /\ attempt #
+                         ReplyAttemptFor(owner, semantic, source)
+                    /\ ~(attempt.owner =
+                           ReplyAttemptFor(
+                             owner, semantic, source).owner
+                         /\ attempt.source =
+                           ReplyAttemptFor(
+                             owner, semantic, source).source)
+          BY <4>6
+             DEF ReplyAttemptAfterReconnectTransform,
+                 SameReplyAttemptIdentity
+        <4> QED BY <4>4, <4>5, <4>6
+      <3> QED BY <3>1
+    <2>3. LET oldAttempt ==
+                   ReplyAttemptFor(owner, semantic, source)
+                 routed ==
+                   ReplyAttemptWithRoute(
+                     oldAttempt,
+                     rrNextDeliveryOrdinal[owner],
+                     rrConnectionTenure[owner][source] + 1)
+             IN /\ rrAttempts' =
+                       {ReplyAttemptAfterReconnectTransform(
+                          oldAttempt, routed, attempt):
+                          attempt \in rrAttempts}
+                /\ rrPayloads' = rrPayloads
+                /\ UNCHANGED
+                     <<rrSemanticSequence, rrSemanticHash,
+                       rrRequesterNextSequence,
+                       rrRequesterClosedThrough,
+                       rrClosePendingThrough, rrCloseSentThrough,
+                       rrCloseAcknowledgedThrough,
+                       rrCloseRetryGeneration>>
+      BY <1>1
+         DEF ReconnectReplySource, ReplyAttemptsAfterReconnect,
+             ReplyAttemptAfterReconnectTransform
+    <2>4. ReplyRouteLifecycleInvariant'
+      BY <1>1, <2>2, <2>3,
+         ReplyIdentityImagePreservesLifecycle
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant
+    <2> QED BY <2>1, <2>4
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM AcquireReplyTicketPreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ AcquireReplyTicket(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY AcquireReplyTicketPreservesInductiveInvariant,
+   ReplyOwnedAttemptIdentity,
+   ReplyTicketAcquisitionPreservesIdentityAndCursor,
+   ReplyIdentityReplacementPreservesLifecycle,
+   SMTT(45)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, AcquireReplyTicket,
+       ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+
+THEOREM AdvanceCurrentReplyAttemptPreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics,
+     source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ AdvanceCurrentReplyAttempt(owner, semantic, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY AdvanceCurrentReplyAttemptPreservesInductiveInvariant,
+   ReplyOwnedAttemptIdentity, ReplyServicePreservesIdentity,
+   ReplyIdentityReplacementPreservesLifecycle,
+   SMTT(45)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, AdvanceCurrentReplyAttempt,
+       ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+
+THEOREM ServiceReplyRoutePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, semantic \in ReplySemantics:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ ServiceReplyRoute(owner, semantic)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY ServiceReplyRoutePreservesInductiveInvariant,
+   ReplySelectedPendingAttemptFacts,
+   ReplyServicePreservesIdentity,
+   ReplyIdentityReplacementPreservesLifecycle,
+   SMTT(60)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, ServiceReplyRoute,
+       ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant
+
+THEOREM CloseSemanticRequestPreservesLifecycleInvariant ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ CloseSemanticRequest(witness)
+    => ReplyRouteLifecycleInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteLifecycleInductiveInvariant,
+                CloseSemanticRequest(witness)
+         PROVE ReplyRouteLifecycleInductiveInvariant'
+    <2>1. ReplyRouteInductiveInvariant'
+      BY <1>1, CloseSemanticRequestPreservesInductiveInvariant
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+    <2>2. /\ witness.requester \in ReplyOwners
+           /\ witness.responder \in ReplySources
+           /\ witness.closedThrough
+                \in 0..ReplyDeliveryOrdinalLimit
+           /\ ReplyLifecycleTypeInvariant
+           /\ ReplyLifecycleOwnershipInvariant
+      BY <1>1
+         DEF ReplyCloseWitnessSet,
+             ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteLifecycleInvariant
+    <2>3. ReplyLifecycleTypeInvariant'
+      BY <1>1, <2>2,
+         ReplyFunctionalUpdatePreservesType,
+         ReplyNestedFunctionalUpdatePreservesType,
+         SMTT(45)
+         DEF CloseSemanticRequest,
+             ReplyLifecycleTypeInvariant
+    <2>4. \A owner \in ReplyOwners:
+             /\ rrRequesterClosedThrough'[owner]
+                  < rrRequesterNextSequence'[owner]
+             /\ \A semantic \in ReplySemantics:
+                  /\ (rrSemanticSequence'[owner][semantic] = 0)
+                       <=>
+                       (rrSemanticHash'[owner][semantic] = {})
+                  /\ rrSemanticSequence'[owner][semantic] # 0 =>
+                       /\ rrSemanticHash'[owner][semantic] =
+                            ReplyCanonicalSemanticHash(semantic)
+                       /\ rrSemanticSequence'[owner][semantic] <
+                            rrRequesterNextSequence'[owner]
+                  /\ ReplySemanticActive(owner, semantic)' =>
+                       rrSemanticSequence'[owner][semantic] <=
+                         rrRequesterClosedThrough'[owner]
+                           + ReplyActiveWindowCapacity
+             /\ \A left, right \in ReplySemantics:
+                  /\ rrSemanticSequence'[owner][left] # 0
+                  /\ rrSemanticSequence'[owner][left] =
+                       rrSemanticSequence'[owner][right]
+                  => left = right
+      BY <1>1, <2>2,
+         ReplyFunctionalUpdateAtKey,
+         ReplyFunctionalUpdateAwayFromKey,
+         SMTT(90)
+         DEF CloseSemanticRequest,
+             ReplyLifecycleTypeInvariant,
+             ReplyLifecycleOwnershipInvariant,
+             ReplySemanticActive, ReplySemanticBound
+    <2>5. \A attempt \in rrAttempts':
+             ReplySemanticActive(
+               attempt.owner, attempt.semantic)'
+      BY <1>1, <2>2,
+         ReplyFunctionalUpdateAtKey,
+         ReplyFunctionalUpdateAwayFromKey,
+         SMTT(60)
+         DEF CloseSemanticRequest, ReplyAttemptsAfterClose,
+             ReplyLifecycleOwnershipInvariant,
+             ReplySemanticActive, ReplySemanticBound
+    <2>6. rrPayloads' =
+             ReplyPayloadsForAttempts(rrAttempts')
+      BY <1>1 DEF CloseSemanticRequest
+    <2>7. \A owner \in ReplyOwners, responder \in ReplySources:
+             /\ rrCloseSentThrough'[owner][responder] =
+                  rrClosePendingThrough'[owner][responder]
+             /\ rrCloseAcknowledgedThrough'[owner][responder]
+                  <= rrClosePendingThrough'[owner][responder]
+             /\ rrClosePendingThrough'[owner][responder]
+                  <= rrRequesterClosedThrough'[owner]
+      BY <1>1, <2>2,
+         ReplyFunctionalUpdateAtKey,
+         ReplyFunctionalUpdateAwayFromKey,
+         ReplyNestedFunctionalUpdateAtKey,
+         ReplyNestedFunctionalUpdateAwayFromKey,
+         SMTT(90)
+         DEF CloseSemanticRequest, ReplyCloseWorkPending,
+             ReplyLifecycleTypeInvariant,
+             ReplyLifecycleOwnershipInvariant
+    <2>8. ReplyLifecycleOwnershipInvariant'
+      BY <2>4, <2>5, <2>6, <2>7
+         DEF ReplyLifecycleOwnershipInvariant
+    <2>9. ReplyRouteLifecycleInvariant'
+      BY <2>3, <2>8 DEF ReplyRouteLifecycleInvariant
+    <2> QED BY <2>1, <2>9
+         DEF ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM PiggybackCloseSemanticRequestPreservesLifecycleInvariant ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ PiggybackCloseSemanticRequest(witness)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY CloseSemanticRequestPreservesLifecycleInvariant
+   DEF PiggybackCloseSemanticRequest
+
+THEOREM RetryCloseSemanticRequestPreservesLifecycleInvariant ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ RetryCloseSemanticRequest(witness)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY ReplyRouteStateIdentityPreservesInductiveInvariant,
+   ReplyNextCloseRetryGenerationTyped,
+   ReplyNestedFunctionalUpdatePreservesType,
+   ReplySemanticCarrierPreservationPreservesLifecycle,
+   SMTT(90)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, ReplyLifecycleTypeInvariant,
+       ReplyLifecycleOwnershipInvariant, RetryCloseSemanticRequest,
+       ReplyCloseWitnessValid, ReplyCloseWorkPending,
+       ReplyRouteVars
+
+THEOREM AcknowledgeCloseSemanticRequestPreservesLifecycleInvariant ==
+  \A acknowledgement \in ReplyCloseAcknowledgementSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ AcknowledgeCloseSemanticRequest(acknowledgement)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY ReplyRouteStateIdentityPreservesInductiveInvariant,
+   ReplyNestedFunctionalUpdatePreservesType,
+   ReplyNestedFunctionalUpdateAtKey,
+   ReplyNestedFunctionalUpdateAwayFromKey,
+   ReplySemanticCarrierPreservationPreservesLifecycle,
+   SMTT(90)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, ReplyLifecycleTypeInvariant,
+       ReplyLifecycleOwnershipInvariant,
+       AcknowledgeCloseSemanticRequest,
+       ReplyCloseAcknowledgementValid
+
+THEOREM RecoverReplyRouteStatePreservesLifecycleInvariant ==
+  \A owner \in ReplyOwners, source \in ReplySources:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ RecoverReplyRouteState(owner, source)
+    => ReplyRouteLifecycleInductiveInvariant'
+BY RetireReplySourcePreservesLifecycleInvariant
+   DEF RecoverReplyRouteState
+
+THEOREM ReplyRouteNextPreservesLifecycleInvariant ==
+  /\ ReplyRouteLifecycleInductiveInvariant
+  /\ ReplyRouteNext
+  => ReplyRouteLifecycleInductiveInvariant'
+PROOF
+  <1>1. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ObserveNewReplySource(owner, semantic, source)
+    BY <1>1, ObserveNewReplySourcePreservesLifecycleInvariant
+  <1>2. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ObserveLaterReplyDelivery(owner, semantic, source)
+    BY <1>2, ObserveLaterReplyDeliveryPreservesLifecycleInvariant
+  <1>3. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               RetryExactReplySource(owner, semantic, source)
+    BY <1>3, RetryExactReplySourcePreservesLifecycleInvariant
+  <1>4. CASE \E owner \in ReplyOwners, source \in ReplySources:
+               RetireReplySource(owner, source)
+    BY <1>4, RetireReplySourcePreservesLifecycleInvariant
+  <1>5. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               ReconnectReplySource(owner, semantic, source)
+    BY <1>5, ReconnectReplySourcePreservesLifecycleInvariant
+  <1>6. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics,
+               source \in ReplySources:
+               AcquireReplyTicket(owner, semantic, source)
+    BY <1>6, AcquireReplyTicketPreservesLifecycleInvariant
+  <1>7. CASE \E owner \in ReplyOwners, semantic \in ReplySemantics:
+               ServiceReplyRoute(owner, semantic)
+    BY <1>7, ServiceReplyRoutePreservesLifecycleInvariant
+  <1>8. CASE \E witness \in ReplyCloseWitnessSet:
+               CloseSemanticRequest(witness)
+    BY <1>8, CloseSemanticRequestPreservesLifecycleInvariant
+  <1>9. CASE \E witness \in ReplyCloseWitnessSet:
+               PiggybackCloseSemanticRequest(witness)
+    BY <1>9, PiggybackCloseSemanticRequestPreservesLifecycleInvariant
+  <1>10. CASE \E witness \in ReplyCloseWitnessSet:
+                RetryCloseSemanticRequest(witness)
+    BY <1>10, RetryCloseSemanticRequestPreservesLifecycleInvariant
+  <1>11. CASE \E acknowledgement \in ReplyCloseAcknowledgementSet:
+                AcknowledgeCloseSemanticRequest(acknowledgement)
+    BY <1>11,
+       AcknowledgeCloseSemanticRequestPreservesLifecycleInvariant
+  <1>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                RecoverReplyRouteState(owner, source)
+    BY <1>12, RecoverReplyRouteStatePreservesLifecycleInvariant
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6, <1>7,
+       <1>8, <1>9, <1>10, <1>11, <1>12
+       DEF ReplyRouteNext
+
+THEOREM ReplyRouteLifecycleStutterPreservesInvariant ==
+  /\ ReplyRouteLifecycleInductiveInvariant
+  /\ UNCHANGED ReplyRouteVars
+  => ReplyRouteLifecycleInductiveInvariant'
+BY ReplyRouteStateIdentityPreservesInductiveInvariant,
+   ReplySemanticCarrierPreservationPreservesLifecycle,
+   SMTT(30)
+   DEF ReplyRouteLifecycleInductiveInvariant,
+       ReplyRouteFullSafetyInvariant, ReplyRouteLifecycleInvariant,
+       ReplyRouteInductiveInvariant, ReplyRouteVars
+
+THEOREM ReplyRouteLifecycleBracketPreservesInvariant ==
+  /\ ReplyRouteLifecycleInductiveInvariant
+  /\ [ReplyRouteNext]_ReplyRouteVars
+  => ReplyRouteLifecycleInductiveInvariant'
+BY ReplyRouteNextPreservesLifecycleInvariant,
+   ReplyRouteLifecycleStutterPreservesInvariant
+
+THEOREM ReplyRouteSpecAlwaysFullSafetyInvariant ==
+  ReplyRouteSpec => []ReplyRouteFullSafetyInvariant
+PROOF
+  <1>1. ReplyRouteInit => ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteInitEstablishesLifecycleInvariant
+  <1>2. /\ ReplyRouteLifecycleInductiveInvariant
+           /\ [ReplyRouteNext]_ReplyRouteVars
+          => ReplyRouteLifecycleInductiveInvariant'
+    BY ReplyRouteLifecycleBracketPreservesInvariant
+  <1>3. ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
+    BY <1>1, <1>2, PTL DEF ReplyRouteSpec
+  <1> QED BY <1>3, PTL
+       DEF ReplyRouteLifecycleInductiveInvariant
 
 THEOREM ReplyAttemptExtensionProvidesReplayAndIsolation ==
   \A newAttempt:
@@ -5925,13 +7018,104 @@ PROOF
          DEF ReplyTenureAwareReplayStep, ReplySourceIsolationStep
   <1> QED BY <1>1
 
+THEOREM CloseSemanticRequestProvidesReplayAndIsolation ==
+  \A witness \in ReplyCloseWitnessSet:
+    /\ ReplyRouteLifecycleInductiveInvariant
+    /\ CloseSemanticRequest(witness)
+    => /\ ReplyTenureAwareReplayStep
+       /\ ReplySourceIsolationStep
+PROOF
+  <1>1. ASSUME NEW witness \in ReplyCloseWitnessSet,
+                ReplyRouteLifecycleInductiveInvariant,
+                CloseSemanticRequest(witness)
+         PROVE /\ ReplyTenureAwareReplayStep
+               /\ ReplySourceIsolationStep
+    <2>1. \A oldAttempt \in rrAttempts:
+             \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+             \/ oldAttempt \in rrAttempts'
+      <3>1. ASSUME NEW oldAttempt \in rrAttempts
+             PROVE \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+                   \/ oldAttempt \in rrAttempts'
+        <4>1. ReplySemanticActive(
+                 oldAttempt.owner, oldAttempt.semantic)
+          BY <1>1, <3>1
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteLifecycleInvariant,
+                 ReplyLifecycleOwnershipInvariant
+        <4>2. CASE oldAttempt.owner # witness.requester
+                     \/ rrSemanticSequence[
+                          witness.requester][oldAttempt.semantic]
+                          > witness.closedThrough
+          <5> QED BY <1>1, <3>1, <4>2
+               DEF CloseSemanticRequest,
+                   ReplyAttemptsAfterClose
+        <4>3. CASE ~(oldAttempt.owner # witness.requester
+                     \/ rrSemanticSequence[
+                          witness.requester][oldAttempt.semantic]
+                          > witness.closedThrough)
+          <5>1. /\ oldAttempt.owner = witness.requester
+                 /\ rrSemanticSequence[
+                      oldAttempt.owner][oldAttempt.semantic]
+                      <= witness.closedThrough
+            BY <4>3, SMTT(5)
+          <5>2. ReplyAttemptCoveredByCloseStep(oldAttempt)
+            BY <1>1, <3>1, <4>1, <5>1, SMTT(30)
+               DEF CloseSemanticRequest,
+                   ReplyAttemptCoveredByCloseStep,
+                   ReplySemanticActive, ReplySemanticBound
+          <5> QED BY <5>2
+        <4> QED BY <4>2, <4>3
+      <3> QED BY <3>1
+    <2>2. ReplyAttemptReplayStep
+      <3>1. ASSUME NEW oldAttempt \in rrAttempts
+             PROVE \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+                   \/ \E newAttempt \in rrAttempts':
+                        ReplyAttemptReplayValid(
+                          oldAttempt, newAttempt)
+        <4>1. \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+               \/ oldAttempt \in rrAttempts'
+          BY <2>1, <3>1
+        <4>2. ReplyAttemptReplayValid(oldAttempt, oldAttempt)
+          BY <1>1, <3>1, SMTT(15)
+             DEF ReplyRouteLifecycleInductiveInvariant,
+                 ReplyRouteFullSafetyInvariant,
+                 ReplyRouteSafetyInvariant, ReplyRouteTypeInvariant,
+                 ReplyAttemptSet, ReplyDeliveryOrdinals,
+                 ReplyAttemptReplayValid, ReplyAttemptCursor
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1 DEF ReplyAttemptReplayStep
+    <2>3. ReplySourceTenureInvalidationStep
+      BY <1>1, SMTT(20)
+         DEF CloseSemanticRequest,
+             ReplySourceTenureInvalidationStep
+    <2>4. ReplyAttemptSurvivalStep
+      BY <2>1, SMTT(10)
+         DEF ReplyAttemptSurvivalStep,
+             SameReplyAttemptIdentity
+    <2>5. ReplyOtherCursorIsolationStep
+      BY <1>1, SMTT(90)
+         DEF CloseSemanticRequest, ReplyAttemptsAfterClose,
+             ReplyOtherCursorIsolationStep,
+             ReplyAttemptCursor, SameReplyAttemptIdentity,
+             ReplyRouteLifecycleInductiveInvariant,
+             ReplyRouteFullSafetyInvariant,
+             ReplyRouteSafetyInvariant,
+             ReplyRouteOwnershipInvariant
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+         DEF ReplyTenureAwareReplayStep,
+             ReplySourceIsolationStep
+  <1> QED BY <1>1
+
 THEOREM ReplyRouteNextProvidesReplayAndIsolation ==
   /\ ReplyRouteInductiveInvariant
+  /\ ReplyRouteLifecycleInductiveInvariant
   /\ ReplyRouteNext
   => /\ ReplyTenureAwareReplayStep
      /\ ReplySourceIsolationStep
 PROOF
   <1>1. ASSUME ReplyRouteInductiveInvariant,
+                ReplyRouteLifecycleInductiveInvariant,
                 ReplyRouteNext
          PROVE /\ ReplyTenureAwareReplayStep
                /\ ReplySourceIsolationStep
@@ -6211,13 +7395,44 @@ PROOF
              ReplyIdentityReplacementProvidesSourceIsolation
       <3> QED BY <3>1, <3>2, <3>3
            DEF ReplyTenureAwareReplayStep
+    <2>8. CASE \E witness \in ReplyCloseWitnessSet:
+                 CloseSemanticRequest(witness)
+      BY <1>1, <2>8,
+         CloseSemanticRequestProvidesReplayAndIsolation
+    <2>9. CASE \E witness \in ReplyCloseWitnessSet:
+                 PiggybackCloseSemanticRequest(witness)
+      BY <1>1, <2>9,
+         CloseSemanticRequestProvidesReplayAndIsolation
+         DEF PiggybackCloseSemanticRequest
+    <2>10. CASE \E witness \in ReplyCloseWitnessSet:
+                  RetryCloseSemanticRequest(witness)
+      BY <1>1, <2>10,
+         ReplyAttemptStutterProvidesReplayAndIsolation,
+         SMTT(30)
+         DEF RetryCloseSemanticRequest,
+             ReplyRouteInductiveInvariant,
+             ReplyRouteSafetyInvariant, ReplyRouteVars
+    <2>11. CASE \E acknowledgement \in
+                    ReplyCloseAcknowledgementSet:
+                  AcknowledgeCloseSemanticRequest(acknowledgement)
+      BY <1>1, <2>11,
+         ReplyAttemptStutterProvidesReplayAndIsolation,
+         SMTT(30)
+         DEF AcknowledgeCloseSemanticRequest,
+             ReplyRouteInductiveInvariant,
+             ReplyRouteSafetyInvariant
+    <2>12. CASE \E owner \in ReplyOwners, source \in ReplySources:
+                  RecoverReplyRouteState(owner, source)
+      BY <1>1, <2>12, SMTT(30)
+         DEF RecoverReplyRouteState, ReplyRouteNext
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
-         <2>7
+         <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
          DEF ReplyRouteNext
   <1> QED BY <1>1
 
 THEOREM ReplyRouteBracketProvidesReplayAndIsolation ==
   /\ ReplyRouteInductiveInvariant
+  /\ ReplyRouteLifecycleInductiveInvariant
   /\ [ReplyRouteNext]_ReplyRouteVars
   => /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
      /\ [ReplySourceIsolationStep]_ReplyRouteVars
@@ -6230,12 +7445,16 @@ THEOREM ReplyRouteSpecAlwaysReplayAndIsolation ==
 PROOF
   <1>1. ReplyRouteSpec => []ReplyRouteInductiveInvariant
     BY ReplyRouteSpecAlwaysInductiveInvariant
-  <1>2. /\ ReplyRouteInductiveInvariant
+  <1>2. ReplyRouteSpec => []ReplyRouteLifecycleInductiveInvariant
+    BY ReplyRouteSpecAlwaysFullSafetyInvariant, PTL
+       DEF ReplyRouteLifecycleInductiveInvariant
+  <1>3. /\ ReplyRouteInductiveInvariant
+           /\ ReplyRouteLifecycleInductiveInvariant
            /\ [ReplyRouteNext]_ReplyRouteVars
           => /\ [ReplyTenureAwareReplayStep]_ReplyRouteVars
              /\ [ReplySourceIsolationStep]_ReplyRouteVars
     BY ReplyRouteBracketProvidesReplayAndIsolation
-  <1> QED BY <1>1, <1>2, PTL
+  <1> QED BY <1>1, <1>2, <1>3, PTL
        DEF ReplyRouteSpec, ReplyTenureAwareReplay,
            ReplySourceIsolation
 

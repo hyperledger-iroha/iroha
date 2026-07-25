@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "release_sorafs_cli.sh"
@@ -240,3 +242,52 @@ def test_release_wrapper_rejects_existing_verification_receipt(
     assert result.returncode == 1
     assert "release verification summary output must not already exist" in result.stderr
     assert receipt.read_text(encoding="utf-8") == "do not overwrite"
+
+
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_release_wrapper_rejects_receipt_link_created_during_signing(
+    tmp_path: Path,
+    link_kind: str,
+) -> None:
+    manifest, _signer, public_key, verifier_digest, verifier = write_inputs(tmp_path)
+    receipt = tmp_path / "verification.json"
+    sentinel = tmp_path / "receipt-target"
+    sentinel.write_text("do not overwrite", encoding="utf-8")
+    link_statement = (
+        f"Path({str(receipt)!r}).symlink_to(Path({str(sentinel)!r}))\n"
+        if link_kind == "symlink"
+        else f"os.link(Path({str(sentinel)!r}), Path({str(receipt)!r}))\n"
+    )
+    racing_signer = write_executable(
+        tmp_path / "racing-ed25519-signer",
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"Path(sys.argv[2]).write_bytes(bytes.fromhex({TEST_SIGNATURE.hex()!r}))\n"
+        + link_statement,
+    )
+    result = run_script(
+        "--workspace",
+        str(tmp_path),
+        "--manifest",
+        str(manifest),
+        "--external-signer",
+        str(racing_signer),
+        "--signing-public-key",
+        str(public_key),
+        "--trusted-signing-fingerprint",
+        TEST_FINGERPRINT,
+        "--release-manifest-verifier",
+        str(verifier),
+        "--trusted-release-manifest-verifier-sha256",
+        verifier_digest,
+        "--verification-summary-out",
+        str(receipt),
+    )
+
+    assert result.returncode == 1
+    assert "cannot create aggregate verification-summary output" in result.stderr
+    assert sentinel.read_text(encoding="utf-8") == "do not overwrite"
+    output_dir = tmp_path / "artifacts" / "sorafs_cli_release"
+    assert not (output_dir / "release_manifest.ed25519.sig").exists()
+    assert not (output_dir / "release_manifest.ed25519.pub").exists()

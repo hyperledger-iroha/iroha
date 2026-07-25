@@ -126,10 +126,12 @@ Operatorlar/SDKlar uchun keng tarqalgan xatolar:
 - `iroha app sorafs pin list|show`, `alias list` va `replication list`
   pin-registr REST so'nggi nuqtalari va attestatsiya bloklari bilan xom Norito JSON chop etish
   auditorlik dalillari uchun.
-- `iroha app sorafs storage pin` va `torii /v1/sorafs/pin/register` Noritoni qabul qiladi
-  yoki JSON manifestlari va ixtiyoriy taxallus isbotlari va vorislari; noto'g'ri shakllangan dalillar
-  `400` ko'taring, eskirgan sirtni `503` bilan `Warning: 110` va
-  muddati o'tgan dalillar `412` ni qaytaradi.
+- `torii /v1/sorafs/pin/register` yopiq JSON V1 soʻrovini qabul qiladi.
+  `manifest_payload` canonical Norito `ManifestV1` baytlarining aniq canonical
+  padding-li base64 ko‘rinishi bo‘lishi kerak. Torii digest, chunker, content
+  length, pin policy va fee inputlarni faqat decoded manifestdan chiqaradi va
+  bekor qilingan duplicate summary maydonlarini rad etadi. `alias` va nol
+  bo‘lmagan `successor_of_hex` predecessor ixtiyoriy bo‘lib qoladi.
 - `iroha app sorafs repair list` nometall navbat filtrlarini ta'mirlash, esa
   `repair claim|complete|fail|escalate` imzolangan ishchi harakatlari yoki slash
   Torii ga takliflar. Slash takliflari boshqaruvni tasdiqlash xulosasini o'z ichiga olishi mumkin

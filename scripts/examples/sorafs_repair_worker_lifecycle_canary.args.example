@@ -32,8 +32,6 @@ in_progress
 completed
 --lifecycle-status
 escalated
---route-status-code
-200
 --route-latency-ms
 200
 --repair-latency-seconds

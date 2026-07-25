@@ -107,6 +107,7 @@ allowed_configs=(
   multilane_autoscale_lifecycle_fixed
   multilane_native_application_evidence_fixed
   multilane_autonomous_reservation_carrier_fixed
+  multilane_queue_plan_admission_registry_fixed
 )
 if (($#)); then
   configs=("$@")
@@ -186,6 +187,9 @@ for config in "${configs[@]}"; do
         ;;
       multilane_autonomous_reservation_carrier_fixed)
         "${common[@]}" SumeragiV2AutonomousReservationCarrier.tla
+        ;;
+      multilane_queue_plan_admission_registry_fixed)
+        "${common[@]}" SumeragiV2QueuePlanAdmissionRegistry.tla
         ;;
       *)
         echo "internal error: unclassified TLC configuration ${config}" >&2

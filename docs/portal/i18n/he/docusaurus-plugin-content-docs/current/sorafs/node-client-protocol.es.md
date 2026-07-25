@@ -132,10 +132,12 @@ Cuando se habilita el fetch multifuente SF-6 (CLI Rust vía `sorafs_fetch`,
 - `iroha app sorafs pin list|show`, `alias list` y `replication list` envuelven los
   נקודות קצה REST של pin-registry e imprimen Norito JSON crudo con bloques de
   אישור לראיה דה אודיטוריה.
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` מניפסטים אקפטניים
-  Norito o JSON עוד הוכחות לכינוי אופציונליים וממשיכים; הוכחה למלפורמדוס
-  elevan `400`, הוכחות מיושנות exponen `503` con `Warning: 110`, y הוכחות
-  expirados devuelven `412`.
+- `torii /v1/sorafs/pin/register` מקבל את בקשת JSON V1 הסגורה.
+  `manifest_payload` חייב להיות base64 קנוני מרופד ומדויק של בתי
+  `ManifestV1` הקנוניים של Norito. ‏Torii גוזר את ה-digest, ה-chunker, אורך
+  התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest המפוענח, ודוחה שדות סיכום
+  כפולים שהוצאו משימוש. `alias` ו-predecessor לא-אפס ב-`successor_of_hex`
+  נשארים אופציונליים.
 - Los נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) כולל אישורים
   לקוחות אימות נתונים נגד כותרות דל último bloque antes de actuar.

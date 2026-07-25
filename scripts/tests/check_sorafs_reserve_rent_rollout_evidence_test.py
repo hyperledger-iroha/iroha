@@ -308,6 +308,9 @@ def metrics_alerts(*, include_all_metrics: bool = True) -> dict:
         "torii_sorafs_reserve_appeal_backlog",
         "torii_sorafs_reserve_custody_movements",
         "torii_sorafs_reserve_chain_reconciled_movements",
+        "torii_sorafs_reserve_finalized_projection_ready",
+        "torii_sorafs_reserve_finalized_projection_height",
+        "torii_sorafs_reserve_finalized_projection_failure_total",
         "torii_sorafs_reserve_service_requests_total",
         "torii_sorafs_reserve_service_rate_limit_total",
     ]
@@ -320,6 +323,11 @@ def metrics_alerts(*, include_all_metrics: bool = True) -> dict:
         "matrix_digest_hex": MATRIX_DIGEST,
         "ledger_digest_hex": LEDGER_DIGEST,
         "metrics_scrape_success": True,
+        "metrics_scrape_blake3_hex": "d" * 64,
+        "metrics_scraped_at_unix": GENERATED_AT,
+        "finalized_projection_ready": True,
+        "finalized_projection_height": 42,
+        "finalized_projection_failure_increase_5m": 0,
         "dashboard_provisioned": True,
         "alert_rules_installed": True,
         "critical_alerts_firing": False,
@@ -1320,6 +1328,51 @@ def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
     artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "metrics must not include unknown values" in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        (
+            "finalized_projection_ready",
+            False,
+            "finalized_projection_ready must be true",
+        ),
+        (
+            "finalized_projection_height",
+            0,
+            "finalized_projection_height must be a positive integer",
+        ),
+        (
+            "finalized_projection_failure_increase_5m",
+            1,
+            "finalized_projection_failure_increase_5m must be 0",
+        ),
+        (
+            "metrics_scraped_at_unix",
+            GENERATED_AT - MODULE.DEFAULT_MAX_LIFECYCLE_LAG_SECS - 1,
+            "metrics_scraped_at_unix is older than",
+        ),
+    ],
+)
+def test_metrics_require_fresh_reconciled_finalized_projection(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload[field] = value
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert any(expected_error in error for error in artifact["errors"])
 
 
 def test_metrics_payload_free_flags_are_required(tmp_path: Path) -> None:

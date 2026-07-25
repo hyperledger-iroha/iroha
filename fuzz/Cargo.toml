@@ -9,6 +9,7 @@ libfuzzer-sys = "0.4.10"
 arbitrary = { version = "1.4.2", features = ["derive"] }
 iroha_core = { path = "../crates/iroha_core" }
 sorafs_car = { path = "../crates/sorafs_car" }
+sorafs_manifest = { path = "../crates/sorafs_manifest" }
 flate2 = "1.1.5"
 zstd = { workspace = true }
 base64 = "0.22.1"

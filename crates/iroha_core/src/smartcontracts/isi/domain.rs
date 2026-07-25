@@ -8845,6 +8845,8 @@ mod tests {
                     multihash_code: 0x1E,
                 },
                 [0xCD; 32],
+                [0; 32],
+                0,
                 iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
                 account_id.clone(),
                 1,

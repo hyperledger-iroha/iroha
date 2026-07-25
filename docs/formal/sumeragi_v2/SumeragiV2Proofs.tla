@@ -800,43 +800,35 @@ PotentialCommitSigners(certificateContext, roundView, subject) ==
     vote \in PotentialCommitVotes(
       certificateContext, roundView, subject)}
 
-InstalledTcAuthorizedPotentialCommitIntersection(tc, protectedView, subject) ==
-  \E timeoutVote \in tc.votes,
-      commitVote \in PotentialCommitVotes(
-        tc.context, protectedView, subject):
-    /\ timeoutVote.signer \in Honest
-    /\ commitVote.signer = timeoutVote.signer
-    /\ timeoutVote.context = tc.context
-    /\ timeoutVote.view = tc.view
-    /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
-    /\ InstalledTcAuthorizesCommitVote(commitVote)
-
-TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc) ==
+TCProtectsPotentialCommit(tc) ==
   \A protectedView \in 0..tc.view, subject \in Subjects:
     DualQuorum(tc.context.epoch,
       PotentialCommitSigners(tc.context, protectedView, subject))
-      => \/ TCProtectsViewSubject(tc, protectedView, subject)
-         \/ InstalledTcAuthorizedPotentialCommitIntersection(
-              tc, protectedView, subject)
+      => TCProtectsViewSubject(tc, protectedView, subject)
 
-THEOREM StrongInvariantImpliesTimeoutProtectionAlternative ==
+\* First-release compatibility names. Installed TCs never authorize a Commit
+\* created after an honest timeout; only strict timeout protection is valid.
+InstalledTcAuthorizedPotentialCommitIntersection(tc, protectedView, subject) ==
+  FALSE
+
+TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc) ==
+  TCProtectsPotentialCommit(tc)
+
+THEOREM StrongInvariantImpliesDirectTimeoutProtection ==
   StrongInductiveInvariant
     => \A tc \in formedTCs:
-         TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc)
+         TCProtectsPotentialCommit(tc)
 PROOF
   <1>1. ASSUME StrongInductiveInvariant,
               NEW tc \in formedTCs
-         PROVE TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc)
+         PROVE TCProtectsPotentialCommit(tc)
     <2>1. ASSUME NEW protectedView \in 0..tc.view,
                 NEW subject \in Subjects,
                 DualQuorum(
                   tc.context.epoch,
                   PotentialCommitSigners(
                     tc.context, protectedView, subject))
-           PROVE \/ TCProtectsViewSubject(
-                        tc, protectedView, subject)
-                 \/ InstalledTcAuthorizedPotentialCommitIntersection(
-                      tc, protectedView, subject)
+           PROVE TCProtectsViewSubject(tc, protectedView, subject)
       <3> DEFINE CommitSigners ==
              PotentialCommitSigners(
                tc.context, protectedView, subject)
@@ -894,100 +886,96 @@ PROOF
            DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                DurableTimeoutsProtectCommits,
                TimeoutIntentProtectsCommits
-      <3>11. \/ TimeoutVoteStrictlyProtectsCommit(
-                    timeoutVote, commitVote)
-              \/ InstalledTcAuthorizesCommitVote(commitVote)
-        BY <2>1, <3>8, <3>9, <3>10, SMT
+      <3>11. TimeoutVoteStrictlyProtectsCommit(
+                timeoutVote, commitVote)
+        BY <3>8, <3>9, <3>10
            DEF TimeoutVoteProtectsCommitSet
-      <3>12. CASE TimeoutVoteStrictlyProtectsCommit(
-                     timeoutVote, commitVote)
-        <4>1. HighestTimeoutVote(tc.votes) \in tc.votes
-          BY <1>1, StrongInvariantImpliesTimeoutCertificateSelectorsSound
-             DEF TimeoutCertificateSelectorsSound
-        <4>2. /\ protectedView \in Int
-              /\ timeoutVote.highRank \in Int
-              /\ TcHighRank(tc) \in Int
-          <5>1. /\ timeoutVote.highRank \in Ranks
-                /\ HighestTimeoutVote(tc.votes).highRank \in Ranks
-            BY <1>1, <3>7, <4>1
-               DEF StrongInductiveInvariant,
-                   ReducerProvenanceInvariant,
-                   FormedTimeoutCertificatesSound
-          <5>2. ViewDomain \subseteq Nat
-            BY <1>1
-               DEF StrongInductiveInvariant, Safety, TypeInvariant,
-                   ModelConfiguration
-          <5>3. /\ Ranks = {NoRank} \cup ViewDomain
-                /\ NoRank = -1
-            BY DEF Ranks, NoRank, Views
-          <5> QED BY <2>1, <5>1, <5>2, <5>3, SMT DEF TcHighRank
-        <4>3. TCProtectsViewSubject(tc, protectedView, subject)
-          BY <2>1, <3>8, <3>9, <3>12, <4>2, SMT
-             DEF TCMaximumProtectsReports,
-                 TimeoutVoteStrictlyProtectsCommit,
-                 TCProtectsViewSubject
-        <4> QED BY <4>3
-      <3>13. CASE ~TimeoutVoteStrictlyProtectsCommit(
-                     timeoutVote, commitVote)
-        <4>1. InstalledTcAuthorizesCommitVote(commitVote)
-          BY <3>11, <3>13
-        <4>2. InstalledTcAuthorizedPotentialCommitIntersection(
-                 tc, protectedView, subject)
-          BY <3>6, <3>7, <3>8, <3>9, <3>13, <4>1
-             DEF InstalledTcAuthorizedPotentialCommitIntersection
-        <4> QED BY <4>2
-      <3> QED BY <3>12, <3>13
-    <2> QED BY <2>1
-         DEF TCProtectsOrInstalledTcAuthorizesPotentialCommit
+      <3>12. HighestTimeoutVote(tc.votes) \in tc.votes
+        BY <1>1, StrongInvariantImpliesTimeoutCertificateSelectorsSound
+           DEF TimeoutCertificateSelectorsSound
+      <3>13. /\ protectedView \in Int
+             /\ timeoutVote.highRank \in Int
+             /\ TcHighRank(tc) \in Int
+        <4>1. /\ timeoutVote.highRank \in Ranks
+              /\ HighestTimeoutVote(tc.votes).highRank \in Ranks
+          BY <1>1, <3>7, <3>12
+             DEF StrongInductiveInvariant,
+                 ReducerProvenanceInvariant,
+                 FormedTimeoutCertificatesSound
+        <4>2. ViewDomain \subseteq Nat
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 ModelConfiguration
+        <4>3. /\ Ranks = {NoRank} \cup ViewDomain
+              /\ NoRank = -1
+          BY DEF Ranks, NoRank, Views
+        <4> QED BY <2>1, <4>1, <4>2, <4>3, SMT DEF TcHighRank
+      <3> QED BY <2>1, <3>8, <3>9, <3>11, <3>13, SMT
+           DEF TCMaximumProtectsReports,
+               TimeoutVoteStrictlyProtectsCommit,
+               TCProtectsViewSubject
+    <2> QED BY <2>1 DEF TCProtectsPotentialCommit
   <1> QED BY <1>1
 
+THEOREM StrongInvariantImpliesTimeoutProtectionAlternative ==
+  StrongInductiveInvariant
+    => \A tc \in formedTCs:
+         TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc)
+BY StrongInvariantImpliesDirectTimeoutProtection
+   DEF TCProtectsOrInstalledTcAuthorizesPotentialCommit
+
 (***************************************************************************
-The strict grouped-timeout kernel remains proved for Commit intents that
-already existed when the timeout votes were made.  A node may instead learn
-an exact historical Prepare lock from an installed TC after its own lower-high
-timeout, validate that body, and only then persist Commit intent.  In that
-case the target TC's selected high need not directly protect the late-created
-Commit.  Safety is retained because dual-quorum intersection supplies an
-honest timeout/Commit signer and the durable historical invariant supplies
-that exact Commit's installed-TC authorization.  The authorizing installed TC
-need not be later than the formed TC quantified by the property.
+Every newly pending LockAndCommit uses a PrepareQC, proposal origin, and Vote
+from the durable current round. Every durable honest timeout directly protects
+same-signer Commit intents at or below its view. Installed TC state can justify
+unchanged later reproposal but cannot mint a split-round Commit.
 ***************************************************************************)
+SameRoundLockAndCommitAuthorizationProperty(specification) ==
+  specification => []SameRoundLockAndCommitAuthorizationInvariant
+
+THEOREM SameRoundLockAndCommitAuthorizationObligation ==
+  \A initialContext:
+    SameRoundLockAndCommitAuthorizationProperty(
+      CoreSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE SameRoundLockAndCommitAuthorizationProperty(
+                 CoreSpecAt(initialContext))
+    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
+      BY CoreSpecAtAlwaysStrongInductiveInvariant
+    <2>2. StrongInductiveInvariant
+             => SameRoundLockAndCommitAuthorizationInvariant
+      BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
+         DEF StrongInductiveInvariant
+    <2> QED BY <2>1, <2>2, PTL
+         DEF SameRoundLockAndCommitAuthorizationProperty
+  <1> QED BY <1>1
+
+\* Compatibility surface for the existing release ledger. Both old names now
+\* denote the exact same-round obligation above and have no historical branch.
 HistoricalLockedCommitAuthorizationProperty(specification) ==
-  specification => []HistoricalLockedCommitAuthorizationInvariant
+  SameRoundLockAndCommitAuthorizationProperty(specification)
 
 THEOREM HistoricalLockedCommitAuthorizationObligation ==
   \A initialContext:
     HistoricalLockedCommitAuthorizationProperty(
       CoreSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE HistoricalLockedCommitAuthorizationProperty(
-                 CoreSpecAt(initialContext))
-    <2>1. CoreSpecAt(initialContext) => []StrongInductiveInvariant
-      BY CoreSpecAtAlwaysStrongInductiveInvariant
-    <2>2. StrongInductiveInvariant
-             => HistoricalLockedCommitAuthorizationInvariant
-      BY ReducerProvenanceImpliesHistoricalLockedCommitAuthorization
-         DEF StrongInductiveInvariant
-    <2> QED BY <2>1, <2>2, PTL
-         DEF HistoricalLockedCommitAuthorizationProperty
-  <1> QED BY <1>1
+BY SameRoundLockAndCommitAuthorizationObligation
+   DEF HistoricalLockedCommitAuthorizationProperty
 
-\* Compatibility surface for the existing release ledger.
 HistoricalTcLockedCommitAuthorizationProperty(specification) ==
-  HistoricalLockedCommitAuthorizationProperty(specification)
+  SameRoundLockAndCommitAuthorizationProperty(specification)
 
 THEOREM HistoricalTcLockedCommitAuthorizationObligation ==
   \A initialContext:
     HistoricalTcLockedCommitAuthorizationProperty(
       CoreSpecAt(initialContext))
-BY HistoricalLockedCommitAuthorizationObligation
+BY SameRoundLockAndCommitAuthorizationObligation
    DEF HistoricalTcLockedCommitAuthorizationProperty
 
 TimeoutProtectionProperty(specification) ==
   specification
-    => [](\A tc \in formedTCs:
-          TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc))
+    => [](\A tc \in formedTCs: TCProtectsPotentialCommit(tc))
 
 THEOREM TimeoutProtectionObligation ==
   \A initialContext:
@@ -999,8 +987,8 @@ PROOF
       BY CoreSpecAtAlwaysStrongInductiveInvariant
     <2>2. StrongInductiveInvariant
              => \A tc \in formedTCs:
-                  TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc)
-      BY StrongInvariantImpliesTimeoutProtectionAlternative
+                  TCProtectsPotentialCommit(tc)
+      BY StrongInvariantImpliesDirectTimeoutProtection
     <2> QED BY <2>1, <2>2, PTL DEF TimeoutProtectionProperty
   <1> QED BY <1>1
 

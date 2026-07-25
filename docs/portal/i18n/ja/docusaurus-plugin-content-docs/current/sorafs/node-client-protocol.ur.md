@@ -127,10 +127,12 @@ SF-6 マルチソースフェッチが有効化 (`sorafs_fetch` 経由の Rust C
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` ピン レジストリ
   REST エンドポイントは、監査証拠をラップし、構成証明ブロックをラップします。
   raw Norito JSON 印刷
-- `iroha app sorafs storage pin` 国際 `torii /v1/sorafs/pin/register` Norito 国際 JSON
-  マニフェスト オプションのエイリアス証明 後継者は受け入れます奇形な
-  プルーフ `400`、古いプルーフ `503`、`Warning: 110`、完全に期限切れのプルーフ
-  پر `412`۔
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - REST エンドポイント (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
   認証構造 クライアントの最新のブロック ヘッダー
   データ検証

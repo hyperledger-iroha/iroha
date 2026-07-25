@@ -43,6 +43,8 @@ mod model {
         OrderbookLedger(SorafsOrderbookLedgerEvent),
         /// Consensus committed an authoritative reserve-ledger transition.
         ReserveLedger(SorafsReserveLedgerEvent),
+        /// Consensus committed a reputation recorder-policy or journal transition.
+        ReputationJournal(SorafsReputationJournalEvent),
     }
 
     /// High-level policy classification for a GAR violation.
@@ -423,6 +425,8 @@ mod model {
         TradeMatched,
         /// Maintenance expired an unfilled or partially filled order.
         OrderExpired,
+        /// Maintenance retired an ask after its exact admitted provider binding was revoked.
+        OrderProviderRevoked,
         /// Maintenance expired an unsettled channel and refunded custody.
         ChannelExpired,
         /// A provider-signed settlement receipt was committed.
@@ -554,9 +558,98 @@ mod model {
         pub policy_digest: [u8; 32],
         /// Resulting provider revision, or zero for policy activation.
         pub provider_revision: u64,
+        /// Resulting authoritative provider lifecycle stage, absent only for
+        /// policy activation.
+        pub resulting_lifecycle_stage: Option<crate::sorafs::reserve::ReserveLifecycleStage>,
         /// Transaction authority that committed the transition.
         pub authority: crate::account::AccountId,
         /// Committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+
+    /// Typed chain-authoritative reputation-journal transition.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    pub enum SorafsReputationJournalEvent {
+        /// Governance activated one strict predecessor-linked recorder policy.
+        PolicyActivated(SorafsReputationJournalPolicyActivatedV1),
+        /// Consensus appended one globally sequenced source projection.
+        EntryCommitted(SorafsReputationJournalEntryCommittedV1),
+    }
+
+    /// Recorder-policy activation emitted by the authoritative journal.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsReputationJournalPolicyActivatedV1 {
+        /// Canonical active policy digest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+        /// Activated policy revision.
+        pub revision: u64,
+        /// Governance authority that activated the revision.
+        pub authority: crate::account::AccountId,
+        /// Exact committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+
+    /// Globally sequenced journal entry emitted after native state mutation.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsReputationJournalEntryCommittedV1 {
+        /// One-based global journal sequence.
+        pub sequence: u64,
+        /// Content-derived event identity.
+        pub event_id: crate::sorafs::reputation::ReputationJournalEventIdV1,
+        /// Domain-separated native source identity.
+        pub source_id: crate::sorafs::reputation::ReputationJournalSourceIdV1,
+        /// Stable source family.
+        pub source_kind: crate::sorafs::reputation::ReputationJournalSourceKindV1,
+        /// Source-local lifecycle revision.
+        pub source_revision: u32,
+        /// Provider whose deterministic counters consume the entry.
+        pub provider_id: crate::sorafs::capacity::ProviderId,
+        /// Active recorder-policy digest bound into the entry.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+        /// Exact governed recorder authority.
+        pub authority: crate::account::AccountId,
+        /// Exact committing block timestamp.
         pub occurred_at_unix_ms: u64,
     }
 }
@@ -681,6 +774,8 @@ pub mod prelude {
         SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation, SorafsGatewayEvent,
         SorafsGatewayEventSet, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
         SorafsOrderbookLedgerEvent, SorafsOrderbookLedgerEventKind, SorafsProofHealthAlert,
+        SorafsReputationJournalEntryCommittedV1, SorafsReputationJournalEvent,
+        SorafsReputationJournalPolicyActivatedV1,
         SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind, SorafsReserveLedgerEvent,
         SorafsReserveLedgerEventKind,
     };

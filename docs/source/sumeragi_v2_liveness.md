@@ -989,9 +989,12 @@ legacy-codec, build, Clippy, workspace-test, and daemon-test legs plus the
 G-SCALE tooling preflight produced the historical 515-test checkpoint. The
 per-source route-attempt, exact PrepareQC recovery, locked-body reproposal,
 runner/worker, sidecar, and daemon closure brings the current source-bound
-inventory to 569 exact tests across 39 modules and 72 pre-network legs.
+inventory to 572 exact tests across 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`be314a8e489645cec1d2e141fee08d8bc506bb12e107156f924f9651c83d727e`.
+`b0c56e1793b9bd1f830f31294a3b2371c5595468b114bf47e8969f78d1f3dc57`.
+Nine of those legs execute the separate 256-test G-UNIT focus inventory; its
+canonical source-derived TSV SHA-256 is
+`f45d6752f3dc449415446abc7340a3531ed48db5e9e744bccc6c1bba0d7a8957`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1051,16 +1054,18 @@ authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-72 legs, including separate exact status and atomic lane-certificate decode
-contracts, two `iroha_config` geometry modules, the two new `iroha_p2p`
+82 legs, including separate exact status and atomic lane-certificate decode
+contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
+fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, the daemon genesis module,
 plus source-sealed workspace formatting, the legacy-codec guard, workspace
 build, Clippy, workspace tests, and feature-enabled `irohad` command-success
 legs, the G-SCALE runner/validator preflight, plus three proposal-origin
-data-model module legs. The data-model modules are
+data-model module legs. Immediately before completion publication, the runner
+also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 569-test inventory is a mechanically checked
+The current 572-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1201,8 +1206,10 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 515 exact production
-liveness tests and executes all 38 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 572 exact production
+liveness tests and executes all 39 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 256-test
+focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
@@ -1312,19 +1319,26 @@ successor-parent, lane-rollover, tip-recovery, terminal-ingress, genesis-origin,
 and restart-deadline closure adds six tests without adding a module. Six
 source-sealed command legs and the G-SCALE runner/validator preflight yielded
 the historical 515-test inventory across 38 modules and 65 pre-network legs.
-The per-source route-attempt and locked-body completion adds 54 exact names,
-one owning module, and seven corridor legs, yielding the current 569-test,
-39-module, 72-leg inventory. The rollover slice covers
+The per-source route-attempt and locked-body completion adds 57 exact names,
+one owning module, and seven corridor legs. Nine G-UNIT execution legs plus the
+source-attested Native AMX fixture-check leg complete the current 572-test,
+39-module, 82-leg inventory. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
 one independent attempt per authenticated source, actor-global delivery
 ordinals, connection-tenure-bound tickets, source-owned non-regressing cursors,
-and bounded route-set capacity. A later delivery changes only its source's
-route and preserves that source's current immutable payload, cursor, FIFO age,
-and reservations. A reconnect keeps the source's FIFO identity, clears the
-retired tenure-bound ticket, and retries the source's retained current item or
-chunk through fresh tenure admission while leaving sibling-source progress
+and bounded route-set capacity. Stream sequence and cumulative-close metadata
+are excluded from the canonical semantic request identity. Completed requests
+have no wall-clock expiry: an authenticated cumulative close advances only
+over a contiguous terminal prefix and is the sole mechanism that retires the
+covered server output. Admission capacity is preflighted before either the
+close floor or server stream state can advance. A later delivery changes only
+its source's route and preserves that source's current immutable payload,
+cursor, FIFO age, and reservations. A reconnect keeps the source's FIFO
+identity, clears the retired tenure-bound ticket, and retries the source's
+retained current item or chunk through fresh tenure admission while leaving
+sibling-source progress
 untouched. A newly observed alternate source starts independently at zero.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
@@ -1571,9 +1585,10 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 72 pre-network corridor legs and
-their exact 569-test inventory, semantic test names/counts, commands, logs, and
-resolved tool identities; the formal completion, pinned harness lock, formal
+evidence directory. That receipt binds the 82 pre-network corridor legs and
+their exact 572-test production inventory, the separate 256-test G-UNIT
+inventory, semantic test names/counts, commands, logs, source-bound localnet
+binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
 completion/log; and the exact-identity Taira completion/canonical JSON/full run
 log. It independently revalidates matrix, chaos, and Taira libtest markers and

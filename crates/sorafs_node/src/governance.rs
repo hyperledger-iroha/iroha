@@ -27,20 +27,20 @@ use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
     GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
     GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
-    GovernanceExternalPayloadV1, GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1,
-    GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
-    ModerationLedgerCyclePublicationV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
-    SettlementReceiptV1, SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
+    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SignedReputationSnapshotV1,
+    SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
-    repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
+    repair::GcAuditEventV1,
 };
 
 use crate::{
     GovernancePublishError, GovernancePublisher, PdpGovernanceArchiveV1, PdpRejectionReasonV1,
-    PdpTerminalDecisionV1, RepairSlashStage,
+    PdpTerminalDecisionV1,
 };
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -153,28 +153,8 @@ impl FilesystemGovernancePublisher {
         self.root.join("settlements")
     }
 
-    fn orderbook_root(&self) -> PathBuf {
-        self.root.join("orderbook")
-    }
-
-    fn orderbook_settlement_receipts_root(&self) -> PathBuf {
-        self.orderbook_root().join("settlement-receipts")
-    }
-
-    fn repairs_root(&self) -> PathBuf {
-        self.root.join("repairs")
-    }
-
     fn pdp_archive_root(&self) -> PathBuf {
         self.root.join("pdp").join("archives")
-    }
-
-    fn repair_audit_root(&self) -> PathBuf {
-        self.repairs_root().join("audit")
-    }
-
-    fn repair_slash_root(&self) -> PathBuf {
-        self.repairs_root().join("slash")
     }
 
     fn gc_audit_root(&self) -> PathBuf {
@@ -268,29 +248,6 @@ impl FilesystemGovernancePublisher {
         let digest_prefix = &digest_hex[..16];
         let base = format!("{:020}_{}_{}", settlement.settled_at, status, digest_prefix);
         self.settlements_root().join(deal_hex).join(base)
-    }
-
-    fn repair_audit_path(&self, event: &RepairAuditEventV1, digest_hex: &str) -> PathBuf {
-        let sequence = format!("{:020}", event.header.sequence);
-        let status = repair_status_label(event.payload.status);
-        let ticket = sanitize_label(event.payload.ticket_id.0.as_str());
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{sequence}_{status}_{ticket}_{digest_prefix}");
-        self.repair_audit_root().join(base)
-    }
-
-    fn repair_slash_path(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        stage: RepairSlashStage,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let submitted = format!("{:020}", proposal.submitted_at_unix);
-        let ticket = sanitize_label(proposal.ticket_id.0.as_str());
-        let stage_label = stage.as_str();
-        let digest_prefix = &digest_hex[..16];
-        let base = format!("{submitted}_{stage_label}_{ticket}_{digest_prefix}");
-        self.repair_slash_root().join(base)
     }
 
     fn gc_audit_path(&self, event: &GcAuditEventV1, digest_hex: &str) -> PathBuf {
@@ -418,25 +375,6 @@ impl FilesystemGovernancePublisher {
         self.appeal_finance_root()
             .join("settlement-receipts")
             .join(case_id)
-            .join(base)
-    }
-
-    fn orderbook_settlement_receipt_path(
-        &self,
-        receipt: &SettlementReceiptV1,
-        digest_hex: &str,
-    ) -> PathBuf {
-        let receipt_id = hex::encode(receipt.receipt_id);
-        let receipt_prefix = &receipt_id[..16];
-        let channel_id = hex::encode(receipt.channel_id);
-        let channel_prefix = &channel_id[..16];
-        let digest_prefix = &digest_hex[..16];
-        let base = format!(
-            "{:020}_{}_{}_{}",
-            receipt.issued_at_unix, channel_prefix, receipt_prefix, digest_prefix
-        );
-        self.orderbook_settlement_receipts_root()
-            .join(channel_id)
             .join(base)
     }
 
@@ -595,17 +533,6 @@ fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
         PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::StorageUnavailable) => {
             "rejected_storage_unavailable"
         }
-    }
-}
-
-fn repair_status_label(status: RepairTaskStatusV1) -> &'static str {
-    match status {
-        RepairTaskStatusV1::Queued => "queued",
-        RepairTaskStatusV1::InProgress => "in_progress",
-        RepairTaskStatusV1::Verifying => "verifying",
-        RepairTaskStatusV1::Completed => "completed",
-        RepairTaskStatusV1::Failed => "failed",
-        RepairTaskStatusV1::Escalated => "escalated",
     }
 }
 
@@ -2795,223 +2722,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         result
     }
 
-    fn publish_repair_audit_event(
-        &self,
-        event: &RepairAuditEventV1,
-        encoded: &[u8],
-    ) -> Result<(), GovernancePublishError> {
-        let result = (|| -> Result<(), GovernancePublishError> {
-            let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(event, encoded, "repair audit event")?;
-            event.validate().map_err(|err| {
-                GovernancePublishError::other(format!("invalid repair audit event: {err}"))
-            })?;
-            let digest = blake3::hash(encoded);
-            let digest_hex = digest.to_hex().to_string();
-            let base_path = self.repair_audit_path(event, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&encoded_path, encoded)?;
-            write_digest_sidecar(&encoded_path, encoded)?;
-
-            let mut payload = JsonMap::new();
-            payload.insert(
-                "event".into(),
-                json::to_value(event).map_err(|err| {
-                    GovernancePublishError::other(format!("serialize audit event: {err}"))
-                })?,
-            );
-
-            let mut metadata = JsonMap::new();
-            metadata.insert(
-                "ticket_id".into(),
-                JsonValue::from(event.payload.ticket_id.0.clone()),
-            );
-            metadata.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(event.payload.manifest_digest)),
-            );
-            metadata.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(event.payload.provider_id)),
-            );
-            metadata.insert(
-                "status".into(),
-                JsonValue::from(repair_status_label(event.payload.status)),
-            );
-            metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
-            metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
-            payload.insert("metadata".into(), JsonValue::Object(metadata));
-
-            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-                GovernancePublishError::other(format!("serialize repair audit json: {err}"))
-            })?;
-
-            let json_path = base_path.with_extension("json");
-            write_atomic(&json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&json_path, json_body.as_bytes())?;
-            let mut labels = JsonMap::new();
-            labels.insert(
-                "ticket_id".into(),
-                JsonValue::from(event.payload.ticket_id.0.clone()),
-            );
-            labels.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(event.payload.manifest_digest)),
-            );
-            labels.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(event.payload.provider_id)),
-            );
-            labels.insert(
-                "status".into(),
-                JsonValue::from(repair_status_label(event.payload.status)),
-            );
-            labels.insert("sequence".into(), JsonValue::from(event.header.sequence));
-            labels.insert(
-                "occurred_at_unix".into(),
-                JsonValue::from(event.header.occurred_at_unix),
-            );
-            self.record_publish_index(
-                "repair_audit",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
-            let external = GovernanceExternalPayloadV1::from_repair_audit(event, encoded)
-                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            self.record_runtime_signed_payload(
-                "repair_audit",
-                GovernanceLogPayloadV1::ExternalPayload(external),
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-            )?;
-
-            Ok(())
-        })();
-        record_governance_dag_publish_result("repair_audit", &result, encoded.len());
-        result
-    }
-
-    fn publish_repair_slash_proposal(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        encoded: &[u8],
-        stage: RepairSlashStage,
-    ) -> Result<(), GovernancePublishError> {
-        let result = (|| -> Result<(), GovernancePublishError> {
-            let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(proposal, encoded, "repair slash proposal")?;
-            proposal.validate().map_err(|err| {
-                GovernancePublishError::other(format!("invalid repair slash proposal: {err}"))
-            })?;
-            if proposal.approval.is_some() {
-                return Err(GovernancePublishError::other(
-                    "repair slash proposal must not embed an approval summary",
-                ));
-            }
-            let digest = blake3::hash(encoded);
-            let digest_hex = digest.to_hex().to_string();
-            let base_path = self.repair_slash_path(proposal, stage, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&encoded_path, encoded)?;
-            write_digest_sidecar(&encoded_path, encoded)?;
-
-            let mut payload = JsonMap::new();
-            payload.insert(
-                "proposal".into(),
-                json::to_value(proposal).map_err(|err| {
-                    GovernancePublishError::other(format!("serialize slash proposal: {err}"))
-                })?,
-            );
-
-            let mut metadata = JsonMap::new();
-            metadata.insert(
-                "ticket_id".into(),
-                JsonValue::from(proposal.ticket_id.0.clone()),
-            );
-            metadata.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(proposal.manifest_digest)),
-            );
-            metadata.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(proposal.provider_id)),
-            );
-            metadata.insert("stage".into(), JsonValue::from(stage.as_str()));
-            metadata.insert("outcome".into(), JsonValue::from(stage.as_str()));
-            metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
-            metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-            metadata.insert(
-                "encoded_base64".into(),
-                JsonValue::from(BASE64_STANDARD.encode(encoded)),
-            );
-            payload.insert("metadata".into(), JsonValue::Object(metadata));
-
-            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-                GovernancePublishError::other(format!("serialize slash proposal json: {err}"))
-            })?;
-
-            let json_path = base_path.with_extension("json");
-            write_atomic(&json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&json_path, json_body.as_bytes())?;
-            let mut labels = JsonMap::new();
-            labels.insert(
-                "ticket_id".into(),
-                JsonValue::from(proposal.ticket_id.0.clone()),
-            );
-            labels.insert(
-                "manifest".into(),
-                JsonValue::from(hex::encode(proposal.manifest_digest)),
-            );
-            labels.insert(
-                "provider".into(),
-                JsonValue::from(hex::encode(proposal.provider_id)),
-            );
-            labels.insert("stage".into(), JsonValue::from(stage.as_str()));
-            labels.insert(
-                "submitted_at_unix".into(),
-                JsonValue::from(proposal.submitted_at_unix),
-            );
-            self.record_publish_index(
-                "repair_slash",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
-            let external_stage = match stage {
-                RepairSlashStage::Drafted => GovernanceExternalRepairSlashStageV1::Drafted,
-                RepairSlashStage::Submitted => GovernanceExternalRepairSlashStageV1::Submitted,
-            };
-            let external =
-                GovernanceExternalPayloadV1::from_repair_slash(proposal, external_stage, encoded)
-                    .map_err(|err| GovernancePublishError::other(err.to_string()))?;
-            self.record_runtime_signed_payload(
-                "repair_slash",
-                GovernanceLogPayloadV1::ExternalPayload(external),
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-            )?;
-
-            Ok(())
-        })();
-        record_governance_dag_publish_result("repair_slash", &result, encoded.len());
-        result
-    }
-
     fn publish_gc_audit_event(
         &self,
         event: &GcAuditEventV1,
@@ -3947,93 +3657,6 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         result
     }
 
-    fn publish_orderbook_settlement_receipt(
-        &self,
-        receipt: &SettlementReceiptV1,
-        encoded: &[u8],
-    ) -> Result<(), GovernancePublishError> {
-        let result = (|| -> Result<(), GovernancePublishError> {
-            let _publication_guard = self.lock_publication()?;
-            ensure_canonical_governance_encoding(receipt, encoded, "orderbook settlement receipt")?;
-            receipt.validate().map_err(|err| {
-                GovernancePublishError::other(format!(
-                    "invalid orderbook settlement receipt: {err}"
-                ))
-            })?;
-            let digest = blake3::hash(encoded);
-            let digest_hex = digest.to_hex().to_string();
-            let base_path = self.orderbook_settlement_receipt_path(receipt, &digest_hex);
-
-            let encoded_path = base_path.with_extension("to");
-            write_atomic(&encoded_path, encoded)?;
-            write_digest_sidecar(&encoded_path, encoded)?;
-
-            let json_body = orderbook_settlement_receipt_json(receipt, encoded, &digest_hex)?;
-            let json_path = base_path.with_extension("json");
-            write_atomic(&json_path, json_body.as_bytes())?;
-            write_digest_sidecar(&json_path, json_body.as_bytes())?;
-
-            let mut labels = JsonMap::new();
-            labels.insert(
-                "receipt_id_hex".into(),
-                JsonValue::from(hex::encode(receipt.receipt_id)),
-            );
-            labels.insert(
-                "channel_id_hex".into(),
-                JsonValue::from(hex::encode(receipt.channel_id)),
-            );
-            labels.insert(
-                "trade_id_hex".into(),
-                JsonValue::from(hex::encode(receipt.trade_id)),
-            );
-            labels.insert("range_start".into(), JsonValue::from(receipt.range.start));
-            labels.insert("range_end".into(), JsonValue::from(receipt.range.end));
-            labels.insert(
-                "bytes_delivered".into(),
-                JsonValue::from(receipt.bytes_delivered),
-            );
-            labels.insert(
-                "xor_debited".into(),
-                JsonValue::from(receipt.xor_debited.to_string()),
-            );
-            labels.insert(
-                "provider_credit".into(),
-                JsonValue::from(receipt.provider_credit.to_string()),
-            );
-            labels.insert(
-                "fee_amount".into(),
-                JsonValue::from(receipt.fee_amount.to_string()),
-            );
-            labels.insert(
-                "issued_at_unix".into(),
-                JsonValue::from(receipt.issued_at_unix),
-            );
-            self.record_publish_index(
-                "orderbook_settlement_receipt",
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-                labels,
-            )?;
-            self.record_runtime_signed_payload(
-                "orderbook_settlement_receipt",
-                GovernanceLogPayloadV1::OrderbookSettlementReceipt(receipt.clone()),
-                &encoded_path,
-                &json_path,
-                &digest_hex,
-                encoded.len(),
-            )?;
-
-            Ok(())
-        })();
-        record_governance_dag_publish_result(
-            "orderbook_settlement_receipt",
-            &result,
-            encoded.len(),
-        );
-        result
-    }
 }
 
 fn reputation_snapshot_json(
@@ -4572,134 +4195,6 @@ fn appeal_finance_settlement_receipt_json(
     })
 }
 
-fn orderbook_settlement_receipt_json(
-    receipt: &SettlementReceiptV1,
-    encoded: &[u8],
-    digest_hex: &str,
-) -> Result<String, GovernancePublishError> {
-    let mut receipt_obj = JsonMap::new();
-    receipt_obj.insert("version".into(), JsonValue::from(receipt.version as u64));
-    receipt_obj.insert(
-        "receipt_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.receipt_id)),
-    );
-    receipt_obj.insert(
-        "channel_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.channel_id)),
-    );
-    receipt_obj.insert(
-        "trade_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.trade_id)),
-    );
-    let mut range = JsonMap::new();
-    range.insert("start".into(), JsonValue::from(receipt.range.start));
-    range.insert("end".into(), JsonValue::from(receipt.range.end));
-    receipt_obj.insert("range".into(), JsonValue::Object(range));
-    receipt_obj.insert(
-        "chunk_hash_hex".into(),
-        JsonValue::from(hex::encode(receipt.chunk_hash)),
-    );
-    receipt_obj.insert(
-        "bytes_delivered".into(),
-        JsonValue::from(receipt.bytes_delivered),
-    );
-    receipt_obj.insert(
-        "xor_debited".into(),
-        JsonValue::from(receipt.xor_debited.to_string()),
-    );
-    receipt_obj.insert(
-        "provider_credit".into(),
-        JsonValue::from(receipt.provider_credit.to_string()),
-    );
-    receipt_obj.insert(
-        "fee_amount".into(),
-        JsonValue::from(receipt.fee_amount.to_string()),
-    );
-    receipt_obj.insert(
-        "issued_at_unix".into(),
-        JsonValue::from(receipt.issued_at_unix),
-    );
-    let mut signature = JsonMap::new();
-    signature.insert(
-        "algorithm".into(),
-        JsonValue::from(orderbook_signature_algorithm_label(
-            receipt.settlement_signature.algorithm,
-        )),
-    );
-    signature.insert(
-        "public_key_hex".into(),
-        JsonValue::from(hex::encode(&receipt.settlement_signature.public_key)),
-    );
-    signature.insert(
-        "signature_hex".into(),
-        JsonValue::from(hex::encode(&receipt.settlement_signature.signature)),
-    );
-    receipt_obj.insert("settlement_signature".into(), JsonValue::Object(signature));
-
-    let mut payload = JsonMap::new();
-    payload.insert("receipt".into(), JsonValue::Object(receipt_obj));
-
-    let mut metadata = JsonMap::new();
-    metadata.insert(
-        "receipt_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.receipt_id)),
-    );
-    metadata.insert(
-        "channel_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.channel_id)),
-    );
-    metadata.insert(
-        "trade_id_hex".into(),
-        JsonValue::from(hex::encode(receipt.trade_id)),
-    );
-    metadata.insert("range_start".into(), JsonValue::from(receipt.range.start));
-    metadata.insert("range_end".into(), JsonValue::from(receipt.range.end));
-    metadata.insert(
-        "bytes_delivered".into(),
-        JsonValue::from(receipt.bytes_delivered),
-    );
-    metadata.insert(
-        "xor_debited".into(),
-        JsonValue::from(receipt.xor_debited.to_string()),
-    );
-    metadata.insert(
-        "provider_credit".into(),
-        JsonValue::from(receipt.provider_credit.to_string()),
-    );
-    metadata.insert(
-        "fee_amount".into(),
-        JsonValue::from(receipt.fee_amount.to_string()),
-    );
-    metadata.insert(
-        "issued_at_unix".into(),
-        JsonValue::from(receipt.issued_at_unix),
-    );
-    metadata.insert(
-        "encoded_blake3".into(),
-        JsonValue::from(digest_hex.to_string()),
-    );
-    metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
-    metadata.insert(
-        "encoded_base64".into(),
-        JsonValue::from(BASE64_STANDARD.encode(encoded)),
-    );
-    payload.insert("metadata".into(), JsonValue::Object(metadata));
-
-    json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
-        GovernancePublishError::other(format!(
-            "serialize orderbook settlement receipt json: {err}"
-        ))
-    })
-}
-
-fn orderbook_signature_algorithm_label(
-    algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm,
-) -> &'static str {
-    match algorithm {
-        sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519 => "ed25519",
-        sorafs_manifest::provider_advert::SignatureAlgorithm::MultiSig => "multi-sig",
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -4718,23 +4213,20 @@ mod tests {
     };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
-        GcAuditPayloadV1, REPAIR_AUDIT_EVENT_VERSION_V1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1,
-        RepairEscalationApprovalV1, RepairTaskEventV1, RepairTaskStatusV1, RepairTicketId,
-        SorafsAuditHeaderV1, gc_audit_payload_digest_v1, repair_audit_payload_digest_v1,
+        GcAuditPayloadV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     };
-    use sorafs_manifest::{BYTES_PER_GIB, PorReportIsoWeek};
+    use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
-        ByteRangeV1, GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
-        MODERATION_LEDGER_PUBLICATION_VERSION_V1, OrderbookSignatureV1,
+        GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
+        MODERATION_LEDGER_PUBLICATION_VERSION_V1,
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         REPUTATION_SCORING_EVIDENCE_VERSION_V1, ReputationProviderInputV1,
         ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationScoringEvidenceV1,
-        ReputationSnapshotSignatureV1, ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        ReputationSnapshotSignatureV1, ReputationWeightsV1,
         SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
-        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementReceiptV1, SignedReputationSnapshotV1,
+        SORAFS_RECONCILIATION_REPORT_VERSION_V1, SignedReputationSnapshotV1,
         SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
         SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
         SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
@@ -5097,34 +4589,6 @@ mod tests {
         (receipt, encoded)
     }
 
-    fn sample_orderbook_settlement_receipt() -> (SettlementReceiptV1, Vec<u8>) {
-        let receipt = SettlementReceiptV1 {
-            version: SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x62; 32],
-            channel_id: [0x63; 32],
-            trade_id: [0x64; 32],
-            range: ByteRangeV1 {
-                start: 0,
-                end: BYTES_PER_GIB,
-            },
-            chunk_hash: [0x65; 32],
-            bytes_delivered: BYTES_PER_GIB,
-            xor_debited: sorafs_manifest::deal::XorQuantity::try_from_micro(500)
-                .expect("legacy micro-XOR value is representable"),
-            provider_credit: sorafs_manifest::deal::XorQuantity::try_from_micro(450)
-                .expect("legacy micro-XOR value is representable"),
-            fee_amount: sorafs_manifest::deal::XorQuantity::try_from_micro(50)
-                .expect("legacy micro-XOR value is representable"),
-            issued_at_unix: 1_800_000_033,
-            settlement_signature: OrderbookSignatureV1 {
-                algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
-                public_key: vec![0x66; 32],
-                signature: vec![0x67; 64],
-            },
-        };
-        let encoded = norito::to_bytes(&receipt).expect("encode orderbook settlement receipt");
-        (receipt, encoded)
-    }
 
     #[test]
     fn governance_car_queue_pending_count_tracks_unassembled_segments() {
@@ -5317,79 +4781,6 @@ mod tests {
         assert!(
             !temp.path().join("settlements").exists(),
             "semantic validation must fail before any governance artifact is written"
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_rejects_tampered_audit_binding_before_writes() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let payload = RepairTaskEventV1 {
-            version: REPAIR_TASK_EVENT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-TAMPERED-AUDIT".into()),
-            manifest_digest: [0x21; 32],
-            provider_id: [0x22; 32],
-            status: RepairTaskStatusV1::Queued,
-            occurred_at_unix: 1_700_000_111,
-            actor: None,
-            message: None,
-        };
-        let mut event = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header: SorafsAuditHeaderV1 {
-                sequence: 1,
-                occurred_at_unix: payload.occurred_at_unix,
-                signer: sorafs_manifest::repair::REPAIR_AUDIT_DEFAULT_SIGNER_V1.into(),
-                payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
-            },
-            payload,
-        };
-        event.header.payload_digest[0] ^= 0x80;
-        let encoded = norito::to_bytes(&event).expect("encode tampered audit event");
-
-        let error = publisher
-            .publish_repair_audit_event(&event, &encoded)
-            .expect_err("tampered audit digest must fail");
-        assert!(error.to_string().contains("invalid repair audit event"));
-        assert!(
-            !temp.path().join("repairs").exists(),
-            "audit validation must fail before any governance artifact is written"
-        );
-    }
-
-    #[test]
-    fn filesystem_publisher_rejects_embedded_slash_approval_before_writes() {
-        let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let proposal = RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: RepairTicketId("REP-EMBEDDED-APPROVAL".into()),
-            provider_id: [0x11; 32],
-            manifest_digest: [0x22; 32],
-            auditor_account: "auditor-1".into(),
-            proposed_penalty: xor("0.00005"),
-            submitted_at_unix: 1_700_000_222,
-            rationale: "missed SLA".into(),
-            approval: Some(RepairEscalationApprovalV1 {
-                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-                approve_votes: 3,
-                reject_votes: 0,
-                abstain_votes: 0,
-                approved_at_unix: 1_700_000_223,
-                finalized_at_unix: 1_700_000_224,
-            }),
-        };
-        let encoded = norito::to_bytes(&proposal).expect("encode proposal");
-
-        let error = publisher
-            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Submitted)
-            .expect_err("embedded approval must not be publication authority");
-        assert!(error.to_string().contains("must not embed an approval"));
-        assert!(
-            !temp.path().join("repairs").exists(),
-            "approval rejection must happen before any governance artifact is written"
         );
     }
 
@@ -5682,10 +5073,6 @@ mod tests {
             .publish_appeal_finance_settlement_receipt(&finance_receipt, &receipt_encoded)
             .expect("publish appeal finance settlement receipt into runtime DAG");
 
-        let (orderbook_receipt, orderbook_receipt_encoded) = sample_orderbook_settlement_receipt();
-        publisher
-            .publish_orderbook_settlement_receipt(&orderbook_receipt, &orderbook_receipt_encoded)
-            .expect("publish orderbook settlement receipt into runtime DAG");
         let (transparency_publication, transparency_encoded) =
             sample_transparency_ledger_publication();
         publisher
@@ -5698,7 +5085,7 @@ mod tests {
         let index = runtime_index(temp.path());
         assert_eq!(
             index.get("block_count").and_then(JsonValue::as_u64),
-            Some(7)
+            Some(6)
         );
         assert_eq!(
             index
@@ -5735,14 +5122,6 @@ mod tests {
         assert_eq!(
             index
                 .get("by_payload_kind")
-                .and_then(|value| value.get("orderbook_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            index
-                .get("by_payload_kind")
                 .and_then(|value| value.get("transparency_ledger_publication"))
                 .and_then(JsonValue::as_array)
                 .map(Vec::len),
@@ -5755,20 +5134,18 @@ mod tests {
         let blocks = runtime_blocks_from_index(temp.path(), &index);
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 7);
+        assert_eq!(blocks.len(), 6);
         assert_eq!(blocks[0].sequence, 0);
         assert_eq!(blocks[1].sequence, 1);
         assert_eq!(blocks[2].sequence, 2);
         assert_eq!(blocks[3].sequence, 3);
         assert_eq!(blocks[4].sequence, 4);
         assert_eq!(blocks[5].sequence, 5);
-        assert_eq!(blocks[6].sequence, 6);
         assert_eq!(blocks[1].prev_block_cid, Some(blocks[0].block_cid.clone()));
         assert_eq!(blocks[2].prev_block_cid, Some(blocks[1].block_cid.clone()));
         assert_eq!(blocks[3].prev_block_cid, Some(blocks[2].block_cid.clone()));
         assert_eq!(blocks[4].prev_block_cid, Some(blocks[3].block_cid.clone()));
         assert_eq!(blocks[5].prev_block_cid, Some(blocks[4].block_cid.clone()));
-        assert_eq!(blocks[6].prev_block_cid, Some(blocks[5].block_cid.clone()));
         assert_eq!(
             blocks[1].node.prev_cid,
             Some(blocks[0].node.node_cid.clone())
@@ -5788,10 +5165,6 @@ mod tests {
         assert_eq!(
             blocks[5].node.prev_cid,
             Some(blocks[4].node.node_cid.clone())
-        );
-        assert_eq!(
-            blocks[6].node.prev_cid,
-            Some(blocks[5].node.node_cid.clone())
         );
         match &blocks[0].node.payload {
             GovernanceLogPayloadV1::DealSettlement(value) => {
@@ -5832,14 +5205,6 @@ mod tests {
             other => panic!("unexpected fifth runtime DAG payload: {other:?}"),
         }
         match &blocks[5].node.payload {
-            GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => {
-                assert_eq!(value.receipt_id, orderbook_receipt.receipt_id);
-                assert_eq!(value.channel_id, orderbook_receipt.channel_id);
-                assert_eq!(value.trade_id, orderbook_receipt.trade_id);
-            }
-            other => panic!("unexpected sixth runtime DAG payload: {other:?}"),
-        }
-        match &blocks[6].node.payload {
             GovernanceLogPayloadV1::ExternalPayload(value) => {
                 assert_eq!(value.payload_kind, "transparency_ledger_publication");
                 assert_eq!(
@@ -5867,7 +5232,7 @@ mod tests {
                     ]
                 );
             }
-            other => panic!("unexpected seventh runtime DAG payload: {other:?}"),
+            other => panic!("unexpected sixth runtime DAG payload: {other:?}"),
         }
     }
 
@@ -6423,88 +5788,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn filesystem_publisher_writes_orderbook_settlement_receipt_files_and_runtime_dag() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-        let (receipt, encoded) = sample_orderbook_settlement_receipt();
-
-        publisher
-            .publish_orderbook_settlement_receipt(&receipt, &encoded)
-            .expect("publish orderbook settlement receipt");
-
-        let receipt_dir = temp
-            .path()
-            .join("orderbook")
-            .join("settlement-receipts")
-            .join(hex::encode(receipt.channel_id));
-        let mut encoded_files = fs::read_dir(&receipt_dir)
-            .expect("read orderbook settlement receipt dir")
-            .map(|entry| entry.expect("dir entry").path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("to"))
-            .collect::<Vec<_>>();
-        encoded_files.sort();
-        assert_eq!(encoded_files.len(), 1);
-        let bytes = fs::read(&encoded_files[0]).expect("read orderbook settlement receipt payload");
-        assert_eq!(bytes, encoded);
-        let decoded: SettlementReceiptV1 =
-            norito::decode_from_bytes(&bytes).expect("decode orderbook settlement receipt");
-        assert_eq!(decoded, receipt);
-        let json_path = encoded_files[0].with_extension("json");
-        assert!(json_path.exists());
-        let json_body = fs::read(&json_path).expect("read orderbook settlement receipt json");
-        let json_value: JsonValue = json::from_slice(&json_body).expect("orderbook receipt json");
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("channel_id_hex"))
-                .and_then(JsonValue::as_str),
-            Some(hex::encode(receipt.channel_id).as_str())
-        );
-        assert_eq!(
-            json_value
-                .get("metadata")
-                .and_then(|value| value.get("bytes_delivered"))
-                .and_then(JsonValue::as_u64),
-            Some(receipt.bytes_delivered)
-        );
-
-        let index_bytes =
-            fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE)).expect("publish index");
-        let index: JsonValue = json::from_slice(&index_bytes).expect("publish index json");
-        assert_eq!(
-            index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("orderbook_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let runtime_index = runtime_index(temp.path());
-        assert_eq!(
-            runtime_index
-                .get("by_payload_kind")
-                .and_then(|value| value.get("orderbook_settlement_receipt"))
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
-        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
-        let head: GovernanceDagHeadV1 =
-            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
-        let blocks = runtime_blocks_from_index(temp.path(), &runtime_index);
-        validate_governance_dag_head_against_chain_v1(&head, &blocks)
-            .expect("runtime head validates against signed blocks");
-        assert_eq!(blocks.len(), 1);
-        match &blocks[0].node.payload {
-            GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => {
-                assert_eq!(value.receipt_id, receipt.receipt_id);
-                assert_eq!(value.channel_id, receipt.channel_id);
-                assert_eq!(value.trade_id, receipt.trade_id);
-            }
-            other => panic!("unexpected runtime DAG payload: {other:?}"),
-        }
     }
 
     #[test]
@@ -6887,44 +6170,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn orderbook_settlement_json_preserves_exact_wide_quantities() {
-        let (mut receipt, _) = sample_orderbook_settlement_receipt();
-        receipt.xor_debited = "0.0000001".parse().expect("sub-micro quantity");
-        receipt.provider_credit = "340282366920938463463374607431768211456"
-            .parse()
-            .expect("quantity wider than u128");
-        receipt.fee_amount = "0.000000001".parse().expect("high precision quantity");
-        let encoded = receipt.encode();
-        let digest = blake3::hash(&encoded).to_hex().to_string();
-        let body = orderbook_settlement_receipt_json(&receipt, &encoded, &digest)
-            .expect("serialize exact receipt");
-        let value: JsonValue = json::from_str(&body).expect("parse receipt json");
-
-        for section in ["receipt", "metadata"] {
-            let object = value
-                .get(section)
-                .and_then(JsonValue::as_object)
-                .expect("receipt json object");
-            for (field, expected) in [
-                ("xor_debited", "0.0000001"),
-                ("provider_credit", "340282366920938463463374607431768211456"),
-                ("fee_amount", "0.000000001"),
-            ] {
-                assert_eq!(
-                    object.get(field).and_then(JsonValue::as_str),
-                    Some(expected),
-                    "exact {section}.{field}"
-                );
-            }
-            for retired in [
-                "xor_debited_micro",
-                "provider_credit_micro",
-                "fee_amount_micro",
-            ] {
-                assert!(!object.contains_key(retired), "retired {section}.{retired}");
-            }
-        }
     }
 
     #[test]
@@ -7052,149 +6297,6 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_repair_audit_files() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-
-        let payload = RepairTaskEventV1 {
-            version: REPAIR_TASK_EVENT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-901".into()),
-            manifest_digest: [0x21; 32],
-            provider_id: [0x22; 32],
-            status: RepairTaskStatusV1::Queued,
-            occurred_at_unix: 1_700_000_111,
-            actor: Some("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into()),
-            message: Some("queued".into()),
-        };
-        let header = SorafsAuditHeaderV1 {
-            sequence: 42,
-            occurred_at_unix: payload.occurred_at_unix,
-            signer: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
-        };
-        let event = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header,
-            payload,
-        };
-        let encoded = norito::to_bytes(&event).expect("encode repair audit event");
-
-        publisher
-            .publish_repair_audit_event(&event, &encoded)
-            .expect("publish repair audit");
-
-        let dir = temp.path().join("repairs").join("audit");
-        let entries = fs::read_dir(&dir)
-            .expect("directory exists")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
-
-        let json_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
-            .expect("json artefact present");
-        let json_bytes = fs::read(json_path).expect("read json");
-        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let manifest_hex = hex::encode(event.payload.manifest_digest);
-        let provider_hex = hex::encode(event.payload.provider_id);
-        let metadata = value
-            .get("metadata")
-            .and_then(JsonValue::as_object)
-            .expect("metadata");
-        let status = metadata
-            .get("status")
-            .and_then(JsonValue::as_str)
-            .expect("status");
-        let ticket_id = metadata
-            .get("ticket_id")
-            .and_then(JsonValue::as_str)
-            .expect("ticket_id");
-        let manifest = metadata
-            .get("manifest")
-            .and_then(JsonValue::as_str)
-            .expect("manifest");
-        let provider = metadata
-            .get("provider")
-            .and_then(JsonValue::as_str)
-            .expect("provider");
-        assert_eq!(status, "queued");
-        assert_eq!(ticket_id, event.payload.ticket_id.0.as_str());
-        assert_eq!(manifest, manifest_hex.as_str());
-        assert_eq!(provider, provider_hex.as_str());
-        assert_single_runtime_external(temp.path(), "repair_audit", &encoded);
-    }
-
-    #[test]
-    fn filesystem_publisher_writes_repair_slash_files() {
-        let temp = tempdir().expect("tempdir");
-        let publisher = signed_runtime_publisher(temp.path());
-
-        let proposal = RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: RepairTicketId("REP-902".into()),
-            provider_id: [0x11; 32],
-            manifest_digest: [0x22; 32],
-            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
-            proposed_penalty: "0.00005".parse().expect("valid quantity"),
-            submitted_at_unix: 1_700_000_222,
-            rationale: "missed SLA".into(),
-            approval: None,
-        };
-        let encoded = norito::to_bytes(&proposal).expect("encode repair slash proposal");
-
-        publisher
-            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Drafted)
-            .expect("publish repair slash");
-
-        let dir = temp.path().join("repairs").join("slash");
-        let entries = fs::read_dir(&dir)
-            .expect("directory exists")
-            .map(|entry| entry.expect("dir entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
-
-        let json_path = entries
-            .iter()
-            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
-            .expect("json artefact present");
-        let json_bytes = fs::read(json_path).expect("read json");
-        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let manifest_hex = hex::encode(proposal.manifest_digest);
-        let provider_hex = hex::encode(proposal.provider_id);
-        let metadata = value
-            .get("metadata")
-            .and_then(JsonValue::as_object)
-            .expect("metadata");
-        let stage = metadata
-            .get("stage")
-            .and_then(JsonValue::as_str)
-            .expect("stage");
-        let outcome = metadata
-            .get("outcome")
-            .and_then(JsonValue::as_str)
-            .expect("outcome");
-        let ticket_id = metadata
-            .get("ticket_id")
-            .and_then(JsonValue::as_str)
-            .expect("ticket_id");
-        let manifest = metadata
-            .get("manifest")
-            .and_then(JsonValue::as_str)
-            .expect("manifest");
-        let provider = metadata
-            .get("provider")
-            .and_then(JsonValue::as_str)
-            .expect("provider");
-        assert_eq!(stage, "drafted");
-        assert_eq!(outcome, "drafted");
-        assert_eq!(ticket_id, proposal.ticket_id.0.as_str());
-        assert_eq!(manifest, manifest_hex.as_str());
-        assert_eq!(provider, provider_hex.as_str());
-        assert_single_runtime_external(temp.path(), "repair_slash", &encoded);
     }
 
     #[test]

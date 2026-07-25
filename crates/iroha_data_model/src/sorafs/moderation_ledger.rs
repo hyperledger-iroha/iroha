@@ -1658,6 +1658,8 @@ pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Finalized block hash resolved from the same immutable state view.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub finalized_block_hash: [u8; 32],
+    /// Signed creation timestamp of that exact finalized block, in Unix milliseconds.
+    pub finalized_at_unix_ms: u64,
     /// Active moderation policy, absent only before ledger initialization.
     pub policy: Option<ModerationLedgerPolicyRecord>,
     /// Constant-time ledger counters, absent only before initialization.
@@ -1727,6 +1729,8 @@ pub const REPAIR_LEDGER_MAX_RECEIPTS_V1: usize = 64;
 pub const REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
 /// Maximum payload-free repair appeal reason length.
 pub const REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1: usize = 512;
+/// Hard encoded-byte ceiling for a canonical repair report or slash proposal.
+pub const REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1: usize = 64 * 1024;
 /// Hard upper bound for tasks or committed events returned by one repair query.
 pub const REPAIR_QUERY_MAX_ITEMS_V1: u32 = 500;
 /// Hard encoded-byte ceiling for one finalized repair-task page.
@@ -1737,6 +1741,8 @@ pub const REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 512 * 1024;
 pub const REPAIR_LEDGER_TASK_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-task-id.v1";
 /// Domain separator for repair action idempotency keys.
 pub const REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-idempotency-key.v1";
+/// Domain separator for authority-bound canonical repair actions.
+pub const REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.action-digest.v1";
 /// Domain separator for repair appeal identities.
 pub const REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-appeal-id.v1";
 
@@ -1763,6 +1769,35 @@ pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 3
         hasher.update(value.as_bytes());
     }
     *hasher.finalize().as_bytes()
+}
+
+/// Derive the consensus action digest for one authority-bound repair instruction.
+///
+/// Clients and durable transaction forwarders use this exact helper to
+/// reconcile an idempotency receipt against finalized state. Keeping the
+/// preimage construction in the data model prevents replicas from
+/// reimplementing a consensus-private hash contract.
+pub fn sorafs_repair_action_digest_v1<T: norito::core::NoritoSerialize>(
+    authority: &AccountId,
+    action: &T,
+) -> Result<[u8; 32], norito::Error> {
+    let bytes = norito::to_bytes(action)?;
+    let authority = authority.to_string();
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(authority.len())
+            .expect("string length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(authority.as_bytes());
+    hasher.update(
+        &u64::try_from(bytes.len())
+            .expect("slice length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(&bytes);
+    Ok(*hasher.finalize().as_bytes())
 }
 
 /// Consensus-owned repair worker lease.
@@ -2714,6 +2749,23 @@ mod tests {
         );
 
         let owner = account(21);
+        let action_digest =
+            sorafs_repair_action_digest_v1(&owner, &"claim-1").expect("encode repair action");
+        assert_eq!(
+            action_digest,
+            sorafs_repair_action_digest_v1(&owner, &"claim-1")
+                .expect("repeat repair action digest")
+        );
+        assert_ne!(
+            action_digest,
+            sorafs_repair_action_digest_v1(&owner, &"claim-2")
+                .expect("changed repair action digest")
+        );
+        assert_ne!(
+            action_digest,
+            sorafs_repair_action_digest_v1(&account(22), &"claim-1")
+                .expect("changed repair authority digest")
+        );
         let task = RepairLedgerTaskV1 {
             version: REPAIR_LEDGER_TASK_VERSION_V1,
             task_id,

@@ -24,17 +24,91 @@ for fn in "${endpoints[@]}"; do
 	fi
 done
 
-repair_handlers=(
-	"handler_post_sorafs_repair_claim"
-	"handler_post_sorafs_repair_heartbeat"
-	"handler_post_sorafs_repair_complete"
-	"handler_post_sorafs_repair_fail"
+repair_routes=(
+	"handle_post_sorafs_repair_report:Report"
+	"handle_post_sorafs_repair_slash:Escalate"
+	"handle_post_sorafs_repair_claim:Claim"
+	"handle_post_sorafs_repair_heartbeat:Renew"
+	"handle_post_sorafs_repair_complete:Complete"
+	"handle_post_sorafs_repair_fail:Fail"
+	"handle_post_sorafs_repair_appeal:Appeal"
 )
 
-for fn in "${repair_handlers[@]}"; do
-	pattern="(?s)fn[[:space:]]+${fn}.*enforce_sorafs_repair_worker_auth"
-	if ! rg --pcre2 --multiline -n "${pattern}" "${TARGET}" >/dev/null; then
-		echo "error: ${fn} must call enforce_sorafs_repair_worker_auth to keep SoraFS repair worker actions authenticated." >&2
+for route_spec in "${repair_routes[@]}"; do
+	fn="${route_spec%%:*}"
+	route="${route_spec#*:}"
+	pattern="(?s)fn[[:space:]]+${fn}\\([^}]*JsonOrNoritoVersioned\\(transaction\\):[[:space:]]+JsonOrNoritoVersioned<SignedTransaction>[^}]*submit_repair_signed_transaction\\(.*?RepairCommandRouteV1::${route}"
+	if ! rg --pcre2 --multiline -n "${pattern}" "${PIN_TARGET}" >/dev/null; then
+		echo "error: ${fn} must forward a caller-signed transaction through the ${route} native repair route." >&2
+		exit 1
+	fi
+done
+
+repair_ingress_pattern="(?s)async[[:space:]]+fn[[:space:]]+submit_repair_signed_transaction\\(.*?validate_repair_signed_transaction\\(.*?submit_signed_transaction_for_ingress_strict_durable\\("
+if ! rg --pcre2 --multiline -n "${repair_ingress_pattern}" "${PIN_TARGET}" >/dev/null; then
+	echo "error: SoraFS repair commands must validate their native instruction and use strict durable transaction ingress." >&2
+	exit 1
+fi
+
+for matcher_token in \
+	"Executable::Instructions(instructions)" \
+	"instructions.len() != 1" \
+	"downcast_ref::<SubmitSorafsRepairTask>()" \
+	"downcast_ref::<SubmitSorafsRepairAppeal>()" \
+	"SorafsRepairTaskActionV1::Escalate(_)" \
+	"SorafsRepairTaskActionV1::Claim(_)" \
+	"SorafsRepairTaskActionV1::Renew(_)" \
+	"SorafsRepairTaskActionV1::Complete(_)" \
+	"SorafsRepairTaskActionV1::Fail(_)"
+do
+	if ! rg -Fq "${matcher_token}" "${PIN_TARGET}"; then
+		echo "error: native SoraFS repair route matcher is missing ${matcher_token}." >&2
+		exit 1
+	fi
+done
+
+repair_matcher_routes=(
+	"Report:SubmitSorafsRepairTask"
+	"Appeal:SubmitSorafsRepairAppeal"
+)
+for matcher_spec in "${repair_matcher_routes[@]}"; do
+	route="${matcher_spec%%:*}"
+	instruction="${matcher_spec#*:}"
+	pattern="(?s)RepairCommandRouteV1::${route}[[:space:]]*=>.*?downcast_ref::<${instruction}>\\(\\)"
+	if ! rg --pcre2 --multiline -n "${pattern}" "${PIN_TARGET}" >/dev/null; then
+		echo "error: native SoraFS repair ${route} route must match only ${instruction}." >&2
+		exit 1
+	fi
+done
+
+repair_action_routes=(
+	"Escalate:Escalate"
+	"Claim:Claim"
+	"Renew:Renew"
+	"Complete:Complete"
+	"Fail:Fail"
+)
+for matcher_spec in "${repair_action_routes[@]}"; do
+	route="${matcher_spec%%:*}"
+	action="${matcher_spec#*:}"
+	pattern="(?s)RepairCommandRouteV1::${route},[[:space:]]*SorafsRepairTaskActionV1::${action}\\(_\\)"
+	if ! rg --pcre2 --multiline -n "${pattern}" "${PIN_TARGET}" >/dev/null; then
+		echo "error: native SoraFS repair ${route} route must match only the ${action} action." >&2
+		exit 1
+	fi
+done
+
+retired_repair_symbols=(
+	"SignedAuditorRequestV1"
+	"RepairWorkerSignaturePayloadV1"
+	"enforce_sorafs_repair_worker_auth"
+	"handle_get_sorafs_repair_status_by_manifest"
+	"handle_get_sorafs_repair_events_stream"
+	"handle_get_sorafs_repair_events_ws"
+)
+for symbol in "${retired_repair_symbols[@]}"; do
+	if rg -Fq "${symbol}" "${TARGET}" "${PIN_TARGET}"; then
+		echo "error: retired pre-release SoraFS repair symbol ${symbol} must not return." >&2
 		exit 1
 	fi
 done
@@ -45,9 +119,9 @@ if ! rg -q "soranet_privacy_ingest" "${DOC_PATH}"; then
 fi
 
 pin_handler="handle_post_sorafs_storage_pin"
-pin_pattern="(?s)fn[[:space:]]+${pin_handler}.*sorafs_pin_policy\\.?enforce"
+pin_pattern="(?s)fn[[:space:]]+${pin_handler}.*?manifest_pin_policy_constraints_from_config\\(&state\\.state\\.gov\\.sorafs_pin_policy\\).*?validate_manifest\\(&manifest,[[:space:]]*&manifest_constraints\\)"
 if ! rg --pcre2 --multiline -n "${pin_pattern}" "${PIN_TARGET}" >/dev/null; then
-	echo "error: ${pin_handler} must enforce sorafs_pin_policy before accepting storage pins." >&2
+	echo "error: ${pin_handler} must validate manifests against iroha_config sorafs_pin_policy before accepting storage pins." >&2
 	exit 1
 fi
 

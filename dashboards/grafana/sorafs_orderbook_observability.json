@@ -27,7 +27,7 @@
         "label": "Cluster",
         "type": "query",
         "datasource": "$datasource",
-        "query": "label_values(torii_sorafs_orderbook_match_lag_seconds, cluster)",
+        "query": "label_values(torii_sorafs_orderbook_finalized_projection_ready, cluster)",
         "refresh": 1,
         "includeAll": true,
         "current": {
@@ -40,7 +40,7 @@
         "label": "Tier",
         "type": "query",
         "datasource": "$datasource",
-        "query": "label_values(torii_sorafs_orderbook_depth_gib, tier)",
+        "query": "label_values(torii_sorafs_orderbook_open_depth_gib, tier)",
         "refresh": 1,
         "includeAll": true,
         "current": {
@@ -64,7 +64,7 @@
       },
       "targets": [
         {
-          "expr": "sum(torii_sorafs_orderbook_depth_gib{cluster=~\"$cluster\",tier=~\"$tier\"})",
+          "expr": "sum(torii_sorafs_orderbook_open_depth_gib{cluster=~\"$cluster\",tier=~\"$tier\"})",
           "legendFormat": "depth",
           "refId": "A"
         }
@@ -132,7 +132,7 @@
       },
       "targets": [
         {
-          "expr": "min(torii_sorafs_orderbook_escrow_runway_seconds)",
+          "expr": "min(torii_sorafs_orderbook_escrow_runway_seconds{cluster=~\"$cluster\"})",
           "legendFormat": "seconds",
           "refId": "A"
         }
@@ -155,7 +155,7 @@
     },
     {
       "type": "stat",
-      "title": "Mirror Divergence",
+      "title": "Finalized Projection Ready",
       "id": 4,
       "datasource": "$datasource",
       "gridPos": {
@@ -166,8 +166,8 @@
       },
       "targets": [
         {
-          "expr": "max(torii_sorafs_orderbook_contract_mirror_divergence{cluster=~\"$cluster\"})",
-          "legendFormat": "divergence",
+          "expr": "min(torii_sorafs_orderbook_finalized_projection_ready{cluster=~\"$cluster\"})",
+          "legendFormat": "ready",
           "refId": "A"
         }
       ],
@@ -200,8 +200,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (status) (rate(torii_sorafs_orderbook_orders_total{cluster=~\"$cluster\",tier=~\"$tier\"}[5m]))",
-          "legendFormat": "{{status}}",
+          "expr": "sum by (event) (rate(torii_sorafs_orderbook_finalized_events_total{cluster=~\"$cluster\"}[5m]))",
+          "legendFormat": "{{event}}",
           "refId": "A"
         }
       ],
@@ -231,7 +231,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (side, tier) (torii_sorafs_orderbook_depth_gib{cluster=~\"$cluster\",tier=~\"$tier\"})",
+          "expr": "sum by (side, tier) (torii_sorafs_orderbook_open_depth_gib{cluster=~\"$cluster\",tier=~\"$tier\"})",
           "legendFormat": "{{side}} {{tier}}",
           "refId": "A"
         }
@@ -262,9 +262,14 @@
       },
       "targets": [
         {
-          "expr": "max by (tier) (torii_sorafs_orderbook_match_lag_seconds{cluster=~\"$cluster\",tier=~\"$tier\"})",
-          "legendFormat": "{{tier}}",
+          "expr": "max(torii_sorafs_orderbook_matcher_lag_seconds{cluster=~\"$cluster\"})",
+          "legendFormat": "matcher lag",
           "refId": "A"
+        },
+        {
+          "expr": "max(torii_sorafs_orderbook_book_revision{cluster=~\"$cluster\"} - torii_sorafs_orderbook_matcher_scan_book_revision{cluster=~\"$cluster\"})",
+          "legendFormat": "revision gap",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -329,7 +334,7 @@
       },
       "targets": [
         {
-          "expr": "max by (route) (torii_sorafs_orderbook_api_error_ratio)",
+          "expr": "sum by (route) (rate(torii_sorafs_orderbook_api_requests_total{cluster=~\"$cluster\",outcome=\"error\"}[5m])) / clamp_min(sum by (route) (rate(torii_sorafs_orderbook_api_requests_total{cluster=~\"$cluster\"}[5m])), 0.000000001)",
           "legendFormat": "{{route}}",
           "refId": "A"
         }
@@ -349,7 +354,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Escrow Runway By Provider",
+      "title": "Finalized Projection",
       "id": 10,
       "datasource": "$datasource",
       "gridPos": {
@@ -360,14 +365,24 @@
       },
       "targets": [
         {
-          "expr": "min by (provider) (torii_sorafs_orderbook_escrow_runway_seconds)",
-          "legendFormat": "{{provider}}",
+          "expr": "min(torii_sorafs_orderbook_finalized_projection_height{cluster=~\"$cluster\"})",
+          "legendFormat": "minimum height",
           "refId": "A"
+        },
+        {
+          "expr": "max(torii_sorafs_orderbook_finalized_projection_height{cluster=~\"$cluster\"})",
+          "legendFormat": "maximum height",
+          "refId": "B"
+        },
+        {
+          "expr": "max(time() - torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster=~\"$cluster\"})",
+          "legendFormat": "finalized age seconds",
+          "refId": "C"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short"
         },
         "overrides": []
       },

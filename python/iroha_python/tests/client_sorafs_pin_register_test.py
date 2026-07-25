@@ -12,7 +12,6 @@ from iroha_python import (
     SorafsPinAlias,
     SorafsPinRegisterResponse,
     ToriiClient,
-    authority_fee_payment,
 )
 
 from .helpers import RecordingSession, StubResponse
@@ -24,7 +23,6 @@ def _pin_register_request() -> dict[str, Any]:
         "private_key": "ed25519:deadbeef",
         "manifest_payload": b"manifest-norito",
         "submitted_epoch": 42,
-        "fee_payment": authority_fee_payment(charge_limits=[]),
         "alias": {
             "namespace": "docs",
             "name": "main",
@@ -55,13 +53,38 @@ def test_register_sorafs_pin_manifest_posts_validated_payload() -> None:
     assert body["private_key"] == "ed25519:deadbeef"
     assert body["manifest_payload"] == base64.b64encode(b"manifest-norito").decode("ascii")
     assert body["submitted_epoch"] == 42
-    assert body["fee_payment"] == authority_fee_payment(charge_limits=[])
     assert body["alias"] == {
         "namespace": "docs",
         "name": "main",
         "proof_base64": base64.b64encode(b"alias-proof").decode("ascii"),
     }
     assert body["successor_of_hex"] == "c" * 64
+    assert set(body) == {
+        "authority",
+        "private_key",
+        "manifest_payload",
+        "submitted_epoch",
+        "alias",
+        "successor_of_hex",
+    }
+
+
+def test_register_sorafs_pin_manifest_posts_exact_required_field_set() -> None:
+    request = _pin_register_request()
+    request.pop("alias")
+    request.pop("successor_of_hex")
+    session = RecordingSession(StubResponse(200, {"status": "queued"}))
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    client.register_sorafs_pin_manifest(request)
+
+    body = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert set(body) == {
+        "authority",
+        "private_key",
+        "manifest_payload",
+        "submitted_epoch",
+    }
 
 
 def test_register_sorafs_pin_manifest_accepts_canonical_payload_and_alias() -> None:
@@ -136,6 +159,8 @@ def test_register_sorafs_pin_manifest_typed_normalizes_response() -> None:
         "manifest_bytes",
         "manifestPayload",
         "submittedEpoch",
+        "fee_payment",
+        "feePayment",
         "gas_asset_id",
         "gasAssetId",
         "successorOfHex",
@@ -195,8 +220,6 @@ def test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_field
         (lambda request: request.update({"submitted_epoch": "42"}), "submitted_epoch"),
         (lambda request: request.update({"authority": " alice@boi"}), "authority"),
         (lambda request: request.update({"private_key": "ed25519:deadbeef "}), "private_key"),
-        (lambda request: request.pop("fee_payment"), "fee_payment"),
-        (lambda request: request.update({"fee_payment": {}}), "fee_payment"),
         (lambda request: request["alias"].pop("proof_base64"), "alias.proof_base64"),
         (
             lambda request: request["alias"].update({"proof_base64": "not base64!"}),

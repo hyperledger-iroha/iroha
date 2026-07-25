@@ -19,7 +19,11 @@ use sorafs_manifest::{
         PdpCommitmentV1, PdpEd25519SignatureV1, PdpHotLeafProofV1, PdpMerkleTreeV1, PdpProofLeafV1,
         PdpProofV1, PdpSampleV1, sign_pdp_proof_ed25519_v1,
     },
+    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
+    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
 };
+
+const VALIDATION_GENERATED_AT: u64 = 123;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/pdp");
@@ -92,6 +96,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         challenge_json(&challenge),
     )?;
     write_norito_pair(&fixture_dir.join("proof_v1"), &proof, proof_json(&proof))?;
+    let commitment_bytes = norito::to_bytes(&commitment)?;
+    let challenge_bytes = norito::to_bytes(&challenge)?;
+    let proof_bytes = norito::to_bytes(&proof)?;
+    let bundle_outcome = validate_pdp_commitment_challenge_proof_bytes(
+        &commitment_bytes,
+        &challenge_bytes,
+        &proof_bytes,
+        "commitment_v1.to",
+        "challenge_v1.to",
+        "proof_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &fixture_dir.join("bundle_validation_outcome_v1.json"),
+        &bundle_outcome,
+        true,
+        "SFS-PDP-DIAG-000",
+    )?;
 
     let mut duplicate_hot_leaf_challenge = challenge.clone();
     duplicate_hot_leaf_challenge.samples[0].hot_leaf_indices = vec![0, 0];
@@ -101,6 +123,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         &duplicate_hot_leaf_challenge,
         challenge_json(&duplicate_hot_leaf_challenge),
     )?;
+    let duplicate_hot_leaf_challenge_bytes = norito::to_bytes(&duplicate_hot_leaf_challenge)?;
+    let duplicate_hot_leaf_outcome = validate_pdp_challenge_bytes(
+        &duplicate_hot_leaf_challenge_bytes,
+        "duplicate_hot_leaf_challenge_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join("duplicate_hot_leaf_challenge_validation_outcome_v1.json"),
+        &duplicate_hot_leaf_outcome,
+        false,
+        "SFS-PDP-001",
+    )?;
 
     let mut missing_signature_proof = proof.clone();
     missing_signature_proof.signature.signature = [0; 64];
@@ -109,6 +143,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         &negative_dir.join("missing_signature_proof_v1"),
         &missing_signature_proof,
         proof_json(&missing_signature_proof),
+    )?;
+    let missing_signature_proof_bytes = norito::to_bytes(&missing_signature_proof)?;
+    let missing_signature_outcome = validate_pdp_proof_bytes(
+        &missing_signature_proof_bytes,
+        "missing_signature_proof_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join("missing_signature_proof_validation_outcome_v1.json"),
+        &missing_signature_outcome,
+        false,
+        "SFS-SIG-008",
     )?;
 
     let mut missing_segment_path_proof = proof.clone();
@@ -121,6 +167,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         &negative_dir.join("missing_segment_path_proof_v1"),
         &missing_segment_path_proof,
         proof_json(&missing_segment_path_proof),
+    )?;
+    write_bundle_negative_outcome(
+        &negative_dir,
+        "missing_segment_path_proof_v1",
+        &commitment_bytes,
+        &challenge_bytes,
+        &missing_segment_path_proof,
+        "SFS-PDP-001",
     )?;
 
     let mut missing_hot_leaf_path_proof = proof.clone();
@@ -137,6 +191,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         &missing_hot_leaf_path_proof,
         proof_json(&missing_hot_leaf_path_proof),
     )?;
+    write_bundle_negative_outcome(
+        &negative_dir,
+        "missing_hot_leaf_path_proof_v1",
+        &commitment_bytes,
+        &challenge_bytes,
+        &missing_hot_leaf_path_proof,
+        "SFS-PDP-001",
+    )?;
 
     let mut late_proof = proof.clone();
     late_proof.issued_at_unix = challenge.response_deadline_unix + 1;
@@ -145,6 +207,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         &negative_dir.join("late_proof_v1"),
         &late_proof,
         proof_json(&late_proof),
+    )?;
+    write_pair_negative_outcome(
+        &negative_dir,
+        "late_proof_v1",
+        &challenge_bytes,
+        &late_proof,
+        "SFS-POL-002",
     )?;
 
     let mut wrong_provider_proof = proof.clone();
@@ -155,6 +224,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         &wrong_provider_proof,
         proof_json(&wrong_provider_proof),
     )?;
+    write_pair_negative_outcome(
+        &negative_dir,
+        "wrong_provider_proof_v1",
+        &challenge_bytes,
+        &wrong_provider_proof,
+        "SFS-PDP-003",
+    )?;
 
     let mut wrong_manifest_proof = proof.clone();
     wrong_manifest_proof.manifest_digest = [0x77; 32];
@@ -164,6 +240,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         &wrong_manifest_proof,
         proof_json(&wrong_manifest_proof),
     )?;
+    write_pair_negative_outcome(
+        &negative_dir,
+        "wrong_manifest_proof_v1",
+        &challenge_bytes,
+        &wrong_manifest_proof,
+        "SFS-PDP-003",
+    )?;
 
     let mut wrong_path_proof = proof;
     wrong_path_proof.proof_leaves[0].segment_merkle_path[0][0] ^= 0x01;
@@ -172,6 +255,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         &negative_dir.join("wrong_path_proof_v1"),
         &wrong_path_proof,
         proof_json(&wrong_path_proof),
+    )?;
+    write_bundle_negative_outcome(
+        &negative_dir,
+        "wrong_path_proof_v1",
+        &commitment_bytes,
+        &challenge_bytes,
+        &wrong_path_proof,
+        "SFS-PDP-003",
     )?;
 
     Ok(())
@@ -191,6 +282,75 @@ fn deterministic_payload(length: usize) -> Vec<u8> {
     (0..length)
         .map(|index| ((index.wrapping_mul(131).wrapping_add(17)) % 251) as u8)
         .collect()
+}
+
+fn write_pair_negative_outcome(
+    negative_dir: &Path,
+    proof_name: &str,
+    challenge_bytes: &[u8],
+    proof: &PdpProofV1,
+    expected_code: &str,
+) -> Result<(), Box<dyn Error>> {
+    let scenario_name = proof_name.strip_suffix("_v1").unwrap_or(proof_name);
+    let proof_bytes = norito::to_bytes(proof)?;
+    let outcome = validate_pdp_challenge_proof_bytes(
+        challenge_bytes,
+        &proof_bytes,
+        "challenge_v1.to",
+        format!("{proof_name}.to"),
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join(format!("{scenario_name}_validation_outcome_v1.json")),
+        &outcome,
+        false,
+        expected_code,
+    )
+}
+
+fn write_bundle_negative_outcome(
+    negative_dir: &Path,
+    proof_name: &str,
+    commitment_bytes: &[u8],
+    challenge_bytes: &[u8],
+    proof: &PdpProofV1,
+    expected_code: &str,
+) -> Result<(), Box<dyn Error>> {
+    let scenario_name = proof_name.strip_suffix("_v1").unwrap_or(proof_name);
+    let proof_bytes = norito::to_bytes(proof)?;
+    let outcome = validate_pdp_commitment_challenge_proof_bytes(
+        commitment_bytes,
+        challenge_bytes,
+        &proof_bytes,
+        "commitment_v1.to",
+        "challenge_v1.to",
+        format!("{proof_name}.to"),
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join(format!("{scenario_name}_validation_outcome_v1.json")),
+        &outcome,
+        false,
+        expected_code,
+    )
+}
+
+fn write_expected_outcome(
+    path: &Path,
+    outcome: &sorafs_manifest::ValidationOutcomeV1,
+    expected_ok: bool,
+    expected_code: &str,
+) -> Result<(), Box<dyn Error>> {
+    if outcome.is_ok() != expected_ok || outcome.code != expected_code {
+        return Err(format!(
+            "generated PDP outcome returned status_ok={} code={}, expected status_ok={expected_ok} code={expected_code}",
+            outcome.is_ok(),
+            outcome.code,
+        )
+        .into());
+    }
+    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
+    Ok(())
 }
 
 fn write_norito_pair<T>(

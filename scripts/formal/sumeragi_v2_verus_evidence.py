@@ -100,16 +100,22 @@ REQUIRED_SOURCE_PATHS = (
 
 EXPECTED_VERIFY_COMMAND_SOURCE = "\\\n".join(
     (
-        "bash scripts/formal/run_sumeragi_v2_harness.sh ",
-        "  cargo verus verify --locked --offline -p iroha_sumeragi_core "
-        "--features verus ",
-        "  --fwd-verus-args-to roots -- ",
-        "  --rlimit 60 ",
-        "  --expand-errors ",
-        "  --no-cheating ",
+        "bash scripts/formal/run_sumeragi_v2_harness.sh --verus ",
         '  2>&1 | tee -a "$verus_log_tmp"',
     )
 )
+EXPECTED_HARNESS_VERUS_BRANCH = """\
+  --verus)
+    if (($# != 1)); then
+      echo "--verus accepts no additional arguments" >&2
+      exit 2
+    fi
+    run_cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \\
+      --fwd-verus-args-to roots -- \\
+      --rlimit 60 \\
+      --expand-errors \\
+      --no-cheating
+    ;;"""
 
 EXPECTED_TOOL_SHA256 = {
     "Darwin-arm64": {
@@ -234,8 +240,18 @@ def _verify_invocation_contract(root: Path) -> None:
     source = path.read_text(encoding="utf-8")
     if source.count(EXPECTED_VERIFY_COMMAND_SOURCE) != 1:
         raise ValueError("Sumeragi v2 Verus runner command has drifted")
-    if source.count("cargo verus verify") != 1:
-        raise ValueError("Sumeragi v2 Verus runner must invoke cargo-verus exactly once")
+    if "cargo verus verify" in source:
+        raise ValueError(
+            "Sumeragi v2 Verus runner must delegate through the fixed harness mode"
+        )
+    harness = root / "scripts/formal/run_sumeragi_v2_harness.sh"
+    if not harness.is_file() or harness.is_symlink():
+        raise ValueError("Sumeragi v2 formal harness must be a regular file")
+    harness_source = harness.read_text(encoding="utf-8")
+    if harness_source.count(EXPECTED_HARNESS_VERUS_BRANCH) != 1:
+        raise ValueError("Sumeragi v2 Verus harness command has drifted")
+    if '"${@:2}"' in harness_source or harness_source.count('"$@"') != 1:
+        raise ValueError("Sumeragi v2 formal harness permits arbitrary command dispatch")
 
 
 def _verus_version(binary: Path) -> tuple[str, str]:

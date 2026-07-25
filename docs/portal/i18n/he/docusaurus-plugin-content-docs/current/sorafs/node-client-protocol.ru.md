@@ -126,10 +126,12 @@ Range-совместимые провайдеры включают следую�
 ## CLI и REST хелперы- `iroha app sorafs pin list|show`, `alias list` ו-`replication list` оборачивают
   נקודות קצה של REST של pin-registry ואישור Norito JSON עם סמל
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` ו-`torii /v1/sorafs/pin/register` פרינט Norito
-  или JSON manifests плюс опциональные כינוי הוכחות и יורשים; הוכחות שגויות
-  возвращают `400`, הוכחות מעופשות дают `503` с `Warning: 110`, הוכחות שפג תוקפן
-  возвращают `412`.
+- `torii /v1/sorafs/pin/register` מקבל את בקשת JSON V1 הסגורה.
+  `manifest_payload` חייב להיות base64 קנוני מרופד ומדויק של בתי
+  `ManifestV1` הקנוניים של Norito. ‏Torii גוזר את ה-digest, ה-chunker, אורך
+  התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest המפוענח, ודוחה שדות סיכום
+  כפולים שהוצאו משימוש. `alias` ו-predecessor לא-אפס ב-`successor_of_hex`
+  נשארים אופציונליים.
 - נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) включают структуры אישור, чтобы клиенты могли
   проверить данные относительно последних לחסום כותרות перед действием.

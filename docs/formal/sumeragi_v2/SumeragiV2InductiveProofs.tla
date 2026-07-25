@@ -1339,18 +1339,47 @@ THEOREM InitEstablishesStrongInductiveInvariant ==
 BY InitAtEstablishesStrongInductiveInvariant DEF Init
 
 (***************************************************************************
-Historical locked-Commit authorization is already forced by two reducer
-clauses.  A lower-view pending Commit cannot use CurrentOpenPrepareForCommit,
-and every non-strict timeout/Commit pair covered by durable timeout protection
-must therefore carry installed-TC authorization.
+Exact same-round LockAndCommit admission is forced by the pending-write and
+timeout-protection invariants. Installed TC provenance has no Commit-creation
+branch; its high is consumed only by later proposal justification.
 ***************************************************************************)
+THEOREM PendingLockCommitUsesExactCurrentRound ==
+  PendingVoteWritesAuthorized
+    => \A request \in pendingLockCommit:
+         /\ request.vote.view = nodeView[request.node]
+         /\ CurrentOpenPrepareForCommit(request.node, request.qc)
+BY SMT DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
+
+THEOREM DurableTimeoutProtectionIsDirect ==
+  DurableTimeoutsProtectCommits
+    => \A timeoutVote \in timeoutIntents,
+          commitVote \in commitIntents:
+         (/\ timeoutVote.signer \in Honest
+          /\ commitVote.signer = timeoutVote.signer
+          /\ commitVote.context = timeoutVote.context
+          /\ commitVote.phase = "Commit"
+          /\ commitVote.view <= timeoutVote.view)
+           => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
+BY DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
+       TimeoutVoteProtectsCommitSet
+
+THEOREM ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization ==
+  ReducerProvenanceInvariant
+    => SameRoundLockAndCommitAuthorizationInvariant
+BY PendingLockCommitUsesExactCurrentRound,
+   DurableTimeoutProtectionIsDirect
+   DEF ReducerProvenanceInvariant,
+       SameRoundLockAndCommitAuthorizationInvariant
+
+\* Compatibility theorems for downstream proof steps. Their conclusions are
+\* aliases of the exact same-round invariant and contain no historical branch.
 THEOREM PendingLowerLockCommitRequiresHistoricalTcAuthorization ==
   PendingVoteWritesAuthorized
     => \A request \in pendingLockCommit:
          request.vote.view < nodeView[request.node]
            => HistoricalLockedPrepareForCommit(request.node, request.qc)
-BY SMT
-   DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
+BY PendingLockCommitUsesExactCurrentRound
+   DEF HistoricalLockedPrepareForCommit
 
 THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
   DurableTimeoutsProtectCommits
@@ -1363,22 +1392,19 @@ THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
           /\ commitVote.view <= timeoutVote.view
           /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
            => InstalledTcAuthorizesCommitVote(commitVote)
-BY SMT
-   DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
-       TimeoutVoteProtectsCommitSet
+BY DurableTimeoutProtectionIsDirect
+   DEF InstalledTcAuthorizesCommitVote
 
 THEOREM ReducerProvenanceImpliesHistoricalLockedCommitAuthorization ==
   ReducerProvenanceInvariant
     => HistoricalLockedCommitAuthorizationInvariant
-BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
-   DurableTimeoutProtectionSuppliesInstalledTcAuthorization
-   DEF ReducerProvenanceInvariant,
-       HistoricalLockedCommitAuthorizationInvariant
+BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
+   DEF HistoricalLockedCommitAuthorizationInvariant
 
 THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
   ReducerProvenanceInvariant
     => HistoricalTcLockedCommitAuthorizationInvariant
-BY ReducerProvenanceImpliesHistoricalLockedCommitAuthorization
+BY ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization
    DEF HistoricalTcLockedCommitAuthorizationInvariant
 
 THEOREM UnchangedPendingVoteWriteVarsPreservesAuthorization ==

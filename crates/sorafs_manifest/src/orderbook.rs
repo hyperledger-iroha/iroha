@@ -4,13 +4,11 @@
 //!
 //! These Norito payloads provide the deterministic data-model foundation for
 //! the SoraFS XOR orderbook. The pure helpers in this module cover deterministic
-//! pair and full-book snapshot matching, fee calculation, settlement-channel
-//! opening, receipt application, replay-safe runtime snapshots, and payload
-//! signature verification. Runtime account authorization, service-side
-//! sequencing, contract submission, and durable escrow mutation still belong to
-//! the runtime layers that consume these payloads.
+//! pair and full-book matching, fee calculation, settlement-channel opening,
+//! receipt application, and payload signature verification. Authoritative
+//! sequencing, lifecycle state, and escrow mutation are committed ledger state.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
@@ -32,8 +30,6 @@ pub const ORDERBOOK_TRADE_EVENT_VERSION_V1: u8 = 1;
 pub const SETTLEMENT_CHANNEL_VERSION_V1: u8 = 1;
 /// Schema version for [`SettlementReceiptV1`].
 pub const SETTLEMENT_RECEIPT_VERSION_V1: u8 = 1;
-/// Schema version for [`OrderbookRuntimeSnapshotV1`].
-pub const ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1: u8 = 1;
 /// Number of bytes in one GiB.
 pub const BYTES_PER_GIB: u64 = 1_073_741_824;
 /// Domain separator for canonical V1 order identifiers.
@@ -49,10 +45,6 @@ pub const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: usize = 256;
 /// small. Keeping a common ceiling prevents forged Norito length prefixes from
 /// turning validator or HTTP ingress into an unbounded allocation surface.
 pub const ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
-/// Maximum exact canonical size of a V1 orderbook runtime snapshot.
-pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024 * 1024;
-/// Maximum entries permitted in any one V1 runtime-snapshot collection.
-pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1: usize = 65_536;
 const ORDERBOOK_DECODE_MAX_DEPTH_V1: usize = 64;
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
 /// Domain separator for settlement-channel identifiers derived from trades.
@@ -170,6 +162,8 @@ pub struct OrderRequestV1 {
     pub remaining_gib: u64,
     /// Canonical owner account bytes.
     pub owner_account: Vec<u8>,
+    /// Exact provider registry identity sold by an ask; absent for bids.
+    pub provider_id: Option<[u8; 32]>,
     /// Unix timestamp (seconds) after which the order expires.
     pub expiry_unix: u64,
     /// Owner nonce used to prevent replay.
@@ -201,6 +195,18 @@ impl OrderRequestV1 {
                 order_id: self.order_id,
                 expected_order_id,
             });
+        }
+        match (self.side, self.provider_id) {
+            (OrderSideV1::Bid, None) => {}
+            (OrderSideV1::Bid, Some(_)) => {
+                return Err(OrderbookValidationError::BidProviderBindingForbidden);
+            }
+            (OrderSideV1::Ask, None) => {
+                return Err(OrderbookValidationError::AskProviderBindingRequired);
+            }
+            (OrderSideV1::Ask, Some(provider_id)) => {
+                validate_digest(provider_id, OrderbookValidationError::InvalidProviderId)?;
+            }
         }
         if self.price_per_gib.is_zero() {
             return Err(OrderbookValidationError::ZeroPrice);
@@ -432,19 +438,6 @@ pub struct OrderBookEntryV1 {
     pub sequence: u64,
 }
 
-/// Highest committed orderbook operation nonce for one canonical owner.
-///
-/// Order submissions and cancellations share one nonce namespace. Runtimes
-/// retain only this high-water value per owner so replay protection does not
-/// grow with the number of operations performed by that owner.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct OrderbookOwnerNonceHighWaterV1 {
-    /// Canonical owner account bytes.
-    pub owner_account: Vec<u8>,
-    /// Highest order or cancellation nonce committed for the owner.
-    pub highest_nonce: u64,
-}
-
 /// Deterministic result of matching a full order-book snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBookMatchOutcomeV1 {
@@ -454,300 +447,6 @@ pub struct OrderBookMatchOutcomeV1 {
     pub remaining_orders: Vec<OrderRequestV1>,
     /// Expired order identifiers skipped before matching.
     pub expired_order_ids: Vec<[u8; 32]>,
-}
-
-/// Canonical replay snapshot for a local orderbook mirror.
-///
-/// The snapshot is not a replacement for an on-chain contract. It gives the
-/// runtime/durable matcher service a Norito-encoded checkpoint format for the
-/// local open order set, emitted trade/channel state, accepted receipts, and
-/// expired-order tombstones.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct OrderbookRuntimeSnapshotV1 {
-    /// Schema version (`ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1`).
-    pub version: u8,
-    /// Next admission sequence to assign after restoring the snapshot.
-    pub next_sequence: u64,
-    /// Unix timestamp (seconds) when the snapshot was generated.
-    pub generated_at_unix: u64,
-    /// Per-owner committed nonce high-waters, strictly sorted by owner bytes.
-    pub owner_nonce_high_waters: Vec<OrderbookOwnerNonceHighWaterV1>,
-    /// Open orders with their canonical local admission sequence.
-    pub open_orders: Vec<OrderBookEntryV1>,
-    /// Trade events already emitted by the local matcher.
-    pub trades: Vec<TradeEventV1>,
-    /// Current settlement-channel snapshots.
-    pub settlement_channels: Vec<SettlementChannelV1>,
-    /// Settlement receipts already accepted for local channels.
-    pub settlement_receipts: Vec<SettlementReceiptV1>,
-    /// Expired order ids removed by prior matching passes.
-    pub expired_order_ids: Vec<[u8; 32]>,
-}
-
-impl OrderbookRuntimeSnapshotV1 {
-    /// Validate structural replay invariants for a runtime snapshot.
-    pub fn validate(&self) -> Result<(), OrderbookValidationError> {
-        if self.version != ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1 {
-            return Err(OrderbookValidationError::UnsupportedSnapshotVersion {
-                found: self.version,
-            });
-        }
-        if self.generated_at_unix == 0 {
-            return Err(OrderbookValidationError::InvalidTimestamp);
-        }
-
-        for (collection, count) in [
-            (
-                "owner_nonce_high_waters",
-                self.owner_nonce_high_waters.len(),
-            ),
-            ("open_orders", self.open_orders.len()),
-            ("trades", self.trades.len()),
-            ("settlement_channels", self.settlement_channels.len()),
-            ("settlement_receipts", self.settlement_receipts.len()),
-            ("expired_order_ids", self.expired_order_ids.len()),
-        ] {
-            if count > ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 {
-                return Err(OrderbookValidationError::SnapshotCollectionTooLarge {
-                    collection,
-                    count,
-                    maximum: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
-                });
-            }
-        }
-
-        let mut owner_nonce_high_waters = BTreeMap::new();
-        let mut previous_owner: Option<&[u8]> = None;
-        for entry in &self.owner_nonce_high_waters {
-            validate_owner_account_v1(&entry.owner_account)?;
-            if entry.highest_nonce == 0 {
-                return Err(OrderbookValidationError::ZeroNonce);
-            }
-            if let Some(previous) = previous_owner {
-                match previous.cmp(entry.owner_account.as_slice()) {
-                    std::cmp::Ordering::Less => {}
-                    std::cmp::Ordering::Equal => {
-                        return Err(OrderbookValidationError::DuplicateOwnerNonceHighWater {
-                            owner_account: entry.owner_account.clone(),
-                        });
-                    }
-                    std::cmp::Ordering::Greater => {
-                        return Err(OrderbookValidationError::UnsortedOwnerNonceHighWaters);
-                    }
-                }
-            }
-            previous_owner = Some(entry.owner_account.as_slice());
-            owner_nonce_high_waters.insert(entry.owner_account.as_slice(), entry.highest_nonce);
-        }
-
-        let mut open_order_ids = BTreeSet::new();
-        let mut sequences = BTreeSet::new();
-        for entry in &self.open_orders {
-            entry.order.validate()?;
-            if self.generated_at_unix > entry.order.expiry_unix {
-                return Err(OrderbookValidationError::ExpiredOrder {
-                    order_id: entry.order.order_id,
-                    expiry_unix: entry.order.expiry_unix,
-                    now_unix: self.generated_at_unix,
-                });
-            }
-            let Some(highest_nonce) =
-                owner_nonce_high_waters.get(entry.order.owner_account.as_slice())
-            else {
-                return Err(OrderbookValidationError::SnapshotOpenOrderNonceMissing {
-                    order_id: entry.order.order_id,
-                });
-            };
-            if entry.order.nonce > *highest_nonce {
-                return Err(
-                    OrderbookValidationError::SnapshotOpenOrderNonceExceedsHighWater {
-                        order_id: entry.order.order_id,
-                        nonce: entry.order.nonce,
-                        highest_nonce: *highest_nonce,
-                    },
-                );
-            }
-            if !open_order_ids.insert(entry.order.order_id) {
-                return Err(OrderbookValidationError::DuplicateOrderId {
-                    order_id: entry.order.order_id,
-                });
-            }
-            if !sequences.insert(entry.sequence) {
-                return Err(OrderbookValidationError::DuplicateOrderSequence {
-                    sequence: entry.sequence,
-                });
-            }
-            if entry.sequence >= self.next_sequence {
-                return Err(OrderbookValidationError::InvalidSnapshotSequence {
-                    sequence: entry.sequence,
-                    next_sequence: self.next_sequence,
-                });
-            }
-        }
-
-        let mut trades_by_id = BTreeMap::new();
-        for trade in &self.trades {
-            trade.validate()?;
-            if trades_by_id.insert(trade.trade_id, trade).is_some() {
-                return Err(OrderbookValidationError::DuplicateTradeId {
-                    trade_id: trade.trade_id,
-                });
-            }
-        }
-
-        let mut channel_ids = BTreeSet::new();
-        let mut channel_replay = BTreeMap::new();
-        for channel in &self.settlement_channels {
-            channel.validate()?;
-            if !channel_ids.insert(channel.channel_id) {
-                return Err(OrderbookValidationError::DuplicateChannelId {
-                    channel_id: channel.channel_id,
-                });
-            }
-            let Some(trade) = trades_by_id.get(&channel.trade_id) else {
-                return Err(OrderbookValidationError::SnapshotChannelTradeMissing {
-                    channel_id: channel.channel_id,
-                    trade_id: channel.trade_id,
-                });
-            };
-            let expected_total_bytes = trade
-                .filled_gib
-                .checked_mul(BYTES_PER_GIB)
-                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
-            if channel.total_bytes != expected_total_bytes {
-                return Err(
-                    OrderbookValidationError::SnapshotChannelTotalBytesMismatch {
-                        channel_id: channel.channel_id,
-                        total_bytes: channel.total_bytes,
-                        expected_total_bytes,
-                    },
-                );
-            }
-            channel_replay.insert(
-                channel.channel_id,
-                SnapshotChannelReplayV1 {
-                    trade_id: channel.trade_id,
-                    total_bytes: channel.total_bytes,
-                    remaining_bytes: channel.remaining_bytes,
-                    xor_locked: channel.xor_locked.clone(),
-                    opened_at_unix: channel.opened_at_unix,
-                    updated_at_unix: channel.updated_at_unix,
-                    initial_escrow: trade_escrow_requirement_v1(trade)?,
-                    delivered_bytes: 0,
-                    debited: XorQuantity::zero(),
-                },
-            );
-        }
-
-        let mut receipt_ids = BTreeSet::new();
-        let mut receipts_by_channel = BTreeSet::<([u8; 32], u64, u64, [u8; 32])>::new();
-        for receipt in &self.settlement_receipts {
-            receipt.validate()?;
-            if !receipt_ids.insert(receipt.receipt_id) {
-                return Err(OrderbookValidationError::DuplicateReceiptId {
-                    receipt_id: receipt.receipt_id,
-                });
-            }
-            let Some(replay) = channel_replay.get_mut(&receipt.channel_id) else {
-                return Err(OrderbookValidationError::SnapshotReceiptChannelMissing {
-                    receipt_id: receipt.receipt_id,
-                    channel_id: receipt.channel_id,
-                });
-            };
-            if replay.trade_id != receipt.trade_id {
-                return Err(OrderbookValidationError::SettlementChannelMismatch);
-            }
-            if receipt.issued_at_unix < replay.opened_at_unix
-                || receipt.issued_at_unix > replay.updated_at_unix
-            {
-                return Err(OrderbookValidationError::InvalidTimestamp);
-            }
-            let delivered = receipt.range.len()?;
-            if receipt.range.end > replay.total_bytes {
-                return Err(OrderbookValidationError::ReceiptExceedsChannelBytes {
-                    range_end: receipt.range.end,
-                    total_bytes: replay.total_bytes,
-                });
-            }
-            if let Some((_, _, _, existing_receipt_id)) =
-                receipts_by_channel
-                    .iter()
-                    .find(|(channel_id, start, end, _)| {
-                        *channel_id == receipt.channel_id
-                            && ranges_overlap(*start, *end, receipt.range.start, receipt.range.end)
-                    })
-            {
-                return Err(OrderbookValidationError::SnapshotReceiptRangeOverlap {
-                    receipt_id: receipt.receipt_id,
-                    existing_receipt_id: *existing_receipt_id,
-                });
-            }
-            receipts_by_channel.insert((
-                receipt.channel_id,
-                receipt.range.start,
-                receipt.range.end,
-                receipt.receipt_id,
-            ));
-            replay.delivered_bytes = replay
-                .delivered_bytes
-                .checked_add(delivered)
-                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
-            replay.debited = replay
-                .debited
-                .checked_add(&receipt.xor_debited)
-                .map_err(OrderbookValidationError::Amount)?;
-            if replay.debited > replay.initial_escrow {
-                return Err(OrderbookValidationError::ReceiptExceedsEscrow {
-                    debited: replay.debited.clone(),
-                    escrow: replay.initial_escrow.clone(),
-                });
-            }
-        }
-
-        for (channel_id, replay) in channel_replay {
-            let expected_remaining_bytes = replay
-                .total_bytes
-                .checked_sub(replay.delivered_bytes)
-                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
-            if replay.remaining_bytes != expected_remaining_bytes {
-                return Err(
-                    OrderbookValidationError::SnapshotChannelReceiptBytesMismatch {
-                        channel_id,
-                        remaining_bytes: replay.remaining_bytes,
-                        expected_remaining_bytes,
-                    },
-                );
-            }
-            let expected_xor_locked = replay
-                .initial_escrow
-                .checked_sub(&replay.debited)
-                .map_err(OrderbookValidationError::Amount)?;
-            if replay.xor_locked != expected_xor_locked {
-                return Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
-                    channel_id,
-                    escrow: replay.xor_locked,
-                    expected_escrow: expected_xor_locked,
-                });
-            }
-        }
-
-        let mut expired_order_ids = BTreeSet::new();
-        for order_id in &self.expired_order_ids {
-            validate_digest(*order_id, OrderbookValidationError::InvalidOrderId)?;
-            if !expired_order_ids.insert(*order_id) {
-                return Err(OrderbookValidationError::DuplicateExpiredOrderId {
-                    order_id: *order_id,
-                });
-            }
-            if open_order_ids.contains(order_id) {
-                return Err(OrderbookValidationError::SnapshotExpiredOrderStillOpen {
-                    order_id: *order_id,
-                });
-            }
-        }
-
-        Ok(())
-    }
 }
 
 /// Decode an exact canonical V1 order request under production resource limits.
@@ -779,17 +478,6 @@ pub fn decode_settlement_receipt_v1(
     bytes: &[u8],
 ) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1, 512)
-}
-
-/// Decode an exact canonical V1 runtime snapshot under production resource limits.
-pub fn decode_orderbook_runtime_snapshot_v1(
-    bytes: &[u8],
-) -> Result<OrderbookRuntimeSnapshotV1, OrderbookPayloadDecodeError> {
-    decode_orderbook_payload_v1(
-        bytes,
-        ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1,
-        ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
-    )
 }
 
 fn decode_orderbook_payload_v1<T>(
@@ -827,19 +515,6 @@ where
         return Err(OrderbookPayloadDecodeError::NonCanonicalEncoding);
     }
     Ok(payload)
-}
-
-#[derive(Debug, Clone)]
-struct SnapshotChannelReplayV1 {
-    trade_id: [u8; 32],
-    total_bytes: u64,
-    remaining_bytes: u64,
-    xor_locked: XorQuantity,
-    opened_at_unix: u64,
-    updated_at_unix: u64,
-    initial_escrow: XorQuantity,
-    delivered_bytes: u64,
-    debited: XorQuantity,
 }
 
 #[derive(Debug, Clone)]
@@ -1143,6 +818,55 @@ pub fn trade_escrow_requirement_v1(
         .map_err(OrderbookValidationError::Amount)
 }
 
+/// Return the immutable maker-plus-taker fee custody for a trade.
+pub fn trade_fee_requirement_v1(
+    trade: &TradeEventV1,
+) -> Result<XorQuantity, OrderbookValidationError> {
+    trade.validate()?;
+    trade
+        .maker_fee
+        .checked_add(&trade.taker_fee)
+        .map_err(OrderbookValidationError::Amount)
+}
+
+/// Return the conservative native custody required to admit one full bid.
+///
+/// The buyer can become either maker or taker. The counterparty's applicable
+/// fee is not known at bid admission, so the bound combines the signed bid fee
+/// for each role with the governed maximum for the opposite role, then selects
+/// the larger exact basis-point charge. The entire signed quantity is priced
+/// at the bid's limit price; execution at any lower crossing price therefore
+/// cannot exceed this lock.
+pub fn bid_order_escrow_requirement_v1(
+    bid: &OrderRequestV1,
+    governed_max_maker_fee_bps: u16,
+    governed_max_taker_fee_bps: u16,
+) -> Result<XorQuantity, OrderbookValidationError> {
+    bid.validate()?;
+    if bid.side != OrderSideV1::Bid {
+        return Err(OrderbookValidationError::BidEscrowRequiresBid {
+            side: bid.side,
+        });
+    }
+    validate_fee_bps(governed_max_maker_fee_bps)?;
+    validate_fee_bps(governed_max_taker_fee_bps)?;
+
+    let gross = bid
+        .price_per_gib
+        .checked_mul_u64(bid.quantity_gib)
+        .map_err(OrderbookValidationError::Amount)?;
+    let bid_as_maker_bps =
+        u32::from(bid.maker_fee_bps) + u32::from(governed_max_taker_fee_bps);
+    let bid_as_taker_bps =
+        u32::from(bid.taker_fee_bps) + u32::from(governed_max_maker_fee_bps);
+    let maximum_fee = gross
+        .checked_mul_basis_points_u32(bid_as_maker_bps.max(bid_as_taker_bps))
+        .map_err(OrderbookValidationError::Amount)?;
+    gross
+        .checked_add(&maximum_fee)
+        .map_err(OrderbookValidationError::Amount)
+}
+
 /// Half-open byte range `[start, end)` covered by a settlement receipt.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ByteRangeV1 {
@@ -1190,6 +914,12 @@ pub struct SettlementChannelV1 {
     pub remaining_bytes: u64,
     /// XOR locked in escrow for the channel.
     pub xor_locked: XorQuantity,
+    /// Initial total XOR partitioned for the channel.
+    pub initial_xor_locked: XorQuantity,
+    /// Initial immutable maker-plus-taker fee custody.
+    pub initial_fee_xor_locked: XorQuantity,
+    /// Maker-plus-taker fee custody not yet settled.
+    pub remaining_fee_xor_locked: XorQuantity,
     /// Channel status.
     pub status: SettlementChannelStatusV1,
     /// Unix timestamp (seconds) when the channel opened.
@@ -1237,6 +967,20 @@ impl SettlementChannelV1 {
         {
             return Err(OrderbookValidationError::ZeroEscrow);
         }
+        if self.xor_locked > self.initial_xor_locked
+            || self.initial_fee_xor_locked > self.initial_xor_locked
+            || self.remaining_fee_xor_locked > self.initial_fee_xor_locked
+            || self.remaining_fee_xor_locked > self.xor_locked
+        {
+            return Err(OrderbookValidationError::InvalidChannelFeeCustody);
+        }
+        if matches!(
+            self.status,
+            SettlementChannelStatusV1::Closed | SettlementChannelStatusV1::Refunded
+        ) && (!self.xor_locked.is_zero() || !self.remaining_fee_xor_locked.is_zero())
+        {
+            return Err(OrderbookValidationError::TerminalChannelHasCustody);
+        }
         if self.opened_at_unix == 0 || self.updated_at_unix < self.opened_at_unix {
             return Err(OrderbookValidationError::InvalidTimestamp);
         }
@@ -1260,6 +1004,8 @@ pub fn open_settlement_channel_for_trade_v1(
         .filled_gib
         .checked_mul(BYTES_PER_GIB)
         .ok_or(OrderbookValidationError::ByteCountOverflow)?;
+    let initial_xor_locked = trade_escrow_requirement_v1(trade)?;
+    let initial_fee_xor_locked = trade_fee_requirement_v1(trade)?;
     let channel = SettlementChannelV1 {
         version: SETTLEMENT_CHANNEL_VERSION_V1,
         channel_id,
@@ -1268,13 +1014,65 @@ pub fn open_settlement_channel_for_trade_v1(
         provider_id,
         total_bytes,
         remaining_bytes: total_bytes,
-        xor_locked: trade_escrow_requirement_v1(trade)?,
+        xor_locked: initial_xor_locked.clone(),
+        initial_xor_locked,
+        initial_fee_xor_locked: initial_fee_xor_locked.clone(),
+        remaining_fee_xor_locked: initial_fee_xor_locked,
         status: SettlementChannelStatusV1::Open,
         opened_at_unix,
         updated_at_unix: opened_at_unix,
     };
     channel.validate()?;
     Ok(channel)
+}
+
+/// Ledger-derived economic split for one streaming receipt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementSplitV1 {
+    /// Total custody debited for the delivered bytes.
+    pub xor_debited: XorQuantity,
+    /// Amount credited to the provider.
+    pub provider_credit: XorQuantity,
+    /// Immutable trade-fee portion credited to treasury.
+    pub fee_amount: XorQuantity,
+}
+
+/// Prorate remaining total and fee custody toward zero for delivered bytes.
+///
+/// Both ratios use the same remaining-byte denominator. A final receipt
+/// (`bytes_delivered == remaining_bytes`) therefore consumes all residual
+/// custody exactly, including rounding dust from earlier chunks.
+pub fn deterministic_settlement_split_v1(
+    remaining_xor_locked: &XorQuantity,
+    remaining_fee_xor_locked: &XorQuantity,
+    bytes_delivered: u64,
+    remaining_bytes: u64,
+) -> Result<SettlementSplitV1, OrderbookValidationError> {
+    let denominator =
+        core::num::NonZeroU64::new(remaining_bytes).ok_or(OrderbookValidationError::ZeroBytes)?;
+    if bytes_delivered == 0 || bytes_delivered > remaining_bytes {
+        return Err(OrderbookValidationError::ReceiptExceedsRemainingBytes {
+            delivered: bytes_delivered,
+            remaining_bytes,
+        });
+    }
+    if remaining_fee_xor_locked > remaining_xor_locked {
+        return Err(OrderbookValidationError::InvalidChannelFeeCustody);
+    }
+    let xor_debited = remaining_xor_locked
+        .checked_mul_ratio(bytes_delivered, denominator)
+        .map_err(OrderbookValidationError::Amount)?;
+    let fee_amount = remaining_fee_xor_locked
+        .checked_mul_ratio(bytes_delivered, denominator)
+        .map_err(OrderbookValidationError::Amount)?;
+    let provider_credit = xor_debited
+        .checked_sub(&fee_amount)
+        .map_err(OrderbookValidationError::Amount)?;
+    Ok(SettlementSplitV1 {
+        xor_debited,
+        provider_credit,
+        fee_amount,
+    })
 }
 
 /// Signed streaming-settlement receipt for delivered bytes.
@@ -1427,6 +1225,22 @@ pub fn apply_settlement_receipt_v1(
             escrow: channel.xor_locked.clone(),
         });
     }
+    let expected_split = deterministic_settlement_split_v1(
+        &channel.xor_locked,
+        &channel.remaining_fee_xor_locked,
+        delivered,
+        channel.remaining_bytes,
+    )?;
+    if receipt.xor_debited != expected_split.xor_debited
+        || receipt.provider_credit != expected_split.provider_credit
+        || receipt.fee_amount != expected_split.fee_amount
+    {
+        return Err(OrderbookValidationError::SettlementSplitMismatch {
+            expected_debit: expected_split.xor_debited,
+            expected_provider_credit: expected_split.provider_credit,
+            expected_fee: expected_split.fee_amount,
+        });
+    }
 
     let remaining_bytes = channel.remaining_bytes - delivered;
     let status = if remaining_bytes == 0 {
@@ -1439,6 +1253,10 @@ pub fn apply_settlement_receipt_v1(
         xor_locked: channel
             .xor_locked
             .checked_sub(&receipt.xor_debited)
+            .map_err(OrderbookValidationError::Amount)?,
+        remaining_fee_xor_locked: channel
+            .remaining_fee_xor_locked
+            .checked_sub(&receipt.fee_amount)
             .map_err(OrderbookValidationError::Amount)?,
         status,
         updated_at_unix: receipt.issued_at_unix,
@@ -1589,24 +1407,6 @@ pub enum OrderbookValidationError {
     /// Unsupported settlement receipt version.
     #[error("unsupported settlement receipt version {found}")]
     UnsupportedReceiptVersion { found: u8 },
-    /// Unsupported runtime snapshot version.
-    #[error("unsupported orderbook runtime snapshot version {found}")]
-    UnsupportedSnapshotVersion {
-        /// Observed version.
-        found: u8,
-    },
-    /// A runtime snapshot collection exceeded the protocol ceiling.
-    #[error(
-        "runtime snapshot collection `{collection}` contains {count} entries; maximum is {maximum}"
-    )]
-    SnapshotCollectionTooLarge {
-        /// Stable collection label.
-        collection: &'static str,
-        /// Supplied collection length.
-        count: usize,
-        /// Maximum accepted collection length.
-        maximum: usize,
-    },
     /// Order identifier is all zeroes.
     #[error("order id must not be zero")]
     InvalidOrderId,
@@ -1641,6 +1441,12 @@ pub enum OrderbookValidationError {
     /// Provider identifier is all zeroes.
     #[error("provider id must not be zero")]
     InvalidProviderId,
+    /// A bid carried an ask-only provider binding.
+    #[error("bid orders must not carry a provider id")]
+    BidProviderBindingForbidden,
+    /// An ask omitted its exact provider binding.
+    #[error("ask orders must carry an exact non-zero provider id")]
+    AskProviderBindingRequired,
     /// Price is zero.
     #[error("price must be positive")]
     ZeroPrice,
@@ -1723,6 +1529,12 @@ pub enum OrderbookValidationError {
     /// Maker and taker order ids are identical.
     #[error("maker and taker order ids must differ")]
     SelfTrade,
+    /// Bid custody was requested for a non-bid order.
+    #[error("native order escrow requires a bid order, found {side:?}")]
+    BidEscrowRequiresBid {
+        /// Supplied order side.
+        side: OrderSideV1,
+    },
     /// Order expired before the match timestamp.
     #[error("order expired at {expiry_unix}, match timestamp {now_unix}")]
     ExpiredOrder {
@@ -1767,131 +1579,6 @@ pub enum OrderbookValidationError {
         /// Repeated sequence.
         sequence: u64,
     },
-    /// An owner appears more than once in the snapshot nonce high-water list.
-    #[error("duplicate owner nonce high-water for account {owner_account:02x?}")]
-    DuplicateOwnerNonceHighWater {
-        /// Repeated canonical owner account bytes.
-        owner_account: Vec<u8>,
-    },
-    /// Snapshot owner nonce high-waters are not in canonical owner-byte order.
-    #[error("snapshot owner nonce high-waters must be strictly sorted by owner account bytes")]
-    UnsortedOwnerNonceHighWaters,
-    /// An open order has no durable nonce high-water for its owner.
-    #[error("snapshot open order {order_id:02x?} has no owner nonce high-water")]
-    SnapshotOpenOrderNonceMissing {
-        /// Open order missing a corresponding owner nonce record.
-        order_id: [u8; 32],
-    },
-    /// An open order carries a nonce above its owner's saved high-water.
-    #[error(
-        "snapshot open order {order_id:02x?} nonce {nonce} exceeds owner high-water {highest_nonce}"
-    )]
-    SnapshotOpenOrderNonceExceedsHighWater {
-        /// Open order with an impossible nonce.
-        order_id: [u8; 32],
-        /// Nonce stored on the open order.
-        nonce: u64,
-        /// Highest committed nonce stored for the owner.
-        highest_nonce: u64,
-    },
-    /// Snapshot open-order sequence is outside the restore window.
-    #[error("snapshot order sequence {sequence} must be less than next sequence {next_sequence}")]
-    InvalidSnapshotSequence {
-        /// Observed sequence.
-        sequence: u64,
-        /// Next sequence recorded by the snapshot.
-        next_sequence: u64,
-    },
-    /// Duplicate trade id in a runtime snapshot.
-    #[error("duplicate trade id {trade_id:02x?}")]
-    DuplicateTradeId {
-        /// Repeated trade id.
-        trade_id: [u8; 32],
-    },
-    /// Duplicate channel id in a runtime snapshot.
-    #[error("duplicate settlement channel id {channel_id:02x?}")]
-    DuplicateChannelId {
-        /// Repeated channel id.
-        channel_id: [u8; 32],
-    },
-    /// Duplicate receipt id in a runtime snapshot.
-    #[error("duplicate settlement receipt id {receipt_id:02x?}")]
-    DuplicateReceiptId {
-        /// Repeated receipt id.
-        receipt_id: [u8; 32],
-    },
-    /// Duplicate expired order id in a runtime snapshot.
-    #[error("duplicate expired order id {order_id:02x?}")]
-    DuplicateExpiredOrderId {
-        /// Repeated expired order id.
-        order_id: [u8; 32],
-    },
-    /// Snapshot channel references a trade absent from the snapshot.
-    #[error("snapshot channel {channel_id:02x?} references missing trade {trade_id:02x?}")]
-    SnapshotChannelTradeMissing {
-        /// Channel id.
-        channel_id: [u8; 32],
-        /// Missing trade id.
-        trade_id: [u8; 32],
-    },
-    /// Snapshot channel byte coverage differs from the referenced trade.
-    #[error(
-        "snapshot channel {channel_id:02x?} total bytes {total_bytes} differ from trade bytes {expected_total_bytes}"
-    )]
-    SnapshotChannelTotalBytesMismatch {
-        /// Channel id.
-        channel_id: [u8; 32],
-        /// Stored channel byte coverage.
-        total_bytes: u64,
-        /// Byte coverage derived from the referenced trade.
-        expected_total_bytes: u64,
-    },
-    /// Snapshot channel remaining bytes differ from accepted receipt replay.
-    #[error(
-        "snapshot channel {channel_id:02x?} remaining bytes {remaining_bytes} differ from receipt replay {expected_remaining_bytes}"
-    )]
-    SnapshotChannelReceiptBytesMismatch {
-        /// Channel id.
-        channel_id: [u8; 32],
-        /// Stored remaining channel bytes.
-        remaining_bytes: u64,
-        /// Remaining bytes after replaying accepted receipts.
-        expected_remaining_bytes: u64,
-    },
-    /// Snapshot channel escrow differs from accepted receipt replay.
-    #[error(
-        "snapshot channel {channel_id:02x?} locked escrow {escrow} differs from receipt replay {expected_escrow}"
-    )]
-    SnapshotChannelEscrowMismatch {
-        /// Channel id.
-        channel_id: [u8; 32],
-        /// Stored exact locked escrow.
-        escrow: XorQuantity,
-        /// Exact locked escrow after replaying accepted receipts.
-        expected_escrow: XorQuantity,
-    },
-    /// Snapshot receipt references a channel absent from the snapshot.
-    #[error("snapshot receipt {receipt_id:02x?} references missing channel {channel_id:02x?}")]
-    SnapshotReceiptChannelMissing {
-        /// Receipt id.
-        receipt_id: [u8; 32],
-        /// Missing channel id.
-        channel_id: [u8; 32],
-    },
-    /// Snapshot receipt range overlaps another accepted receipt.
-    #[error("snapshot receipt {receipt_id:02x?} overlaps receipt {existing_receipt_id:02x?}")]
-    SnapshotReceiptRangeOverlap {
-        /// Overlapping receipt id.
-        receipt_id: [u8; 32],
-        /// Existing receipt id.
-        existing_receipt_id: [u8; 32],
-    },
-    /// Snapshot marks an order as both expired and open.
-    #[error("snapshot expired order {order_id:02x?} is still open")]
-    SnapshotExpiredOrderStillOpen {
-        /// Conflicting order id.
-        order_id: [u8; 32],
-    },
     /// GiB-to-byte expansion overflowed.
     #[error("byte count overflow")]
     ByteCountOverflow,
@@ -1927,6 +1614,24 @@ pub enum OrderbookValidationError {
         debited: XorQuantity,
         /// Exact remaining escrow.
         escrow: XorQuantity,
+    },
+    /// Channel total or fee custody violates immutable accounting bounds.
+    #[error("settlement channel fee custody is outside total-custody bounds")]
+    InvalidChannelFeeCustody,
+    /// A closed or refunded channel retained total or fee custody.
+    #[error("terminal settlement channel retains custody")]
+    TerminalChannelHasCustody,
+    /// Receipt split differs from the deterministic trade-derived split.
+    #[error(
+        "settlement split mismatch: expected debit {expected_debit}, provider credit {expected_provider_credit}, fee {expected_fee}"
+    )]
+    SettlementSplitMismatch {
+        /// Expected total debit.
+        expected_debit: XorQuantity,
+        /// Expected provider credit.
+        expected_provider_credit: XorQuantity,
+        /// Expected fee amount.
+        expected_fee: XorQuantity,
     },
     /// Byte count is zero.
     #[error("byte count must be positive")]
@@ -2076,6 +1781,7 @@ mod tests {
             quantity_gib: 10,
             remaining_gib: 10,
             owner_account,
+            provider_id: None,
             expiry_unix: 1_800_000_000,
             nonce,
             maker_fee_bps: 5,
@@ -2097,6 +1803,7 @@ mod tests {
         order.quantity_gib = quantity_gib;
         order.remaining_gib = quantity_gib;
         order.owner_account = account(seed);
+        order.provider_id = (side == OrderSideV1::Ask).then_some([seed.max(1); 32]);
         order.nonce = u64::from(seed);
         refresh_order_id(&mut order);
         order
@@ -2131,35 +1838,6 @@ mod tests {
     fn snapshot_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
         open_settlement_channel_for_trade_v1(trade, id(5), account(9), id(6), 1_800_000_100)
             .expect("snapshot channel should open")
-    }
-
-    fn runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
-        let mut open = book_order(9, OrderSideV1::Ask, 1_700_000, 1);
-        open.expiry_unix = 1_800_000_300;
-        let trade = snapshot_trade();
-        let opened_channel = snapshot_channel(&trade);
-        let mut accepted_receipt = receipt();
-        accepted_receipt.channel_id = opened_channel.channel_id;
-        accepted_receipt.trade_id = opened_channel.trade_id;
-        accepted_receipt.issued_at_unix = 1_800_000_200;
-        accepted_receipt = sign_receipt(accepted_receipt, 0x55);
-        let channel = apply_settlement_receipt_v1(&opened_channel, &accepted_receipt)
-            .expect("snapshot receipt should apply");
-
-        OrderbookRuntimeSnapshotV1 {
-            version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-            next_sequence: 3,
-            generated_at_unix: 1_800_000_250,
-            owner_nonce_high_waters: vec![OrderbookOwnerNonceHighWaterV1 {
-                owner_account: open.owner_account.clone(),
-                highest_nonce: open.nonce,
-            }],
-            open_orders: vec![book_entry(open, 2)],
-            trades: vec![trade],
-            settlement_channels: vec![channel],
-            settlement_receipts: vec![accepted_receipt],
-            expired_order_ids: vec![id(8)],
-        }
     }
 
     #[derive(Debug)]
@@ -2389,6 +2067,32 @@ mod tests {
     #[test]
     fn order_accepts_valid_payload() {
         assert_eq!(order().validate(), Ok(()));
+    }
+
+    #[test]
+    fn order_requires_exact_provider_binding_only_for_asks() {
+        let mut bid_with_provider = order();
+        bid_with_provider.provider_id = Some(id(9));
+        assert_eq!(
+            bid_with_provider.validate(),
+            Err(OrderbookValidationError::BidProviderBindingForbidden),
+        );
+
+        let mut ask_without_provider = order();
+        ask_without_provider.side = OrderSideV1::Ask;
+        assert_eq!(
+            ask_without_provider.validate(),
+            Err(OrderbookValidationError::AskProviderBindingRequired),
+        );
+
+        ask_without_provider.provider_id = Some([0; 32]);
+        assert_eq!(
+            ask_without_provider.validate(),
+            Err(OrderbookValidationError::InvalidProviderId),
+        );
+
+        ask_without_provider.provider_id = Some(id(9));
+        assert_eq!(ask_without_provider.validate(), Ok(()));
     }
 
     #[test]
@@ -2688,9 +2392,31 @@ mod tests {
     }
 
     #[test]
+    fn bid_order_escrow_covers_full_limit_value_and_worst_role_fee() {
+        let bid = order();
+        let required = bid_order_escrow_requirement_v1(&bid, 100, 200)
+            .expect("derive conservative bid custody");
+        assert_eq!(
+            required,
+            XorQuantity::try_from_micro(15_307_500).expect("expected custody"),
+        );
+
+        let mut ask = bid;
+        ask.side = OrderSideV1::Ask;
+        ask.provider_id = Some(id(9));
+        assert_eq!(
+            bid_order_escrow_requirement_v1(&ask, 100, 200),
+            Err(OrderbookValidationError::BidEscrowRequiresBid {
+                side: OrderSideV1::Ask,
+            }),
+        );
+    }
+
+    #[test]
     fn match_orders_creates_trade_and_remaining_quantities() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -2736,6 +2462,7 @@ mod tests {
     fn match_orders_rejects_non_crossing_prices() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -2764,6 +2491,7 @@ mod tests {
         let bid_price: XorQuantity = "0.0000001".parse().expect("canonical sub-micro XOR price");
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(21));
         maker.owner_account = account(21);
         maker.price_per_gib = ask_price.clone();
         refresh_order_id(&mut maker);
@@ -2872,6 +2600,8 @@ mod tests {
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
+                    provider_id: (side == OrderSideV1::Ask)
+                        .then_some([index_u8.wrapping_add(1); 32]),
                     expiry_unix: now_unix + 1 + rng.range(600),
                     nonce,
                     maker_fee_bps: rng.range(40) as u16,
@@ -2921,6 +2651,8 @@ mod tests {
                     quantity_gib,
                     remaining_gib: quantity_gib,
                     owner_account,
+                    provider_id: (side == OrderSideV1::Ask)
+                        .then_some([index_u8.wrapping_add(1); 32]),
                     expiry_unix: now_unix + 10 + rng.range(900),
                     nonce,
                     maker_fee_bps: rng.range(60) as u16,
@@ -3000,6 +2732,7 @@ mod tests {
     fn open_settlement_channel_for_trade_locks_trade_value_and_fees() {
         let mut maker = order();
         maker.side = OrderSideV1::Ask;
+        maker.provider_id = Some(id(11));
         maker.owner_account = account(11);
         refresh_order_id(&mut maker);
         maker.price_per_gib = XorQuantity::try_from_micro(1_500_000)
@@ -3078,6 +2811,10 @@ mod tests {
             remaining_bytes: 1_025,
             xor_locked: XorQuantity::try_from_micro(3_000_000)
                 .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(3_000_000)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::zero(),
+            remaining_fee_xor_locked: XorQuantity::zero(),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
             updated_at_unix: 1_800_000_100,
@@ -3153,6 +2890,9 @@ mod tests {
         let trade = snapshot_trade();
         let mut channel = snapshot_channel(&trade);
         channel.xor_locked = two.clone();
+        channel.initial_xor_locked = two.clone();
+        channel.initial_fee_xor_locked = XorQuantity::zero();
+        channel.remaining_fee_xor_locked = XorQuantity::zero();
         let mut overdraw = receipt();
         overdraw.xor_debited = three.clone();
         overdraw.provider_credit = two;
@@ -3162,201 +2902,6 @@ mod tests {
             Err(OrderbookValidationError::ReceiptExceedsEscrow {
                 debited: three,
                 escrow: channel.xor_locked,
-            })
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_validates_replay_state() {
-        let snapshot = runtime_snapshot();
-
-        snapshot
-            .validate()
-            .expect("snapshot replay state validates");
-        let bytes = norito::to_bytes(&snapshot).expect("encode runtime snapshot");
-        let decoded: OrderbookRuntimeSnapshotV1 =
-            norito::decode_from_bytes(&bytes).expect("decode runtime snapshot");
-
-        assert_eq!(decoded, snapshot);
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_missing_open_order_nonce_high_water() {
-        let mut snapshot = runtime_snapshot();
-        let order_id = snapshot.open_orders[0].order.order_id;
-        snapshot.owner_nonce_high_waters.clear();
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::SnapshotOpenOrderNonceMissing { order_id })
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_open_order_above_nonce_high_water() {
-        let mut snapshot = runtime_snapshot();
-        let order = &snapshot.open_orders[0].order;
-        let order_id = order.order_id;
-        let nonce = order.nonce;
-        snapshot.owner_nonce_high_waters[0].highest_nonce = nonce - 1;
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(
-                OrderbookValidationError::SnapshotOpenOrderNonceExceedsHighWater {
-                    order_id,
-                    nonce,
-                    highest_nonce: nonce - 1,
-                }
-            )
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_duplicate_owner_nonce_high_water() {
-        let mut snapshot = runtime_snapshot();
-        let duplicate = snapshot.owner_nonce_high_waters[0].clone();
-        let owner_account = duplicate.owner_account.clone();
-        snapshot.owner_nonce_high_waters.push(duplicate);
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::DuplicateOwnerNonceHighWater { owner_account })
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_unsorted_owner_nonce_high_waters() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.owner_nonce_high_waters.insert(
-            0,
-            OrderbookOwnerNonceHighWaterV1 {
-                owner_account: account(10),
-                highest_nonce: 1,
-            },
-        );
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::UnsortedOwnerNonceHighWaters)
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_invalid_owner_nonce_high_water_shape() {
-        let mut empty_owner = runtime_snapshot();
-        empty_owner.owner_nonce_high_waters[0].owner_account.clear();
-        assert_eq!(
-            empty_owner.validate(),
-            Err(OrderbookValidationError::EmptyOwnerAccount)
-        );
-
-        let mut zero_nonce = runtime_snapshot();
-        zero_nonce.owner_nonce_high_waters[0].highest_nonce = 0;
-        assert_eq!(
-            zero_nonce.validate(),
-            Err(OrderbookValidationError::ZeroNonce)
-        );
-
-        let mut oversized_owner = runtime_snapshot();
-        oversized_owner.owner_nonce_high_waters[0].owner_account =
-            vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
-        assert_eq!(
-            oversized_owner.validate(),
-            Err(OrderbookValidationError::OwnerAccountTooLong {
-                length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
-                max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
-            })
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_overlapping_receipts() {
-        let mut snapshot = runtime_snapshot();
-        let mut overlapping = snapshot.settlement_receipts[0].clone();
-        overlapping.receipt_id = id(10);
-        overlapping.range = ByteRangeV1 { start: 20, end: 52 };
-        overlapping.bytes_delivered = 32;
-        overlapping.chunk_hash = id(11);
-        overlapping = sign_receipt(overlapping, 0x56);
-        snapshot.settlement_receipts.push(overlapping);
-
-        assert!(matches!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::SnapshotReceiptRangeOverlap { .. })
-        ));
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_channel_total_byte_drift() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.settlement_channels[0].total_bytes += 1;
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(
-                OrderbookValidationError::SnapshotChannelTotalBytesMismatch {
-                    channel_id: id(5),
-                    total_bytes: 2 * BYTES_PER_GIB + 1,
-                    expected_total_bytes: 2 * BYTES_PER_GIB,
-                },
-            )
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_receipt_remaining_byte_drift() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.settlement_channels[0].remaining_bytes += 1;
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(
-                OrderbookValidationError::SnapshotChannelReceiptBytesMismatch {
-                    channel_id: id(5),
-                    remaining_bytes: 2 * BYTES_PER_GIB - 31,
-                    expected_remaining_bytes: 2 * BYTES_PER_GIB - 32,
-                },
-            )
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_receipt_escrow_drift() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.settlement_channels[0].xor_locked = XorQuantity::try_from_micro(2_841_901)
-            .expect("legacy micro-XOR value is representable");
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
-                channel_id: id(5),
-                escrow: XorQuantity::try_from_micro(2_841_901)
-                    .expect("legacy micro-XOR value is representable"),
-                expected_escrow: XorQuantity::try_from_micro(2_841_900)
-                    .expect("legacy micro-XOR value is representable"),
-            })
-        );
-    }
-
-    #[test]
-    fn orderbook_runtime_snapshot_rejects_receipt_range_beyond_channel_total() {
-        let mut snapshot = runtime_snapshot();
-        let total_bytes = snapshot.settlement_channels[0].total_bytes;
-        let receipt = &mut snapshot.settlement_receipts[0];
-        receipt.range = ByteRangeV1 {
-            start: total_bytes - 16,
-            end: total_bytes + 16,
-        };
-        receipt.bytes_delivered = 32;
-        receipt.chunk_hash = id(12);
-        *receipt = sign_receipt(receipt.clone(), 0x57);
-
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::ReceiptExceedsChannelBytes {
-                range_end: total_bytes + 16,
-                total_bytes,
             })
         );
     }
@@ -3385,6 +2930,12 @@ mod tests {
             total_bytes: 32,
             remaining_bytes: 32,
             xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10)
                 .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
@@ -3419,6 +2970,153 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_settlement_split_preserves_zero_fee_channels() {
+        let total = XorQuantity::try_from_micro(101).expect("channel total");
+        let split = deterministic_settlement_split_v1(
+            &total,
+            &XorQuantity::zero(),
+            3,
+            10,
+        )
+        .expect("zero-fee split");
+
+        assert_eq!(split.fee_amount, XorQuantity::zero());
+        assert_eq!(split.provider_credit, split.xor_debited);
+        assert!(split.xor_debited < total);
+    }
+
+    #[test]
+    fn chunked_settlement_prorates_fee_and_consumes_final_rounding_dust_exactly() {
+        let initial_total = XorQuantity::try_from_micro(101).expect("channel total");
+        let initial_fee = XorQuantity::try_from_micro(10).expect("channel fee");
+        let mut channel = SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: id(5),
+            trade_id: id(4),
+            buyer_account: account(8),
+            provider_id: id(6),
+            total_bytes: 3,
+            remaining_bytes: 3,
+            xor_locked: initial_total.clone(),
+            initial_xor_locked: initial_total.clone(),
+            initial_fee_xor_locked: initial_fee.clone(),
+            remaining_fee_xor_locked: initial_fee.clone(),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_100,
+            updated_at_unix: 1_800_000_100,
+        };
+        let mut total_debited = XorQuantity::zero();
+        let mut total_provider_credit = XorQuantity::zero();
+        let mut total_fees = XorQuantity::zero();
+
+        for index in 0_u64..3 {
+            let split = deterministic_settlement_split_v1(
+                &channel.xor_locked,
+                &channel.remaining_fee_xor_locked,
+                1,
+                channel.remaining_bytes,
+            )
+            .expect("derive sequential split");
+            let receipt = SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: id(u8::try_from(20 + index).expect("receipt id seed")),
+                channel_id: channel.channel_id,
+                trade_id: channel.trade_id,
+                range: ByteRangeV1 {
+                    start: index,
+                    end: index + 1,
+                },
+                chunk_hash: id(u8::try_from(30 + index).expect("chunk id seed")),
+                bytes_delivered: 1,
+                xor_debited: split.xor_debited.clone(),
+                provider_credit: split.provider_credit.clone(),
+                fee_amount: split.fee_amount.clone(),
+                issued_at_unix: 1_800_000_200 + index,
+                settlement_signature: signature(),
+            };
+            total_debited = total_debited
+                .checked_add(&split.xor_debited)
+                .expect("sum debits");
+            total_provider_credit = total_provider_credit
+                .checked_add(&split.provider_credit)
+                .expect("sum provider credits");
+            total_fees = total_fees
+                .checked_add(&split.fee_amount)
+                .expect("sum fees");
+            channel =
+                apply_settlement_receipt_v1(&channel, &receipt).expect("apply sequential receipt");
+        }
+
+        assert_eq!(total_debited, initial_total);
+        assert_eq!(total_fees, initial_fee);
+        assert_eq!(
+            total_provider_credit
+                .checked_add(&total_fees)
+                .expect("provider plus fees"),
+            total_debited,
+        );
+        assert_eq!(channel.remaining_bytes, 0);
+        assert_eq!(channel.xor_locked, XorQuantity::zero());
+        assert_eq!(channel.remaining_fee_xor_locked, XorQuantity::zero());
+        assert_eq!(channel.status, SettlementChannelStatusV1::Closed);
+    }
+
+    #[test]
+    fn settlement_rejects_balanced_but_inflated_receipt_amounts() {
+        let channel = SettlementChannelV1 {
+            version: SETTLEMENT_CHANNEL_VERSION_V1,
+            channel_id: id(5),
+            trade_id: id(4),
+            buyer_account: account(8),
+            provider_id: id(6),
+            total_bytes: 10,
+            remaining_bytes: 10,
+            xor_locked: XorQuantity::try_from_micro(100).expect("channel total"),
+            initial_xor_locked: XorQuantity::try_from_micro(100).expect("channel total"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10).expect("channel fee"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10).expect("channel fee"),
+            status: SettlementChannelStatusV1::Open,
+            opened_at_unix: 1_800_000_100,
+            updated_at_unix: 1_800_000_100,
+        };
+        let expected = deterministic_settlement_split_v1(
+            &channel.xor_locked,
+            &channel.remaining_fee_xor_locked,
+            5,
+            channel.remaining_bytes,
+        )
+        .expect("expected split");
+        let inflation = XorQuantity::try_from_micro(1).expect("inflation");
+        let inflated_debit = expected
+            .xor_debited
+            .checked_add(&inflation)
+            .expect("inflated debit");
+        let inflated_provider_credit = expected
+            .provider_credit
+            .checked_add(&inflation)
+            .expect("inflated provider credit");
+        let receipt = SettlementReceiptV1 {
+            version: SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: id(7),
+            channel_id: channel.channel_id,
+            trade_id: channel.trade_id,
+            range: ByteRangeV1 { start: 0, end: 5 },
+            chunk_hash: id(8),
+            bytes_delivered: 5,
+            xor_debited: inflated_debit,
+            provider_credit: inflated_provider_credit,
+            fee_amount: expected.fee_amount,
+            issued_at_unix: 1_800_000_200,
+            settlement_signature: signature(),
+        };
+
+        assert!(matches!(
+            apply_settlement_receipt_v1(&channel, &receipt),
+            Err(OrderbookValidationError::SettlementSplitMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn apply_settlement_receipt_rejects_channel_mismatch() {
         let channel = SettlementChannelV1 {
             version: SETTLEMENT_CHANNEL_VERSION_V1,
@@ -3429,6 +3127,12 @@ mod tests {
             total_bytes: 32,
             remaining_bytes: 32,
             xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_xor_locked: XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            initial_fee_xor_locked: XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
+            remaining_fee_xor_locked: XorQuantity::try_from_micro(10)
                 .expect("legacy micro-XOR value is representable"),
             status: SettlementChannelStatusV1::Open,
             opened_at_unix: 1_800_000_100,
@@ -3466,14 +3170,6 @@ mod tests {
             decode_order_request_v1(&encoded).expect("decode canonical order"),
             order
         );
-
-        let snapshot = runtime_snapshot();
-        let encoded = norito::to_bytes(&snapshot).expect("encode snapshot");
-        assert_eq!(
-            decode_orderbook_runtime_snapshot_v1(&encoded)
-                .expect("decode canonical runtime snapshot"),
-            snapshot
-        );
     }
 
     #[test]
@@ -3495,31 +3191,4 @@ mod tests {
         assert!(decode_order_request_v1(&encoded).is_err());
     }
 
-    #[test]
-    fn runtime_snapshot_rejects_collection_above_protocol_ceiling_first() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.expired_order_ids = vec![id(0xA5); ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 + 1];
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::SnapshotCollectionTooLarge {
-                collection: "expired_order_ids",
-                count: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1 + 1,
-                maximum: ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1,
-            })
-        );
-    }
-
-    #[test]
-    fn runtime_snapshot_rejects_expired_order_retained_as_open() {
-        let mut snapshot = runtime_snapshot();
-        snapshot.generated_at_unix = snapshot.open_orders[0].order.expiry_unix + 1;
-        assert_eq!(
-            snapshot.validate(),
-            Err(OrderbookValidationError::ExpiredOrder {
-                order_id: snapshot.open_orders[0].order.order_id,
-                expiry_unix: snapshot.open_orders[0].order.expiry_unix,
-                now_unix: snapshot.generated_at_unix,
-            })
-        );
-    }
 }

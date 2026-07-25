@@ -500,8 +500,8 @@ PROOF
              HistoricalLockedBodyCandidateCoordinates
     <2>3. ENABLED ExecuteCommand(candidate)
       BY <1>1, HistoricalLockedBodyExecutableCandidateEnablesExecution
-    <2>4. CommandExecutionEnabled(candidate)
-      BY <2>3, Isa DEF CommandExecutionEnabled, ExecuteCommand
+    <2>4. CommandExecutionReady(candidate)
+      BY <2>3, Isa DEF CommandExecutionReady, ExecuteCommand
     <2> QED BY <2>1, <2>2, <2>4 DEF CommandDispatchable
   <1> QED BY <1>1
 

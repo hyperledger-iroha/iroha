@@ -344,6 +344,29 @@ artifact binding. Native `conflictsWith` compares every claim pair, rejecting eq
 ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
 applications never parse lineage paths.
 
+## Native privacy bridge
+
+`PrivacyNativeBridge` exposes the privacy FFI as raw Norito archives through
+`capabilitiesArchive()`, `buildProof(requestArchive)`, and
+`verifyProof(requestArchive)`. The bridge validates the Norito V1 frame and
+non-empty payload, enforces the 64 MiB native size cap, copies request bytes for
+native dispatch, and clears that temporary copy afterward. Returned archives
+must carry the operation-specific result schema: capabilities, build, and
+verify results are not interchangeable.
+
+Capability metadata is bound to `privacy-production-gate-v1`. It remains
+fail-closed with `productionReady = false` until every native production gate
+and audit reference is present; native availability or a decoded capabilities
+archive alone is not a production-readiness claim.
+
+The deterministic privacy FFI status/error-code contract exposes
+`STATUS_ERROR`, `ERROR_NULL_POINTER`, `ERROR_MALFORMED_NORITO`,
+`ERROR_UNSUPPORTED_ALGORITHM`, `ERROR_PRODUCTION_DISABLED`, and
+`ERROR_INVALID_REQUEST`. The stable wire values are `status_error = 1`,
+`null_pointer = 1`, `malformed_norito = 2`, `unsupported_algorithm = 3`,
+`production_disabled = 4`, and `invalid_request = 5`; treat them as sanitized
+status metadata, not proof success.
+
 ## Multisig specs and TTL preview
 
 ```java

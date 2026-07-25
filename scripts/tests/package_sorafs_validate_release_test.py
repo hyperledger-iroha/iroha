@@ -248,6 +248,93 @@ def test_release_packager_accepts_regular_staged_files(tmp_path: Path) -> None:
     assert (tmp_path / "out" / f"{package.name}.manifest.json.sha256").is_file()
 
 
+def test_release_packager_builds_with_locked_dependency_graph(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    cargo_log = tmp_path / "cargo-args.json"
+    fake_cargo = fake_bin / "cargo"
+    fake_cargo.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "arguments = sys.argv[1:]\n"
+        "Path(os.environ['FAKE_CARGO_LOG']).write_text(\n"
+        "    json.dumps(arguments), encoding='utf-8'\n"
+        ")\n"
+        "target_dir = Path(arguments[arguments.index('--target-dir') + 1])\n"
+        "target = arguments[arguments.index('--target') + 1]\n"
+        "binary = target_dir / target / 'release' / 'sorafs-validate'\n"
+        "binary.parent.mkdir(parents=True, exist_ok=True)\n"
+        "binary.write_text(\n"
+        "    '#!/bin/sh\\nprintf \"fake locked validator help\\\\n\"\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "binary.chmod(0o755)\n",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    target_dir = tmp_path / "target"
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CARGO_LOG"] = str(cargo_log)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--workspace",
+            str(REPO_ROOT),
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--target",
+            "test-target",
+            "--target-dir",
+            str(target_dir),
+            "--version",
+            "test-version",
+            "--skip-smoke",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    cargo_arguments = json.loads(cargo_log.read_text(encoding="utf-8"))
+    assert cargo_arguments[:3] == ["build", "--locked", "-p"]
+    assert cargo_arguments.count("--locked") == 1
+
+
+def test_release_workflow_replays_reference_validator_package() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "sorafs-cli-release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        workflow.count("bash scripts/package_sorafs_validate_release.sh")
+        == 2
+    )
+    assert "sorafs-validate-first.XXXXXX" in workflow
+    assert "sorafs-validate-replay.XXXXXX" in workflow
+    for suffix in (
+        ".tar.gz",
+        ".tar.gz.sha256",
+        ".manifest.json",
+        ".manifest.json.sha256",
+        ".sha256",
+    ):
+        assert f'"${{package_name}}{suffix}"' in workflow
+    assert 'cmp "${first_out}/${relative}" "${replay_out}/${relative}"' in workflow
+    assert "for suffix in .tar.gz.sha256 .manifest.json.sha256; do" in workflow
+    assert "cmp candidate-package-first.json candidate-package-replay.json" in workflow
+
+
 def test_release_packager_uses_windows_executable_name_for_windows_target(
     tmp_path: Path,
 ) -> None:
@@ -877,6 +964,49 @@ def test_release_packager_rejects_symlinked_staged_entries(tmp_path: Path) -> No
     assert "release package entry" in result.stderr
     assert "symlinked.txt" in result.stderr
     assert "must not be a symlink" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "output_kind",
+    ["binary-sha", "archive", "archive-sha", "manifest", "manifest-sha"],
+)
+def test_release_packager_rejects_hardlink_output_races(
+    tmp_path: Path,
+    output_kind: str,
+) -> None:
+    out_dir = tmp_path / "out"
+    package_name = "sorafs-validate-test-version-test-target"
+    generated_paths = {
+        "binary-sha": out_dir / f"{package_name}.sha256",
+        "archive": out_dir / f"{package_name}.tar.gz",
+        "archive-sha": out_dir / f"{package_name}.tar.gz.sha256",
+        "manifest": out_dir / f"{package_name}.manifest.json",
+        "manifest-sha": out_dir / f"{package_name}.manifest.json.sha256",
+    }
+    raced_output = generated_paths[output_kind]
+    sentinel = tmp_path / f"{output_kind}-sentinel"
+    sentinel.write_text("do not truncate", encoding="utf-8")
+    fake_binary = write_fake_validator(
+        tmp_path / "sorafs-validate",
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "if len(sys.argv) > 1 and sys.argv[1] == '--help':\n"
+        f"    os.link(Path({str(sentinel)!r}), Path({str(raced_output)!r}))\n"
+        "print('fake help')\n",
+    )
+
+    result = run_packager(
+        tmp_path,
+        fake_binary,
+        out_dir=out_dir,
+    )
+
+    assert result.returncode != 0
+    assert "File exists" in result.stderr
+    assert sentinel.read_text(encoding="utf-8") == "do not truncate"
+    assert raced_output.stat().st_ino == sentinel.stat().st_ino
 
 
 def test_release_packager_rejects_symlinked_output_parent_before_archive(

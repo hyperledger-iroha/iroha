@@ -2,60 +2,92 @@ groups:
   - name: sorafs-orderbook
     interval: 1m
     rules:
+      - alert: SoraFSOrderbookFinalizedProjectionUnavailable
+        expr: min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS finalized orderbook projection is unavailable"
+          description: |
+            Torii has not published one complete immutable finalized orderbook
+            projection for cluster {{ $labels.cluster }}. Matching, depth, and
+            settlement panels are not release evidence until the ready gauge
+            returns to one.
+      - alert: SoraFSOrderbookFinalizedProjectionStale
+        expr: (max by (cluster) (time() - torii_sorafs_orderbook_finalized_projection_timestamp_seconds) > 120) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) == 1)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS finalized orderbook projection is stale"
+          description: |
+            The last complete orderbook projection for cluster
+            {{ $labels.cluster }} is more than two minutes behind the current
+            time. Check finality, the bounded event scan, and Torii readiness.
+      - alert: SoraFSOrderbookFinalizedProjectionFailure
+        expr: sum by (cluster, reason) (increase(torii_sorafs_orderbook_finalized_projection_failures_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS finalized orderbook projection failed"
+          description: |
+            A fail-closed orderbook projection refresh failed for reason
+            {{ $labels.reason }} in cluster {{ $labels.cluster }}. Inspect the
+            finalized query path; do not substitute a process-local book.
+      - alert: SoraFSOrderbookFinalizedProjectionSkew
+        expr: ((max by (cluster) (torii_sorafs_orderbook_finalized_projection_height) - min by (cluster) (torii_sorafs_orderbook_finalized_projection_height)) > 2) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) == 1)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS finalized orderbook projections are skewed"
+          description: |
+            Ready Torii replicas in cluster {{ $labels.cluster }} differ by
+            more than two finalized heights. Check peer finality and complete
+            reconciliation before using the projection as rollout evidence.
       - alert: SoraFSOrderbookMatchingLagHigh
-        expr: max by (cluster, tier) (torii_sorafs_orderbook_match_lag_seconds) > 2
+        expr: (max by (cluster) (torii_sorafs_orderbook_matcher_lag_seconds) > 2) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) == 1)
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "SoraFS orderbook matching lag is high"
           description: |
-            Orderbook matching lag for cluster {{ $labels.cluster }} tier {{ $labels.tier }}
-            stayed above 2 seconds for 10 minutes. Check matcher queue depth,
-            contract submission latency, and price-feed freshness before accepting
+            The authoritative book in cluster {{ $labels.cluster }} has remained
+            ahead of its last exhaustive bounded matcher scan for more than two
+            seconds. Check transaction forwarding and finality before accepting
             additional order flow.
       - alert: SoraFSOrderbookSettlementBacklogHigh
-        expr: (sum by (cluster) (torii_sorafs_orderbook_settlement_backlog) > 100) or (max by (cluster) (torii_sorafs_orderbook_oldest_settlement_age_seconds) > 900)
+        expr: ((max by (cluster) (torii_sorafs_orderbook_settlement_backlog) > 100) or (max by (cluster) (torii_sorafs_orderbook_oldest_settlement_age_seconds) > 900)) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) == 1)
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "SoraFS settlement backlog is high"
           description: |
-            Streaming settlement backlog for cluster {{ $labels.cluster }} exceeded
-            the configured backlog or age threshold. Drain receipt submission,
-            verify provider settlement workers, and pause new channels if the
-            queue continues to grow.
-      - alert: SoraFSOrderbookContractMirrorDivergence
-        expr: max by (cluster) (torii_sorafs_orderbook_contract_mirror_divergence) > 0
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "SoraFS orderbook mirror diverged from contract state"
-          description: |
-            The off-chain matcher mirror for cluster {{ $labels.cluster }} disagrees
-            with contract state. Stop submitting fills from the mirror, replay the
-            canonical event log, and reconcile before resuming order matching.
+            Authoritative open settlement channels for cluster
+            {{ $labels.cluster }} exceeded the backlog or age threshold. Drain
+            receipt submission and pause new channels if the queue grows.
       - alert: SoraFSOrderbookApiErrorRatioHigh
-        expr: max by (route) (torii_sorafs_orderbook_api_error_ratio) > 0.05
+        expr: sum by (cluster, route) (rate(torii_sorafs_orderbook_api_requests_total{outcome="error"}[5m])) / clamp_min(sum by (cluster, route) (rate(torii_sorafs_orderbook_api_requests_total[5m])), 0.000000001) > 0.05
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "SoraFS orderbook API error ratio is high"
           description: |
-            Orderbook API route {{ $labels.route }} reported an error ratio above
-            5% for 5 minutes. Inspect validation outcomes, signer failures, and
-            matcher availability before widening rollout.
+            Orderbook API route {{ $labels.route }} in cluster
+            {{ $labels.cluster }} reported an error ratio above 5% for five
+            minutes. Inspect validation, signer, and finalized-query failures.
       - alert: SoraFSOrderbookEscrowRunwayLow
-        expr: min by (provider) (torii_sorafs_orderbook_escrow_runway_seconds) < 86400
+        expr: (max by (cluster) (torii_sorafs_orderbook_settlement_backlog) > 0) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_escrow_runway_seconds) < 86400) and on (cluster) (min by (cluster) (torii_sorafs_orderbook_finalized_projection_ready) == 1)
         for: 15m
         labels:
           severity: critical
         annotations:
           summary: "SoraFS orderbook escrow runway below one day"
           description: |
-            Provider {{ $labels.provider }} has less than one day of escrow runway
-            for open orderbook settlement channels. Trigger top-up or channel
-            throttling before receipts can no longer settle cleanly.
+            At least one authoritative open settlement channel in cluster
+            {{ $labels.cluster }} expires within one day. Drain or expire the
+            channel before remaining custody can no longer settle cleanly.

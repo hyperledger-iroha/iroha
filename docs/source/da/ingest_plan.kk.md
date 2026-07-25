@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   дәлелдер бумаларында `policy_source` мәндерін мәнді сақтау үшін жолдар. Қараңыз
   Ішкі пәрмен үшін `crates/iroha_cli/src/commands/da.rs` және `docs/source/da/rent_policy.md`
   саясат схемасы үшін.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- PIN тізілімінің паритеті енді SDK-ға таралады: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK `iroha app sorafs pin register` пайдаланатын нақты пайдалы жүктемені құрастырып, канондық талаптарды орындайды.
-  chunker метадеректері, түйреуіш саясаттары, бүркеншік аттың дәлелдері және мұрагер дайджесттері үшін POST жібермес бұрын
-  `/v1/sorafs/pin/register`. Бұл CI боттары мен автоматтандыруды CLI-ге жіберуден сақтайды
+- Pin registry паритеті енді SDK-ға таралады:
+  `ToriiClient.registerSorafsPinManifest(...)` `manifest_payload` ішінде дәл
+  canonical padded-base64 `ManifestV1` бар жабық JSON V1 сұрауын құрады. Torii
+  digest, chunker, content length, pin policy және fee input мәндерін тек decoded
+  manifest-тен шығарып, duplicate summary-лерді қабылдамайды; optional alias пен
+  nonzero predecessor сақталады. Бұл `/v1/sorafs/pin/register` қолданылғанда CI
+  боттары мен автоматтандырудың CLI-ге жүгінуін болдырмайды
   манифест тіркеулерін жазу және көмекші DA-8 үшін TypeScript/README қамтуымен жеткізіледі.
   «жіберу/алу/дәлелдеу» құрал паритеті JS жүйесінде Rust/Swift-пен бірге толығымен қанағаттандырылады.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】78
 - `iroha app da prove-availability` жоғарыда аталғандардың барлығын тізбектейді: ол сақтау билетін алады, жүктеп алады

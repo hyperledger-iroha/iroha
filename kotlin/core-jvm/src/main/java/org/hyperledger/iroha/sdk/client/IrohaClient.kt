@@ -20,6 +20,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingResponseV1
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -372,6 +373,15 @@ interface IrohaClient {
         val future = CompletableFuture<AliasSetupReportV1>()
         future.completeExceptionally(
             IllegalStateException("getAccountOnboardingReadiness requires a concrete IrohaClient implementation")
+        )
+        return future
+    }
+
+    /** Fetches the complete non-authoritative `/v1/sumeragi/diagnostics` payload. */
+    fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> {
+        val future = CompletableFuture<SumeragiDiagnosticsStatus>()
+        future.completeExceptionally(
+            IllegalStateException("getSumeragiDiagnostics requires a concrete IrohaClient implementation")
         )
         return future
     }

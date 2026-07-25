@@ -27,6 +27,174 @@ LEDGER_SCHEMA_VERSION = 2
 EVIDENCE_SCHEMA_VERSION = 2
 CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 2
 
+# Merge and pending-control shared-config projection fields current in format version 6.
+#
+# Each entry is:
+# (projected field, actual field, user field, default constant, actual type,
+#  user type, user-default suffix, user-to-actual suffix).
+MERGE_RUNTIME_CONFIG_FIELDS = (
+    (
+        "merge_sidecar_inbound_session_capacity",
+        "merge_sidecar_inbound_session_capacity",
+        "merge_sidecar_inbound_session_capacity",
+        "V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_inbound_sessions_per_peer",
+        "merge_sidecar_inbound_sessions_per_peer",
+        "merge_sidecar_inbound_sessions_per_peer",
+        "V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_inbound_assembly_bytes",
+        "merge_sidecar_inbound_assembly_bytes",
+        "merge_sidecar_inbound_assembly_bytes",
+        "V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_inbound_assembly_bytes_per_peer",
+        "merge_sidecar_inbound_assembly_bytes_per_peer",
+        "merge_sidecar_inbound_assembly_bytes_per_peer",
+        "V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_deferred_block_capacity",
+        "merge_sidecar_deferred_block_capacity",
+        "merge_sidecar_deferred_block_capacity",
+        "V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_future_block_distance",
+        "merge_sidecar_future_block_distance",
+        "merge_sidecar_future_block_distance",
+        "V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE",
+        "NonZeroU64",
+        "NonZeroU64",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_request_timeout_ms",
+        "merge_sidecar_request_timeout",
+        "merge_sidecar_request_timeout_ms",
+        "V2_MERGE_SIDECAR_REQUEST_TIMEOUT",
+        "Duration",
+        "DurationMs",
+        ".into()",
+        ".0",
+    ),
+    (
+        "merge_sidecar_outbound_sessions_per_source",
+        "merge_sidecar_outbound_sessions_per_source",
+        "merge_sidecar_outbound_sessions_per_source",
+        "V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_outbound_bytes_per_source",
+        "merge_sidecar_outbound_bytes_per_source",
+        "merge_sidecar_outbound_bytes_per_source",
+        "V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_sidecar_server_request_gates_per_source",
+        "merge_sidecar_server_request_gates_per_source",
+        "merge_sidecar_server_request_gates_per_source",
+        "V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "pending_certified_merge_entry_capacity",
+        "pending_certified_merge_entry_capacity",
+        "pending_certified_merge_entry_capacity",
+        "V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "pending_queue_plan_admission_capacity",
+        "pending_queue_plan_admission_capacity",
+        "pending_queue_plan_admission_capacity",
+        "V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "pending_control_sidecar_bytes",
+        "pending_control_sidecar_bytes",
+        "pending_control_sidecar_bytes",
+        "V2_PENDING_CONTROL_SIDECAR_BYTES",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_signing_guard_record_capacity",
+        "merge_signing_guard_record_capacity",
+        "merge_signing_guard_record_capacity",
+        "V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_signing_guard_record_bytes",
+        "merge_signing_guard_record_bytes",
+        "merge_signing_guard_record_bytes",
+        "V2_MERGE_SIGNING_GUARD_RECORD_BYTES",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+    (
+        "merge_signing_guard_total_bytes",
+        "merge_signing_guard_total_bytes",
+        "merge_signing_guard_total_bytes",
+        "V2_MERGE_SIGNING_GUARD_TOTAL_BYTES",
+        "NonZeroUsize",
+        "NonZeroUsize",
+        "",
+        "",
+    ),
+)
+
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
     "2c161330a64361ec04eacf1e42fa985591536e8083a1b1bdbb1c1eca2180a50d"
@@ -4581,9 +4749,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 569
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 572
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 82
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "be314a8e489645cec1d2e141fee08d8bc506bb12e107156f924f9651c83d727e"
+    "b0c56e1793b9bd1f830f31294a3b2371c5595468b114bf47e8969f78d1f3dc57"
 )
 _GENESIS_HEADER_BINDING_TEST_SHA256 = (
     "8d847d27cdea09a87f5ee4ec940f60f9fa73fb85ca9a965d2a3fcac19eb3b41e"
@@ -4614,7 +4783,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::authoritative_runtime_gate_tests",
         29,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 30),
+    ("production-merge-sidecar", "merge_sidecar::tests", 33),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),
@@ -4966,6 +5135,7 @@ _PRODUCTION_LIVENESS_RETIRED_REGRESSIONS = frozenset(
         "merge_sidecar::tests::equal_ordinal_different_tenure_alternate_source_is_rejected_atomically",
         "merge_sidecar::tests::inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor",
         "merge_sidecar::tests::partitioned_materialization_preserves_rejected_source_resume_cursor",
+        "merge_sidecar::tests::exact_delivery_retry_rematerializes_after_rate_gate_expiry",
         "sumeragi::v2_worker::tests::mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings",
         "peer::run::tests::dispatch_worker_shutdown_drains_reliable_old_generation_to_actor",
         "network::tests::accepted_draining_generation_delivers_reliable_progress_after_replacement",
@@ -4994,6 +5164,10 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "merge_sidecar::tests::reused_actor_ordinals_under_different_tenures_are_rejected_atomically",
     "merge_sidecar::tests::inactive_source_parking_retains_budget_and_reconnect_reuses_shared_bytes",
     "merge_sidecar::tests::parked_source_retains_capacity_and_cursor_while_alternate_source_progresses",
+    "merge_sidecar::tests::exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon",
+    "merge_sidecar::tests::request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix",
+    "merge_sidecar::tests::authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression",
+    "merge_sidecar::tests::rejected_request_does_not_consume_server_stream_state",
     "sumeragi::v2_worker::tests::delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route",
     "sumeragi::v2_worker::tests::ordinary_reply_closed_flush_retains_current_item_while_sibling_source_progresses",
     "sumeragi::v2_worker::tests::ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once",
@@ -5192,7 +5366,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "13f90766826d2bca5672c20ff423e56e7861a127fbe62b73b9b58c78adc2ccfd",
+    "run_inner": "7c14839c93d03306ba4ef1499cc25cdad59982daca61d448eba85c343573a22c",
     "lane_work_limits": "1743fe781af0676a9c04b3c3d73cf6b6c52109795708c5875be8d1633ab9e2f2",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
     "apply_certified_merge_sidecar_chunk_admissions": "0243d1f22247947cc44ac474293a9c852c63509fd46f9357e4ce56b3fd0be518",
@@ -5218,7 +5392,7 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 )
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "13f90766826d2bca5672c20ff423e56e7861a127fbe62b73b9b58c78adc2ccfd",
+    "run_inner": "7c14839c93d03306ba4ef1499cc25cdad59982daca61d448eba85c343573a22c",
     "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -5500,7 +5674,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "13f90766826d2bca5672c20ff423e56e7861a127fbe62b73b9b58c78adc2ccfd"
+        "7c14839c93d03306ba4ef1499cc25cdad59982daca61d448eba85c343573a22c"
     ),
     "drain_v2_ingress": (
         "5ec7c70967e56f22bd789b3b59b70d844cb2d52318c193711db0c19d94e6ebc9"
@@ -6354,6 +6528,75 @@ def rust_items(source: str, name: str) -> tuple[RustItem, ...]:
                     start,
                     delimiter_context,
                 ),
+            )
+        )
+    return tuple(items)
+
+
+def rust_function_items_from_structural(
+    source: str, structural: str, name: str
+) -> tuple[RustItem, ...]:
+    """Extract named real functions from one already-masked large source.
+
+    Unlike :func:`rust_items`, this bounded helper intentionally omits enclosing-impl context.
+    It is used when several unique functions must be inspected in a multi-megabyte source: the
+    caller masks comments/literals once, and only the small selected item bodies are tokenized.
+    """
+
+    if len(source) != len(structural):
+        raise ValueError("Rust structural source must preserve byte positions")
+    declaration = re.compile(
+        rf"(?m)^[ \t]*(?:pub(?:\s*\([^\n)]*\))?[ \t]+)?"
+        rf"(?:(?:async|const)[ \t]+)*"
+        rf"(?:(?:open|closed|broadcast|tracked|exec|spec|proof)[ \t]+)*"
+        rf"fn[ \t]+{re.escape(name)}\b"
+    )
+    items: list[RustItem] = []
+    for match in declaration.finditer(structural):
+        paren_depth = 0
+        bracket_depth = 0
+        body_start = -1
+        for index in range(match.end(), len(structural)):
+            char = structural[index]
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "[":
+                bracket_depth += 1
+            elif char == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif char == "{" and paren_depth == 0 and bracket_depth == 0:
+                body_start = index
+                break
+            elif char == ";" and paren_depth == 0 and bracket_depth == 0:
+                break
+        if body_start < 0:
+            continue
+        depth = 0
+        body_end = -1
+        for index in range(body_start, len(structural)):
+            if structural[index] == "{":
+                depth += 1
+            elif structural[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = index + 1
+                    break
+        if body_end < 0:
+            continue
+        start = match.start()
+        items.append(
+            RustItem(
+                name=name,
+                line=source.count("\n", 0, start) + 1,
+                source=source[start:body_end],
+                body=source[body_start + 1 : body_end - 1],
+                structural_source=structural[start:body_end],
+                brace_context=(),
+                delimiter_context=(),
+                attributes=(),
+                ancestor_inner_attributes=(),
             )
         )
     return tuple(items)
@@ -10721,11 +10964,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         )
         expected_strong_type = (
             "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
+            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
             "/\\ ReceivedTimeoutVotePoolInvariant "
             "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
             "/\\ AsyncRecoveryExecutionInvariant "
             "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
-            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant"
+            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
+            "/\\ AsyncGstRecoveryPhaseInvariant "
+            "/\\ AsyncSerializedBusyKernelInvariant"
         )
         if strong_type is None:
             errors.append(f"{path}: missing AsyncStrongTypeInvariant")
@@ -10812,6 +11058,14 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
                 "BY <1>1 DEF AsyncStrongTypeInvariant"
             )
+            expected_auxiliary_projections = (
+                "<2>2e. AsyncGstRecoveryPhaseInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2f. AsyncSerializedBusyKernelInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant "
+                "<2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant "
+                "BY <1>1 DEF AsyncStrongTypeInvariant"
+            )
             expected_recovery_step = (
                 "<2>6. /\\ AsyncRecoveryTypeInvariant' "
                 "/\\ AsyncRestartAuthorityInvariant' "
@@ -10829,8 +11083,25 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1, <2>1, <2>2d, "
                 "AsyncNextPreservesHistoricalLockRestartAuthorityInvariants"
             )
+            expected_serialized_busy_step = (
+                "<2>9. AsyncSerializedBusyKernelInvariant' "
+                "BY <1>1, <2>1, <2>2f, "
+                "AsyncNextPreservesSerializedBusyKernelInvariant"
+            )
+            expected_gst_recovery_step = (
+                "<2>10. AsyncGstRecoveryPhaseInvariant' "
+                "BY <1>1, <2>2e, "
+                "AsyncNextPreservesGstRecoveryPhaseInvariant"
+            )
+            expected_claim_ingress_step = (
+                "<2>11. "
+                "AsyncCertifiedResponseClaimIngressOwnershipInvariant' "
+                "BY <1>1, <2>2, <2>2g, "
+                "AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant"
+            )
             expected_recovery_qed = (
-                "<2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8 "
+                "<2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, "
+                "<2>9, <2>10, <2>11 "
                 "DEF AsyncStrongTypeInvariant"
             )
             normalized_body = " ".join(body.split())
@@ -10845,6 +11116,12 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
                     "retain the exact named <2>2a recovery-type, <2>2b "
                     "restart-authority, and <2>2c recovery-execution projections"
+                )
+            if normalized_body.count(expected_auxiliary_projections) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "retain the exact GST-recovery, serialized-busy, and "
+                    "certified-response claim-ingress projections"
                 )
             if normalized_body.count(expected_recovery_step) != 1:
                 errors.append(
@@ -10864,11 +11141,30 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "pass the historical-lock authority type/source projections "
                     "to their exact preservation step"
                 )
+            if normalized_body.count(expected_serialized_busy_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass the serialized-busy projection to its exact "
+                    "preservation step"
+                )
+            if normalized_body.count(expected_gst_recovery_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass the GST-recovery projection to its exact "
+                    "preservation step"
+                )
+            if normalized_body.count(expected_claim_ingress_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                    "pass the certified-response claim-ingress projection to "
+                    "its exact preservation step"
+                )
             if normalized_body.count(expected_recovery_qed) != 1:
                 errors.append(
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
-                    "make the <2>7 recovery-execution and <2>8 historical-lock "
-                    "authority prime steps exact QED dependencies"
+                    "make every recovery, historical-lock, serialized-busy, "
+                    "GST-recovery, and claim-ingress prime step an exact QED "
+                    "dependency"
                 )
     universally_quantified = re.compile(
         r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
@@ -18854,7 +19150,7 @@ let mut emitter = Emitter::new();
         (
             actual_path,
             actual_source,
-            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
             "source-geometry shared-config format version",
         ),
         (
@@ -21993,6 +22289,894 @@ match ref_peer.handle.post_recover_with_flush_ack(frame) {
     return errors
 
 
+def _retired_sidecar_gate_ttl_source_errors(
+    path: Path,
+    source: str,
+    role: str,
+) -> list[str]:
+    """Reject any server-request gate TTL identifier in executable Rust."""
+
+    retired_ttl_tokens = sorted(
+        {
+            token
+            for token in rust_code_tokens(source)
+            if "ttl" in token.lower()
+            and all(
+                fragment in token.lower()
+                for fragment in ("server", "request", "gate")
+            )
+        }
+    )
+    if not retired_ttl_tokens:
+        return []
+    return [
+        f"{path}: retired wall-clock sidecar gate TTL must remain absent "
+        f"from production; found identifiers {retired_ttl_tokens} in the "
+        f"{role} seam"
+    ]
+
+
+def _merge_runtime_config_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind config-format-v6 merge/pending limits to validation and live consumers."""
+
+    # Mutation tests call this gate repeatedly with multi-megabyte Kura variants. Retain each
+    # source's token stream only for the current complete cross-layer pass instead of allowing
+    # the global token cache to pin every prior variant.
+    rust_code_tokens.cache_clear()
+    paths = {
+        "defaults": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "defaults.rs"
+        ),
+        "actual": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "actual.rs"
+        ),
+        "user": (
+            repo_root
+            / "crates"
+            / "iroha_config"
+            / "src"
+            / "parameters"
+            / "user.rs"
+        ),
+        "runner": (
+            repo_root
+            / "crates"
+            / "iroha_core"
+            / "src"
+            / "sumeragi"
+            / "v2_runner.rs"
+        ),
+        "lane": (
+            repo_root
+            / "crates"
+            / "iroha_core"
+            / "src"
+            / "sumeragi"
+            / "v2_lane_work.rs"
+        ),
+        "merge": (
+            repo_root / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
+        ),
+        "kura": repo_root / "crates" / "iroha_core" / "src" / "kura.rs",
+        "daemon": repo_root / "crates" / "irohad" / "src" / "main.rs",
+    }
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for role, path in paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: merge-runtime {role} source must be a regular file"
+            )
+            sources[role] = ""
+        else:
+            sources[role] = path.read_text(encoding="utf-8")
+
+    if len(MERGE_RUNTIME_CONFIG_FIELDS) != 16:
+        errors.append(
+            "merge-runtime shared-config inventory must contain exactly 16 fields"
+        )
+
+    defaults_path = paths["defaults"]
+    defaults_source = sources["defaults"]
+    actual_path = paths["actual"]
+    actual_source = sources["actual"]
+    user_path = paths["user"]
+    user_source = sources["user"]
+    runner_path = paths["runner"]
+    runner_source = sources["runner"]
+    lane_path = paths["lane"]
+    lane_source = sources["lane"]
+    merge_path = paths["merge"]
+    merge_source = sources["merge"]
+    kura_path = paths["kura"]
+    kura_source = sources["kura"]
+    daemon_path = paths["daemon"]
+    daemon_source = sources["daemon"]
+
+    # Completed semantic requests are retired only by authenticated cumulative
+    # close floors. Reintroducing a wall-clock tombstone TTL at any config or
+    # production seam would let elapsed time reopen an exact request.
+    for role, path in paths.items():
+        errors.extend(
+            _retired_sidecar_gate_ttl_source_errors(
+                path,
+                sources[role],
+                role,
+            )
+        )
+
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
+        "merge-runtime shared-config format version 6",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+pub struct SumeragiV2Config {
+    pub format_version: u16,
+    pub protocol_version: u16,
+    pub mode: consensus_v2::ConsensusMode,
+    pub block_cadence_ms: u64,
+    pub limits: SumeragiV2Limits,
+    pub key_policy: SumeragiV2KeyPolicy,
+}
+""",
+        "canonical shared config encodes the complete limits projection",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        defaults_path,
+        defaults_source,
+        """
+pub const V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES: usize = 64 * 1024;
+""",
+        "merge-signing metadata headroom has one named config source",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        """
+let encoded = self.encode();
+let mut preimage =
+    Vec::with_capacity(SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN.len() + encoded.len());
+preimage.extend_from_slice(SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN);
+preimage.extend_from_slice(&encoded);
+Hash::new(preimage)
+""",
+        "handshake fingerprint hashes the complete encoded config-v6 projection",
+        errors,
+    )
+
+    actual_fields = "\n".join(
+        f"pub {actual_field}: {actual_type},"
+        for (
+            _projected_field,
+            actual_field,
+            _user_field,
+            _default_constant,
+            actual_type,
+            _user_type,
+            _user_default_suffix,
+            _user_mapping_suffix,
+        ) in MERGE_RUNTIME_CONFIG_FIELDS
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        actual_fields,
+        "actual runtime limits carry all 16 config-v6 merge fields in order",
+        errors,
+    )
+
+    shared_fields = "\n".join(
+        f"pub {projected_field}: u64,"
+        for projected_field, *_rest in MERGE_RUNTIME_CONFIG_FIELDS
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        shared_fields,
+        "shared fingerprint limits carry all 16 config-v6 merge fields in order",
+        errors,
+    )
+
+    actual_defaults = "\n".join(
+        f"{actual_field}: defaults::sumeragi::{default_constant},"
+        for (
+            _projected_field,
+            actual_field,
+            _user_field,
+            default_constant,
+            _actual_type,
+            _user_type,
+            _user_default_suffix,
+            _user_mapping_suffix,
+        ) in MERGE_RUNTIME_CONFIG_FIELDS
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        actual_defaults,
+        "actual runtime defaults source all 16 config-v6 merge fields",
+        errors,
+    )
+
+    user_mapping = "\n".join(
+        f"{actual_field}: limits.{user_field}{user_mapping_suffix},"
+        for (
+            _projected_field,
+            actual_field,
+            user_field,
+            _default_constant,
+            _actual_type,
+            _user_type,
+            _user_default_suffix,
+            user_mapping_suffix,
+        ) in MERGE_RUNTIME_CONFIG_FIELDS
+    )
+    _require_rust_source_token_sequence(
+        user_path,
+        user_source,
+        user_mapping,
+        "user parsing maps all 16 config-v6 merge fields without substitution",
+        errors,
+    )
+
+    projected_fields = "\n".join(
+        f"{projected_field},"
+        for projected_field, *_rest in MERGE_RUNTIME_CONFIG_FIELDS
+    )
+    _require_rust_source_token_sequence(
+        actual_path,
+        actual_source,
+        projected_fields,
+        "shared fingerprint projection carries all 16 config-v6 merge fields",
+        errors,
+    )
+
+    for (
+        _projected_field,
+        _actual_field,
+        user_field,
+        default_constant,
+        _actual_type,
+        user_type,
+        user_default_suffix,
+        _user_mapping_suffix,
+    ) in MERGE_RUNTIME_CONFIG_FIELDS:
+        default_declarations = re.findall(
+            rf"(?m)^\s*pub const {re.escape(default_constant)}\s*:",
+            defaults_source,
+        )
+        if len(default_declarations) != 1:
+            errors.append(
+                f"{defaults_path}: config-v6 default {default_constant} must be "
+                f"declared exactly once; found {len(default_declarations)}"
+            )
+        default_expression = (
+            f"defaults::sumeragi::{default_constant}{user_default_suffix}"
+        )
+        user_declarations = re.findall(
+            rf'#\[config\(\s*default\s*=\s*"{re.escape(default_expression)}"\s*\)\]'
+            rf"\s*pub\s+{re.escape(user_field)}\s*:\s*{re.escape(user_type)}\s*,",
+            user_source,
+        )
+        if len(user_declarations) != 1:
+            errors.append(
+                f"{user_path}: user config field {user_field} must bind default "
+                f"{default_expression} exactly once; found {len(user_declarations)}"
+            )
+
+    for expected, description in (
+        (
+            """
+let merge_sidecar_inbound_session_capacity = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+    self.limits.merge_sidecar_inbound_session_capacity.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_inbound_session_capacity",
+    merge_sidecar_inbound_session_capacity,
+    2,
+)?;
+let merge_sidecar_inbound_sessions_per_peer = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+    self.limits.merge_sidecar_inbound_sessions_per_peer.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+    merge_sidecar_inbound_sessions_per_peer,
+    2,
+)?;
+require_maximum(
+    "sumeragi.limits.merge_sidecar_inbound_sessions_per_peer",
+    merge_sidecar_inbound_sessions_per_peer,
+    merge_sidecar_inbound_session_capacity,
+)?;
+""",
+            "config validation preserves decided and ordinary inbound session corridors",
+        ),
+        (
+            """
+let merge_sidecar_inbound_assembly_bytes = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+    self.limits.merge_sidecar_inbound_assembly_bytes.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_inbound_assembly_bytes",
+    merge_sidecar_inbound_assembly_bytes,
+    canonical_size(
+        "Sumeragi v2 merge-sidecar inbound byte minimum",
+        defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+    )?,
+)?;
+let merge_sidecar_inbound_assembly_bytes_per_peer = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+    self.limits
+        .merge_sidecar_inbound_assembly_bytes_per_peer
+        .get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+    merge_sidecar_inbound_assembly_bytes_per_peer,
+    canonical_size(
+        "Sumeragi v2 per-peer merge-sidecar inbound byte minimum",
+        defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN,
+    )?,
+)?;
+require_maximum(
+    "sumeragi.limits.merge_sidecar_inbound_assembly_bytes_per_peer",
+    merge_sidecar_inbound_assembly_bytes_per_peer,
+    merge_sidecar_inbound_assembly_bytes,
+)?;
+""",
+            "config validation preserves global and per-peer inbound byte corridors",
+        ),
+        (
+            """
+let merge_sidecar_deferred_block_capacity = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+    self.limits.merge_sidecar_deferred_block_capacity.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_deferred_block_capacity",
+    merge_sidecar_deferred_block_capacity,
+    2,
+)?;
+let merge_sidecar_future_block_distance = canonical_bounded_u64(
+    "sumeragi.limits.merge_sidecar_future_block_distance",
+    self.limits.merge_sidecar_future_block_distance.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX,
+)?;
+let merge_sidecar_request_timeout_ms = canonical_duration_ms(
+    "sumeragi.limits.merge_sidecar_request_timeout_ms",
+    self.limits.merge_sidecar_request_timeout,
+)?;
+require_maximum(
+    "sumeragi.limits.merge_sidecar_request_timeout_ms",
+    merge_sidecar_request_timeout_ms,
+    defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS,
+)?;
+""",
+            "config validation bounds deferred work, future distance, and retry time",
+        ),
+        (
+            """
+let merge_sidecar_outbound_sessions_per_source = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_outbound_sessions_per_source",
+    self.limits.merge_sidecar_outbound_sessions_per_source.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE_MAX,
+)?;
+let merge_sidecar_outbound_bytes_per_source = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+    self.limits.merge_sidecar_outbound_bytes_per_source.get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_outbound_bytes_per_source",
+    merge_sidecar_outbound_bytes_per_source,
+    canonical_size(
+        "Sumeragi v2 merge-sidecar outbound byte minimum",
+        defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN,
+    )?,
+)?;
+let merge_sidecar_server_request_gates_per_source = canonical_bounded_size(
+    "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+    self.limits
+        .merge_sidecar_server_request_gates_per_source
+        .get(),
+    defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
+    merge_sidecar_server_request_gates_per_source,
+    merge_sidecar_outbound_sessions_per_source,
+)?;
+""",
+            "config validation binds per-source output and gate geometry",
+        ),
+        (
+            """
+let pending_certified_merge_entry_capacity = canonical_bounded_size(
+    "sumeragi.limits.pending_certified_merge_entry_capacity",
+    self.limits.pending_certified_merge_entry_capacity.get(),
+    defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX,
+)?;
+let pending_queue_plan_admission_capacity = canonical_bounded_size(
+    "sumeragi.limits.pending_queue_plan_admission_capacity",
+    self.limits.pending_queue_plan_admission_capacity.get(),
+    defaults::sumeragi::V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
+)?;
+let pending_control_sidecar_bytes = canonical_bounded_size(
+    "sumeragi.limits.pending_control_sidecar_bytes",
+    self.limits.pending_control_sidecar_bytes.get(),
+    defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.pending_control_sidecar_bytes",
+    pending_control_sidecar_bytes,
+    u64::try_from(defaults::sumeragi::V2_PENDING_CONTROL_SIDECAR_BYTES_MIN)
+        .expect("static pending-control sidecar byte minimum fits u64"),
+)?;
+""",
+            "config validation bounds pending merge, QueuePlan, and shared bytes",
+        ),
+        (
+            """
+let merge_signing_guard_record_capacity = canonical_bounded_size(
+    "sumeragi.limits.merge_signing_guard_record_capacity",
+    self.limits.merge_signing_guard_record_capacity.get(),
+    defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX,
+)?;
+let merge_signing_guard_record_bytes = canonical_bounded_size(
+    "sumeragi.limits.merge_signing_guard_record_bytes",
+    self.limits.merge_signing_guard_record_bytes.get(),
+    defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MAX,
+)?;
+require_minimum(
+    "sumeragi.limits.merge_signing_guard_record_bytes",
+    merge_signing_guard_record_bytes,
+    canonical_size(
+        "Sumeragi v2 merge-signing record byte minimum",
+        defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN,
+    )?,
+)?;
+let merge_signing_guard_total_bytes = canonical_bounded_size(
+    "sumeragi.limits.merge_signing_guard_total_bytes",
+    self.limits.merge_signing_guard_total_bytes.get(),
+    defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX,
+)?;
+let merge_signing_guard_minimum_total_bytes = merge_signing_guard_record_bytes
+    .checked_add(
+        u64::try_from(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES)
+            .expect("static merge-signing metadata headroom fits u64"),
+    )
+    .ok_or(SumeragiV2ConfigError::LimitOverflow(
+        "Sumeragi v2 merge-signing aggregate byte minimum",
+    ))?;
+require_minimum(
+    "sumeragi.limits.merge_signing_guard_total_bytes",
+    merge_signing_guard_total_bytes,
+    merge_signing_guard_minimum_total_bytes.max(
+        u64::try_from(defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MIN)
+            .expect("static merge-signing minimum fits u64"),
+    ),
+)?;
+""",
+            "config validation bounds merge-signing count, record, and aggregate bytes",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            actual_path,
+            actual_source,
+            expected,
+            description,
+            errors,
+        )
+
+    _require_rust_source_token_sequence(
+        runner_path,
+        runner_source,
+        """
+let merge_sidecar_limits = MergeSidecarLimits::new(
+    non_zero(config.limits.merge_sidecar_inbound_session_capacity)?,
+    non_zero(config.limits.merge_sidecar_inbound_sessions_per_peer)?,
+    non_zero(config.limits.merge_sidecar_inbound_assembly_bytes)?,
+    non_zero(config.limits.merge_sidecar_inbound_assembly_bytes_per_peer)?,
+    non_zero(config.limits.merge_sidecar_deferred_block_capacity)?,
+    NonZeroU64::new(config.limits.merge_sidecar_future_block_distance)
+        .ok_or(V2RunnerError::InvalidLimits)?,
+    Duration::from_millis(merge_sidecar_request_timeout_ms.get()),
+    non_zero(config.limits.merge_sidecar_outbound_sessions_per_source)?,
+    non_zero(config.limits.merge_sidecar_outbound_bytes_per_source)?,
+    non_zero(config.limits.merge_sidecar_server_request_gates_per_source)?,
+)
+.map_err(|_| V2RunnerError::InvalidLimits)?;
+let merge_signing_guard_limits = MergeSigningGuardLimits::new(
+    non_zero(config.limits.merge_signing_guard_record_capacity)?,
+    non_zero(config.limits.merge_signing_guard_record_bytes)?,
+    non_zero(config.limits.merge_signing_guard_total_bytes)?,
+)
+.map_err(|_| V2RunnerError::InvalidLimits)?;
+""",
+        "runner constructs live sidecar and signing limits from all projected merge fields",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        runner_path,
+        runner_source,
+        """
+non_zero(config.limits.sidecar_service_burst)?,
+merge_sidecar_limits,
+merge_signing_guard_limits,
+native_amx_signing_guard_limits,
+""",
+        "runner transfers validated merge limits into the height-local adapter",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        """
+let merge_signing_guard = MergeSigningGuard::open_with_committed_frontier(
+    &kura.store_root(),
+    committed_merge_epoch,
+    state_height,
+    limits.merge_signing_guard_limits,
+)
+""",
+        "adapter opens the durable merge-signing journal with fingerprinted limits",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        lane_path,
+        lane_source,
+        """
+merge_sidecars: match retained_merge_sidecars {
+    Some(transport) => transport.rehydrate_with_exact_geometry(
+        limits.reply_source_capacity.get(),
+        limits.merge_sidecar_limits,
+    ),
+    None => MergeSidecarTransport::with_limits(
+        limits.reply_source_capacity.get(),
+        limits.merge_sidecar_limits,
+    ),
+}
+""",
+        "adapter rehydrates retained sidecar ownership only under the exact fingerprinted "
+        "geometry and installs the same limits for a fresh live transport",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
+let metadata_headroom =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
+let minimum_record_bytes = MAX_MERGE_LEDGER_ENTRY_BYTES
+    .checked_add(metadata_headroom)
+""",
+        "live merge-signing geometry consumes the named metadata headroom",
+        errors,
+    )
+    kura_constructor = (
+        "new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits"
+    )
+    kura_structural_source = mask_rust_comments_and_literals(kura_source)
+    kura_items: dict[str, RustItem | None] = {}
+    for name in (
+        kura_constructor,
+        "pending_merge_entry_paths_unlocked",
+        "pending_queue_plan_admission_paths_unlocked",
+        "validate_pending_merge_entries_on_startup",
+        "persist_pending_certified_merge_entry",
+        "persist_pending_queue_plan_admission_certificate",
+    ):
+        items = rust_function_items_from_structural(
+            kura_source, kura_structural_source, name
+        )
+        if len(items) != 1:
+            errors.append(
+                f"{kura_path}: require exactly one real Rust function item named "
+                f"{name}; found {len(items)}"
+            )
+            kura_items[name] = None
+        else:
+            kura_items[name] = items[0]
+    _require_rust_source_token_sequence(
+        daemon_path,
+        daemon_source,
+        """
+Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+    &config.kura,
+    &config.nexus.lane_config,
+    &config.nexus.configured_lane_catalog,
+    &config.snapshot.bootstrap,
+    &config.sumeragi.limits,
+)
+""",
+        "daemon passes fingerprinted pending-control limits into production Kura",
+        errors,
+    )
+    _require_rust_token_sequence(
+        kura_path,
+        kura_items[kura_constructor],
+        """
+let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
+    sumeragi_limits,
+    &config.store_dir.resolve_relative_path(),
+)?;
+""",
+        "Kura validates pending-control limits before opening its store",
+        errors,
+    )
+    for item_name, expected, description in (
+        (
+            "pending_merge_entry_paths_unlocked",
+            """
+if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+    return Err(Self::invalid_pending_merge_entry_error(
+        directory,
+        "pending certified merge entry count exceeds the hard limit",
+    ));
+}
+""",
+            "Kura restart inventory consumes the configured pending merge count",
+        ),
+        (
+            "persist_pending_certified_merge_entry",
+            """
+if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
+    return Err(Self::invalid_pending_merge_entry_error(
+        directory,
+        "pending certified merge entry count exceeds the hard limit",
+    ));
+}
+""",
+            "Kura merge admission consumes the configured pending-entry count",
+        ),
+        (
+            "pending_queue_plan_admission_paths_unlocked",
+            """
+if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+    return Err(Self::invalid_pending_queue_plan_admission_error(
+        directory,
+        "pending QueuePlan admission certificate count exceeds the hard limit",
+    ));
+}
+""",
+            "Kura restart inventory consumes the configured pending QueuePlan count",
+        ),
+        (
+            "persist_pending_queue_plan_admission_certificate",
+            """
+if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+    return Err(Self::invalid_pending_queue_plan_admission_error(
+        directory,
+        "pending QueuePlan admission certificate count exceeds the hard limit",
+    ));
+}
+""",
+            "Kura QueuePlan admission consumes the configured certificate count",
+        ),
+        (
+            "validate_pending_merge_entries_on_startup",
+            """
+if !self
+    .pending_control_sidecar_limits
+    .combined_bytes_within_limit(merge_bytes, admission_bytes)
+{
+    return Err(Self::invalid_pending_queue_plan_admission_error(
+        self.store_root.clone(),
+        "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+    ));
+}
+""",
+            "Kura startup consumes the configured shared pending byte limit",
+        ),
+        (
+            "persist_pending_certified_merge_entry",
+            """
+if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
+    !self
+        .pending_control_sidecar_limits
+        .combined_bytes_within_limit(total, admission_bytes)
+}) {
+""",
+            "Kura merge admission consumes the configured shared pending byte limit",
+        ),
+        (
+            "persist_pending_queue_plan_admission_certificate",
+            """
+if admission_bytes
+    .checked_add(canonical_certificate_bytes.len())
+    .is_none_or(|total| {
+        !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(merge_bytes, total)
+    })
+{
+""",
+            "Kura QueuePlan admission consumes the configured shared pending byte limit",
+        ),
+    ):
+        _require_rust_token_sequence(
+            kura_path,
+            kura_items[item_name],
+            expected,
+            description,
+            errors,
+        )
+
+    for expected, description in (
+        (
+            """
+if inbound_session_capacity <= RESERVED_DECIDED_INBOUND_SESSIONS
+    || inbound_sessions_per_peer <= RESERVED_DECIDED_INBOUND_SESSIONS
+    || inbound_sessions_per_peer > inbound_session_capacity
+    || deferred_block_capacity <= RESERVED_DECIDED_DEFERRED_BLOCKS
+    || inbound_assembly_bytes < minimum_inbound_bytes
+    || inbound_assembly_bytes_per_peer < minimum_inbound_bytes
+    || inbound_assembly_bytes_per_peer > inbound_assembly_bytes
+    || outbound_bytes_per_source < MAX_MERGE_LEDGER_ENTRY_BYTES
+    || server_request_gates_per_source < outbound_sessions_per_source
+    || request_timeout.is_zero()
+""",
+            "live sidecar constructor revalidates every relational corridor",
+        ),
+        (
+            """
+let outbound_session_capacity = reply_source_capacity
+    .checked_mul(limits.outbound_sessions_per_source)
+    .ok_or(MergeSidecarError::Capacity(
+        "outbound response session geometry",
+    ))?;
+let outbound_byte_capacity = reply_source_capacity
+    .checked_mul(limits.outbound_bytes_per_source)
+    .ok_or(MergeSidecarError::Capacity(
+        "outbound response byte geometry",
+    ))?;
+let server_request_gate_capacity = reply_source_capacity
+    .checked_mul(limits.server_request_gates_per_source)
+    .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
+""",
+            "live sidecar transport derives checked source-partition capacities",
+        ),
+        (
+            """
+height > committed_height.saturating_add(self.limits.future_block_distance)
+""",
+            "live sidecar carrier admission consumes configured future distance",
+        ),
+        (
+            """
+self.deferred_count() >= self.limits.deferred_block_capacity
+""",
+            "live sidecar admission consumes configured deferred-block capacity",
+        ),
+        (
+            """
+self.inbound.len() >= self.limits.inbound_session_capacity
+""",
+            "live sidecar admission consumes configured global session capacity",
+        ),
+        (
+            """
+new_global_bytes > self.limits.inbound_assembly_bytes
+""",
+            "live sidecar ingestion consumes configured global byte capacity",
+        ),
+        (
+            """
+new_peer_bytes > self.limits.inbound_assembly_bytes_per_peer
+""",
+            "live sidecar ingestion consumes configured per-peer byte capacity",
+        ),
+        (
+            """
+self.inbound_peer_session_count(holder)
+    < self.limits.inbound_sessions_per_peer
+""",
+            "live sidecar scheduling consumes configured per-peer session capacity",
+        ),
+        (
+            """
+now.saturating_duration_since(attempt.last_progress_at)
+    >= retry_timeout(self.limits.request_timeout, assembly.attempts)
+""",
+            "live sidecar retry consumes configured request timeout",
+        ),
+        (
+            """
+self.source_outbound_count(source) < self.limits.outbound_sessions_per_source
+""",
+            "live sidecar response admission consumes configured source sessions",
+        ),
+        (
+            """
+self.source_outbound_bytes(source).saturating_add(bytes)
+    <= self.limits.outbound_bytes_per_source
+""",
+            "live sidecar response admission consumes configured source bytes",
+        ),
+        (
+            """
+self.source_gate_count(&source) >= self.limits.server_request_gates_per_source
+""",
+            "live sidecar request admission consumes configured source gates",
+        ),
+        (
+            """
+Self::guard_directory_bytes(&directory, limits.max_total_bytes)?;
+Self::reconcile_temps(&directory, limits)?;
+let durable_high_water = Self::read_high_water(&directory, limits.max_record_bytes)?
+""",
+            "merge-signing startup consumes configured record and aggregate byte limits",
+        ),
+        (
+            """
+if bytes.len() > self.limits.max_record_bytes
+""",
+            "merge-signing authorization consumes configured record bytes",
+        ),
+        (
+            """
+if count >= self.limits.max_records {
+    return Err(MergeSidecarError::SigningGuard(
+        "signing-guard record count reached hard limit".to_owned(),
+    ));
+}
+""",
+            "merge-signing authorization consumes configured record count",
+        ),
+        (
+            """
+if count >= self.limits.max_records {
+    return Err(MergeSidecarError::SigningGuard(
+        "signing-guard record count reached hard limit".to_owned(),
+    ));
+}
+if total_bytes
+    .checked_add(bytes.len())
+    .is_none_or(|total| total > self.limits.max_total_bytes)
+""",
+            "merge-signing authorization consumes configured aggregate bytes",
+        ),
+    ):
+        _require_rust_source_token_sequence(
+            merge_path,
+            merge_source,
+            expected,
+            description,
+            errors,
+        )
+
+    return errors
+
+
 def _effect_capacity_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
@@ -23997,7 +25181,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
         "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e"
     ),
     "schedule_local_proposal": (
-        "0c3a0d46b347de0afd6959e81abf97bd760881739910d387e376446609ea7303"
+        "bdc7e1b315f8cdb6a7c4c17b1b998ced6b70c267de62299c444d3542b438ad8e"
     ),
     "submit_exact_body": (
         "bd38de84a86fd4769bf7784324b1ff94c875072d2cab99325897d1390962128e"
@@ -27867,6 +29051,76 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
+def _canonical_sidecar_request_identity_source_errors(
+    merge_path: Path,
+    merge_source: str,
+) -> list[str]:
+    """Seal semantic request identity independently from stream metadata."""
+
+    errors: list[str] = []
+    canonical_request_id_item = _require_qualified_rust_item(
+        merge_path,
+        merge_source,
+        "CertifiedMergeSidecarRequestV1",
+        "canonical_request_id",
+        errors,
+        "canonical semantic sidecar request identity production item",
+        expected_attributes=("#[must_use]",),
+    )
+    _require_exact_rust_tokens(
+        merge_path,
+        canonical_request_id_item,
+        """
+pub fn canonical_request_id(&self) -> Hash {
+    let version = [self.version];
+    let encoded_len = self.encoded_len.to_le_bytes();
+    let epoch_id = self.epoch_id.to_le_bytes();
+    let requester = self.requester.encode();
+    let responder = self.responder.encode();
+    Hash::new_from_chunks(&[
+        REQUEST_ID_DOMAIN,
+        &version,
+        self.entry_hash.as_ref().as_ref(),
+        &encoded_len,
+        &epoch_id,
+        self.reference_digest.as_ref(),
+        requester.as_slice(),
+        responder.as_slice(),
+    ])
+}
+""",
+        "canonical semantic request identity must exclude semantic sequence and close floor",
+        errors,
+    )
+    for stream_metadata in ("self.semantic_sequence", "self.closed_through"):
+        _require_rust_token_sequence(
+            merge_path,
+            canonical_request_id_item,
+            stream_metadata,
+            "canonical semantic request identity must exclude semantic sequence and close floor",
+            errors,
+            count=0,
+        )
+    return errors
+
+
+def _canonical_sidecar_request_identity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Load and validate the canonical sidecar request identity production item."""
+
+    merge_path = repo_root / "crates" / "iroha_core" / "src" / "merge_sidecar.rs"
+    if not merge_path.is_file() or merge_path.is_symlink():
+        return [
+            f"{merge_path}: canonical semantic sidecar request identity source "
+            "must be a regular file"
+        ]
+    return _canonical_sidecar_request_identity_source_errors(
+        merge_path,
+        merge_path.read_text(encoding="utf-8"),
+    )
+
+
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -28006,12 +29260,15 @@ def _exact_output_production_source_fidelity_errors(
         )
 
     _require_rust_source_token_sequence(
-        merge_path,
-        merge_source,
+        config_defaults_path,
+        config_defaults_source,
         """
-const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 2;
-const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 16 * 1024 * 1024;
-const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 4;
+pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE: NonZeroUsize =
+    nonzero!(2_usize);
+pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE: NonZeroUsize =
+    nonzero!(16_usize * 1024 * 1024);
+pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize =
+    nonzero!(4_usize);
 """,
         "certified sidecar authenticated-source limits must remain exactly four gates, two sessions, and 16 MiB",
         errors,
@@ -28715,6 +29972,13 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
             count=0,
         )
 
+    errors.extend(
+        _canonical_sidecar_request_identity_source_errors(
+            merge_path,
+            merge_source,
+        )
+    )
+
     merge_ack_items = {
         "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": _require_qualified_rust_item(
             merge_path,
@@ -29166,24 +30430,15 @@ pub(crate) fn with_reply_source_capacity(
         "sidecar ownership must use the authenticated source key rather than relay origin or tenure",
         errors,
     )
-    _require_rust_token_sequence(
+    _require_exact_rust_tokens(
         merge_path,
         merge_ack_items.get("MergeSidecarTransport::prune_server_gates"),
         """
-self.park_inactive_outbound_attempts(now);
-let outbound = &self.outbound;
-self.server_request_gates.retain(|key, gate| {
-    gate.attempts.retain(|source, attempt| {
-        outbound
-            .get(key)
-            .is_some_and(|transfer| transfer.attempts.contains_key(source))
-            || attempt.cursor != ServerResponseCursor::Complete
-            || now.saturating_duration_since(attempt.inserted) <= SERVER_REQUEST_GATE_TTL
-    });
-    !gate.attempts.is_empty()
-});
+fn prune_server_gates(&mut self, now: Instant) {
+    self.park_inactive_outbound_attempts(now);
+}
 """,
-        "sidecar gate pruning must retain every incomplete source cursor as a bounded reservation while expiring only terminal no-outbound tombstones",
+        "sidecar gate pruning must preserve semantic ownership until an authenticated close floor retires it",
         errors,
     )
     _require_rust_token_sequence(
@@ -34559,12 +35814,6 @@ _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS = (
         "lane retirement lane-block artifact",
     ),
     (
-        "autonomous_data",
-        "autonomous_index",
-        "autonomous_lane_block_paths_for_entry",
-        "lane retirement autonomous artifact",
-    ),
-    (
         "input_data",
         "input_index",
         "lane_block_execution_input_paths_for_entry",
@@ -34587,18 +35836,6 @@ _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS = (
         "receipt_index",
         "lane_block_application_receipt_paths_for_entry",
         "lane retirement application receipt",
-    ),
-    (
-        "native_manifest_data",
-        "native_manifest_index",
-        "native_amx_application_manifest_paths_for_entry",
-        "lane retirement Native AMX participant manifest",
-    ),
-    (
-        "native_receipt_data",
-        "native_receipt_index",
-        "native_amx_participant_receipt_paths_for_entry",
-        "lane retirement Native AMX participant receipt",
     ),
 )
 
@@ -34663,7 +35900,7 @@ let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
 )?;
 let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
     &lane_artifacts_guard,
-    MAX_LANE_RETIREMENT_ARTIFACT_FILES,
+    per_route_artifact_file_limit,
     "first-release lane retirement artifact scan",
 )?;
 """,
@@ -34716,7 +35953,7 @@ let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
             if observed_pairs != expected_pair_membership:
                 errors.append(
                     f"{lane_geometry_path}:{retirement.line}: fixed retirement "
-                    "progress pairs must preserve exact eight-member artifact "
+                    "progress pairs must preserve exact five-member artifact "
                     f"membership and order; found {observed_pairs!r}"
                 )
 
@@ -34817,6 +36054,583 @@ if recovery_directory.expected_path != immutable_directory.expected_path
             description,
             errors,
         )
+    return errors
+
+
+def _kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind retirement/archive GC to the standalone Native AMX namespace."""
+
+    lane_geometry_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
+    )
+    errors: list[str] = []
+    if not lane_geometry_path.is_file() or lane_geometry_path.is_symlink():
+        errors.append(
+            f"{lane_geometry_path}: Kura standalone Native AMX production "
+            "source must be a regular file"
+        )
+        return errors
+    source = lane_geometry_path.read_text(encoding="utf-8")
+
+    scanner = _require_qualified_rust_item(
+        lane_geometry_path,
+        source,
+        "Kura",
+        "read_geometry_native_amx_per_height_evidence",
+        errors,
+        "standalone Native AMX per-height evidence scanner",
+    )
+    scanner_contracts = (
+        (
+            """
+for (raw_name, entry_snapshot) in artifact_snapshot {
+    let path = lane_artifacts.join(raw_name);
+    let Some((kind, lane_block_height, temporary)) =
+        Self::parse_native_amx_evidence_path(&path)?
+    else {
+        continue;
+    };
+    if temporary {
+""",
+            "standalone Native AMX scanner must classify only canonical "
+            "per-height names and reject temporary evidence",
+        ),
+        (
+            """
+let retained_count = match kind {
+    NativeAmxEvidenceKind::Manifest => manifests.len(),
+    NativeAmxEvidenceKind::Receipt => receipts.len(),
+};
+if retained_count >= retained_record_limit {
+""",
+            "standalone Native AMX manifest and receipt counts must be bounded "
+            "independently",
+        ),
+        (
+            """
+if entry_snapshot.kind != BoundProgressDirectoryEntryKind::File {
+""",
+            "standalone Native AMX scanner must reject non-regular snapshot "
+            "entries",
+        ),
+        (
+            """
+let metadata =
+    Self::regular_sidecar_metadata_for(&self.store_root, &path, lane_artifacts)?
+""",
+            "standalone Native AMX scanner must use the bound regular-file "
+            "metadata path",
+        ),
+        (
+            """
+let aggregate_bytes = match kind {
+    NativeAmxEvidenceKind::Manifest => &mut manifest_bytes,
+    NativeAmxEvidenceKind::Receipt => &mut receipt_bytes,
+};
+*aggregate_bytes = aggregate_bytes.checked_add(encoded_len)
+""",
+            "standalone Native AMX manifest and receipt byte totals must be "
+            "independent and overflow checked",
+        ),
+        (
+            """
+if *aggregate_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES {
+""",
+            "standalone Native AMX aggregate byte bounds",
+        ),
+        (
+            """
+let before = self
+    .read_regular_sidecar_snapshot(&path, lane_artifacts, payload_limit)?
+""",
+            "standalone Native AMX scanner must use bounded stable snapshot "
+            "reads",
+        ),
+        (
+            """
+if !Self::stable_sidecar_metadata_unchanged(&metadata, &before.metadata) {
+""",
+            "standalone Native AMX scanner must bind stable metadata before "
+            "decode",
+        ),
+        (
+            """
+NativeAmxEvidenceKind::Manifest => {
+    let artifact = norito::decode_from_bytes::<
+        NativeAmxParticipantApplicationManifestArtifactV1,
+    >(&before.bytes)
+    .map_err(Error::NoritoFrame)?;
+    if norito::to_bytes(&artifact).map_err(Error::NoritoFrame)? != before.bytes
+        || artifact.leaf.participant_height != lane_block_height
+        || Self::validate_native_amx_participant_application_manifest_artifact(
+            &artifact,
+        )
+        .is_err()
+""",
+            "standalone Native AMX manifest canonical decode, height binding, "
+            "and validation",
+        ),
+        (
+            """
+NativeAmxEvidenceKind::Receipt => {
+    let artifact = norito::decode_from_bytes::<
+        NativeAmxParticipantApplicationReceiptArtifact,
+    >(&before.bytes)
+    .map_err(Error::NoritoFrame)?;
+    if norito::to_bytes(&artifact).map_err(Error::NoritoFrame)? != before.bytes
+        || artifact.participant_proposal.descriptor.lane_block_height
+            != lane_block_height
+        || Self::validate_native_amx_participant_application_receipt_artifact(
+            &artifact,
+        )
+        .is_err()
+""",
+            "standalone Native AMX receipt canonical decode, height binding, "
+            "and validation",
+        ),
+        (
+            """
+if !Self::sidecar_file_metadata_unchanged(&before.metadata.file, &opened_metadata) {
+""",
+            "standalone Native AMX durability open must retain the scanned file "
+            "identity",
+        ),
+        (
+            """
+file.sync_all()
+""",
+            "standalone Native AMX files must be durability attested",
+        ),
+        (
+            """
+if after.bytes_hash != before.bytes_hash
+    || !Self::stable_sidecar_metadata_unchanged(&before.metadata, &after.metadata)
+{
+""",
+            "standalone Native AMX durability sync must preserve exact bytes "
+            "and stable metadata",
+        ),
+        (
+            """
+sync_dir(lane_artifacts)
+""",
+            "standalone Native AMX directory must be durability attested",
+        ),
+    )
+    for fragment, description in scanner_contracts:
+        _require_rust_token_sequence(
+            lane_geometry_path,
+            scanner,
+            fragment,
+            description,
+            errors,
+        )
+
+    retirement = _require_qualified_rust_item(
+        lane_geometry_path,
+        source,
+        "Kura",
+        "ensure_first_release_lane_retirement_admissible_locked",
+        errors,
+        "live standalone Native AMX retirement evidence join",
+    )
+    retirement_contracts = (
+        (
+            """
+let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
+    &lane_artifacts_guard,
+    per_route_artifact_file_limit,
+    "first-release lane retirement artifact scan",
+)?;
+""",
+            "live Native AMX retirement must bind an immutable artifact snapshot",
+        ),
+        (
+            """
+if snapshot.kind == BoundProgressDirectoryEntryKind::Symlink {
+""",
+            "live Native AMX retirement must reject symlink artifacts",
+        ),
+        (
+            """
+if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+""",
+            "live Native AMX retirement must reject non-regular artifacts",
+        ),
+        (
+            """
+if name.ends_with(".tmp") {
+""",
+            "live Native AMX retirement must reject temporary artifacts",
+        ),
+        (
+            """
+if Self::parse_native_amx_evidence_path(&path)?.is_some() {
+    continue;
+}
+""",
+            "live Native AMX retirement allowlist must use the standalone "
+            "per-height parser",
+        ),
+        (
+            """
+if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+    || Self::autonomous_two_height_coordinates(
+        name,
+        AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+    )
+    .is_some()
+    || Self::autonomous_one_height_coordinate(
+        name,
+        AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
+    )
+    .is_some()
+    || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
+{
+    continue;
+}
+return Err(Error::IO(
+    std::io::Error::new(
+        ErrorKind::InvalidData,
+        "lane retirement scan encountered an unknown artifact filename",
+    ),
+    path,
+));
+""",
+            "live Native AMX retirement must reject every unexpected or legacy "
+            "artifact after the complete allowlist",
+        ),
+        (
+            """
+let (retained_native_manifests, retained_native_receipts) = self
+    .read_geometry_native_amx_per_height_evidence(
+        &lane_artifacts,
+        &artifact_snapshot,
+        self.native_amx_participant_evidence_retention().get(),
+        "lane retirement",
+    )?;
+""",
+            "live Native AMX retirement must scan the exact immutable snapshot",
+        ),
+        (
+            """
+if manifest.leaf.lane_id != entry.lane_id
+    || manifest.leaf.dataspace_id != entry.dataspace_id
+    || self
+        .require_active_lane_incarnation(
+            &entry,
+            manifest.leaf.lane_incarnation,
+            manifest.leaf.application_block_height,
+        )
+        .is_err()
+""",
+            "live Native AMX manifests must join the active route, incarnation, "
+            "and application height",
+        ),
+        (
+            """
+if self
+    .require_active_lane_artifact(&entry, descriptor)
+    .is_err()
+    || receipt.manifest_artifact_hash != HashOf::new(manifest)
+    || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+        &receipt,
+        &manifest.leaf,
+    )
+""",
+            "live Native AMX receipts must join the active descriptor and exact "
+            "manifest leaf",
+        ),
+        (
+            """
+if !native_amx_retained_windows_are_complete(
+    &native_manifest_heights,
+    &native_receipt_heights,
+) {
+""",
+            "live Native AMX evidence must form a complete retained suffix",
+        ),
+        (
+            """
+match native_receipt_heights.last().copied() {
+    Some(latest_height) => {
+""",
+            "live Native AMX latest lookup must select the highest retained "
+            "receipt",
+        ),
+        (
+            """
+self.require_active_lane_incarnation(
+    &entry,
+    latest.lane_incarnation,
+    latest.application_block_height,
+)
+.is_ok()
+    && latest.matches_receipt(receipt)
+""",
+            "live Native AMX latest pointer must exactly join the active "
+            "incarnation and highest receipt",
+        ),
+        (
+            """
+for manifest in native_manifests.values() {
+    if !self
+        .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(manifest)
+""",
+            "live Native AMX manifests must revalidate canonical finality",
+        ),
+        (
+            """
+if !self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+    receipt,
+    manifest,
+)
+""",
+            "live Native AMX receipts must revalidate exact application "
+            "evidence",
+        ),
+        (
+            """
+let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
+    &lane_artifacts_guard,
+    per_route_artifact_file_limit,
+    "lane retirement artifact rescan",
+)?;
+if confirmed_snapshot != artifact_snapshot
+    || !self.geometry_bound_progress_directory_unchanged(&lane_artifacts_guard)
+{
+""",
+            "live Native AMX retirement must prove the immutable snapshot "
+            "unchanged",
+        ),
+    )
+    for fragment, description in retirement_contracts:
+        _require_rust_token_sequence(
+            lane_geometry_path,
+            retirement,
+            fragment,
+            description,
+            errors,
+        )
+
+    archive = _require_qualified_rust_item(
+        lane_geometry_path,
+        source,
+        "Kura",
+        "ensure_archived_lane_work_released",
+        errors,
+        "archived standalone Native AMX evidence join",
+    )
+    archive_contracts = (
+        (
+            """
+let lane_artifacts_guard =
+    Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
+let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
+    &lane_artifacts_guard,
+    MAX_GEOMETRY_ARCHIVE_ENTRIES,
+    "retired lane artifact scan",
+)?;
+""",
+            "archived Native AMX GC must bind an immutable artifact snapshot",
+        ),
+        (
+            """
+if snapshot.kind == BoundProgressDirectoryEntryKind::Symlink {
+""",
+            "archived Native AMX GC must reject symlink artifacts",
+        ),
+        (
+            """
+if snapshot.kind != BoundProgressDirectoryEntryKind::File {
+""",
+            "archived Native AMX GC must reject non-regular artifacts",
+        ),
+        (
+            """
+if name.ends_with(".tmp") {
+""",
+            "archived Native AMX GC must reject temporary artifacts",
+        ),
+        (
+            """
+if Self::parse_native_amx_evidence_path(&path)?.is_some() {
+    continue;
+}
+""",
+            "archived Native AMX allowlist must use the standalone per-height "
+            "parser",
+        ),
+        (
+            """
+if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
+    || Self::autonomous_two_height_coordinates(
+        name,
+        AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+    )
+    .is_some()
+    || Self::autonomous_one_height_coordinate(
+        name,
+        AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
+    )
+    .is_some()
+    || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
+{
+    continue;
+}
+return Err(Error::IO(
+    std::io::Error::new(
+        ErrorKind::InvalidData,
+        "lane artifact archive contains an unexpected artifact",
+    ),
+    path,
+));
+""",
+            "archived Native AMX GC must reject every unexpected or legacy "
+            "artifact after the complete allowlist",
+        ),
+        (
+            """
+let (retained_native_manifests, retained_native_receipts) = self
+    .read_geometry_native_amx_per_height_evidence(
+        &lane_artifacts,
+        &artifact_snapshot,
+        self.native_amx_participant_evidence_retention().get(),
+        "retired lane",
+    )?;
+""",
+            "archived Native AMX GC must scan the exact immutable snapshot",
+        ),
+        (
+            """
+if manifest.leaf.lane_incarnation != binding.incarnation
+    || !self
+        .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+            &manifest,
+        )
+""",
+            "archived Native AMX manifests must join the archived incarnation "
+            "and canonical finality",
+        ),
+        (
+            """
+if !native_amx_retained_windows_are_complete(
+    &native_manifest_heights,
+    &native_receipt_heights,
+) {
+""",
+            "archived Native AMX evidence must form a complete retained suffix",
+        ),
+        (
+            """
+if receipt.participant_proposal.descriptor.lane_incarnation != binding.incarnation
+    || receipt.manifest_artifact_hash != HashOf::new(manifest)
+    || !Self::native_amx_participant_receipt_matches_manifest_leaf(
+        &receipt,
+        &manifest.leaf,
+    )
+    || !self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
+        &receipt,
+        manifest,
+    )
+""",
+            "archived Native AMX receipts must join the incarnation, manifest, "
+            "and canonical application",
+        ),
+        (
+            """
+if native_receipt_heights.last().copied() == Some(lane_block_height) {
+    latest_native_receipt = Some(receipt);
+}
+""",
+            "archived Native AMX latest selection must use the highest retained "
+            "receipt",
+        ),
+        (
+            """
+decode_native_amx_participant_receipt_latest_index_for_route(
+    binding.lane_id,
+    receipt.participant_proposal.descriptor.dataspace_id,
+    &native_receipt_latest,
+)
+""",
+            "archived Native AMX latest pointer must join the exact route",
+        ),
+        (
+            """
+latest.lane_incarnation == binding.incarnation
+    && latest.matches_receipt(receipt)
+""",
+            "archived Native AMX latest pointer must join the archived "
+            "incarnation and highest receipt",
+        ),
+        (
+            """
+let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
+    &lane_artifacts_guard,
+    MAX_GEOMETRY_ARCHIVE_ENTRIES,
+    "retired lane artifact rescan",
+)?;
+if confirmed_snapshot != artifact_snapshot
+    || !self.geometry_bound_progress_directory_unchanged(&lane_artifacts_guard)
+{
+""",
+            "archived Native AMX GC must prove the immutable snapshot unchanged",
+        ),
+    )
+    for fragment, description in archive_contracts:
+        _require_rust_token_sequence(
+            lane_geometry_path,
+            archive,
+            fragment,
+            description,
+            errors,
+        )
+
+    obsolete_dense_symbols = (
+        "native_amx_application_manifest_paths_for_entry",
+        "native_amx_participant_receipt_paths_for_entry",
+        "NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE",
+        "NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE",
+        "NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE",
+        "NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE",
+    )
+    obsolete_dense_filenames = (
+        "native_amx_application_manifests.norito",
+        "native_amx_application_manifests.index",
+        "native_amx_participant_receipts.norito",
+        "native_amx_participant_receipts.index",
+    )
+    for item, label in (
+        (scanner, "standalone Native AMX scanner"),
+        (retirement, "live Native AMX retirement"),
+        (archive, "archived Native AMX GC"),
+    ):
+        if item is None:
+            continue
+        item_tokens = rust_code_tokens(item.source)
+        for symbol in obsolete_dense_symbols:
+            observed = _token_sequence_count(
+                item_tokens,
+                rust_code_tokens(symbol),
+            )
+            if observed:
+                errors.append(
+                    f"{lane_geometry_path}:{item.line}: {label} must reject "
+                    "obsolete dense Native AMX evidence acceptance; found "
+                    f"{symbol} {observed} time(s)"
+                )
+        for filename in obsolete_dense_filenames:
+            observed = item.source.count(filename)
+            if observed:
+                errors.append(
+                    f"{lane_geometry_path}:{item.line}: {label} must reject "
+                    "obsolete dense Native AMX evidence acceptance; found "
+                    f"{filename} {observed} time(s)"
+                )
+
     return errors
 
 
@@ -39053,6 +40867,102 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             f"missing {missing_lock_validation}"
         )
 
+    wait_definition = "wait_for_external_cargo() {"
+    exact_process_snapshot = "    ps -axo pid,etime,command"
+    run_cargo_definition = (
+        'run_cargo() {\n'
+        "  wait_for_external_cargo\n"
+        '  command cargo "$@"\n'
+        "}"
+    )
+    if harness.count(wait_definition) != 1:
+        errors.append(
+            f"{harness_path}: harness must define exactly one Cargo/rustc "
+            "quiescence wait"
+        )
+    if harness.count(exact_process_snapshot) != 1:
+        errors.append(
+            f"{harness_path}: harness must execute the exact "
+            "`ps -axo pid,etime,command` snapshot"
+        )
+    if harness.count(run_cargo_definition) != 1:
+        errors.append(
+            f"{harness_path}: every harness Cargo command must use the exact "
+            "wait_for_external_cargo/run_cargo wrapper"
+        )
+    direct_cargo_lines = [
+        line
+        for line in harness.splitlines()
+        if re.match(r"^\s*(?:command\s+)?cargo(?:\s|$)", line)
+    ]
+    if direct_cargo_lines != ['  command cargo "$@"']:
+        errors.append(
+            f"{harness_path}: direct Cargo execution bypasses run_cargo; "
+            f"found {direct_cargo_lines}"
+        )
+    fixed_modes = set(re.findall(r"(?m)^  (--[a-z0-9-]+)\)$", harness))
+    expected_fixed_modes = {
+        "--fetch",
+        "--unit",
+        "--fast-network",
+        "--chaos-100k",
+        "--model-replay",
+        "--verus",
+        "--clippy",
+    }
+    if fixed_modes != expected_fixed_modes:
+        errors.append(
+            f"{harness_path}: formal harness fixed-mode inventory is not exact; "
+            f"expected {sorted(expected_fixed_modes)}, found {sorted(fixed_modes)}"
+        )
+    arbitrary_dispatch_tokens = ('"${@:2}"', "bash -c", "sh -c", "env cargo")
+    retained_dispatch_tokens = [
+        token for token in arbitrary_dispatch_tokens if token in harness
+    ]
+    if retained_dispatch_tokens:
+        errors.append(
+            f"{harness_path}: formal harness retains arbitrary child-command "
+            f"dispatch tokens {retained_dispatch_tokens}"
+        )
+    if harness.count('"$@"') != 1:
+        errors.append(
+            f"{harness_path}: the argument vector may be forwarded only by the "
+            "guarded run_cargo wrapper"
+        )
+    expected_verus_branch = """\
+  --verus)
+    if (($# != 1)); then
+      echo "--verus accepts no additional arguments" >&2
+      exit 2
+    fi
+    run_cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \\
+      --fwd-verus-args-to roots -- \\
+      --rlimit 60 \\
+      --expand-errors \\
+      --no-cheating
+    ;;"""
+    expected_clippy_branch = """\
+  --clippy)
+    if (($# != 1)); then
+      echo "--clippy accepts no additional arguments" >&2
+      exit 2
+    fi
+    run_cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
+    ;;"""
+    if (
+        harness.count(expected_verus_branch) != 1
+        or harness.count(expected_clippy_branch) != 1
+        or harness.count(
+            'echo "positional harness commands are unsupported; '
+            'select one fixed mode" >&2'
+        )
+        != 1
+    ):
+        errors.append(
+            f"{harness_path}: formal harness must fail closed outside its exact "
+            "reviewed Verus and Clippy command branches"
+        )
+
     lock_copy = harness.find('cp -- "$HARNESS_LOCK" Cargo.lock')
     case_start = harness.find('case "$1" in')
     fetch_start = harness.find("  --fetch)", case_start)
@@ -39065,11 +40975,11 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         fetch_branch = ""
     else:
         fetch_branch = harness[fetch_start:unit_start]
-    fetch_commands = re.findall(r"(?m)^\s*cargo fetch[^\n]*$", fetch_branch)
-    if fetch_commands != ["    cargo fetch --locked"]:
+    fetch_commands = re.findall(r"(?m)^\s*run_cargo fetch[^\n]*$", fetch_branch)
+    if fetch_commands != ["    run_cargo fetch --locked"]:
         errors.append(
             f"{harness_path}: --fetch must perform exactly one online "
-            f"`cargo fetch --locked`; found {fetch_commands}"
+            f"guarded `run_cargo fetch --locked`; found {fetch_commands}"
         )
 
     chaos_start = harness.find("  --chaos-100k)", unit_start)
@@ -39101,9 +41011,9 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         if chaos_start < 0 or replay_start < 0
         else harness[chaos_start:replay_start]
     )
-    chaos_cargo_commands = re.findall(r"(?m)^\s*cargo test\b", chaos_branch)
+    chaos_cargo_commands = re.findall(r"(?m)^\s*run_cargo test\b", chaos_branch)
     offline_chaos_commands = re.findall(
-        r"(?m)^\s*cargo test --locked --offline "
+        r"(?m)^\s*run_cargo test --locked --offline "
         r"-p iroha_sumeragi_core\s*\\?$",
         chaos_branch,
     )
@@ -39135,7 +41045,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         )
     else:
         job = job_match.group("body")
-        cache_marker = "- uses: Swatinem/rust-cache@v2"
+        cache_marker = (
+            "- uses: Swatinem/rust-cache@"
+            "e18b497796c12c097a38f9edb9d0641fb99eee32"
+        )
         fetch_marker = (
             "run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch"
         )
@@ -39215,8 +41128,8 @@ def _production_liveness_release_inventory_errors(
             f"{release_path}: production liveness source count must be sealed as "
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 306:
-        errors.append("internal release-regression seal must contain exactly 306 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 309:
+        errors.append("internal release-regression seal must contain exactly 309 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -39494,19 +41407,24 @@ def _production_liveness_release_inventory_errors(
                 f"{release_path}: production module {module} must contain exactly "
                 f"{expected_count} named tests; found {observed_count}"
             )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=72") != 1:
+    expected_corridor_leg_count_line = (
+        "  readonly expected_corridor_leg_count="
+        f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
+    )
+    if source.splitlines().count(expected_corridor_leg_count_line) != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at seventy-two legs"
+            "sealed at "
+            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs"
         )
 
     expected_p2p_list = (
-        'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p '
+        'production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p '
         '--lib -- --list)"'
     )
     expected_p2p_ignored_list = (
         'production_p2p_ignored_unit_list="$(\n'
-        '  cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored\n'
+        '  run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_p2p_list) != 1 or source.count(
@@ -39518,13 +41436,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  cargo test --locked --offline -p irohad --bin irohad '
+        '  run_cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  cargo test --locked --offline -p irohad --bin irohad '
+        '  run_cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -39536,12 +41454,12 @@ def _production_liveness_release_inventory_errors(
             "test-network-message-control feature"
         )
     expected_config_list = (
-        'production_config_unit_list="$(cargo test --locked --offline -p iroha_config '
+        'production_config_unit_list="$(run_cargo test --locked --offline -p iroha_config '
         '--lib -- --list)"'
     )
     expected_config_ignored_list = (
         'production_config_ignored_unit_list="$(\n'
-        '  cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
+        '  run_cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_config_list) != 1 or source.count(
@@ -39580,12 +41498,12 @@ def _production_liveness_release_inventory_errors(
             "finality, offline compact-QC, and context-identity modules"
         )
     expected_data_model_list = (
-        'production_data_model_unit_list="$(cargo test --locked --offline '
+        'production_data_model_unit_list="$(run_cargo test --locked --offline '
         '-p iroha_data_model --lib -- --list)"'
     )
     expected_data_model_ignored_list = (
         'production_data_model_ignored_unit_list="$(\n'
-        '  cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored\n'
+        '  run_cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_data_model_list) != 1 or source.count(
@@ -39600,7 +41518,7 @@ def _production_liveness_release_inventory_errors(
         'elif is_production_data_model_module "$module"; then',
         'module_command="cargo test --locked --offline -p iroha_data_model --lib '
         '${module} -- --test-threads=1"',
-        'cargo test --locked --offline -p iroha_data_model --lib "$module" '
+        'run_cargo test --locked --offline -p iroha_data_model --lib "$module" '
         '-- --test-threads=1',
     ):
         if source.count(fragment) != 1:
@@ -39637,11 +41555,14 @@ def _production_liveness_release_inventory_errors(
         ),
     )
     for leg_id, command in source_sealed_commands:
+        execution_command = (
+            f"run_{command}" if command.startswith("cargo ") else command
+        )
         expected = (
-            "run_corridor_leg \\\n"
-            f"  {leg_id} command 0 \\\n"
-            f'  "{command}" \\\n'
-            f"  {command}"
+            "  run_corridor_leg \\\n"
+            f"    {leg_id} command 0 \\\n"
+            f'    "{command}" \\\n'
+            f"    {execution_command}"
         )
         if source.count(expected) != 1:
             errors.append(
@@ -39836,20 +41757,22 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "inventory to 569 tests across 39 modules. Together with the "
+            "inventory to 572 tests across 39 modules. Together with the "
             "source-sealed\ncommand and tooling legs, the pre-network corridor "
-            "contains 72 legs.",
+            f"contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "569-test, 39-module inventory. The complete source-sealed "
-            "pre-network corridor\ncontains 72 legs.",
+            "572-test, 39-module inventory. The complete source-sealed "
+            "pre-network corridor\ncontains "
+            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "inventory to 569 exact tests across 39 modules and 72 pre-network "
+            "inventory to 572 exact tests across 39 modules and "
+            f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network "
             "legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -40448,10 +42371,10 @@ def _exact_tla_call_statement_tokens(
 
 _SAME_ROUND_STRICT_TLA_SOURCE_SHA256 = {
     "SumeragiV2InductiveProofs.tla": (
-        "d962f1fc3d3a6f11f01757a6719efc49055633b05cae6882e9e7a44b8245b0d1"
+        "74ed46cc0c891ee2b54b708bf025f1422e913a28108d6135ed1fb40286de6573"
     ),
     "SumeragiV2Proofs.tla": (
-        "ce4dcea554b90e6b1cb5cb75ce9ee514dc14703a0ec858a5df3a90caa494ecd8"
+        "c1962e7e4c7e8571349385152ad1aa756d4a5f29139f187e56188423621e66af"
     ),
 }
 
@@ -40953,7 +42876,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "d9b9799d17ac1f84b9e166ad04640606c55337c474cc5a29a7bd8ceb45a6613c"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "d7c467f9694625e770a79bd7831625acd06c39e79f79dc7d839a86a6aa27831b"
+        "97d3bdd1408a4acb406bb7a1ce6a560db978badd225165d81cefbdbd37cc1cbb"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
         "a1a9a39721f3de6c7ef65d3d6bafdd3b5b78786df68b2c31ca38479d9ff76ad5"
@@ -43073,12 +44996,20 @@ def validate_ledger(
     )
     errors.extend(_async_historical_recovery_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
+    errors.extend(
+        _merge_runtime_config_production_source_fidelity_errors(ROOT_DIR)
+    )
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)
     )
     errors.extend(
         _kura_retirement_progress_production_source_fidelity_errors(ROOT_DIR)
+    )
+    errors.extend(
+        _kura_native_amx_standalone_evidence_production_source_fidelity_errors(
+            ROOT_DIR
+        )
     )
     errors.extend(_chain_source_fidelity_errors(formal_dir))
     errors.extend(

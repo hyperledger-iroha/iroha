@@ -121,10 +121,12 @@ Erreurs courantes présentées par les opérateurs/SDK :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` impliquent le système d'exploitation
   les points de terminaison REST du registre pin et l'impression Norito JSON brut avec les blocs de
   attestation para evidencias de auditoria.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` aceitam manifestes
-  Norito ou JSON avec alias preuves et successeurs optionnels ; preuves malformées
-  Geram `400`, épreuves périmées renvoyées `503` avec `Warning: 110`, et épreuves expirées
-  retour du nom `412`.
+- `torii /v1/sorafs/pin/register` accepte la requête JSON V1 fermée.
+  `manifest_payload` doit être le base64 canonique avec padding exact des octets
+  Norito `ManifestV1` canoniques. Torii dérive le digest, le chunker, la longueur
+  du contenu, la politique de pin et les entrées de frais uniquement du manifest
+  décodé, et rejette les champs de résumé dupliqués retirés. `alias` et un
+  predecessor `successor_of_hex` non nul restent optionnels.
 - Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   incluem estruturas de attestation para que clientses verifiquem dados contra os
   derniers en-têtes de bloc avant d'agir.

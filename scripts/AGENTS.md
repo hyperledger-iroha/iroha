@@ -5,7 +5,11 @@ These guidelines apply to the `scripts/` directory.
 ## Purpose and layout
 - Shell and Python helpers that back CI (`ci/`, `buildkite/`), release automation, fixture regeneration, GPU experiments, etc.
 - `test_env.py` provisions a local multi-peer network that is consumed by the Python test suites and manual QA.
-- `requirements.txt` lists the minimal Python dependencies shared by the scripts (currently `tomli_w`). Install them with `python3 -m pip install -r scripts/requirements.txt` before running helpers that import Python modules.
+- `requirements.txt` is the exact pinned Python dependency set shared by the
+  scripts (BLAKE3, pytest, requests, the pre-3.11 TOML backport, and
+  `tomli_w`). Install it with
+  `python3 -m pip install -r scripts/requirements.txt` before running helpers
+  that import Python modules.
 
 ## Development workflow
 - Keep scripts idempotent and portable across macOS/Linux. Prefer POSIX shell or Python 3.11+; for long workflows use Python so we can add tests.

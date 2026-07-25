@@ -126,10 +126,12 @@ SF-6 ባለብዙ-ምንጭ ማምጣት ሲነቃ (Rust CLI በ I18NI0000057X�
 - `iroha app sorafs pin list|show`፣ `alias list`፣ እና `replication list` ይጠቀለላል
   ፒን መዝገብ REST የመጨረሻ ነጥቦችን እና ጥሬ Norito JSON ን ከማስረጃ ብሎኮች ጋር ያትሙ
   ለኦዲት ማስረጃ.
-- `iroha app sorafs storage pin` እና `torii /v1/sorafs/pin/register` Norito ይቀበላሉ
-  ወይም JSON ይገለጻል እና አማራጭ ተለዋጭ ስም ማረጋገጫዎች እና ተተኪዎች። የተበላሹ ማስረጃዎች
-  `400` ያሳድጉ፣ የቆየ ማረጋገጫዎች ላዩን `503` ከ `Warning: 110` ጋር፣ እና
-  ጠንካራ ጊዜ ያለፈባቸው ማረጋገጫዎች `412` ይመለሳሉ።
+- `torii /v1/sorafs/pin/register` የተዘጋውን JSON V1 ጥያቄ ይቀበላል።
+  `manifest_payload` የcanonical Norito `ManifestV1` ባይቶች ትክክለኛ፣
+  canonical padded base64 መሆን አለበት። Torii digest፣ chunker፣ content
+  length፣ pin policy እና fee inputs ከdecoded manifest ብቻ ያመነጫል፤
+  የተተዉ duplicate summary fields ውድቅ ይደረጋሉ። `alias` እና nonzero
+  `successor_of_hex` predecessor አማራጭ ሆነው ይቀራሉ።
 - `iroha app sorafs repair list` መስተዋቶች ጥገና ወረፋ ማጣሪያዎች, ሳለ
   `repair claim|complete|fail|escalate` የተፈረመ የሰራተኛ ድርጊቶችን ወይም መቆራረጥን ያቀርባል
   የውሳኔ ሃሳቦች ለ Torii. Slash ፕሮፖዛል የአስተዳደር ማጽደቅ ማጠቃለያን ሊያካትቱ ይችላሉ።

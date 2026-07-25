@@ -254,7 +254,10 @@ hashing, chunking, and verifying optional manifests.
   signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
   `ToriiClient.getDaManifest(storageTicketHex)` while the Swift SDK now exposes
   `ToriiClient.getDaManifestBundle(...)`. Both return the decoded Norito bytes, manifest JSON, manifest hash,
-  and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI, and Swift
+  and strict payload-bound `sorafs.chunk_fetch_plan.v1` object so SDK callers
+  can hydrate orchestrator sessions without shelling out to the CLI. Bare
+  arrays and plans with missing or substituted whole-payload bindings are
+  rejected. Swift
   clients can additionally call `fetchDaPayloadViaGateway(...)` to pipe those bundles through the native
   SoraFS orchestrator wrapper.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
 - `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
@@ -272,11 +275,14 @@ hashing, chunking, and verifying optional manifests.
   strings to keep `policy_source` values meaningful in evidence bundles. See
   `crates/iroha_cli/src/commands/da.rs` for the subcommand and `docs/source/da/rent_policy.md`
   for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin registry parity now extends to SDKs: `ToriiClient.registerSorafsPinManifest(...)` in the
-  JavaScript SDK builds the exact payload used by `iroha app sorafs pin register`, enforcing canonical
-  chunker metadata, pin policies, alias proofs, and successor digests before POSTing to
-  `/v1/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
-  recording manifest registrations, and the helper ships with TypeScript/README coverage so DA-8’s
+- Pin registry parity now extends to SDKs:
+  `ToriiClient.registerSorafsPinManifest(...)` builds the closed JSON V1 request
+  with exact canonical padded-base64 `ManifestV1` in `manifest_payload`. Torii
+  derives the digest, chunker, content length, pin policy, and fee inputs solely
+  from the decoded manifest and rejects duplicate summaries; the optional alias
+  and nonzero predecessor remain. This keeps CI bots and automation from
+  shelling out to the CLI when recording registrations through
+  `/v1/sorafs/pin/register`, and the helper ships with TypeScript/README coverage so DA-8’s
   “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
   canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
@@ -376,7 +382,9 @@ All previously blocked ingest TODOs have been implemented and verified:
   clients can stash the encoded sampling schedule immediately.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
 - Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
-  (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, plus the relevant
+  (base64), rendered manifest JSON, a strict
+  `sorafs.chunk_fetch_plan.v1` `chunk_plan` object ready for `sorafs fetch`,
+  plus the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) so downstream tooling can
   feed the orchestrator without recomputing digests, and emits the same `Sora-PDP-Commitment` header to
   mirror ingest responses. Passing `block_hash=<hex>` as a query parameter returns a deterministic

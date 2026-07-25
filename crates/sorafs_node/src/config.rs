@@ -6,21 +6,20 @@ use std::{
 };
 
 use iroha_config::parameters::actual;
-use iroha_data_model::{
-    prelude::Quantity,
-    sorafs::transparency::{
+use iroha_data_model::sorafs::{
+    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+    transparency::{
         MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
         ModerationPrivacyParametersV1,
     },
 };
-use sorafs_manifest::deal::XorQuantity;
 
 use crate::{
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
     transparency::{
-        PrivacyAggregateCycleConfig, PrivacyAggregateScheduleConfig,
-        PrivacyCompositionBudgetPolicyV1,
+        PrivacyAggregateCycleConfig, PrivacyAggregateMetricSchemaV1, PrivacyAggregatePopulationV1,
+        PrivacyAggregateScheduleConfig, PrivacyCompositionBudgetPolicyV1,
     },
 };
 
@@ -44,14 +43,14 @@ pub struct StorageConfig {
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
-    orderbook: OrderbookAdmissionPolicy,
+    orderbook_worker: OrderbookWorkerPolicy,
+    reserve_worker: ReserveWorkerPolicy,
     reputation_trust_policy_path: Option<PathBuf>,
     pricing_trust_policy_path: Option<PathBuf>,
     hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
-    reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
     governance_dag_signing_key_path: Option<PathBuf>,
@@ -167,10 +166,16 @@ impl StorageConfig {
         self.stream_token_signing_key_path.as_ref()
     }
 
-    /// Local orderbook admission policy.
+    /// Operational policy for durable native orderbook transaction forwarding.
     #[must_use]
-    pub fn orderbook_admission_policy(&self) -> &OrderbookAdmissionPolicy {
-        &self.orderbook
+    pub fn orderbook_worker_policy(&self) -> OrderbookWorkerPolicy {
+        self.orderbook_worker
+    }
+
+    /// Operational policy for durable native reserve/rent transaction forwarding.
+    #[must_use]
+    pub fn reserve_worker_policy(&self) -> ReserveWorkerPolicy {
+        self.reserve_worker
     }
 
     /// Canonical external trust-policy file used for reputation snapshot admission.
@@ -207,12 +212,6 @@ impl StorageConfig {
     #[must_use]
     pub fn evidence_viewer_audit_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.evidence_viewer_audit_schedule
-    }
-
-    /// Optional config-backed reserve lifecycle advancement scheduler.
-    #[must_use]
-    pub fn reserve_lifecycle_schedule(&self) -> Option<ReserveLifecycleScheduleConfig> {
-        self.reserve_lifecycle_schedule
     }
 
     /// Optional directory used to materialise governance artefacts.
@@ -300,14 +299,14 @@ impl StorageConfig {
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
-            orderbook: OrderbookAdmissionPolicy::from(storage.orderbook.clone()),
+            orderbook_worker: OrderbookWorkerPolicy::from(storage.orderbook_worker),
+            reserve_worker: ReserveWorkerPolicy::from(storage.reserve_worker),
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
             pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
             hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.clone().into_schedule_config(),
             privacy_aggregate_policy: storage.privacy_aggregates.clone().into_policy_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
-            reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
             governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
@@ -453,10 +452,17 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Override the local orderbook admission policy.
+    /// Override the durable native orderbook transaction worker policy.
     #[must_use]
-    pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
-        self.inner.orderbook = policy;
+    pub fn orderbook_worker_policy(mut self, policy: OrderbookWorkerPolicy) -> Self {
+        self.inner.orderbook_worker = policy;
+        self
+    }
+
+    /// Override the durable native reserve/rent transaction worker policy.
+    #[must_use]
+    pub fn reserve_worker_policy(mut self, policy: ReserveWorkerPolicy) -> Self {
+        self.inner.reserve_worker = policy;
         self
     }
 
@@ -508,16 +514,6 @@ impl StorageConfigBuilder {
         schedule: Option<PrivacyAggregateScheduleConfig>,
     ) -> Self {
         self.inner.evidence_viewer_audit_schedule = schedule;
-        self
-    }
-
-    /// Override the optional config-backed reserve lifecycle scheduler.
-    #[must_use]
-    pub fn reserve_lifecycle_schedule(
-        mut self,
-        schedule: Option<ReserveLifecycleScheduleConfig>,
-    ) -> Self {
-        self.inner.reserve_lifecycle_schedule = schedule;
         self
     }
 
@@ -650,81 +646,271 @@ impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
     }
 }
 
-/// Config-backed local orderbook admission policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderbookAdmissionPolicy {
-    min_order_gib: u64,
-    price_tick: Quantity,
-}
-
-impl OrderbookAdmissionPolicy {
-    /// Construct a local orderbook admission policy.
-    #[must_use]
-    pub fn new(min_order_gib: u64, price_tick: Quantity) -> Self {
-        Self {
-            min_order_gib: min_order_gib.max(1),
-            price_tick,
-        }
-    }
-
-    /// Minimum accepted order quantity in GiB.
-    #[must_use]
-    pub fn min_order_gib(&self) -> u64 {
-        self.min_order_gib
-    }
-
-    /// Exact accepted XOR price tick per GiB.
-    #[must_use]
-    pub fn price_tick(&self) -> &Quantity {
-        &self.price_tick
-    }
-}
-
-impl From<actual::SorafsOrderbook> for OrderbookAdmissionPolicy {
-    fn from(policy: actual::SorafsOrderbook) -> Self {
-        Self::new(policy.min_order_gib, policy.price_tick)
-    }
-}
-
-/// Config-backed local reserve lifecycle advancement schedule.
+/// Config-backed operational policy for durable native orderbook transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReserveLifecycleScheduleConfig {
-    interval_seconds: u64,
-    initial_delay_seconds: u64,
+pub struct OrderbookWorkerPolicy {
+    enabled: bool,
+    scan_interval: Duration,
+    match_batch_limit: u32,
+    maintenance_batch_limit: u32,
+    max_pending: usize,
+    max_completed: usize,
+    max_dead_letters: usize,
+    max_attempts: u32,
+    checkpoint_max_bytes: u64,
 }
 
-impl ReserveLifecycleScheduleConfig {
-    /// Construct a reserve lifecycle advancement schedule, clamping zero cadence to one second.
+impl OrderbookWorkerPolicy {
+    /// Whether the supervised finalized-state worker should run.
     #[must_use]
-    pub fn new(interval_seconds: u64, initial_delay_seconds: u64) -> Self {
+    pub const fn enabled(self) -> bool {
+        self.enabled
+    }
+
+    /// Finalized-state scan cadence.
+    #[must_use]
+    pub const fn scan_interval(self) -> Duration {
+        self.scan_interval
+    }
+
+    /// Maximum fills requested by one native match transaction.
+    #[must_use]
+    pub const fn match_batch_limit(self) -> u32 {
+        self.match_batch_limit
+    }
+
+    /// Maximum expiries/closures requested by one native maintenance transaction.
+    #[must_use]
+    pub const fn maintenance_batch_limit(self) -> u32 {
+        self.maintenance_batch_limit
+    }
+
+    /// Maximum pending semantic operations retained durably.
+    #[must_use]
+    pub const fn max_pending(self) -> usize {
+        self.max_pending
+    }
+
+    /// Maximum finalized idempotency tombstones retained durably.
+    #[must_use]
+    pub const fn max_completed(self) -> usize {
+        self.max_completed
+    }
+
+    /// Maximum terminal dead letters retained durably.
+    #[must_use]
+    pub const fn max_dead_letters(self) -> usize {
+        self.max_dead_letters
+    }
+
+    /// Maximum signing/submission attempts under one semantic identity.
+    #[must_use]
+    pub const fn max_attempts(self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Maximum canonical durable checkpoint size.
+    #[must_use]
+    pub const fn checkpoint_max_bytes(self) -> u64 {
+        self.checkpoint_max_bytes
+    }
+}
+
+impl From<actual::SorafsOrderbookWorker> for OrderbookWorkerPolicy {
+    fn from(policy: actual::SorafsOrderbookWorker) -> Self {
+        use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
+
+        let min_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS);
+        let max_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS);
+        let max_pending =
+            usize::try_from(bounds::MAX_PENDING_LIMIT).expect("u32 fits supported usize");
+        let max_completed =
+            usize::try_from(bounds::MAX_COMPLETED_LIMIT).expect("u32 fits supported usize");
+        let max_dead_letters =
+            usize::try_from(bounds::MAX_DEAD_LETTERS_LIMIT).expect("u32 fits supported usize");
         Self {
-            interval_seconds: interval_seconds.max(1),
-            initial_delay_seconds,
+            enabled: policy.enabled,
+            scan_interval: policy
+                .scan_interval
+                .clamp(min_scan_interval, max_scan_interval),
+            match_batch_limit: policy
+                .match_batch_limit
+                .clamp(1, ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1),
+            maintenance_batch_limit: policy
+                .maintenance_batch_limit
+                .clamp(1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1),
+            max_pending: usize::try_from(policy.max_pending)
+                .unwrap_or(max_pending)
+                .clamp(1, max_pending),
+            max_completed: usize::try_from(policy.max_completed)
+                .unwrap_or(max_completed)
+                .clamp(1, max_completed),
+            max_dead_letters: usize::try_from(policy.max_dead_letters)
+                .unwrap_or(max_dead_letters)
+                .clamp(1, max_dead_letters),
+            max_attempts: policy.max_attempts.clamp(1, bounds::MAX_ATTEMPTS_LIMIT),
+            checkpoint_max_bytes: policy.checkpoint_max_bytes.0.clamp(
+                bounds::CHECKPOINT_MIN_BYTES,
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT,
+            ),
         }
     }
+}
 
-    /// Interval between lifecycle advancement ticks, in seconds.
-    #[must_use]
-    pub fn interval_seconds(&self) -> u64 {
-        self.interval_seconds
-    }
-
-    /// Delay before the first lifecycle advancement tick, in seconds.
-    #[must_use]
-    pub fn initial_delay_seconds(&self) -> u64 {
-        self.initial_delay_seconds
+impl Default for OrderbookWorkerPolicy {
+    fn default() -> Self {
+        Self::from(actual::SorafsOrderbookWorker::default())
     }
 }
 
-trait ReserveLifecycleScheduleConfigExt {
-    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig>;
+/// Config-backed operational policy for durable native reserve/rent transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReserveWorkerPolicy {
+    enabled: bool,
+    scan_interval: Duration,
+    scan_batch_limit: usize,
+    max_pending: usize,
+    max_completed: usize,
+    max_dead_letters: usize,
+    max_attempts: u32,
+    checkpoint_max_bytes: u64,
 }
 
-impl ReserveLifecycleScheduleConfigExt for actual::SorafsReserveLifecycleSchedule {
-    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig> {
-        self.enabled.then(|| {
-            ReserveLifecycleScheduleConfig::new(self.interval_seconds, self.initial_delay_seconds)
-        })
+impl ReserveWorkerPolicy {
+    /// Whether the supervised runtime may generate new reserve/rent work.
+    ///
+    /// The durable outbox is always drained and reconciled on restart.
+    #[must_use]
+    pub const fn enabled(self) -> bool {
+        self.enabled
+    }
+
+    /// Finalized-state scan cadence.
+    #[must_use]
+    pub const fn scan_interval(self) -> Duration {
+        self.scan_interval
+    }
+
+    /// Maximum durable operations inspected in one fair scan.
+    #[must_use]
+    pub const fn scan_batch_limit(self) -> usize {
+        self.scan_batch_limit
+    }
+
+    /// Maximum pending semantic operations retained durably.
+    #[must_use]
+    pub const fn max_pending(self) -> usize {
+        self.max_pending
+    }
+
+    /// Maximum finalized idempotency tombstones retained durably.
+    #[must_use]
+    pub const fn max_completed(self) -> usize {
+        self.max_completed
+    }
+
+    /// Maximum terminal dead letters retained durably.
+    #[must_use]
+    pub const fn max_dead_letters(self) -> usize {
+        self.max_dead_letters
+    }
+
+    /// Maximum signing/submission attempts under one semantic identity.
+    #[must_use]
+    pub const fn max_attempts(self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Maximum canonical durable checkpoint size.
+    #[must_use]
+    pub const fn checkpoint_max_bytes(self) -> u64 {
+        self.checkpoint_max_bytes
+    }
+
+    /// Reject programmatic policies outside the same bounds enforced while parsing.
+    pub(crate) fn validate(self) -> Result<(), String> {
+        use iroha_config::parameters::defaults::sorafs::storage::reserve_worker as bounds;
+
+        let minimum_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS);
+        let maximum_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS);
+        if !(minimum_scan_interval..=maximum_scan_interval).contains(&self.scan_interval) {
+            return Err(format!(
+                "scan_interval_ms must be within {}..={}, got {:?}",
+                bounds::SCAN_INTERVAL_MIN_MS,
+                bounds::SCAN_INTERVAL_MAX_MS,
+                self.scan_interval,
+            ));
+        }
+        let maxima = [
+            (
+                "scan_batch_limit",
+                self.scan_batch_limit,
+                usize::try_from(bounds::SCAN_BATCH_LIMIT_MAX)
+                    .expect("u32 reserve scan limit fits supported usize"),
+            ),
+            (
+                "max_pending",
+                self.max_pending,
+                usize::try_from(bounds::MAX_PENDING_LIMIT)
+                    .expect("u32 reserve pending limit fits supported usize"),
+            ),
+            (
+                "max_completed",
+                self.max_completed,
+                usize::try_from(bounds::MAX_COMPLETED_LIMIT)
+                    .expect("u32 reserve completed limit fits supported usize"),
+            ),
+            (
+                "max_dead_letters",
+                self.max_dead_letters,
+                usize::try_from(bounds::MAX_DEAD_LETTERS_LIMIT)
+                    .expect("u32 reserve dead-letter limit fits supported usize"),
+            ),
+        ];
+        for (field, value, maximum) in maxima {
+            if value == 0 || value > maximum {
+                return Err(format!("{field} must be within 1..={maximum}, got {value}"));
+            }
+        }
+        if self.max_attempts == 0 || self.max_attempts > bounds::MAX_ATTEMPTS_LIMIT {
+            return Err(format!(
+                "max_attempts must be within 1..={}, got {}",
+                bounds::MAX_ATTEMPTS_LIMIT,
+                self.max_attempts,
+            ));
+        }
+        if !(bounds::CHECKPOINT_MIN_BYTES..=bounds::CHECKPOINT_MAX_BYTES_LIMIT)
+            .contains(&self.checkpoint_max_bytes)
+        {
+            return Err(format!(
+                "checkpoint_max_bytes must be within {}..={}, got {}",
+                bounds::CHECKPOINT_MIN_BYTES,
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT,
+                self.checkpoint_max_bytes,
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl From<actual::SorafsReserveWorker> for ReserveWorkerPolicy {
+    fn from(policy: actual::SorafsReserveWorker) -> Self {
+        Self {
+            enabled: policy.enabled,
+            scan_interval: policy.scan_interval,
+            scan_batch_limit: usize::try_from(policy.scan_batch_limit).unwrap_or(usize::MAX),
+            max_pending: usize::try_from(policy.max_pending).unwrap_or(usize::MAX),
+            max_completed: usize::try_from(policy.max_completed).unwrap_or(usize::MAX),
+            max_dead_letters: usize::try_from(policy.max_dead_letters).unwrap_or(usize::MAX),
+            max_attempts: policy.max_attempts,
+            checkpoint_max_bytes: policy.checkpoint_max_bytes.0,
+        }
+    }
+}
+
+impl Default for ReserveWorkerPolicy {
+    fn default() -> Self {
+        Self::from(actual::SorafsReserveWorker::default())
     }
 }
 
@@ -735,7 +921,12 @@ trait PrivacyAggregateScheduleConfigExt {
 /// Governed V1 privacy aggregate policy sourced exclusively from `iroha_config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAggregatePolicyConfig {
+    query_id: [u8; 32],
+    first_cycle_start_unix: u64,
+    cycle_seconds: u64,
     aggregate_id_prefix: String,
+    populations: Vec<PrivacyAggregatePopulationV1>,
+    metrics: Vec<PrivacyAggregateMetricSchemaV1>,
     privacy: ModerationPrivacyParametersV1,
     policy_digest: [u8; 32],
     composition_budget: PrivacyCompositionBudgetPolicyV1,
@@ -749,11 +940,19 @@ impl PrivacyAggregatePolicyConfig {
     /// Returns an error when the public identifier, privacy parameters, policy
     /// digest, or durable composition-budget policy is not canonical.
     pub fn new(
+        query_id: [u8; 32],
+        first_cycle_start_unix: u64,
+        cycle_seconds: u64,
         aggregate_id_prefix: String,
+        populations: Vec<PrivacyAggregatePopulationV1>,
+        metrics: Vec<PrivacyAggregateMetricSchemaV1>,
         privacy: ModerationPrivacyParametersV1,
         policy_digest: [u8; 32],
         composition_budget: PrivacyCompositionBudgetPolicyV1,
     ) -> Result<Self, String> {
+        if query_id == [0; 32] {
+            return Err("privacy aggregate query id must be nonzero".to_string());
+        }
         if aggregate_id_prefix.trim() != aggregate_id_prefix
             || aggregate_id_prefix.is_empty()
             || aggregate_id_prefix.len() > 128
@@ -770,13 +969,32 @@ impl PrivacyAggregatePolicyConfig {
         composition_budget
             .validate()
             .map_err(|error| format!("privacy composition budget is invalid: {error}"))?;
-        if composition_budget.budget_id != policy_digest {
+        if composition_budget.budget_id != query_id {
             return Err(
-                "privacy composition budget must be bound to the policy digest".to_string(),
+                "privacy composition budget must be bound to the stable query id".to_string(),
             );
         }
+        let cycle = PrivacyAggregateCycleConfig {
+            query_id,
+            first_cycle_start_unix,
+            cycle_seconds,
+            aggregate_id_prefix: aggregate_id_prefix.clone(),
+            populations: populations.clone(),
+            metrics: metrics.clone(),
+            privacy,
+            policy_digest,
+            metadata: Vec::new(),
+        };
+        cycle
+            .validate()
+            .map_err(|error| format!("privacy aggregate query is invalid: {error}"))?;
         Ok(Self {
+            query_id,
+            first_cycle_start_unix,
+            cycle_seconds,
             aggregate_id_prefix,
+            populations,
+            metrics,
             privacy,
             policy_digest,
             composition_budget,
@@ -787,11 +1005,22 @@ impl PrivacyAggregatePolicyConfig {
     #[must_use]
     pub fn cycle_config(&self) -> PrivacyAggregateCycleConfig {
         PrivacyAggregateCycleConfig {
+            query_id: self.query_id,
+            first_cycle_start_unix: self.first_cycle_start_unix,
+            cycle_seconds: self.cycle_seconds,
             aggregate_id_prefix: self.aggregate_id_prefix.clone(),
+            populations: self.populations.clone(),
+            metrics: self.metrics.clone(),
             privacy: self.privacy,
-            policy_digest: Some(self.policy_digest),
+            policy_digest: self.policy_digest,
             metadata: Vec::new(),
         }
+    }
+
+    /// Return the stable governed query identity.
+    #[must_use]
+    pub const fn query_id(&self) -> [u8; 32] {
+        self.query_id
     }
 
     /// Return the governed digest bound into threshold-PRF cycle requests.
@@ -806,7 +1035,7 @@ impl PrivacyAggregatePolicyConfig {
         self.privacy.per_subject_metric_cap.is_some()
     }
 
-    /// Durable composition-budget policy bound to the same governed digest.
+    /// Durable composition-budget policy bound to the stable query identity.
     #[must_use]
     pub const fn composition_budget(&self) -> PrivacyCompositionBudgetPolicyV1 {
         self.composition_budget
@@ -823,7 +1052,8 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedul
             return None;
         }
         Some(PrivacyAggregateScheduleConfig {
-            cycle_seconds: self.cycle_seconds.max(1),
+            first_cycle_start_unix: self.first_cycle_start_unix,
+            cycle_seconds: self.cycle_seconds,
             publish_delay_seconds: self.publish_delay_seconds,
         })
     }
@@ -847,6 +1077,25 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
         let policy_digest = self.policy_digest.unwrap_or_else(|| {
             panic!("enabled SoraFS privacy aggregate config is missing its policy digest")
         });
+        let query_id = self.query_id.unwrap_or_else(|| {
+            panic!("enabled SoraFS privacy aggregate config is missing its query id")
+        });
+        let populations = self
+            .population_inventory
+            .into_iter()
+            .map(|population| PrivacyAggregatePopulationV1 {
+                label: population.label,
+                digest: population.digest,
+            })
+            .collect();
+        let metrics = self
+            .metric_schema
+            .into_iter()
+            .map(|metric| PrivacyAggregateMetricSchemaV1 {
+                key: metric.key,
+                unit: metric.unit,
+            })
+            .collect();
         let uses_dp = !matches!(mode, ModerationPrivacyModeV1::Suppression);
         let uses_suppression = !matches!(mode, ModerationPrivacyModeV1::DifferentialPrivacy);
         let privacy = ModerationPrivacyParametersV1 {
@@ -857,17 +1106,21 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
             delta_ppb: uses_dp.then_some(0),
             per_subject_metric_cap: uses_dp.then_some(self.per_subject_metric_cap),
             suppression_threshold: uses_suppression.then_some(self.suppression_threshold),
-            suppressed_count: 0,
         };
         let composition_budget = PrivacyCompositionBudgetPolicyV1 {
-            budget_id: policy_digest,
+            budget_id: query_id,
             epsilon_limit_numerator: self.composition_budget_epsilon_numerator,
             epsilon_limit_denominator: self.composition_budget_epsilon_denominator,
             max_publications: self.composition_budget_max_publications,
         };
         Some(
             PrivacyAggregatePolicyConfig::new(
+                query_id,
+                self.first_cycle_start_unix,
+                self.cycle_seconds,
                 self.aggregate_id_prefix,
+                populations,
+                metrics,
                 privacy,
                 policy_digest,
                 composition_budget,
@@ -885,167 +1138,52 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSche
             return None;
         }
         Some(PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: self.cycle_seconds.max(1),
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
         })
     }
 }
 
-/// Governance policy controlling repair escalation decisions.
-#[derive(Debug, Clone)]
-pub struct RepairEscalationPolicy {
-    quorum_bps: u16,
-    minimum_voters: u32,
-    dispute_window_secs: u64,
-    appeal_window_secs: u64,
-    max_penalty: XorQuantity,
-}
-
-impl RepairEscalationPolicy {
-    /// Construct a policy from the governance configuration.
-    pub fn from_policy(policy: &actual::RepairEscalationPolicyV1) -> Self {
-        Self {
-            quorum_bps: policy.quorum_bps.min(10_000),
-            minimum_voters: policy.minimum_voters.max(1),
-            dispute_window_secs: policy.dispute_window_secs,
-            appeal_window_secs: policy.appeal_window_secs,
-            max_penalty: policy.max_penalty.clone(),
-        }
-    }
-
-    /// Approval quorum (basis points) required to approve a decision.
-    #[must_use]
-    pub fn quorum_bps(&self) -> u16 {
-        self.quorum_bps
-    }
-
-    /// Minimum number of distinct voters required to resolve a decision.
-    #[must_use]
-    pub fn minimum_voters(&self) -> u32 {
-        self.minimum_voters
-    }
-
-    /// Dispute window in seconds after escalation before governance finalizes.
-    #[must_use]
-    pub fn dispute_window_secs(&self) -> u64 {
-        self.dispute_window_secs
-    }
-
-    /// Appeal window in seconds after approval before a decision is final.
-    #[must_use]
-    pub fn appeal_window_secs(&self) -> u64 {
-        self.appeal_window_secs
-    }
-
-    /// Maximum slash penalty allowed for repair escalation proposals.
-    #[must_use]
-    pub fn max_penalty(&self) -> &XorQuantity {
-        &self.max_penalty
-    }
-
-    /// Clamp a proposed penalty to the configured maximum.
-    #[must_use]
-    pub fn cap_penalty(&self, penalty: &XorQuantity) -> XorQuantity {
-        penalty.min(&self.max_penalty)
-    }
-}
-
-impl Default for RepairEscalationPolicy {
-    fn default() -> Self {
-        Self::from_policy(&actual::RepairEscalationPolicyV1::default())
-    }
-}
-
-/// Repair scheduler configuration resolved from the runtime config.
+/// Native repair worker and durable transaction-forwarder configuration.
 #[derive(Debug, Clone)]
 pub struct RepairConfig {
     enabled: bool,
-    state_dir: Option<PathBuf>,
     claim_ttl_secs: u64,
     heartbeat_interval_secs: u64,
     max_attempts: u32,
     worker_concurrency: usize,
-    backoff_initial_secs: u64,
-    backoff_max_secs: u64,
-    default_slash_penalty: XorQuantity,
-    escalation_policy: RepairEscalationPolicy,
 }
 
 impl RepairConfig {
-    /// Whether the repair scheduler is enabled.
+    /// Whether native repair processing is enabled.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
-    /// Optional directory for durable repair state.
-    #[must_use]
-    pub fn state_dir(&self) -> Option<&PathBuf> {
-        self.state_dir.as_ref()
-    }
-
-    /// Claim TTL for repair tickets (seconds).
+    /// Lease duration requested by the native transaction worker (seconds).
     #[must_use]
     pub fn claim_ttl_secs(&self) -> u64 {
         self.claim_ttl_secs
     }
 
-    /// Heartbeat interval/TTL for active claims (seconds).
+    /// Renewal lead time used by the native transaction worker (seconds).
     #[must_use]
     pub fn heartbeat_interval_secs(&self) -> u64 {
         self.heartbeat_interval_secs
     }
 
-    /// Maximum number of attempts before escalation.
+    /// Maximum durable forwarding attempts before dead-lettering.
     #[must_use]
     pub fn max_attempts(&self) -> u32 {
         self.max_attempts
     }
 
-    /// Concurrent repair workers per node.
+    /// Concurrent native repair executions per node.
     #[must_use]
     pub fn worker_concurrency(&self) -> usize {
         self.worker_concurrency
-    }
-
-    /// Initial retry backoff for failed repairs (seconds).
-    #[must_use]
-    pub fn backoff_initial_secs(&self) -> u64 {
-        self.backoff_initial_secs
-    }
-
-    /// Maximum retry backoff for failed repairs (seconds).
-    #[must_use]
-    pub fn backoff_max_secs(&self) -> u64 {
-        self.backoff_max_secs
-    }
-
-    /// Default penalty used for scheduler-generated slash proposals.
-    #[must_use]
-    pub fn default_slash_penalty(&self) -> &XorQuantity {
-        &self.default_slash_penalty
-    }
-
-    /// Governance policy for escalation/quorum enforcement.
-    #[must_use]
-    pub fn escalation_policy(&self) -> &RepairEscalationPolicy {
-        &self.escalation_policy
-    }
-
-    /// Override the escalation governance policy.
-    #[must_use]
-    pub fn with_escalation_policy(mut self, policy: RepairEscalationPolicy) -> Self {
-        self.escalation_policy = policy;
-        self
-    }
-
-    /// Apply a default state directory when one is not provided.
-    #[must_use]
-    pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
-        if self.state_dir.is_none() {
-            self.state_dir = Some(data_dir.join("repair"));
-        }
-        self
     }
 }
 
@@ -1063,28 +1201,12 @@ impl From<actual::SorafsRepair> for RepairConfig {
 
 impl From<&actual::SorafsRepair> for RepairConfig {
     fn from(value: &actual::SorafsRepair) -> Self {
-        Self::from_repair_and_policy(value, &actual::RepairEscalationPolicyV1::default())
-    }
-}
-
-impl RepairConfig {
-    /// Build a repair config from runtime settings and the governance escalation policy.
-    #[must_use]
-    pub fn from_repair_and_policy(
-        repair: &actual::SorafsRepair,
-        policy: &actual::RepairEscalationPolicyV1,
-    ) -> Self {
         Self {
-            enabled: repair.enabled,
-            state_dir: repair.state_dir.clone(),
-            claim_ttl_secs: repair.claim_ttl_secs,
-            heartbeat_interval_secs: repair.heartbeat_interval_secs,
-            max_attempts: repair.max_attempts,
-            worker_concurrency: repair.worker_concurrency,
-            backoff_initial_secs: repair.backoff_initial_secs,
-            backoff_max_secs: repair.backoff_max_secs,
-            default_slash_penalty: repair.default_slash_penalty.clone(),
-            escalation_policy: RepairEscalationPolicy::from_policy(policy),
+            enabled: value.enabled,
+            claim_ttl_secs: value.claim_ttl_secs,
+            heartbeat_interval_secs: value.heartbeat_interval_secs,
+            max_attempts: value.max_attempts,
+            worker_concurrency: value.worker_concurrency,
         }
     }
 }
@@ -1097,7 +1219,6 @@ pub struct GcConfig {
     interval_secs: u64,
     max_deletions_per_run: u32,
     retention_grace_secs: u64,
-    pre_admission_sweep: bool,
 }
 
 impl GcConfig {
@@ -1131,12 +1252,6 @@ impl GcConfig {
         self.retention_grace_secs
     }
 
-    /// Whether a GC sweep is attempted before rejecting new pins.
-    #[must_use]
-    pub fn pre_admission_sweep(&self) -> bool {
-        self.pre_admission_sweep
-    }
-
     /// Apply a default state directory when one is not provided.
     #[must_use]
     pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
@@ -1167,7 +1282,6 @@ impl From<&actual::SorafsGc> for GcConfig {
             interval_secs: value.interval_secs,
             max_deletions_per_run: value.max_deletions_per_run,
             retention_grace_secs: value.retention_grace_secs,
-            pre_admission_sweep: value.pre_admission_sweep,
         }
     }
 }
@@ -1382,6 +1496,131 @@ mod tests {
     }
 
     #[test]
+    fn orderbook_worker_policy_defensively_clamps_programmatic_boundaries() {
+        use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
+
+        let below = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
+            enabled: true,
+            scan_interval: Duration::ZERO,
+            match_batch_limit: 0,
+            maintenance_batch_limit: 0,
+            max_pending: 0,
+            max_completed: 0,
+            max_dead_letters: 0,
+            max_attempts: 0,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(0),
+        });
+        assert!(below.enabled());
+        assert_eq!(
+            below.scan_interval(),
+            Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS)
+        );
+        assert_eq!(below.match_batch_limit(), 1);
+        assert_eq!(below.maintenance_batch_limit(), 1);
+        assert_eq!(below.max_pending(), 1);
+        assert_eq!(below.max_completed(), 1);
+        assert_eq!(below.max_dead_letters(), 1);
+        assert_eq!(below.max_attempts(), 1);
+        assert_eq!(below.checkpoint_max_bytes(), bounds::CHECKPOINT_MIN_BYTES);
+
+        let above = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
+            enabled: false,
+            scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS + 1),
+            match_batch_limit: ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1 + 1,
+            maintenance_batch_limit: ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1 + 1,
+            max_pending: bounds::MAX_PENDING_LIMIT + 1,
+            max_completed: bounds::MAX_COMPLETED_LIMIT + 1,
+            max_dead_letters: bounds::MAX_DEAD_LETTERS_LIMIT + 1,
+            max_attempts: bounds::MAX_ATTEMPTS_LIMIT + 1,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT + 1,
+            ),
+        });
+        assert!(!above.enabled());
+        assert_eq!(
+            above.scan_interval(),
+            Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS)
+        );
+        assert_eq!(
+            above.match_batch_limit(),
+            ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1
+        );
+        assert_eq!(
+            above.maintenance_batch_limit(),
+            ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1
+        );
+        assert_eq!(
+            above.max_pending(),
+            usize::try_from(bounds::MAX_PENDING_LIMIT).unwrap()
+        );
+        assert_eq!(
+            above.max_completed(),
+            usize::try_from(bounds::MAX_COMPLETED_LIMIT).unwrap()
+        );
+        assert_eq!(
+            above.max_dead_letters(),
+            usize::try_from(bounds::MAX_DEAD_LETTERS_LIMIT).unwrap()
+        );
+        assert_eq!(above.max_attempts(), bounds::MAX_ATTEMPTS_LIMIT);
+        assert_eq!(
+            above.checkpoint_max_bytes(),
+            bounds::CHECKPOINT_MAX_BYTES_LIMIT
+        );
+    }
+
+    #[test]
+    fn reserve_worker_policy_preserves_and_rejects_unsafe_programmatic_values() {
+        use iroha_config::parameters::defaults::sorafs::storage::reserve_worker as bounds;
+
+        assert_eq!(
+            usize::try_from(bounds::SCAN_BATCH_LIMIT_MAX).unwrap(),
+            crate::reserve_transaction_forwarder::RESERVE_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1
+        );
+
+        let invalid = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
+            enabled: true,
+            scan_interval: Duration::ZERO,
+            scan_batch_limit: 0,
+            max_pending: bounds::MAX_PENDING_LIMIT + 1,
+            max_completed: 1,
+            max_dead_letters: 1,
+            max_attempts: 0,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(bounds::CHECKPOINT_MIN_BYTES - 1),
+        });
+        assert_eq!(invalid.scan_interval(), Duration::ZERO);
+        assert_eq!(invalid.scan_batch_limit(), 0);
+        assert_eq!(
+            invalid.max_pending(),
+            usize::try_from(bounds::MAX_PENDING_LIMIT + 1).unwrap()
+        );
+        assert_eq!(invalid.max_attempts(), 0);
+        assert!(invalid.validate().is_err());
+
+        let sub_millisecond_overflow = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
+            scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS)
+                + Duration::from_nanos(1),
+            ..actual::SorafsReserveWorker::default()
+        });
+        assert!(sub_millisecond_overflow.validate().is_err());
+
+        let boundary = ReserveWorkerPolicy::from(actual::SorafsReserveWorker {
+            enabled: false,
+            scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS),
+            scan_batch_limit: bounds::SCAN_BATCH_LIMIT_MAX,
+            max_pending: bounds::MAX_PENDING_LIMIT,
+            max_completed: bounds::MAX_COMPLETED_LIMIT,
+            max_dead_letters: bounds::MAX_DEAD_LETTERS_LIMIT,
+            max_attempts: bounds::MAX_ATTEMPTS_LIMIT,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT,
+            ),
+        });
+        boundary
+            .validate()
+            .expect("exact reserve worker safety boundaries are valid");
+    }
+
+    #[test]
     fn conversion_from_actual_preserves_fields() {
         let mut actual = actual::SorafsStorage::default();
         actual.enabled = true;
@@ -1410,6 +1649,27 @@ mod tests {
             proof_outcome_forwarder_interval: Duration::from_millis(250),
             proof_outcome_max_attempts: 5,
         };
+        actual.orderbook_worker = actual::SorafsOrderbookWorker {
+            enabled: true,
+            scan_interval: Duration::from_millis(250),
+            match_batch_limit: 17,
+            maintenance_batch_limit: 33,
+            max_pending: 31,
+            max_completed: 47,
+            max_dead_letters: 11,
+            max_attempts: 5,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(8 * 1024 * 1024),
+        };
+        actual.reserve_worker = actual::SorafsReserveWorker {
+            enabled: true,
+            scan_interval: Duration::from_millis(375),
+            scan_batch_limit: 19,
+            max_pending: 37,
+            max_completed: 53,
+            max_dead_letters: 13,
+            max_attempts: 6,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(12 * 1024 * 1024),
+        };
         actual.alias = Some("tenant.alpha".into());
         actual.adverts = actual::SorafsAdvertOverrides {
             stake_pointer: Some("stake.pool:abcd".into()),
@@ -1420,10 +1680,6 @@ mod tests {
                 "sorafs.sf1.backup:eu".into(),
             ],
         };
-        actual.orderbook = actual::SorafsOrderbook {
-            min_order_gib: 8,
-            price_tick: "0.025".parse().expect("exact orderbook price tick"),
-        };
         actual.reputation_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
         actual.pricing_trust_policy_path = Some(PathBuf::from("/tmp/sorafs-pricing-policy.to"));
@@ -1432,7 +1688,17 @@ mod tests {
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
+            first_cycle_start_unix: 120,
             publish_delay_seconds: 3,
+            query_id: Some([0xB0; 32]),
+            population_inventory: vec![actual::SorafsPrivacyAggregatePopulation {
+                label: "jurisdiction-a".to_string(),
+                digest: [0xA0; 32],
+            }],
+            metric_schema: vec![actual::SorafsPrivacyAggregateMetric {
+                key: "moderation_actions".to_string(),
+                unit: "count".to_string(),
+            }],
             policy_digest: Some([0xC0; 32]),
             ..actual::SorafsPrivacyAggregateSchedule::default()
         };
@@ -1441,12 +1707,6 @@ mod tests {
             cycle_seconds: 24,
             publish_delay_seconds: 6,
         };
-        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
-            enabled: true,
-            interval_seconds: 30,
-            initial_delay_seconds: 7,
-        };
-
         let cfg = StorageConfig::from(&actual);
         assert!(cfg.enabled());
         assert_eq!(cfg.data_dir(), &PathBuf::from("/tmp/sorafs"));
@@ -1479,6 +1739,25 @@ mod tests {
             Duration::from_millis(250)
         );
         assert_eq!(cfg.runtime_retention().proof_outcome_max_attempts(), 5);
+        let orderbook_worker = cfg.orderbook_worker_policy();
+        assert!(orderbook_worker.enabled());
+        assert_eq!(orderbook_worker.scan_interval(), Duration::from_millis(250));
+        assert_eq!(orderbook_worker.match_batch_limit(), 17);
+        assert_eq!(orderbook_worker.maintenance_batch_limit(), 33);
+        assert_eq!(orderbook_worker.max_pending(), 31);
+        assert_eq!(orderbook_worker.max_completed(), 47);
+        assert_eq!(orderbook_worker.max_dead_letters(), 11);
+        assert_eq!(orderbook_worker.max_attempts(), 5);
+        assert_eq!(orderbook_worker.checkpoint_max_bytes(), 8 * 1024 * 1024);
+        let reserve_worker = cfg.reserve_worker_policy();
+        assert!(reserve_worker.enabled());
+        assert_eq!(reserve_worker.scan_interval(), Duration::from_millis(375));
+        assert_eq!(reserve_worker.scan_batch_limit(), 19);
+        assert_eq!(reserve_worker.max_pending(), 37);
+        assert_eq!(reserve_worker.max_completed(), 53);
+        assert_eq!(reserve_worker.max_dead_letters(), 13);
+        assert_eq!(reserve_worker.max_attempts(), 6);
+        assert_eq!(reserve_worker.checkpoint_max_bytes(), 12 * 1024 * 1024);
         assert_eq!(cfg.alias(), Some(&"tenant.alpha".to_string()));
         let adverts = cfg.adverts();
         assert_eq!(
@@ -1494,9 +1773,6 @@ mod tests {
                 "sorafs.sf1.backup:eu".to_string()
             ]
         );
-        let orderbook = cfg.orderbook_admission_policy();
-        assert_eq!(orderbook.min_order_gib(), 8);
-        assert_eq!(orderbook.price_tick().to_string(), "0.025");
         assert_eq!(
             cfg.reputation_trust_policy_path(),
             Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
@@ -1512,6 +1788,7 @@ mod tests {
         assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {
+                first_cycle_start_unix: 120,
                 cycle_seconds: 12,
                 publish_delay_seconds: 3,
             })
@@ -1521,7 +1798,8 @@ mod tests {
             .expect("enabled privacy aggregate policy");
         let cycle_policy = privacy_policy.cycle_config();
         assert_eq!(cycle_policy.aggregate_id_prefix, "sfm4c-cycle");
-        assert_eq!(cycle_policy.policy_digest, Some([0xC0; 32]));
+        assert_eq!(cycle_policy.query_id, [0xB0; 32]);
+        assert_eq!(cycle_policy.policy_digest, [0xC0; 32]);
         assert_eq!(privacy_policy.policy_digest(), [0xC0; 32]);
         assert!(privacy_policy.requires_cycle_prf());
         assert_eq!(cycle_policy.privacy.epsilon_numerator, Some(4));
@@ -1531,7 +1809,7 @@ mod tests {
         assert_eq!(
             privacy_policy.composition_budget(),
             PrivacyCompositionBudgetPolicyV1 {
-                budget_id: [0xC0; 32],
+                budget_id: [0xB0; 32],
                 epsilon_limit_numerator: 12,
                 epsilon_limit_denominator: 1,
                 max_publications: 52,
@@ -1540,13 +1818,10 @@ mod tests {
         assert_eq!(
             cfg.evidence_viewer_audit_schedule(),
             Some(PrivacyAggregateScheduleConfig {
+                first_cycle_start_unix: 24,
                 cycle_seconds: 24,
                 publish_delay_seconds: 6,
             })
-        );
-        assert_eq!(
-            cfg.reserve_lifecycle_schedule(),
-            Some(ReserveLifecycleScheduleConfig::new(30, 7))
         );
         let penalty = cfg.penalty();
         let defaults = actual::SorafsPenaltyPolicy::default();
@@ -1598,73 +1873,22 @@ mod tests {
     }
 
     #[test]
-    fn reserve_lifecycle_schedule_is_none_when_disabled_and_clamps_zero_interval() {
-        let mut actual = actual::SorafsStorage::default();
-        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
-            enabled: false,
-            interval_seconds: 0,
-            initial_delay_seconds: 5,
-        };
-
-        let cfg = StorageConfig::from(&actual);
-        assert_eq!(cfg.reserve_lifecycle_schedule(), None);
-
-        actual.reserve_lifecycle.enabled = true;
-        let cfg = StorageConfig::from(&actual);
-        assert_eq!(
-            cfg.reserve_lifecycle_schedule(),
-            Some(ReserveLifecycleScheduleConfig::new(1, 5))
-        );
-    }
-
-    #[test]
     fn repair_and_gc_configs_preserve_fields() {
         let repair = actual::SorafsRepair {
             enabled: true,
-            state_dir: Some(PathBuf::from("/tmp/repair_state")),
             claim_ttl_secs: 900,
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 12,
-            backoff_initial_secs: 7,
-            backoff_max_secs: 120,
-            default_slash_penalty: "0.000005".parse().expect("valid exact quantity"),
-            auditor_rate_per_sec: std::num::NonZeroU32::new(5),
-            auditor_burst: std::num::NonZeroU32::new(10),
+            ..Default::default()
         };
 
-        let policy = actual::RepairEscalationPolicyV1 {
-            quorum_bps: 7_000,
-            minimum_voters: 4,
-            dispute_window_secs: 12_000,
-            appeal_window_secs: 24_000,
-            max_penalty: "0.000009".parse().expect("valid exact quantity"),
-        };
-        let cfg = RepairConfig::from_repair_and_policy(&repair, &policy);
+        let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
-        assert_eq!(cfg.state_dir(), Some(&PathBuf::from("/tmp/repair_state")));
         assert_eq!(cfg.claim_ttl_secs(), 900);
         assert_eq!(cfg.heartbeat_interval_secs(), 45);
         assert_eq!(cfg.max_attempts(), 6);
         assert_eq!(cfg.worker_concurrency(), 12);
-        assert_eq!(cfg.backoff_initial_secs(), 7);
-        assert_eq!(cfg.backoff_max_secs(), 120);
-        assert_eq!(
-            cfg.default_slash_penalty(),
-            &"0.000005"
-                .parse::<XorQuantity>()
-                .expect("valid exact quantity")
-        );
-        assert_eq!(cfg.escalation_policy().quorum_bps(), 7_000);
-        assert_eq!(cfg.escalation_policy().minimum_voters(), 4);
-        assert_eq!(cfg.escalation_policy().dispute_window_secs(), 12_000);
-        assert_eq!(cfg.escalation_policy().appeal_window_secs(), 24_000);
-        assert_eq!(
-            cfg.escalation_policy().max_penalty(),
-            &"0.000009"
-                .parse::<XorQuantity>()
-                .expect("valid exact quantity")
-        );
 
         let gc = actual::SorafsGc {
             enabled: true,
@@ -1672,7 +1896,7 @@ mod tests {
             interval_secs: 300,
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
-            pre_admission_sweep: false,
+            ..Default::default()
         };
 
         let gc_cfg = GcConfig::from(&gc);
@@ -1681,17 +1905,13 @@ mod tests {
         assert_eq!(gc_cfg.interval_secs(), 300);
         assert_eq!(gc_cfg.max_deletions_per_run(), 2_000);
         assert_eq!(gc_cfg.retention_grace_secs(), 86_400);
-        assert!(!gc_cfg.pre_admission_sweep());
     }
 
     #[test]
-    fn repair_and_gc_default_state_dirs_follow_storage_root() {
+    fn gc_default_state_dir_follows_storage_root() {
         let data_dir = PathBuf::from("/var/lib/sorafs");
-        let repair =
-            RepairConfig::from(&actual::SorafsRepair::default()).with_default_state_dir(&data_dir);
         let gc = GcConfig::from(&actual::SorafsGc::default()).with_default_state_dir(&data_dir);
 
-        assert_eq!(repair.state_dir(), Some(&data_dir.join("repair")));
         assert_eq!(gc.state_dir(), Some(&data_dir.join("gc")));
     }
 }

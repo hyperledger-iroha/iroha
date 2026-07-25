@@ -13,7 +13,10 @@ use norito::{
     json::{Map, Value, to_string_pretty},
     to_bytes,
 };
-use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
+use sorafs_car::{
+    CarBuildPlan,
+    fetch_plan::{chunk_fetch_plan_to_string, try_chunk_fetch_plan_to_json},
+};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     CapabilityTlv, CapabilityType, CouncilSignature, ProviderAdvertV1, ProviderCapabilityRangeV1,
@@ -80,9 +83,7 @@ fn write_plan_for_payload_with_profile(
     profile: ChunkProfile,
 ) -> PathBuf {
     let plan = CarBuildPlan::single_file_with_profile(payload, profile).expect("plan");
-    let plan_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-        .expect("serialize chunk specs")
-        + "\n";
+    let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize canonical plan");
     let path = tempdir.path().join("plan.json");
     fs::write(&path, plan_json.as_bytes()).expect("write plan file");
     path
@@ -155,23 +156,7 @@ fn fetch_cli_recovers_payload_from_multiple_providers() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 32 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_json = to_string_pretty(&Value::Array(fetch_array)).expect("serialise plan") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let provider_a_path = tempdir.path().join("provider_a.bin");
     let provider_b_path = tempdir.path().join("provider_b.bin");
@@ -306,20 +291,12 @@ fn fetch_cli_handles_failures_across_three_providers() {
         "chunk 1 length must be greater than zero to exercise failure path"
     );
 
-    let fetch_array: Vec<Value> = specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_json = to_string_pretty(&Value::Array(fetch_array)).expect("serialise plan") + "\n";
     let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan");
+    fs::write(
+        &plan_path,
+        chunk_fetch_plan_to_string(&plan).expect("serialize canonical plan"),
+    )
+    .expect("write plan");
 
     let provider_alpha_path = tempdir.path().join("provider_alpha.bin");
     fs::write(&provider_alpha_path, &payload).expect("write provider alpha");
@@ -523,23 +500,7 @@ fn fetch_cli_limits_max_peers() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 24 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_json = to_string_pretty(&Value::Array(fetch_array)).expect("serialise plan") + "\n";
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(&plan_path, plan_json.as_bytes()).expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let provider_a_path = tempdir.path().join("provider_alpha.bin");
     let provider_b_path = tempdir.path().join("provider_beta.bin");
@@ -595,26 +556,7 @@ fn fetch_cli_respects_expected_digest_and_len() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 8 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let digest_hex = blake3_hash(&payload).to_hex().to_string();
     let payload_len = payload.len();
@@ -636,7 +578,7 @@ fn fetch_cli_reads_plan_from_stdin() {
 
     let plan =
         CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let plan_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs()).expect("plan json");
+    let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json");
 
     let output_path = tempdir.path().join("assembled.bin");
 
@@ -673,11 +615,21 @@ fn fetch_cli_reads_manifest_report_from_stdin() {
         })
         .collect();
     let mut manifest_map = Map::new();
+    manifest_map.insert(
+        "schema".into(),
+        Value::from(sorafs_car::fetch_plan::MANIFEST_BUILDER_REPORT_SCHEMA_V1),
+    );
     manifest_map.insert("chunk_fetch_specs".into(), Value::Array(fetch_array));
     manifest_map.insert("payload_len".into(), Value::from(payload.len() as u64));
     manifest_map.insert(
         "payload_digest_hex".into(),
         Value::from(blake3_hash(&payload).to_hex().to_string()),
+    );
+    manifest_map.insert(
+        "manifest".into(),
+        norito::json!({
+            "version": 1
+        }),
     );
     let manifest_str = to_string_pretty(&Value::Object(manifest_map)).expect("json") + "\n";
 
@@ -718,9 +670,19 @@ fn fetch_cli_reads_manifest_report_when_plan_omitted() {
     let digest_hex = blake3_hash(&payload).to_hex().to_string();
 
     let mut report_obj = Map::new();
+    report_obj.insert(
+        "schema".into(),
+        Value::from(sorafs_car::fetch_plan::MANIFEST_BUILDER_REPORT_SCHEMA_V1),
+    );
     report_obj.insert("chunk_fetch_specs".into(), Value::Array(fetch_array));
     report_obj.insert("payload_digest_hex".into(), Value::from(digest_hex.clone()));
     report_obj.insert("payload_len".into(), Value::from(payload.len() as u64));
+    report_obj.insert(
+        "manifest".into(),
+        norito::json!({
+            "version": 1
+        }),
+    );
     let manifest_path = tempdir.path().join("report.json");
     fs::write(
         &manifest_path,
@@ -785,26 +747,7 @@ fn fetch_cli_rejects_digest_mismatch() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 4 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
@@ -815,8 +758,61 @@ fn fetch_cli_rejects_digest_mismatch() {
 
     let stderr = String::from_utf8_lossy(assert.get_output().stderr.as_ref());
     assert!(
-        stderr.contains("assembled payload digest"),
+        stderr.contains("does not match the canonical plan whole-payload digest"),
         "stderr should mention digest mismatch, got: {stderr}"
+    );
+}
+
+#[test]
+fn fetch_cli_rejects_missing_or_substituted_plan_payload_digest() {
+    let tempdir = tempdir().expect("tempdir");
+    let payload_path = tempdir.path().join("payload.bin");
+    let payload = write_payload(&payload_path, 4 * 1024);
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+    let canonical = try_chunk_fetch_plan_to_json(&plan).expect("canonical plan");
+
+    let mut missing = canonical.clone();
+    missing
+        .as_object_mut()
+        .expect("plan object")
+        .remove("payload_digest_blake3_hex");
+    let missing_path = tempdir.path().join("missing-digest-plan.json");
+    fs::write(
+        &missing_path,
+        norito::json::to_vec_pretty(&missing).expect("encode missing plan"),
+    )
+    .expect("write missing plan");
+    let missing_assert = sorafs_fetch_cmd()
+        .arg(format!("--plan={}", missing_path.display()))
+        .arg(format!("--provider=alpha={}", payload_path.display()))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(missing_assert.get_output().stderr.as_ref())
+            .contains("missing required `payload_digest_blake3_hex`")
+    );
+
+    let mut substituted = canonical;
+    substituted.as_object_mut().expect("plan object").insert(
+        "payload_digest_blake3_hex".into(),
+        Value::from("42".repeat(32)),
+    );
+    let substituted_path = tempdir.path().join("substituted-digest-plan.json");
+    fs::write(
+        &substituted_path,
+        norito::json::to_vec_pretty(&substituted).expect("encode substituted plan"),
+    )
+    .expect("write substituted plan");
+    let substituted_assert = sorafs_fetch_cmd()
+        .arg(format!("--plan={}", substituted_path.display()))
+        .arg(format!("--provider=alpha={}", payload_path.display()))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(substituted_assert.get_output().stderr.as_ref())
+            .contains("assembled payload digest"),
+        "substituted whole-payload digest must fail after assembly"
     );
 }
 
@@ -826,26 +822,7 @@ fn fetch_cli_streaming_outputs_fail_on_corruption() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 12 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     // Corrupt the provider payload so chunk verification fails mid-stream.
     let mut corrupt = payload.clone();
@@ -883,26 +860,7 @@ fn fetch_cli_writes_car_archive() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 10 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = norito::json::Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let provider_path = tempdir.path().join("provider.bin");
     fs::write(&provider_path, &payload).expect("write provider");
@@ -958,26 +916,7 @@ fn fetch_cli_writes_report_to_stdout_when_json_out_dash() {
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 8 * 1024);
 
-    let plan =
-        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
-    let fetch_array: Vec<Value> = fetch_specs
-        .iter()
-        .map(|spec| {
-            let mut obj = Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
+    let plan_path = write_plan_for_payload(&tempdir, &payload);
 
     let output_path = tempdir.path().join("assembled.bin");
     let assert = sorafs_fetch_cmd()

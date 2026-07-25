@@ -15,7 +15,8 @@ policy, and the capacity marketplace roadmap.
    backend that stores chunk bytes, manifests, and PoR trees in the configured
    data directory.
 2. **Gateway endpoints**: expose Norito HTTP endpoints for pin submission,
-   chunk fetch, PoR sampling, and storage telemetry within the Torii process.
+   chunk fetch, authenticated proof streaming, and storage telemetry within the
+   Torii process.
 3. **Configuration plumbing**: add `SoraFsStorage` config struct (enabled,
    capacity, directories, concurrency limits) wired through `iroha_config`,
    `iroha_core`, and `iroha_torii`.
@@ -46,10 +47,10 @@ policy, and the capacity marketplace roadmap.
 
 | Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch one exact native manifest record at a finalized cursor. | Validate chunker profiles and canonical manifest payloads before registration; for detail reads return `PinManifestFinalizedRecordV1` and accept only the paired expected finalized height/hash precondition. |
 | `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
 | `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
-| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample` | Report peer/storage state and request bounded local PoR samples. Proof and verdict admission use the authenticated capacity lifecycle; direct storage mutation routes are not mounted. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/proof/stream` | Report peer/storage state and request authenticated, finalized-pin-bound PoR witnesses. The unauthenticated local PoR sampling route is retired; proof and verdict admission use the governed capacity lifecycle. | Reuse chunk-store sampling behind the authenticated proof stream, verify generated witnesses against the committed manifest root, update telemetry, and preserve governance-verdict replay state. |
 
 The runtime now threads these PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` and scheduler metrics reflect governance verdicts without bespoke plumbing in Torii.
 
@@ -95,7 +96,8 @@ Logs / events:
    - Pin → fetch round trip using fixture manifest/plan.
    - Restart recovery: pin, restart, verify manifest registry.
    - Quota rejection: set low capacity, attempt additional pin.
-   - PoR sampling endpoint verifying proof matches chunk store root.
+   - Authenticated proof-stream PoR sampling verifies every witness against the
+     committed chunk-store root.
 3. **Torii integration tests**: run Torii with storage enabled, exercise HTTP endpoints using `assert_cmd`.
 4. **Chaos tests (future)**: simulate disk exhaustion, slow IO, provider removal (tracked in later milestones).
 

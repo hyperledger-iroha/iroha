@@ -1537,6 +1537,10 @@ PROOF
       BY AsyncSpecAlwaysStrongTypeInvariant
     <2>2. AsyncArchiveIoServiceNodes \subseteq Responsive
       BY AsyncArchiveIoServiceNodesAreResponsive
+    <2>2a. AsyncSpecAt(initialContext)
+              => [](AsyncCurrentResponsiveVoters
+                     = AsyncVotersAt(initialContext))
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>3. ProtectedServeStage5Pending(node, job, position)
                /\ ~ProtectedServeRankProgressExit(
                     node, job, <<5, position>>)
@@ -1572,7 +1576,7 @@ PROOF
       <3>1. AsyncSpecAt(initialContext)
                => []~ProtectedServeOwnedAtServiceRank(
                       node, job, <<5, position>>)
-        BY <2>2, <2>7, PTL
+        BY <2>2, <2>2a, <2>7, PTL
            DEF ProtectedServeOwnedAtServiceRank,
                ResponsiveProtectedServeJobOwned,
                AsyncArchiveIoServiceNodes,
@@ -2099,20 +2103,18 @@ BY ONLY ResponsiveProtectedServeJobHasRankPosition, SMT
 
 THEOREM ProtectedServeRankProgressImpliesStarvation ==
   \A initialContext:
-    /\ AsyncLiveSpecAt(initialContext)
+    /\ AsyncSpecAt(initialContext)
     /\ ProtectedServeRankProgressProperty(
-         AsyncLiveSpecAt(initialContext))
+         AsyncSpecAt(initialContext))
     => ProtectedServeStarvationProperty(
-         AsyncLiveSpecAt(initialContext))
+         AsyncSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
-                AsyncLiveSpecAt(initialContext),
+                AsyncSpecAt(initialContext),
                 ProtectedServeRankProgressProperty(
-                  AsyncLiveSpecAt(initialContext))
+                  AsyncSpecAt(initialContext))
          PROVE ProtectedServeStarvationProperty(
-                 AsyncLiveSpecAt(initialContext))
-    <2>0. AsyncSpecAt(initialContext)
-      BY <1>1, AsyncLiveSpecProjectsAsyncSpec
+                 AsyncSpecAt(initialContext))
     <2>1. ASSUME NEW node \in Responsive,
                     NEW job \in AsyncServeJobSet
            PROVE (gst /\ ResponsiveProtectedServeJobOwned(node, job))
@@ -2138,7 +2140,7 @@ PROOF
                  ~> ProtectedServeOwnershipExit(node, job)
         BY ONLY <3>2, ProtectedServeRankExistentialLift, SMT
       <3>4. []AsyncStrongTypeInvariant
-        BY <2>0, AsyncSpecAlwaysStrongTypeInvariant
+        BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
       <3>5. [](/\ AsyncStrongTypeInvariant
                 /\ gst
                 /\ ResponsiveProtectedServeJobOwned(node, job)
@@ -2158,18 +2160,16 @@ PROOF
 
 THEOREM ProtectedServiceRankProgressImpliesStarvation ==
   \A initialContext:
-    /\ AsyncLiveSpecAt(initialContext)
+    /\ AsyncSpecAt(initialContext)
     /\ ProtectedServiceRanksProgressProperty(
-         AsyncLiveSpecAt(initialContext))
-    => StarvationFreedomProperty(AsyncLiveSpecAt(initialContext))
+         AsyncSpecAt(initialContext))
+    => StarvationFreedomProperty(AsyncSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
-                AsyncLiveSpecAt(initialContext),
+                AsyncSpecAt(initialContext),
                 ProtectedServiceRanksProgressProperty(
-                  AsyncLiveSpecAt(initialContext))
-         PROVE StarvationFreedomProperty(AsyncLiveSpecAt(initialContext))
-    <2>0. AsyncSpecAt(initialContext)
-      BY <1>1, AsyncLiveSpecProjectsAsyncSpec
+                  AsyncSpecAt(initialContext))
+         PROVE StarvationFreedomProperty(AsyncSpecAt(initialContext))
     <2>1. ASSUME NEW candidate \in AsyncCandidateSet
            PROVE (gst /\ ResponsiveProtectedCandidateOwned(candidate))
                    ~> ~ResponsiveProtectedCandidateOwned(candidate)
@@ -2188,7 +2188,7 @@ PROOF
         BY <3>1, OwnedServiceRankOrderingWellFounded,
            WellFoundedLeadsTo
       <3>3. AsyncSpecAt(initialContext) => []AsyncTypeInvariant
-        BY <2>0, AsyncSpecAlwaysStrongTypeInvariant,
+        BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
            AsyncStrongTypeProjectsAsyncType, PTL
       <3>4. AsyncTypeInvariant
                /\ gst
@@ -2201,7 +2201,7 @@ PROOF
       <3> QED BY <1>1, <3>2, <3>3, <3>4, PTL
            DEF ProtectedServiceOwnershipExit
     <2>2. ProtectedServeStarvationProperty(
-             AsyncLiveSpecAt(initialContext))
+             AsyncSpecAt(initialContext))
       BY <1>1, ProtectedServeRankProgressImpliesStarvation
          DEF ProtectedServiceRanksProgressProperty
     <2> QED BY <1>1, <2>1, <2>2 DEF StarvationFreedomProperty

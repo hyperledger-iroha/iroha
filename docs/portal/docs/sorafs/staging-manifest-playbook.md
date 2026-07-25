@@ -82,12 +82,16 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
 
    ```bash
    sorafs-fetch \
-     --plan fixtures/chunk_fetch_specs.json \
+     --plan fixtures/chunk_fetch_plan.json \
      --gateway-provider name=staging,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://staging-gateway/,stream-token=<base64> \
      --gateway-manifest-id <manifest_id_hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0 \
      --json-out=reports/staging_manifest.json
    ```
+
+   The plan file must be the strict payload-bound
+   `sorafs.chunk_fetch_plan.v1` object emitted by the builder, not a copied
+   report array.
 
 2. Inspect the JSON output and verify:
    - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.

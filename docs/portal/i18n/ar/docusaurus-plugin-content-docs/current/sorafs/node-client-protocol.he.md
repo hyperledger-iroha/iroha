@@ -132,10 +132,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
   الخاصة بسجل pins وتطبع Norito JSON الخام مع كتل attestation لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
-  بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
-  المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
-  proofs المنتهية تمامًا `412`.
+- يقبل `torii /v1/sorafs/pin/register` طلب JSON V1 المغلق. يجب أن يكون
+  `manifest_payload` ترميز base64 مبطنًا canonical ودقيقًا لبايتات
+  `ManifestV1` canonical بنمط Norito. يشتق Torii الـ digest والـ chunker وطول
+  المحتوى وسياسة pin ومدخلات الرسوم حصريًا من الـ manifest المفكوك، ويرفض
+  حقول الملخص المكررة المتقاعدة. يبقى `alias` وسلف `successor_of_hex` غير
+  الصفري اختياريين.
 - نقاط REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.

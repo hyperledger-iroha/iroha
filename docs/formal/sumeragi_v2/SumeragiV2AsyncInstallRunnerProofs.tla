@@ -1,6 +1,266 @@
 ---- MODULE SumeragiV2AsyncInstallRunnerProofs ----
 EXTENDS SumeragiV2AsyncRuntimeAdmissionTypeProofs
 
+THEOREM CausalCandidateFromTypedCommand ==
+  \A command, commandClass, kind:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ commandClass \in AsyncCommandClasses
+    /\ kind \in AsyncWorkKinds
+    => /\ AsyncCandidateTyped(
+             CausalCandidate(commandClass, kind, command))
+       /\ CausalCandidate(commandClass, kind, command).node = command.node
+PROOF
+  <1>1. ASSUME NEW command, NEW commandClass, NEW kind,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                commandClass \in AsyncCommandClasses,
+                kind \in AsyncWorkKinds
+         PROVE /\ AsyncCandidateTyped(
+                      CausalCandidate(commandClass, kind, command))
+               /\ CausalCandidate(commandClass, kind, command).node =
+                    command.node
+    <2>1. /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+           /\ command.view \in Views
+           /\ command.subject \in SubjectOrNone
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant,
+                   AsyncCandidateTyped
+    <2>2. /\ DOMAIN CausalCandidate(commandClass, kind, command) =
+                    AsyncCandidateDomain
+           /\ CausalCandidate(commandClass, kind, command).class =
+                commandClass
+           /\ CausalCandidate(commandClass, kind, command).kind = kind
+           /\ CausalCandidate(commandClass, kind, command).node =
+                command.node
+           /\ CausalCandidate(commandClass, kind, command).height =
+                context.height
+           /\ CausalCandidate(commandClass, kind, command).view =
+                command.view
+           /\ CausalCandidate(commandClass, kind, command).subject =
+                command.subject
+           /\ CausalCandidate(commandClass, kind, command).item =
+                NoAsyncItem
+           /\ CausalCandidate(commandClass, kind, command).consumerContext =
+                command.consumerContext
+           /\ CausalCandidate(commandClass, kind, command).consumerView =
+                command.consumerView
+           /\ CausalCandidate(commandClass, kind, command).consumerGeneration =
+                command.consumerGeneration
+           /\ CausalCandidate(commandClass, kind, command).evidence =
+                command.evidence
+           /\ CausalCandidate(commandClass, kind, command).bodyIdentity =
+                command.bodyIdentity
+           /\ CausalCandidate(commandClass, kind, command).manifestIdentity =
+                command.manifestIdentity
+           /\ CausalCandidate(commandClass, kind, command).commitmentIdentity =
+                command.commitmentIdentity
+      BY DEF CausalCandidate, AsyncCandidateFrom,
+             AsyncCandidateWithIdentity, AsyncCandidateDomain
+    <2> QED BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCandidateTyped, AsyncEvidenceSet
+  <1> QED BY <1>1
+
+THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
+  \A command:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind # "PersistInstallTC"
+    => /\ AsyncQueueTyped(CommandSuccessors(command))
+       /\ AsyncCausalQueueOwnership(
+            command.node, CommandSuccessors(command))
+BY CausalCandidateFromTypedCommand, SMTT(120)
+   DEF CommandSuccessors, RetainedBodyRebindCandidate,
+       PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
+       PersistDecisionBody, PersistDecisionValidationHeld,
+       PersistDecisionRequest, PersistDecisionRequests,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncQueueTyped, AsyncCausalQueueOwnership,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       SequenceSet
+
+THEOREM ExecutedInstallSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    => LET successor == InstallProposalSuccessor(command)
+       IN /\ AsyncCandidateTyped(successor)
+          /\ successor.node = command.node
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.kind = "PersistInstallTC",
+                ExecuteCommand(command)
+         PROVE LET successor == InstallProposalSuccessor(command)
+               IN /\ AsyncCandidateTyped(successor)
+                  /\ successor.node = command.node
+    <2> DEFINE Successor == InstallProposalSuccessor(command)
+    <2>1. /\ TypeInvariant
+           /\ PendingCertificateWritesAuthorized
+           /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, AsyncTypeInvariant,
+             TypeInvariant, AsyncCandidateTyped
+    <2>2. \E request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <1>1, Isa
+         DEF ExecuteCommand, ExecutePersistInstall
+    <2>3. PICK request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <2>2
+    <2>4. command.view + 1 \in Views
+      BY <2>1, <2>3 DEF PendingCertificateWritesAuthorized
+    <2>5. InstallProposalSubject(command) \in SubjectOrNone
+      BY <2>1, <2>3, SMTT(60), Isa
+         DEF InstallProposalSubject, InstallRequests,
+             AsyncProposalSubject, PendingCertificateWritesAuthorized,
+             TCValid, AuthenticatedHighRef, HighRefValid,
+             TcHighRank, TcHighSubject, HighestTimeoutVote,
+             MaximalTimeoutVotes, EmptyTimeoutHigh,
+             TypeInvariant, AsyncCandidateTyped
+    <2>6. /\ context \in ContextRecords
+           /\ generation[command.node] \in Generations
+           /\ generation[command.node] < MaxGeneration
+           /\ generation[command.node] + 1 \in Generations
+           /\ command.evidence \in AsyncEvidenceSet
+      BY <1>1, <2>1, <2>3, SMT
+         DEF PersistInstallTC, TypeInvariant, AsyncCandidateTyped,
+             Generations
+    <2>7. /\ DOMAIN Successor = AsyncCandidateDomain
+           /\ Successor.class \in AsyncCommandClasses
+           /\ Successor.kind \in AsyncWorkKinds
+           /\ Successor.node = command.node
+           /\ Successor.height = context.height
+           /\ Successor.view = command.view + 1
+           /\ Successor.subject = InstallProposalSubject(command)
+           /\ Successor.item = NoAsyncItem
+      BY Isa
+         DEF Successor, InstallProposalSuccessor,
+             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateDomain,
+             AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
+    <2> QED BY <2>1, <2>4, <2>5, <2>6, <2>7, SMT
+         DEF Successor, InstallProposalSuccessor,
+             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateTyped
+  <1> QED BY <1>1
+
+THEOREM ExecutedInstallProposalSuccessorMatchesPostState ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    => LET successor == InstallProposalSuccessor(command)
+       IN /\ successor.consumerContext = context'
+          /\ successor.consumerView = nodeView'[command.node]
+          /\ successor.consumerGeneration = generation'[command.node]
+          /\ successor.subject =
+               IF highestRank'[command.node] = NoRank
+               THEN AsyncHeartbeatSubject
+               ELSE highestSubject'[command.node]
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.kind = "PersistInstallTC",
+                ExecuteCommand(command)
+         PROVE LET successor == InstallProposalSuccessor(command)
+               IN /\ successor.consumerContext = context'
+                  /\ successor.consumerView = nodeView'[command.node]
+                  /\ successor.consumerGeneration =
+                       generation'[command.node]
+                  /\ successor.subject =
+                       IF highestRank'[command.node] = NoRank
+                       THEN AsyncHeartbeatSubject
+                       ELSE highestSubject'[command.node]
+    <2>1. PICK request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <1>1, Isa DEF ExecuteCommand, ExecutePersistInstall
+    <2>2. InstallRequests(command) = {request}
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, RequestsUniqueByNode,
+             AllPendingRequests, InstallRequests
+    <2>3. /\ context' = context
+           /\ nodeView'[command.node] = command.view + 1
+           /\ generation'[command.node] =
+                generation[command.node] + 1
+           /\ highestRank'[command.node] =
+                IF TcHighRank(request.tc) > highestRank[command.node]
+                THEN TcHighRank(request.tc)
+                ELSE highestRank[command.node]
+           /\ highestSubject'[command.node] =
+                IF TcHighRank(request.tc) > highestRank[command.node]
+                THEN TcHighSubject(request.tc)
+                ELSE highestSubject[command.node]
+      BY <2>1, Isa DEF PersistInstallTC
+    <2>4. InstallProposalSubject(command) =
+             IF highestRank'[command.node] = NoRank
+             THEN AsyncHeartbeatSubject
+             ELSE highestSubject'[command.node]
+      BY <1>1, <2>1, <2>2, <2>3, SMTT(30), Isa
+         DEF InstallProposalSubject, AsyncProposalSubject
+    <2> QED BY <2>3, <2>4, Isa
+         DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
+             AsyncCandidateWithIdentity
+  <1> QED BY <1>1
+
+THEOREM ExecutedInstallCommitSignSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    /\ InstallCommitSignRequests(command) # {}
+    => /\ AsyncCandidateTyped(InstallCommitSignSuccessor(command))
+       /\ InstallCommitSignSuccessor(command).node = command.node
+BY SMTT(120), Isa
+   DEF InstallCommitSignSuccessor, InstallCommitSignRequests,
+       ActiveLockedCommitSignRequestsAfterInstall,
+       ExactLockedCommitIntents, VoteSign, VoteSignSet,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateTyped, AsyncEvidenceSet,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ExecuteCommand, ExecutePersistInstall
+
+THEOREM ExecutedInstallLockedFetchSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    /\ InstallResultingLockedPrepareQCs(command) # {}
+    => /\ AsyncCandidateTyped(InstallLockedFetchSuccessor(command))
+       /\ InstallLockedFetchSuccessor(command).node = command.node
+BY SMTT(120), Isa
+   DEF InstallLockedFetchSuccessor,
+       InstallResultingLockedPrepareQCs, InstallRequests,
+       HistoricalLockedPrepareRecoveryProvenance,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateTyped, AsyncEvidenceSet,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ExecuteCommand, ExecutePersistInstall
+
 (***************************************************************************
 Every constructor emitted by a successful TC installation freezes the
 post-install consumer epoch.  The constructor is evaluated in the pre-state,
@@ -4258,15 +4518,15 @@ PROOF
     <2>1. CASE ExecuteRegularCommand(command)
       BY <1>1, <2>1,
          ExecuteRegularCommandPreservesTransportContentType
-    <2>2. CASE ExecuteApply(command)
+    <2>2. CASE ExecuteDecisionFetch(command)
       BY <1>1, <2>2,
-         ExecuteApplyPreservesTransportContentType
-    <2>3. CASE ExecuteRejectAuthenticatedJunk(command)
-      BY <1>1, <2>3,
-         ExecuteRejectAuthenticatedJunkPreservesTransportContentType
-    <2>4. CASE ExecuteDecisionFetch(command)
-      BY <1>1, <2>4,
          ExecuteDecisionFetchPreservesTransportContentType
+    <2>3. CASE ExecuteApply(command)
+      BY <1>1, <2>3,
+         ExecuteApplyPreservesTransportContentType
+    <2>4. CASE ExecuteRejectAuthenticatedJunk(command)
+      BY <1>1, <2>4,
+         ExecuteRejectAuthenticatedJunkPreservesTransportContentType
     <2>5. CASE ExecuteSignProposal(command)
       BY <1>1, <2>5,
          ExecuteSignProposalPreservesTransportContentType

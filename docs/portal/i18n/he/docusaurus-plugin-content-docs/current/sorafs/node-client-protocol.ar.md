@@ -120,10 +120,12 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
   الخاصة بسجل pins وتطبع Norito JSON الخام مع كتل attestation لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
-  بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
-  المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
-  proofs المنتهية تمامًا `412`.
+- `torii /v1/sorafs/pin/register` מקבל את בקשת JSON V1 הסגורה.
+  `manifest_payload` חייב להיות base64 קנוני מרופד ומדויק של בתי
+  `ManifestV1` הקנוניים של Norito. ‏Torii גוזר את ה-digest, ה-chunker, אורך
+  התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest המפוענח, ודוחה שדות סיכום
+  כפולים שהוצאו משימוש. `alias` ו-predecessor לא-אפס ב-`successor_of_hex`
+  נשארים אופציונליים.
 - REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.## المراجع

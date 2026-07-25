@@ -119,17 +119,12 @@ Opérateurs/SDK et erreurs suivantes :
 - `iroha app sorafs pin list|show`, `alias list`, et `replication list` registre de broches
   Les points de terminaison REST enveloppent les éléments de preuve d'audit et les blocs d'attestation.
   raw Norito Impression JSON en anglais
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` Norito et JSON
-  manifeste des preuves d'alias facultatives et les successeurs acceptent des preuves d'alias facultatives mal formé
-  épreuves پر `400`, épreuves périmées پر `503` مع `Warning: 110`, اور épreuves périmées
-  par `412`۔
--Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
-  structures d'attestation شامل کرتے ہیں تاکہ clients derniers en-têtes de bloc کے
-  خلاف données vérifier کر سکیں۔
-
-## Références- Spécification canonique :
-  [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
--Type Norito : `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- `torii /v1/sorafs/pin/register` accepte la requête JSON V1 fermée.
+  `manifest_payload` doit être le base64 canonique avec padding exact des octets
+  Norito `ManifestV1` canoniques. Torii dérive le digest, le chunker, la longueur
+  du contenu, la politique de pin et les entrées de frais uniquement du manifest
+  décodé, et rejette les champs de résumé dupliqués retirés. `alias` et un
+  predecessor `successor_of_hex` non nul restent optionnels.
 - Aides CLI : `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
 - Caisse d'orchestrateur : `crates/sorafs_orchestrator`

@@ -21,7 +21,8 @@ public struct ToriiDaProofSummaryArtifact: Encodable, Sendable, Equatable {
         public var leafBytesBase64: String
         public var segmentLeaves: [String]
         public var chunkSegments: [String]
-        public var chunkRoots: [String]
+        public var chunkCount: UInt64
+        public var chunkMerklePath: [String]
         public var verified: Bool
 
         public init(from record: ToriiDaProofRecord) {
@@ -43,7 +44,8 @@ public struct ToriiDaProofSummaryArtifact: Encodable, Sendable, Equatable {
             leafBytesBase64 = record.leafBytes.base64EncodedString()
             segmentLeaves = record.segmentLeavesHex.map { $0.lowercased() }
             chunkSegments = record.chunkSegmentsHex.map { $0.lowercased() }
-            chunkRoots = record.chunkRootsHex.map { $0.lowercased() }
+            chunkCount = record.chunkCount
+            chunkMerklePath = record.chunkMerklePathHex.map { $0.lowercased() }
             verified = record.verified
         }
 
@@ -66,7 +68,8 @@ public struct ToriiDaProofSummaryArtifact: Encodable, Sendable, Equatable {
             case leafBytesBase64 = "leaf_bytes_b64"
             case segmentLeaves = "segment_leaves"
             case chunkSegments = "chunk_segments"
-            case chunkRoots = "chunk_roots"
+            case chunkCount = "chunk_count"
+            case chunkMerklePath = "chunk_merkle_path"
             case verified
         }
     }

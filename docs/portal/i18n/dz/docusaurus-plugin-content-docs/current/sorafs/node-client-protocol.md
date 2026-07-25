@@ -126,10 +126,13 @@ SDKs I18NI000000058X བརྒྱུད་དེ་):
 - `iroha app sorafs pin list|show`, དང་ I18NI0000086X དང་ I18NI000000087X
   pin-ཐོ་བཀོད་ REST མཐའ་མཚམས་དང་ དཔར་བསྐྲུན་ I18NT0000001X JSON འདི་ བདེན་ཁུངས་བཀག་ཆ་ཚུ་དང་གཅིག་ཁར་
   རྩིས་ཞིབ་སྒྲུབ་བྱེད་ཀྱི་དོན་ལུ།
-- I18NI0000008X དང་ `torii /v1/sorafs/pin/register` གིས་ Norito དང་ལེན་འབདཝ་ཨིན།
-  ཡང་ན་ JSON གིས་ གདམ་ཁ་ཅན་གྱི་བདེན་ཁུངས་དང་ ཤུལ་འཛིན་ཚུ་ མངོན་གསལ་འབདཝ་ཨིན། གནོདཔ་ཅན་གྱི་བདེན་དཔང་ཚུ།
-  I18NI000000090X བསྡུ་སྒྲིག་དང་ བརྟན་པོའི་བདེན་ཁུངས་ཚུ་ I18NI000000091X དང་ I18NI000000092X, དང་།
-  ཧརཌ་-ཐོན་པའི་བདེན་ཁུངས་ཚུ་ ལོག་ `412`.
+- `torii /v1/sorafs/pin/register` གིས་ ཁ་བསྡམས་པའི་ JSON V1 ཞུ་བ་
+  དང་ལེན་འབདཝ་ཨིན། `manifest_payload` འདི་ canonical Norito
+  `ManifestV1` བཱའིཊ་ཚུ་གི་ ཏག་ཏག་ canonical padded base64 ཨིན་དགོ།
+  Torii གིས་ digest, chunker, content length, pin policy དང་ fee inputs ཚུ་
+  decoded manifest རྐྱངམ་ཅིག་ལས་བཟོཝ་ཨིནམ་དང་ duplicate summary fields
+  རྙིངམ་ཚུ་ངོས་ལེན་མི་འབད། `alias` དང་ zero མེན་པའི་
+  `successor_of_hex` predecessor འདི་གདམ་ཁ་ཅན་སྦེ་རང་སྡོདཔ་ཨིན།
 - `iroha app sorafs repair list` ཉམས་བཅོས་བང་རིམ་ཚགས་མ་ཚུ་ མེ་ལོང་ཚུ་ ཨིན།
   `repair claim|complete|fail|escalate` མཚན་རྟགས་བཀོད་པའི་ལས་བྱེད་པའི་བྱ་བ་ཡང་ན་གཡོ་ཤས།
   གྲོས་འཆར་ Torii. གཡོ་སྒྱུའི་གྲོས་འཆར་ནང་ གཞུང་སྐྱོང་གནང་བ་བཅུད་བསྡུས་ཚུད་ཆོག།

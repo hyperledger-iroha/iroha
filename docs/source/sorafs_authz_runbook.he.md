@@ -62,7 +62,6 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
   ```bash
   iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \
-    --chunk-digest 0123abcd... \
     --submitted-epoch 0 \
     --config /etc/iroha/config.toml
   ```

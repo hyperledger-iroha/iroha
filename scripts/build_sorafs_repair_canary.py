@@ -37,6 +37,7 @@ from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     REQUIRED_GOVERNANCE_TARGETS,
     REQUIRED_LIFECYCLE_STATUSES,
     REQUIRED_METRICS,
+    REQUIRED_ROUTE_STATUS_CODES,
     REQUIRED_WORKER_ROUTES,
     ROSTER_BOUND_KINDS,
     ValidationOptions,
@@ -280,7 +281,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
         {
             "name": name,
             "passed": True,
-            "status_code": args.route_status_code,
+            "status_code": REQUIRED_ROUTE_STATUS_CODES[name],
             "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
@@ -338,10 +339,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "passed_route_count": len(routes),
                 "routes": routes,
                 "roster_digest_hex": args.roster_digest_hex,
-                "signed_auditor_envelope_required": True,
-                "nonce_replay_rejected": True,
-                "legacy_raw_payload_rejected": True,
-                "per_auditor_rate_limit_enforced": True,
+                "caller_signed_transaction_required": True,
+                "single_native_instruction_required": True,
+                "transaction_replay_rejected": True,
+                "non_transaction_payload_rejected": True,
+                "per_authority_rate_limit_enforced": True,
                 "response_bodies_included": False,
             }
         )
@@ -359,7 +361,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "worker_permission_enforced": True,
                 "lease_heartbeat_enforced": True,
                 "idempotency_enforced": True,
-                "norito_snapshot_persisted": True,
+                "finalized_task_projection_verified": True,
+                "exact_live_lease_execution_verified": True,
+                "durable_transaction_forwarding_verified": True,
+                "restart_reconciliation_verified": True,
+                "single_terminal_outcome_verified": True,
                 "gc_protection_verified": True,
                 "repair_latency_seconds": args.repair_latency_seconds,
                 "raw_repair_payloads_included": False,
@@ -374,9 +380,10 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "roster_digest_hex": args.roster_digest_hex,
                 "evidence_bundle_digest_hex": args.evidence_bundle_digest_hex,
-                "backlog_replay_verified": True,
-                "sse_delivery_verified": True,
-                "websocket_delivery_verified": True,
+                "finalized_chain_projection_verified": True,
+                "cursor_resume_verified": True,
+                "etag_revalidation_verified": True,
+                "cross_peer_consistency_verified": True,
                 "event_lag_seconds": args.event_lag_seconds,
                 "response_bodies_included": False,
             }
@@ -511,8 +518,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--auditor-route",
             errors=errors,
         )
-        if args.route_status_code < 200 or args.route_status_code > 299:
-            errors.append("--route-status-code must be a 2xx HTTP status code")
     elif args.kind == "worker_lifecycle":
         validate_hex64(
             args.route_body_blake3_hex,
@@ -531,8 +536,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--lifecycle-status",
             errors=errors,
         )
-        if args.route_status_code < 200 or args.route_status_code > 299:
-            errors.append("--route-status-code must be a 2xx HTTP status code")
     elif args.kind == "event_streams":
         validate_hex64(
             args.route_body_blake3_hex,
@@ -545,8 +548,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--event-route",
             errors=errors,
         )
-        if args.route_status_code < 200 or args.route_status_code > 299:
-            errors.append("--route-status-code must be a 2xx HTTP status code")
     elif args.kind == "governance_handoff":
         require_kind_options(
             args,
@@ -676,7 +677,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--handoff-target", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--auditor", action="append", default=[])
-    parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--event-lag-seconds", type=non_negative_int_arg, default=30)

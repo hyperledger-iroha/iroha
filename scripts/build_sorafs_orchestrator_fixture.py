@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import blake3
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -141,6 +143,31 @@ def fixture_file_size(path: Path, label: str) -> int:
         error_label = error_diagnostic_label(error, path_label=path_label)
         raise ValueError(
             f"failed to inspect {label} `{path_label}`: {error_label}"
+        ) from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def fixture_file_bytes(path: Path, label: str) -> bytes:
+    """Read a regular fixture file through a no-follow descriptor."""
+
+    validate_fixture_path(path, label)
+    if not path.is_file():
+        raise ValueError(
+            f"{label} `{path_diagnostic_label(path)}` must exist and be a file"
+        )
+    fd = -1
+    try:
+        fd = os.open(path, read_open_flags())
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read()
+    except OSError as error:
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(
+            f"failed to read {label} `{path_label}`: {error_label}"
         ) from error
     finally:
         if fd >= 0:
@@ -320,6 +347,13 @@ def main() -> None:
     root = repo_root()
     chunker_fixture = load_chunker_fixture(root)
     plan_specs = build_plan_specs(chunker_fixture)
+    payload_path = Path("fuzz") / "sorafs_chunker" / "sf1_profile_v1_input.bin"
+    payload = fixture_file_bytes(root / payload_path, "chunker payload")
+    plan = {
+        "schema": "sorafs.chunk_fetch_plan.v1",
+        "payload_digest_blake3_hex": blake3.blake3(payload).hexdigest(),
+        "chunk_fetch_specs": plan_specs,
+    }
     max_chunk_length = max(int(length) for length in chunker_fixture["chunk_lengths"])
     providers = build_providers(max_chunk_length)
     telemetry = build_telemetry(providers)
@@ -332,13 +366,12 @@ def main() -> None:
     )
     ensure_fixture_directory(output_dir, "orchestrator fixture output directory")
 
-    write_json(output_dir / "plan.json", plan_specs)
+    write_json(output_dir / "plan.json", plan)
     write_json(output_dir / "providers.json", providers)
     write_json(output_dir / "telemetry.json", telemetry)
     write_json(output_dir / "options.json", options)
 
-    payload_path = Path("fuzz") / "sorafs_chunker" / "sf1_profile_v1_input.bin"
-    payload_bytes = fixture_file_size(root / payload_path, "chunker payload")
+    payload_bytes = len(payload)
 
     metadata = {
         "version": 1,

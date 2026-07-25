@@ -20,6 +20,7 @@ use std::{
 use blake3::hash as blake3_hash;
 use norito::json::{self, Value};
 use sorafs_car::{
+    fetch_plan::chunk_fetch_plan_from_json,
     fixtures::MultiPeerFixture,
     multi_fetch::{ChunkResponse, FetchRequest},
 };
@@ -204,7 +205,17 @@ fn read_json_value(path: &Path) -> Value {
 }
 
 fn validate_plan(fixture: &MultiPeerFixture, path: &Path) {
-    let plan_json = read_json_array(path);
+    let plan_value = read_json_value(path);
+    let parsed = chunk_fetch_plan_from_json(&plan_value).expect("canonical V1 fixture plan");
+    assert_eq!(
+        parsed.payload_digest,
+        *blake3_hash(fixture.payload()).as_bytes(),
+        "plan whole-payload digest mismatch"
+    );
+    let plan_json = plan_value
+        .get("chunk_fetch_specs")
+        .and_then(Value::as_array)
+        .expect("canonical V1 fixture plan specs");
     assert_eq!(
         plan_json.len(),
         fixture.plan().chunks.len(),

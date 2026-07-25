@@ -10,9 +10,10 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self, OpenOptions},
     io::{Read, Write},
+    num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use iroha_crypto::{Hash, HashOf};
@@ -64,25 +65,15 @@ pub const MAX_CERTIFIED_MERGE_CHUNKS: usize =
 
 const REFERENCE_DIGEST_DOMAIN: &[u8] = b"iroha:merge:sidecar-reference:v1\0";
 const REQUEST_ID_DOMAIN: &[u8] = b"iroha:merge:sidecar-request:v1\0";
+const CLOSE_ID_DOMAIN: &[u8] = b"iroha:merge:sidecar-close:v1\0";
 const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v2\0";
 
-const MAX_INBOUND_SESSIONS: usize = 32;
-const MAX_INBOUND_SESSIONS_PER_PEER: usize = 4;
-const MAX_INBOUND_ASSEMBLY_BYTES: usize = 64 * 1024 * 1024;
-const MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER: usize = 32 * 1024 * 1024;
 const RESERVED_DECIDED_INBOUND_SESSIONS: usize = 1;
 const RESERVED_DECIDED_INBOUND_BYTES: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
-const MAX_DEFERRED_BLOCKS: usize = 128;
 const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
-const MAX_FUTURE_BLOCK_DISTANCE: u64 = 64;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
 const DEFAULT_REPLY_SOURCE_CAPACITY: usize = 8;
-const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize = 2;
-const MAX_OUTBOUND_BYTES_PER_SOURCE: usize = 16 * 1024 * 1024;
-const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize = 4;
-const SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
 const CHUNK_PAYLOAD_DIGEST_DOMAIN: &[u8] = b"iroha:merge-sidecar:chunk-payload:v1";
 const RELIABLE_FLUSH_SIBLING_STATE_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-sibling-state:v1\0";
@@ -100,14 +91,185 @@ const SIGNING_GUARD_RECORD_EXT: &str = "norito";
 const SIGNING_GUARD_TEMP_EXT: &str = "norito.tmp";
 const SIGNING_GUARD_HIGH_WATER_FILE: &str = "committed-high-water.norito";
 const SIGNING_GUARD_HIGH_WATER_TEMP: &str = "committed-high-water.norito.tmp";
-const MAX_SIGNING_GUARD_RECORDS: usize = 1_024;
-const SIGNING_GUARD_RECORD_HEADROOM_BYTES: usize = 64 * 1024;
+#[cfg(test)]
+const MAX_INBOUND_SESSIONS: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY.get();
+#[cfg(test)]
+const MAX_INBOUND_SESSIONS_PER_PEER: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER.get();
+#[cfg(test)]
+const MAX_OUTBOUND_SESSIONS_PER_SOURCE: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE
+        .get();
+#[cfg(test)]
+const MAX_OUTBOUND_BYTES_PER_SOURCE: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE.get();
+#[cfg(test)]
+const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE
+        .get();
+#[cfg(test)]
+const REQUEST_TIMEOUT: Duration =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT;
+#[cfg(test)]
+const MAX_SIGNING_GUARD_RECORDS: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY.get();
+#[cfg(test)]
 const MAX_SIGNING_GUARD_RECORD_BYTES: usize =
-    MAX_MERGE_LEDGER_ENTRY_BYTES + SIGNING_GUARD_RECORD_HEADROOM_BYTES;
-// Mirror the existing aggregate pending certified-merge sidecar budget. This
-// prevents successive views from turning exact pre-QC recovery into unbounded
-// disk retention before the committed high-water can advance.
-const MAX_SIGNING_GUARD_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES.get();
+#[cfg(test)]
+const MAX_SIGNING_GUARD_TOTAL_BYTES: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES.get();
+
+/// Fingerprinted runtime geometry for certified merge-sidecar transfer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MergeSidecarLimits {
+    inbound_session_capacity: usize,
+    inbound_sessions_per_peer: usize,
+    inbound_assembly_bytes: usize,
+    inbound_assembly_bytes_per_peer: usize,
+    deferred_block_capacity: usize,
+    future_block_distance: u64,
+    request_timeout: Duration,
+    outbound_sessions_per_source: usize,
+    outbound_bytes_per_source: usize,
+    server_request_gates_per_source: usize,
+}
+
+impl MergeSidecarLimits {
+    /// Construct a geometry which retains disjoint decided and ordinary
+    /// full-entry corridors and cannot weaken per-source ownership.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        inbound_session_capacity: NonZeroUsize,
+        inbound_sessions_per_peer: NonZeroUsize,
+        inbound_assembly_bytes: NonZeroUsize,
+        inbound_assembly_bytes_per_peer: NonZeroUsize,
+        deferred_block_capacity: NonZeroUsize,
+        future_block_distance: NonZeroU64,
+        request_timeout: Duration,
+        outbound_sessions_per_source: NonZeroUsize,
+        outbound_bytes_per_source: NonZeroUsize,
+        server_request_gates_per_source: NonZeroUsize,
+    ) -> Result<Self, MergeSidecarError> {
+        let inbound_session_capacity = inbound_session_capacity.get();
+        let inbound_sessions_per_peer = inbound_sessions_per_peer.get();
+        let inbound_assembly_bytes = inbound_assembly_bytes.get();
+        let inbound_assembly_bytes_per_peer = inbound_assembly_bytes_per_peer.get();
+        let deferred_block_capacity = deferred_block_capacity.get();
+        let outbound_sessions_per_source = outbound_sessions_per_source.get();
+        let outbound_bytes_per_source = outbound_bytes_per_source.get();
+        let server_request_gates_per_source = server_request_gates_per_source.get();
+        let minimum_inbound_bytes =
+            MAX_MERGE_LEDGER_ENTRY_BYTES
+                .checked_mul(2)
+                .ok_or(MergeSidecarError::Capacity(
+                    "merge-sidecar inbound reserved-byte geometry",
+                ))?;
+        if inbound_session_capacity <= RESERVED_DECIDED_INBOUND_SESSIONS
+            || inbound_sessions_per_peer <= RESERVED_DECIDED_INBOUND_SESSIONS
+            || inbound_sessions_per_peer > inbound_session_capacity
+            || deferred_block_capacity <= RESERVED_DECIDED_DEFERRED_BLOCKS
+            || inbound_assembly_bytes < minimum_inbound_bytes
+            || inbound_assembly_bytes_per_peer < minimum_inbound_bytes
+            || inbound_assembly_bytes_per_peer > inbound_assembly_bytes
+            || outbound_bytes_per_source < MAX_MERGE_LEDGER_ENTRY_BYTES
+            || server_request_gates_per_source < outbound_sessions_per_source
+            || request_timeout.is_zero()
+        {
+            return Err(MergeSidecarError::Capacity(
+                "invalid merge-sidecar runtime geometry",
+            ));
+        }
+        Ok(Self {
+            inbound_session_capacity,
+            inbound_sessions_per_peer,
+            inbound_assembly_bytes,
+            inbound_assembly_bytes_per_peer,
+            deferred_block_capacity,
+            future_block_distance: future_block_distance.get(),
+            request_timeout,
+            outbound_sessions_per_source,
+            outbound_bytes_per_source,
+            server_request_gates_per_source,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn defaults() -> Self {
+        use iroha_config::parameters::defaults::sumeragi as defaults;
+
+        Self::new(
+            defaults::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY,
+            defaults::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER,
+            defaults::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES,
+            defaults::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER,
+            defaults::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY,
+            defaults::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE,
+            defaults::V2_MERGE_SIDECAR_REQUEST_TIMEOUT,
+            defaults::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE,
+            defaults::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
+            defaults::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
+        )
+        .expect("default merge-sidecar limits are valid")
+    }
+}
+
+/// Fingerprinted disk geometry for the durable merge-signing guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MergeSigningGuardLimits {
+    max_records: usize,
+    max_record_bytes: usize,
+    max_total_bytes: usize,
+}
+
+impl MergeSigningGuardLimits {
+    /// Construct a journal geometry capable of atomically retaining at least
+    /// one protocol-sized candidate decision and its metadata.
+    pub(crate) fn new(
+        max_records: NonZeroUsize,
+        max_record_bytes: NonZeroUsize,
+        max_total_bytes: NonZeroUsize,
+    ) -> Result<Self, MergeSidecarError> {
+        let max_record_bytes = max_record_bytes.get();
+        let max_total_bytes = max_total_bytes.get();
+        let metadata_headroom =
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
+        let minimum_record_bytes = MAX_MERGE_LEDGER_ENTRY_BYTES
+            .checked_add(metadata_headroom)
+            .ok_or(MergeSidecarError::Capacity(
+                "merge-signing record byte geometry",
+            ))?;
+        let minimum_total_bytes =
+            max_record_bytes
+                .checked_add(metadata_headroom)
+                .ok_or(MergeSidecarError::Capacity(
+                    "merge-signing aggregate byte geometry",
+                ))?;
+        if max_record_bytes < minimum_record_bytes || max_total_bytes < minimum_total_bytes {
+            return Err(MergeSidecarError::Capacity(
+                "invalid merge-signing guard runtime geometry",
+            ));
+        }
+        Ok(Self {
+            max_records: max_records.get(),
+            max_record_bytes,
+            max_total_bytes,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn defaults() -> Self {
+        use iroha_config::parameters::defaults::sumeragi as defaults;
+
+        Self::new(
+            defaults::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY,
+            defaults::V2_MERGE_SIGNING_GUARD_RECORD_BYTES,
+            defaults::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES,
+        )
+        .expect("default merge-signing limits are valid")
+    }
+}
 
 fn retry_timeout(base: Duration, attempts: u32) -> Duration {
     let backoff_shift = attempts.saturating_sub(1).min(4);
@@ -119,7 +281,12 @@ fn retry_timeout(base: Duration, attempts: u32) -> Duration {
 pub struct CertifiedMergeSidecarRequestV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
     pub version: u8,
-    /// Request nonce generated by the requester.
+    /// Monotonic semantic sequence in the requester-to-responder stream.
+    pub semantic_sequence: u64,
+    /// Cumulative authenticated close floor for the same semantic stream.
+    pub closed_through: u64,
+    /// Canonical identity of the immutable semantic payload. Stream sequence
+    /// and cumulative close metadata are deliberately excluded.
     pub request_id: Hash,
     /// Canonical hash of the requested full entry.
     pub entry_hash: HashOf<MergeLedgerEntry>,
@@ -135,12 +302,105 @@ pub struct CertifiedMergeSidecarRequestV1 {
     pub responder: PeerId,
 }
 
+impl CertifiedMergeSidecarRequestV1 {
+    /// Derive the canonical identity of this immutable semantic projection.
+    #[must_use]
+    pub fn canonical_request_id(&self) -> Hash {
+        let version = [self.version];
+        let encoded_len = self.encoded_len.to_le_bytes();
+        let epoch_id = self.epoch_id.to_le_bytes();
+        let requester = self.requester.encode();
+        let responder = self.responder.encode();
+        Hash::new_from_chunks(&[
+            REQUEST_ID_DOMAIN,
+            &version,
+            self.entry_hash.as_ref().as_ref(),
+            &encoded_len,
+            &epoch_id,
+            self.reference_digest.as_ref(),
+            requester.as_slice(),
+            responder.as_slice(),
+        ])
+    }
+
+    fn bind_canonical_request_id(&mut self) {
+        self.request_id = self.canonical_request_id();
+    }
+}
+
+/// Cumulative authenticated release of completed semantic request occurrences.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct CertifiedMergeSidecarCloseV1 {
+    /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
+    pub version: u8,
+    /// Highest contiguous semantic sequence which the requester has terminated.
+    pub closed_through: u64,
+    /// Canonical identity of this cumulative close witness.
+    pub close_id: Hash,
+    /// Authenticated peer which issued the request stream.
+    pub requester: PeerId,
+    /// Exact responder whose retained occurrences may be released.
+    pub responder: PeerId,
+}
+
+impl CertifiedMergeSidecarCloseV1 {
+    /// Derive the canonical identity of this cumulative close witness.
+    #[must_use]
+    pub(crate) fn canonical_close_id(&self) -> Hash {
+        let version = [self.version];
+        let closed_through = self.closed_through.to_le_bytes();
+        let requester = self.requester.encode();
+        let responder = self.responder.encode();
+        Hash::new_from_chunks(&[
+            CLOSE_ID_DOMAIN,
+            &version,
+            &closed_through,
+            requester.as_slice(),
+            responder.as_slice(),
+        ])
+    }
+
+    fn bind_canonical_close_id(&mut self) {
+        self.close_id = self.canonical_close_id();
+    }
+}
+
+/// Idempotent responder acknowledgement for one cumulative close witness.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct CertifiedMergeSidecarCloseAckV1 {
+    /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
+    pub version: u8,
+    /// Cumulative close floor durably observed by the responder.
+    pub closed_through: u64,
+    /// Canonical identity copied from the acknowledged close witness.
+    pub close_id: Hash,
+    /// Authenticated peer which issued the request stream.
+    pub requester: PeerId,
+    /// Exact responder which applied the cumulative close floor.
+    pub responder: PeerId,
+}
+
+impl CertifiedMergeSidecarCloseAckV1 {
+    pub(crate) fn canonical_close_id(&self) -> Hash {
+        CertifiedMergeSidecarCloseV1 {
+            version: self.version,
+            closed_through: self.closed_through,
+            close_id: self.close_id,
+            requester: self.requester.clone(),
+            responder: self.responder.clone(),
+        }
+        .canonical_close_id()
+    }
+}
+
 /// One fixed-boundary chunk of a certified merge sidecar response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarChunkV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
     pub version: u8,
-    /// Request nonce copied verbatim from the request.
+    /// Monotonic semantic sequence copied verbatim from the request.
+    pub semantic_sequence: u64,
+    /// Canonical request identity copied verbatim from the request.
     pub request_id: Hash,
     /// Canonical hash of the requested full entry.
     pub entry_hash: HashOf<MergeLedgerEntry>,
@@ -167,6 +427,10 @@ pub struct CertifiedMergeSidecarChunkV1 {
 pub enum CertifiedMergeSidecarMessage {
     /// Request an exact full entry from one merge-QC signer.
     Request(CertifiedMergeSidecarRequestV1),
+    /// Release a contiguous prefix of terminated request occurrences.
+    Close(CertifiedMergeSidecarCloseV1),
+    /// Acknowledge durable application of a cumulative close floor.
+    CloseAck(CertifiedMergeSidecarCloseAckV1),
     /// Return one bounded chunk of the requested entry.
     Chunk(CertifiedMergeSidecarChunkV1),
 }
@@ -206,6 +470,8 @@ pub(crate) struct CertifiedMergeSidecarChunkFlushProjection {
     pub(crate) stream_wire_bytes: usize,
     /// Semantic sidecar request nonce.
     pub(crate) request_id: Hash,
+    /// Monotonic requester-to-responder semantic request sequence.
+    pub(crate) semantic_sequence: u64,
     /// Canonical hash of the requested full merge-ledger entry.
     pub(crate) entry_hash: HashOf<MergeLedgerEntry>,
     /// Exact canonical byte length of the full entry.
@@ -328,6 +594,7 @@ impl CertifiedMergeSidecarChunkAdmission {
             canonical_request_digest: flush_identity.canonical_request_digest(),
             stream_wire_bytes: flush_identity.ticket_stream_wire_bytes(),
             request_id: chunk.request_id,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -462,6 +729,7 @@ impl CertifiedMergeSidecarChunkAdmission {
         let projection = &self.projection;
         projection.semantic_target == chunk.requester
             && projection.request_id == chunk.request_id
+            && projection.semantic_sequence == chunk.semantic_sequence
             && projection.entry_hash == chunk.entry_hash
             && projection.encoded_len == chunk.encoded_len
             && projection.epoch_id == chunk.epoch_id
@@ -627,6 +895,9 @@ pub enum MergeSidecarError {
     /// Request identifier differs from the active request.
     #[error("certified merge-sidecar request identifier mismatch")]
     RequestIdMismatch,
+    /// A close or acknowledgement did not match its canonical stream witness.
+    #[error("certified merge-sidecar close identifier mismatch")]
+    CloseIdMismatch,
     /// Response metadata differs from the requested reference.
     #[error("certified merge-sidecar response metadata mismatch")]
     MetadataMismatch,
@@ -677,6 +948,7 @@ struct DeferredCarrier {
 #[derive(Clone, Debug)]
 struct RequestAttempt {
     id: Hash,
+    semantic_sequence: u64,
     holder: PeerId,
     last_progress_at: Instant,
     previous_holder_cursor: usize,
@@ -704,9 +976,96 @@ struct InboundAssembly {
     complete_pending_validation: bool,
 }
 
+#[derive(Debug, Default)]
+struct RequestStreamState {
+    next_sequence: u64,
+    closed_through: u64,
+    acknowledged_through: u64,
+    last_close_sent_at: Option<Instant>,
+    open_sequences: BTreeSet<u64>,
+}
+
+impl RequestStreamState {
+    fn allocate(&mut self) -> Result<(u64, u64), MergeSidecarError> {
+        let semantic_sequence =
+            self.next_sequence
+                .checked_add(1)
+                .ok_or(MergeSidecarError::Capacity(
+                    "semantic request sequence exhausted",
+                ))?;
+        self.next_sequence = semantic_sequence;
+        let inserted = self.open_sequences.insert(semantic_sequence);
+        debug_assert!(inserted, "new semantic sequence must be unique");
+        Ok((semantic_sequence, self.closed_through))
+    }
+
+    fn close(&mut self, semantic_sequence: u64) {
+        if semantic_sequence == 0 || semantic_sequence > self.next_sequence {
+            return;
+        }
+        self.open_sequences.remove(&semantic_sequence);
+        let prior = self.closed_through;
+        self.closed_through = self
+            .open_sequences
+            .first()
+            .map_or(self.next_sequence, |first_open| {
+                first_open.saturating_sub(1)
+            });
+        if self.closed_through > prior {
+            self.last_close_sent_at = None;
+        }
+    }
+
+    fn close_due(&self, now: Instant, retry_after: Duration) -> bool {
+        self.closed_through > self.acknowledged_through
+            && self
+                .last_close_sent_at
+                .is_none_or(|last_sent| now.saturating_duration_since(last_sent) >= retry_after)
+    }
+
+    fn emit_close(
+        &mut self,
+        requester: &PeerId,
+        responder: &PeerId,
+        now: Instant,
+    ) -> CertifiedMergeSidecarCloseV1 {
+        debug_assert!(self.closed_through > self.acknowledged_through);
+        self.last_close_sent_at = Some(now);
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: self.closed_through,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.bind_canonical_close_id();
+        close
+    }
+
+    fn acknowledge_close(&mut self, closed_through: u64) -> bool {
+        if closed_through <= self.acknowledged_through || closed_through > self.closed_through {
+            return false;
+        }
+        self.acknowledged_through = closed_through;
+        if self.acknowledged_through == self.closed_through {
+            self.last_close_sent_at = None;
+        }
+        true
+    }
+}
+
 type InboundSidecarKey = (HashOf<MergeLedgerEntry>, Hash);
 type ServerRequestKey = (PeerId, Hash);
 type OutboundAttemptKey = (ServerRequestKey, ServerRequestSource);
+
+/// One authenticated server-stream prefix whose queued output is no longer owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedMergeSidecarClosedPrefix {
+    /// Requester whose semantic occurrences were closed.
+    pub(crate) requester: PeerId,
+    /// Highest contiguous semantic sequence covered by the close.
+    pub(crate) closed_through: u64,
+}
 
 #[derive(Debug)]
 struct OutboundTransfer {
@@ -736,6 +1095,7 @@ enum ServerRequestSource {
 #[derive(Clone, Debug)]
 struct ServerRequestGate {
     request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
+    semantic_sequence: u64,
     source_capacity: Option<usize>,
     attempts: BTreeMap<ServerRequestSource, ServerRequestGateAttempt>,
 }
@@ -778,6 +1138,7 @@ enum ServerResponseCursor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ServerPendingChunkIdentity {
     request_id: Hash,
+    semantic_sequence: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
     encoded_len: u64,
     epoch_id: u64,
@@ -801,6 +1162,7 @@ impl ServerPendingChunkIdentity {
         let data = crate::NetworkMessage::CertifiedMergeSidecar(Arc::clone(message));
         Some(Self {
             request_id: chunk.request_id,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -823,6 +1185,7 @@ impl ServerPendingChunkIdentity {
     fn matches_admission(&self, admission: &CertifiedMergeSidecarChunkAdmission) -> bool {
         let projection = admission.projection();
         self.request_id == projection.request_id
+            && self.semantic_sequence == projection.semantic_sequence
             && self.entry_hash == projection.entry_hash
             && self.encoded_len == projection.encoded_len
             && self.epoch_id == projection.epoch_id
@@ -914,6 +1277,7 @@ impl ReliableFlushProjectionBytes {
         };
         self.bool(true);
         self.hash(pending.request_id);
+        self.u64(pending.semantic_sequence);
         self.typed_hash(pending.entry_hash);
         self.u64(pending.encoded_len);
         self.u64(pending.epoch_id);
@@ -1093,6 +1457,7 @@ struct ReliableFlushChunkArcIdentity {
     message: Arc<CertifiedMergeSidecarMessage>,
     payload_len: usize,
     request_id: Hash,
+    semantic_sequence: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
     encoded_len: u64,
     epoch_id: u64,
@@ -1112,6 +1477,7 @@ impl ReliableFlushChunkArcIdentity {
             message: Arc::clone(message),
             payload_len: chunk.bytes.len(),
             request_id: chunk.request_id,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -1127,6 +1493,7 @@ impl ReliableFlushChunkArcIdentity {
         bytes.usize(Arc::as_ptr(&self.message) as usize);
         bytes.usize(self.payload_len);
         bytes.hash(self.request_id);
+        bytes.u64(self.semantic_sequence);
         bytes.typed_hash(self.entry_hash);
         bytes.u64(self.encoded_len);
         bytes.u64(self.epoch_id);
@@ -1143,6 +1510,7 @@ impl PartialEq for ReliableFlushChunkArcIdentity {
         Arc::ptr_eq(&self.message, &other.message)
             && self.payload_len == other.payload_len
             && self.request_id == other.request_id
+            && self.semantic_sequence == other.semantic_sequence
             && self.entry_hash == other.entry_hash
             && self.encoded_len == other.encoded_len
             && self.epoch_id == other.epoch_id
@@ -2173,6 +2541,7 @@ pub(crate) enum ChunkIngestOutcome {
 /// In-memory bounded transport state. Incomplete bytes are never durable.
 #[derive(Debug)]
 pub(crate) struct MergeSidecarTransport {
+    limits: MergeSidecarLimits,
     reply_source_capacity: usize,
     outbound_session_capacity: usize,
     outbound_byte_capacity: usize,
@@ -2184,9 +2553,12 @@ pub(crate) struct MergeSidecarTransport {
     /// moves to the tail and every new source starts behind all current owners.
     outbound_order: VecDeque<OutboundAttemptKey>,
     tick_response_next: bool,
+    tick_close_next: bool,
     server_request_gates: BTreeMap<ServerRequestKey, ServerRequestGate>,
-    next_request_nonce: u64,
-    boot_nonce: Hash,
+    request_streams: BTreeMap<PeerId, RequestStreamState>,
+    server_closed_through: BTreeMap<PeerId, u64>,
+    server_highest_sequence: BTreeMap<PeerId, u64>,
+    pending_server_closures: BTreeMap<PeerId, u64>,
 }
 
 impl MergeSidecarTransport {
@@ -2199,8 +2571,17 @@ impl MergeSidecarTransport {
 
     /// Construct an empty transport whose global corridors reserve every
     /// configured authenticated source's independent per-source limits.
+    #[cfg(test)]
     pub(crate) fn with_reply_source_capacity(
         reply_source_capacity: usize,
+    ) -> Result<Self, MergeSidecarError> {
+        Self::with_limits(reply_source_capacity, MergeSidecarLimits::defaults())
+    }
+
+    /// Construct an empty transport from the exact fingerprinted geometry.
+    pub(crate) fn with_limits(
+        reply_source_capacity: usize,
+        limits: MergeSidecarLimits,
     ) -> Result<Self, MergeSidecarError> {
         if reply_source_capacity == 0 {
             return Err(MergeSidecarError::Capacity(
@@ -2208,25 +2589,20 @@ impl MergeSidecarTransport {
             ));
         }
         let outbound_session_capacity = reply_source_capacity
-            .checked_mul(MAX_OUTBOUND_SESSIONS_PER_SOURCE)
+            .checked_mul(limits.outbound_sessions_per_source)
             .ok_or(MergeSidecarError::Capacity(
                 "outbound response session geometry",
             ))?;
         let outbound_byte_capacity = reply_source_capacity
-            .checked_mul(MAX_OUTBOUND_BYTES_PER_SOURCE)
+            .checked_mul(limits.outbound_bytes_per_source)
             .ok_or(MergeSidecarError::Capacity(
                 "outbound response byte geometry",
             ))?;
         let server_request_gate_capacity = reply_source_capacity
-            .checked_mul(MAX_SERVER_REQUEST_GATES_PER_SOURCE)
+            .checked_mul(limits.server_request_gates_per_source)
             .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
-        let unix_nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .to_le_bytes();
-        let process_id = std::process::id().to_le_bytes();
         Ok(Self {
+            limits,
             reply_source_capacity,
             outbound_session_capacity,
             outbound_byte_capacity,
@@ -2236,14 +2612,52 @@ impl MergeSidecarTransport {
             outbound: BTreeMap::new(),
             outbound_order: VecDeque::new(),
             tick_response_next: true,
+            tick_close_next: true,
             server_request_gates: BTreeMap::new(),
-            next_request_nonce: 0,
-            boot_nonce: Hash::new_from_chunks(&[
-                REQUEST_ID_DOMAIN,
-                unix_nanos.as_slice(),
-                process_id.as_slice(),
-            ]),
+            request_streams: BTreeMap::new(),
+            server_closed_through: BTreeMap::new(),
+            server_highest_sequence: BTreeMap::new(),
+            pending_server_closures: BTreeMap::new(),
         })
+    }
+
+    /// Reuse process-local semantic ownership across a height rollover while
+    /// rejecting any geometry drift which could weaken its reservations.
+    pub(crate) fn rehydrate_with_exact_geometry(
+        mut self,
+        reply_source_capacity: usize,
+        limits: MergeSidecarLimits,
+    ) -> Result<Self, MergeSidecarError> {
+        if self.reply_source_capacity != reply_source_capacity || self.limits != limits {
+            return Err(MergeSidecarError::Capacity(
+                "merge-sidecar retained-height geometry drift",
+            ));
+        }
+        // The height-local exact-output worker has already relinquished its
+        // writer occurrences under the durable rollover authority. Preserve
+        // each source's current chunk, but make every formerly in-flight item
+        // eligible for an exact retry in this height. The receiver deduplicates
+        // the immutable chunk identity if the prior writer flushed before its
+        // acknowledgement was observed.
+        let mut retained_order = BTreeSet::new();
+        self.outbound_order.retain(|attempt_key| {
+            let valid = self
+                .outbound
+                .get(&attempt_key.0)
+                .is_some_and(|transfer| transfer.attempts.contains_key(&attempt_key.1));
+            valid && retained_order.insert(attempt_key.clone())
+        });
+        for (key, transfer) in &mut self.outbound {
+            for (source, attempt) in &mut transfer.attempts {
+                attempt.in_flight_chunk = None;
+                let attempt_key = (key.clone(), source.clone());
+                if retained_order.insert(attempt_key.clone()) {
+                    self.outbound_order.push_back(attempt_key);
+                }
+                attempt.queued = true;
+            }
+        }
+        Ok(self)
     }
 
     fn validate_reference_len(
@@ -2259,16 +2673,105 @@ impl MergeSidecarTransport {
         Ok(len)
     }
 
-    fn request_id(&self, requester: &PeerId, key: InboundSidecarKey, nonce: u64) -> Hash {
-        let (entry_hash, reference_digest) = key;
-        Hash::new_from_chunks(&[
-            REQUEST_ID_DOMAIN,
-            self.boot_nonce.as_ref(),
-            requester.to_string().as_bytes(),
-            entry_hash.as_ref().as_ref(),
-            reference_digest.as_ref(),
-            &nonce.to_le_bytes(),
-        ])
+    fn allocate_request_sequence(
+        &mut self,
+        responder: &PeerId,
+    ) -> Result<(u64, u64), MergeSidecarError> {
+        self.request_streams
+            .entry(responder.clone())
+            .or_default()
+            .allocate()
+    }
+
+    fn close_request_sequence(&mut self, responder: &PeerId, semantic_sequence: u64) {
+        if let Some(stream) = self.request_streams.get_mut(responder) {
+            stream.close(semantic_sequence);
+        }
+    }
+
+    fn due_close_responders(&self, now: Instant) -> VecDeque<PeerId> {
+        self.request_streams
+            .iter()
+            .filter(|(_, stream)| stream.close_due(now, self.limits.request_timeout))
+            .map(|(responder, _)| responder.clone())
+            .collect()
+    }
+
+    fn begin_close(
+        &mut self,
+        requester: &PeerId,
+        responder: &PeerId,
+        now: Instant,
+    ) -> Option<MergeSidecarPost> {
+        let stream = self.request_streams.get_mut(responder)?;
+        if !stream.close_due(now, self.limits.request_timeout) {
+            return None;
+        }
+        let close = stream.emit_close(requester, responder, now);
+        Some(MergeSidecarPost {
+            peer: responder.clone(),
+            reply_route: None,
+            message: Arc::new(CertifiedMergeSidecarMessage::Close(close)),
+        })
+    }
+
+    fn begin_request_or_close(
+        &mut self,
+        requester: &PeerId,
+        idle: &mut VecDeque<InboundSidecarKey>,
+        close_responders: &mut VecDeque<PeerId>,
+        now: Instant,
+    ) -> Option<MergeSidecarPost> {
+        let contended = !idle.is_empty() && !close_responders.is_empty();
+        let close_first = !close_responders.is_empty() && (idle.is_empty() || self.tick_close_next);
+        if close_first {
+            while let Some(responder) = close_responders.pop_front() {
+                if let Some(post) = self.begin_close(requester, &responder, now) {
+                    if contended {
+                        self.tick_close_next = false;
+                    }
+                    return Some(post);
+                }
+            }
+        }
+        while let Some(key) = idle.pop_front() {
+            if let Ok(Some(post)) = self.begin_request(key, requester, now) {
+                if contended {
+                    self.tick_close_next = true;
+                }
+                return Some(post);
+            }
+        }
+        if !close_first {
+            while let Some(responder) = close_responders.pop_front() {
+                if let Some(post) = self.begin_close(requester, &responder, now) {
+                    return Some(post);
+                }
+            }
+        }
+        None
+    }
+
+    pub(crate) fn acknowledge_close(
+        &mut self,
+        sender: &PeerId,
+        ack: &CertifiedMergeSidecarCloseAckV1,
+        local_peer: &PeerId,
+    ) -> Result<bool, MergeSidecarError> {
+        if ack.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {
+            return Err(MergeSidecarError::UnsupportedVersion(ack.version));
+        }
+        if &ack.requester != local_peer || &ack.responder != sender {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if ack.closed_through == 0 || ack.close_id != ack.canonical_close_id() {
+            return Err(MergeSidecarError::CloseIdMismatch);
+        }
+        let stream = self
+            .request_streams
+            .get_mut(sender)
+            .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+        Ok(stream.acknowledge_close(ack.closed_through))
     }
 
     fn inbound_peer_session_count(&self, peer: &PeerId) -> usize {
@@ -2408,18 +2911,19 @@ impl MergeSidecarTransport {
                 .and_then(|assembly| usize::try_from(assembly.reference.encoded_len).ok())
                 .unwrap_or(usize::MAX);
             let full_peer_capacity = self.inbound_peer_session_count(holder)
-                < MAX_INBOUND_SESSIONS_PER_PEER
+                < self.limits.inbound_sessions_per_peer
                 && self
                     .inbound_peer_reserved_bytes(holder)
                     .saturating_add(requested_len)
-                    <= MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER;
+                    <= self.limits.inbound_assembly_bytes_per_peer;
             let priority_capacity = priority == InboundPriority::Decided
                 || (self.ordinary_inbound_peer_session_count(holder)
-                    < MAX_INBOUND_SESSIONS_PER_PEER - RESERVED_DECIDED_INBOUND_SESSIONS
+                    < self.limits.inbound_sessions_per_peer - RESERVED_DECIDED_INBOUND_SESSIONS
                     && self
                         .ordinary_inbound_peer_reserved_bytes(holder)
                         .saturating_add(requested_len)
-                        <= MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER - RESERVED_DECIDED_INBOUND_BYTES);
+                        <= self.limits.inbound_assembly_bytes_per_peer
+                            - RESERVED_DECIDED_INBOUND_BYTES);
             if holder == requester || !full_peer_capacity || !priority_capacity {
                 None
             } else {
@@ -2429,8 +2933,7 @@ impl MergeSidecarTransport {
         let Some((holder_index, holder)) = selected else {
             return Ok(None);
         };
-        self.next_request_nonce = self.next_request_nonce.wrapping_add(1);
-        let request_id = self.request_id(requester, key, self.next_request_nonce);
+        let (semantic_sequence, closed_through) = self.allocate_request_sequence(&holder)?;
         let assembly = self
             .inbound
             .get_mut(&key)
@@ -2438,19 +2941,14 @@ impl MergeSidecarTransport {
         let previous_attempts = assembly.attempts;
         assembly.attempts = assembly.attempts.saturating_add(1);
         assembly.holder_cursor = (holder_index + 1) % holders.len();
-        assembly.current = Some(RequestAttempt {
-            id: request_id,
-            holder: holder.clone(),
-            last_progress_at: now,
-            previous_holder_cursor: start_cursor,
-            previous_attempts,
-        });
         assembly.chunks.clear();
         assembly.received_bytes = 0;
         let reference = &assembly.reference;
-        let request = CertifiedMergeSidecarRequestV1 {
+        let mut request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            request_id,
+            semantic_sequence,
+            closed_through,
+            request_id: Hash::prehashed([0; Hash::LENGTH]),
             entry_hash: key.0,
             encoded_len: reference.encoded_len,
             epoch_id: reference.epoch_id,
@@ -2458,6 +2956,15 @@ impl MergeSidecarTransport {
             requester: requester.clone(),
             responder: holder.clone(),
         };
+        request.bind_canonical_request_id();
+        assembly.current = Some(RequestAttempt {
+            id: request.request_id,
+            semantic_sequence,
+            holder: holder.clone(),
+            last_progress_at: now,
+            previous_holder_cursor: start_cursor,
+            previous_attempts,
+        });
         self.inbound_cursor = Some(key);
         Ok(Some(MergeSidecarPost {
             peer: holder,
@@ -2489,6 +2996,7 @@ impl MergeSidecarTransport {
         assembly.chunks.clear();
         assembly.received_bytes = 0;
         assembly.complete_pending_validation = false;
+        self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
     }
 
     /// Register a block whose exact sidecar is missing and begin a bounded
@@ -2554,7 +3062,7 @@ impl MergeSidecarTransport {
     ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
         Self::validate_reference_len(&reference)?;
         if height <= committed_height
-            || height > committed_height.saturating_add(MAX_FUTURE_BLOCK_DISTANCE)
+            || height > committed_height.saturating_add(self.limits.future_block_distance)
         {
             return Err(MergeSidecarError::InvalidCarrierHeight);
         }
@@ -2566,29 +3074,29 @@ impl MergeSidecarTransport {
             .get(&key)
             .is_some_and(|assembly| assembly.deferred.contains_key(&block_hash));
         if !already_deferred
-            && (self.deferred_count() >= MAX_DEFERRED_BLOCKS
+            && (self.deferred_count() >= self.limits.deferred_block_capacity
                 || (priority == InboundPriority::Ordinary
                     && self.ordinary_deferred_count()
-                        >= MAX_DEFERRED_BLOCKS - RESERVED_DECIDED_DEFERRED_BLOCKS))
+                        >= self.limits.deferred_block_capacity - RESERVED_DECIDED_DEFERRED_BLOCKS))
         {
             return Err(MergeSidecarError::Capacity("deferred block count"));
         }
         if !self.inbound.contains_key(&key) {
-            if self.inbound.len() >= MAX_INBOUND_SESSIONS
+            if self.inbound.len() >= self.limits.inbound_session_capacity
                 || (priority == InboundPriority::Ordinary
                     && self.ordinary_inbound_session_count()
-                        >= MAX_INBOUND_SESSIONS - RESERVED_DECIDED_INBOUND_SESSIONS)
+                        >= self.limits.inbound_session_capacity - RESERVED_DECIDED_INBOUND_SESSIONS)
             {
                 return Err(MergeSidecarError::Capacity("inbound session count"));
             }
             let requested_len = usize::try_from(reference.encoded_len).unwrap_or(usize::MAX);
             if self.inbound_reserved_bytes().saturating_add(requested_len)
-                > MAX_INBOUND_ASSEMBLY_BYTES
+                > self.limits.inbound_assembly_bytes
                 || (priority == InboundPriority::Ordinary
                     && self
                         .ordinary_inbound_reserved_bytes()
                         .saturating_add(requested_len)
-                        > MAX_INBOUND_ASSEMBLY_BYTES - RESERVED_DECIDED_INBOUND_BYTES)
+                        > self.limits.inbound_assembly_bytes - RESERVED_DECIDED_INBOUND_BYTES)
             {
                 return Err(MergeSidecarError::Capacity("global inbound reservation"));
             }
@@ -2691,6 +3199,9 @@ impl MergeSidecarTransport {
         if attempt.id != chunk.request_id {
             return Err(MergeSidecarError::RequestIdMismatch);
         }
+        if attempt.semantic_sequence != chunk.semantic_sequence {
+            return Err(MergeSidecarError::MetadataMismatch);
+        }
         let reference = &snapshot.reference;
         if chunk.encoded_len != reference.encoded_len
             || chunk.epoch_id != reference.epoch_id
@@ -2708,7 +3219,7 @@ impl MergeSidecarTransport {
             .inbound_received_bytes()
             .checked_add(chunk.bytes.len())
             .ok_or(MergeSidecarError::Capacity("inbound byte counter overflow"))?;
-        if new_global_bytes > MAX_INBOUND_ASSEMBLY_BYTES {
+        if new_global_bytes > self.limits.inbound_assembly_bytes {
             return Err(MergeSidecarError::Capacity("global inbound bytes"));
         }
         let new_peer_bytes = self
@@ -2717,7 +3228,7 @@ impl MergeSidecarTransport {
             .ok_or(MergeSidecarError::Capacity(
                 "per-peer byte counter overflow",
             ))?;
-        if new_peer_bytes > MAX_INBOUND_ASSEMBLY_BYTES_PER_PEER {
+        if new_peer_bytes > self.limits.inbound_assembly_bytes_per_peer {
             return Err(MergeSidecarError::Capacity("per-peer inbound bytes"));
         }
         let assembly = self
@@ -2780,24 +3291,30 @@ impl MergeSidecarTransport {
     ) {
         let key = (entry_hash, reference_digest);
         if success {
-            let deferred = self
-                .inbound
-                .remove(&key)
-                .map(|assembly| {
-                    assembly
-                        .deferred
-                        .into_values()
-                        .map(|carrier| (carrier.hash, carrier.height, carrier.view))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let deferred = self.inbound.remove(&key).map_or_else(Vec::new, |assembly| {
+                if let Some(attempt) = &assembly.current {
+                    self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+                }
+                assembly
+                    .deferred
+                    .into_values()
+                    .map(|carrier| (carrier.hash, carrier.height, carrier.view))
+                    .collect()
+            });
             return (deferred, None);
         }
-        if let Some(assembly) = self.inbound.get_mut(&key) {
-            assembly.current = None;
+        let closed = self.inbound.get_mut(&key).and_then(|assembly| {
+            let closed = assembly
+                .current
+                .take()
+                .map(|attempt| (attempt.holder, attempt.semantic_sequence));
             assembly.chunks.clear();
             assembly.received_bytes = 0;
             assembly.complete_pending_validation = false;
+            closed
+        });
+        if let Some((holder, semantic_sequence)) = closed {
+            self.close_request_sequence(&holder, semantic_sequence);
         }
         let request = self.begin_request(key, requester, now).ok().flatten();
         (Vec::new(), request)
@@ -2814,15 +3331,22 @@ impl MergeSidecarTransport {
             .filter(|key| key.0 == entry_hash)
             .copied()
             .collect::<Vec<_>>();
-        keys.into_iter()
-            .filter_map(|key| self.inbound.remove(&key))
-            .flat_map(|assembly| {
+        let mut affected = Vec::new();
+        for key in keys {
+            let Some(assembly) = self.inbound.remove(&key) else {
+                continue;
+            };
+            if let Some(attempt) = &assembly.current {
+                self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+            }
+            affected.extend(
                 assembly
                     .deferred
                     .into_values()
-                    .map(|carrier| (carrier.hash, carrier.height, carrier.view))
-            })
-            .collect()
+                    .map(|carrier| (carrier.hash, carrier.height, carrier.view)),
+            );
+        }
+        affected
     }
 
     fn park_inactive_outbound_attempts(&mut self, now: Instant) {
@@ -2877,21 +3401,155 @@ impl MergeSidecarTransport {
 
     fn prune_server_gates(&mut self, now: Instant) {
         self.park_inactive_outbound_attempts(now);
-        let outbound = &self.outbound;
-        self.server_request_gates.retain(|key, gate| {
-            // A pending cursor is the source's bounded progress reservation,
-            // including while its tenure is inactive. Its immutable shared
-            // bytes and per-source capacity remain owned until an exact flush
-            // completes the response. Only terminal tombstones age out.
-            gate.attempts.retain(|source, attempt| {
-                outbound
-                    .get(key)
-                    .is_some_and(|transfer| transfer.attempts.contains_key(source))
-                    || attempt.cursor != ServerResponseCursor::Complete
-                    || now.saturating_duration_since(attempt.inserted) <= SERVER_REQUEST_GATE_TTL
-            });
-            !gate.attempts.is_empty()
-        });
+        // Semantic ownership has no wall-clock expiry. A completed source
+        // remains terminal until the authenticated requester advances its
+        // cumulative close floor; elapsed time must never reset its cursor.
+    }
+
+    fn preflight_server_request_stream(
+        &self,
+        sender: &PeerId,
+        request: &CertifiedMergeSidecarRequestV1,
+    ) -> Result<(), MergeSidecarError> {
+        if request.semantic_sequence == 0
+            || request.closed_through >= request.semantic_sequence
+            || request.request_id != request.canonical_request_id()
+        {
+            return Err(MergeSidecarError::RequestIdMismatch);
+        }
+        let prior_floor = self
+            .server_closed_through
+            .get(sender)
+            .copied()
+            .unwrap_or_default();
+        if request.closed_through < prior_floor {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if !self.server_closed_through.contains_key(sender)
+            && self.server_closed_through.len() >= self.server_request_gate_capacity
+        {
+            return Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry",
+            ));
+        }
+        let forward_window = u64::try_from(self.limits.inbound_sessions_per_peer)
+            .map_err(|_| MergeSidecarError::Capacity("semantic request forward window"))?;
+        let window_end = request.closed_through.checked_add(forward_window).ok_or(
+            MergeSidecarError::Capacity("semantic request forward window"),
+        )?;
+        if request.semantic_sequence > window_end {
+            return Err(MergeSidecarError::Capacity(
+                "semantic request forward window",
+            ));
+        }
+        if self.server_request_gates.iter().any(|(key, gate)| {
+            &key.0 == sender
+                && gate.semantic_sequence == request.semantic_sequence
+                && (key.1 != request.request_id || gate.request_hash != HashOf::new(request))
+        }) {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        Ok(())
+    }
+
+    fn advance_server_close_floor(&mut self, sender: &PeerId, closed_through: u64) {
+        let prior = self
+            .server_closed_through
+            .get(sender)
+            .copied()
+            .unwrap_or_default();
+        if closed_through == prior {
+            self.server_closed_through
+                .entry(sender.clone())
+                .or_insert(prior);
+            return;
+        }
+        debug_assert!(closed_through > prior);
+        let retired = self
+            .server_request_gates
+            .iter()
+            .filter(|(key, gate)| &key.0 == sender && gate.semantic_sequence <= closed_through)
+            .map(|(key, _)| key.clone())
+            .collect::<BTreeSet<_>>();
+        for key in &retired {
+            self.server_request_gates.remove(key);
+            self.outbound.remove(key);
+        }
+        if !retired.is_empty() {
+            self.outbound_order
+                .retain(|(key, _)| !retired.contains(key));
+        }
+        self.server_closed_through
+            .insert(sender.clone(), closed_through);
+        self.pending_server_closures
+            .entry(sender.clone())
+            .and_modify(|pending| *pending = (*pending).max(closed_through))
+            .or_insert(closed_through);
+    }
+
+    /// Apply an authenticated standalone close and return its topology ACK.
+    pub(crate) fn admit_server_close(
+        &mut self,
+        sender: &PeerId,
+        close: &CertifiedMergeSidecarCloseV1,
+        local_peer: &PeerId,
+    ) -> Result<MergeSidecarPost, MergeSidecarError> {
+        if close.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {
+            return Err(MergeSidecarError::UnsupportedVersion(close.version));
+        }
+        if &close.requester != sender || &close.responder != local_peer {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if close.closed_through == 0 || close.close_id != close.canonical_close_id() {
+            return Err(MergeSidecarError::CloseIdMismatch);
+        }
+        let highest = self
+            .server_highest_sequence
+            .get(sender)
+            .copied()
+            .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+        if close.closed_through > highest {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        let prior = self
+            .server_closed_through
+            .get(sender)
+            .copied()
+            .unwrap_or_default();
+        if close.closed_through < prior {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if close.closed_through > prior {
+            self.advance_server_close_floor(sender, close.closed_through);
+        }
+        let ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: close.requester.clone(),
+            responder: close.responder.clone(),
+        };
+        Ok(MergeSidecarPost {
+            peer: sender.clone(),
+            reply_route: None,
+            message: Arc::new(CertifiedMergeSidecarMessage::CloseAck(ack)),
+        })
+    }
+
+    /// Drain coalesced server prefixes so every downstream queue can cancel
+    /// covered response chunks before dispatching newer work.
+    pub(crate) fn drain_closed_server_prefixes(
+        &mut self,
+    ) -> Vec<CertifiedMergeSidecarClosedPrefix> {
+        std::mem::take(&mut self.pending_server_closures)
+            .into_iter()
+            .map(
+                |(requester, closed_through)| CertifiedMergeSidecarClosedPrefix {
+                    requester,
+                    closed_through,
+                },
+            )
+            .collect()
     }
 
     fn server_request_source(
@@ -2916,6 +3574,29 @@ impl MergeSidecarTransport {
             .values()
             .map(|gate| gate.attempts.len())
             .sum()
+    }
+
+    fn server_gate_attempt_count_after_close(&self, sender: &PeerId, closed_through: u64) -> usize {
+        self.server_request_gates
+            .iter()
+            .filter(|(key, gate)| &key.0 != sender || gate.semantic_sequence > closed_through)
+            .map(|(_, gate)| gate.attempts.len())
+            .sum()
+    }
+
+    fn source_gate_count_after_close(
+        &self,
+        source: &ServerRequestSource,
+        sender: &PeerId,
+        closed_through: u64,
+    ) -> usize {
+        self.server_request_gates
+            .iter()
+            .filter(|(key, gate)| {
+                (&key.0 != sender || gate.semantic_sequence > closed_through)
+                    && gate.attempts.contains_key(source)
+            })
+            .count()
     }
 
     fn outbound_attempt_count(&self) -> usize {
@@ -2993,9 +3674,9 @@ impl MergeSidecarTransport {
 
     fn can_add_outbound_attempt(&self, source: &ServerRequestSource, bytes: usize) -> bool {
         self.outbound_attempt_count() < self.outbound_session_capacity
-            && self.source_outbound_count(source) < MAX_OUTBOUND_SESSIONS_PER_SOURCE
+            && self.source_outbound_count(source) < self.limits.outbound_sessions_per_source
             && self.source_outbound_bytes(source).saturating_add(bytes)
-                <= MAX_OUTBOUND_BYTES_PER_SOURCE
+                <= self.limits.outbound_bytes_per_source
     }
 
     /// Rate-limit authenticated requests before any potentially expensive Kura lookup.
@@ -3039,8 +3720,23 @@ impl MergeSidecarTransport {
         if source_capacity.is_some_and(|capacity| capacity != self.reply_source_capacity) {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
-        if let Some(existing) = self.server_request_gates.get(&key).cloned() {
+        self.preflight_server_request_stream(sender, request)?;
+        if self.server_request_gates.get(&key).is_some_and(|existing| {
+            existing.semantic_sequence != request.semantic_sequence
+                && existing.semantic_sequence > request.closed_through
+        }) {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if let Some(existing) = self
+            .server_request_gates
+            .get(&key)
+            .filter(|existing| existing.semantic_sequence == request.semantic_sequence)
+            .cloned()
+        {
             if existing.request_hash != request_hash {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+            if existing.semantic_sequence != request.semantic_sequence {
                 return Err(MergeSidecarError::UnsolicitedResponse);
             }
             if existing.source_capacity != source_capacity {
@@ -3236,7 +3932,7 @@ impl MergeSidecarTransport {
             }
             if source_capacity.is_some_and(|capacity| existing.attempts.len() >= capacity)
                 || self.server_gate_attempt_count() >= self.server_request_gate_capacity
-                || self.source_gate_count(&source) >= MAX_SERVER_REQUEST_GATES_PER_SOURCE
+                || self.source_gate_count(&source) >= self.limits.server_request_gates_per_source
             {
                 return Err(MergeSidecarError::Capacity("server request rate gate"));
             }
@@ -3303,16 +3999,25 @@ impl MergeSidecarTransport {
                 );
             return Ok(!materialization_in_progress);
         }
-        let source_count = self.source_gate_count(&source);
-        if self.server_gate_attempt_count() >= self.server_request_gate_capacity
-            || source_count >= MAX_SERVER_REQUEST_GATES_PER_SOURCE
+        let source_count =
+            self.source_gate_count_after_close(&source, sender, request.closed_through);
+        if self.server_gate_attempt_count_after_close(sender, request.closed_through)
+            >= self.server_request_gate_capacity
+            || source_count >= self.limits.server_request_gates_per_source
         {
             return Err(MergeSidecarError::Capacity("server request rate gate"));
         }
+        self.advance_server_close_floor(sender, request.closed_through);
+        debug_assert!(!self.server_request_gates.contains_key(&key));
+        self.server_highest_sequence
+            .entry(sender.clone())
+            .and_modify(|highest| *highest = (*highest).max(request.semantic_sequence))
+            .or_insert(request.semantic_sequence);
         self.server_request_gates.insert(
             key,
             ServerRequestGate {
                 request_hash,
+                semantic_sequence: request.semantic_sequence,
                 source_capacity,
                 attempts: BTreeMap::from([(
                     source,
@@ -3383,9 +4088,9 @@ impl MergeSidecarTransport {
     /// The admission gate binds the canonical request and exact authenticated
     /// delivery. Materialized bytes are shared by every admitted source, while
     /// each source receives its own source-local non-regressing chunk cursor.
-    /// After the bounded duplicate window expires, an exact live delivery may authorize
-    /// another durable lookup, so local admission never becomes height-long
-    /// deduplication.
+    /// Completed attempts remain terminal until the authenticated requester's
+    /// cumulative close floor covers their semantic sequence. No timer,
+    /// reconnect, or height reconstruction may reset a source cursor.
     pub(crate) fn enqueue_response(
         &mut self,
         request: CertifiedMergeSidecarRequestV1,
@@ -3440,6 +4145,7 @@ impl MergeSidecarTransport {
                 Arc::new(CertifiedMergeSidecarMessage::Chunk(
                     CertifiedMergeSidecarChunkV1 {
                         version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                        semantic_sequence: request.semantic_sequence,
                         request_id: request.request_id,
                         entry_hash: request.entry_hash,
                         encoded_len: request.encoded_len,
@@ -3488,11 +4194,11 @@ impl MergeSidecarTransport {
                 continue;
             }
             if remaining_global_sessions == 0
-                || self.source_outbound_count(source) >= MAX_OUTBOUND_SESSIONS_PER_SOURCE
+                || self.source_outbound_count(source) >= self.limits.outbound_sessions_per_source
                 || self
                     .source_outbound_bytes(source)
                     .saturating_add(response_len)
-                    > MAX_OUTBOUND_BYTES_PER_SOURCE
+                    > self.limits.outbound_bytes_per_source
             {
                 capacity_rejected_attempts.push(source.clone());
                 continue;
@@ -3798,8 +4504,22 @@ impl MergeSidecarTransport {
                 carrier.height > committed_height && pending_blocks.contains(hash)
             });
         }
+        let retired = self
+            .inbound
+            .iter()
+            .filter(|(_, assembly)| assembly.deferred.is_empty())
+            .filter_map(|(_, assembly)| {
+                assembly
+                    .current
+                    .as_ref()
+                    .map(|attempt| (attempt.holder.clone(), attempt.semantic_sequence))
+            })
+            .collect::<Vec<_>>();
         self.inbound
             .retain(|_, assembly| !assembly.deferred.is_empty());
+        for (holder, semantic_sequence) in retired {
+            self.close_request_sequence(&holder, semantic_sequence);
+        }
     }
 
     /// Rotate stalled holders and emit bounded, indefinitely retried requests.
@@ -3816,18 +4536,24 @@ impl MergeSidecarTransport {
             .filter(|(_, assembly)| {
                 assembly.current.as_ref().is_some_and(|attempt| {
                     now.saturating_duration_since(attempt.last_progress_at)
-                        >= retry_timeout(REQUEST_TIMEOUT, assembly.attempts)
+                        >= retry_timeout(self.limits.request_timeout, assembly.attempts)
                 })
             })
             .map(|(hash, _)| *hash)
             .collect();
+        let mut closed = Vec::new();
         for hash in &timed_out {
             if let Some(assembly) = self.inbound.get_mut(hash) {
-                assembly.current = None;
+                if let Some(attempt) = assembly.current.take() {
+                    closed.push((attempt.holder, attempt.semantic_sequence));
+                }
                 assembly.chunks.clear();
                 assembly.received_bytes = 0;
                 assembly.complete_pending_validation = false;
             }
+        }
+        for (holder, semantic_sequence) in closed {
+            self.close_request_sequence(&holder, semantic_sequence);
         }
         let idle_keys = self
             .inbound
@@ -3845,9 +4571,10 @@ impl MergeSidecarTransport {
             .chain(&idle_keys[..start])
             .copied()
             .collect::<VecDeque<_>>();
+        let mut close_responders = self.due_close_responders(now);
         let mut posts = Vec::new();
         while posts.len() < limit {
-            let request_ready = !idle.is_empty();
+            let request_ready = !idle.is_empty() || !close_responders.is_empty();
             let response_ready = !self.outbound_order.is_empty();
             if !request_ready && !response_ready {
                 break;
@@ -3864,16 +4591,13 @@ impl MergeSidecarTransport {
                         self.tick_response_next = false;
                     }
                 }
-            } else {
-                while let Some(hash) = idle.pop_front() {
-                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
-                        posts.push(post);
-                        emitted = true;
-                        if contended {
-                            self.tick_response_next = true;
-                        }
-                        break;
-                    }
+            } else if let Some(post) =
+                self.begin_request_or_close(requester, &mut idle, &mut close_responders, now)
+            {
+                posts.push(post);
+                emitted = true;
+                if contended {
+                    self.tick_response_next = true;
                 }
             }
 
@@ -3881,12 +4605,11 @@ impl MergeSidecarTransport {
             // per-peer reservations are inspected. Preserve useful capacity
             // by trying the other class without advancing its fairness turn.
             if !emitted && response_first {
-                while let Some(hash) = idle.pop_front() {
-                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
-                        posts.push(post);
-                        emitted = true;
-                        break;
-                    }
+                if let Some(post) =
+                    self.begin_request_or_close(requester, &mut idle, &mut close_responders, now)
+                {
+                    posts.push(post);
+                    emitted = true;
                 }
             } else if !emitted && let Some(post) = self.drain_outbound_chunks(1, now).pop() {
                 posts.push(post);
@@ -3950,13 +4673,14 @@ pub(crate) struct MergeSigningGuard {
     directory: PathBuf,
     committed_epoch: u64,
     committed_carrier_height: u64,
+    limits: MergeSigningGuardLimits,
 }
 
 impl MergeSigningGuard {
     /// Open the guard under the Kura root and fail closed on malformed records.
     #[cfg(test)]
     pub(crate) fn open(store_root: &Path) -> Result<Self, MergeSidecarError> {
-        Self::open_with_committed_frontier(store_root, 0, 0)
+        Self::open_with_committed_frontier(store_root, 0, 0, MergeSigningGuardLimits::defaults())
     }
 
     /// Open and reconcile the guard against the exact latest globally ordered
@@ -3966,7 +4690,12 @@ impl MergeSigningGuard {
         store_root: &Path,
         committed_epoch: u64,
     ) -> Result<Self, MergeSidecarError> {
-        Self::open_with_committed_frontier(store_root, committed_epoch, 0)
+        Self::open_with_committed_frontier(
+            store_root,
+            committed_epoch,
+            0,
+            MergeSigningGuardLimits::defaults(),
+        )
     }
 
     /// Open against the exact globally finalized merge epoch and carrier height.
@@ -3974,6 +4703,7 @@ impl MergeSigningGuard {
         store_root: &Path,
         committed_epoch: u64,
         committed_carrier_height: u64,
+        limits: MergeSigningGuardLimits,
     ) -> Result<Self, MergeSidecarError> {
         Self::reject_legacy_journals(store_root)?;
         let directory = store_root.join(SIGNING_GUARD_DIR);
@@ -3981,10 +4711,10 @@ impl MergeSigningGuard {
         // The first record is not crash-safe unless the directory entry itself
         // is durable in the Kura root before any signature can be emitted.
         sync_directory(store_root)?;
-        Self::guard_directory_bytes(&directory)?;
-        Self::reconcile_temps(&directory)?;
-        let durable_high_water =
-            Self::read_high_water(&directory)?.unwrap_or(MergeSigningHighWaterV2 {
+        Self::guard_directory_bytes(&directory, limits.max_total_bytes)?;
+        Self::reconcile_temps(&directory, limits)?;
+        let durable_high_water = Self::read_high_water(&directory, limits.max_record_bytes)?
+            .unwrap_or(MergeSigningHighWaterV2 {
                 version: SIGNING_GUARD_VERSION,
                 committed_epoch: 0,
                 committed_carrier_height: 0,
@@ -4001,6 +4731,7 @@ impl MergeSigningGuard {
             directory,
             committed_epoch: durable_high_water.committed_epoch,
             committed_carrier_height: durable_high_water.committed_carrier_height,
+            limits,
         };
         guard.validate_all()?;
         guard.advance_committed_frontier(committed_epoch, committed_carrier_height)?;
@@ -4043,6 +4774,7 @@ impl MergeSigningGuard {
     fn remove_regular_temp_if_present(
         path: &Path,
         artifact: &str,
+        max_record_bytes: usize,
     ) -> Result<(), MergeSidecarError> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
@@ -4051,7 +4783,7 @@ impl MergeSigningGuard {
         };
         if metadata.file_type().is_symlink()
             || !metadata.file_type().is_file()
-            || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+            || metadata.len() > max_record_bytes as u64
         {
             return Err(MergeSidecarError::SigningGuard(format!(
                 "unsafe {artifact} signing-guard temp {}",
@@ -4061,7 +4793,10 @@ impl MergeSigningGuard {
         fs::remove_file(path).map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))
     }
 
-    fn guard_directory_bytes(directory: &Path) -> Result<usize, MergeSidecarError> {
+    fn guard_directory_bytes(
+        directory: &Path,
+        max_total_bytes: usize,
+    ) -> Result<usize, MergeSidecarError> {
         let mut total = 0_usize;
         for item in fs::read_dir(directory)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
@@ -4079,7 +4814,7 @@ impl MergeSigningGuard {
                     "signing-guard aggregate byte count overflowed".to_owned(),
                 )
             })?;
-            if total > MAX_SIGNING_GUARD_TOTAL_BYTES {
+            if total > max_total_bytes {
                 return Err(MergeSidecarError::SigningGuard(
                     "signing-guard aggregate bytes exceed hard limit".to_owned(),
                 ));
@@ -4088,12 +4823,15 @@ impl MergeSigningGuard {
         Ok(total)
     }
 
-    fn decode_high_water(path: &Path) -> Result<MergeSigningHighWaterV2, MergeSidecarError> {
+    fn decode_high_water(
+        path: &Path,
+        max_record_bytes: usize,
+    ) -> Result<MergeSigningHighWaterV2, MergeSidecarError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         if metadata.file_type().is_symlink()
             || !metadata.file_type().is_file()
-            || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+            || metadata.len() > max_record_bytes as u64
         {
             return Err(MergeSidecarError::SigningGuard(format!(
                 "unsafe signing-guard high-water file {}",
@@ -4116,23 +4854,31 @@ impl MergeSigningGuard {
 
     fn read_high_water(
         directory: &Path,
+        max_record_bytes: usize,
     ) -> Result<Option<MergeSigningHighWaterV2>, MergeSidecarError> {
         let path = Self::high_water_path(directory);
         if !path.exists() {
             return Ok(None);
         }
-        Self::decode_high_water(&path).map(Some)
+        Self::decode_high_water(&path, max_record_bytes).map(Some)
     }
 
-    fn reconcile_temps(directory: &Path) -> Result<(), MergeSidecarError> {
-        Self::guard_directory_bytes(directory)?;
+    fn reconcile_temps(
+        directory: &Path,
+        limits: MergeSigningGuardLimits,
+    ) -> Result<(), MergeSidecarError> {
+        Self::guard_directory_bytes(directory, limits.max_total_bytes)?;
         let high_water_temp = Self::high_water_temp_path(directory);
         // The canonical committed epoch supplied by Kura/state is the
         // authority on restart. A bounded regular temp may be partial at any
         // pre-rename crash boundary, so it is safe to discard before
         // re-publishing the canonical high-water. Symlinks and other artifact
         // types remain fail-closed.
-        Self::remove_regular_temp_if_present(&high_water_temp, "high-water")?;
+        Self::remove_regular_temp_if_present(
+            &high_water_temp,
+            "high-water",
+            limits.max_record_bytes,
+        )?;
 
         for item in fs::read_dir(directory)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
@@ -4157,7 +4903,7 @@ impl MergeSigningGuard {
                 .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
-                || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+                || metadata.len() > limits.max_record_bytes as u64
             {
                 return Err(MergeSidecarError::SigningGuard(
                     "unsafe signing-guard record temp".to_owned(),
@@ -4230,12 +4976,15 @@ impl MergeSigningGuard {
         Ok(candidate)
     }
 
-    fn read_record(path: &Path) -> Result<MergeSigningGuardRecordV2, MergeSidecarError> {
+    fn read_record(
+        path: &Path,
+        max_record_bytes: usize,
+    ) -> Result<MergeSigningGuardRecordV2, MergeSidecarError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         if metadata.file_type().is_symlink()
             || !metadata.file_type().is_file()
-            || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+            || metadata.len() > max_record_bytes as u64
         {
             return Err(MergeSidecarError::SigningGuard(format!(
                 "unsafe signing-guard record {}",
@@ -4273,7 +5022,7 @@ impl MergeSigningGuard {
             let name = item.file_name();
             let name = name.to_string_lossy();
             if name == SIGNING_GUARD_HIGH_WATER_FILE {
-                let high_water = Self::decode_high_water(&path)?;
+                let high_water = Self::decode_high_water(&path, self.limits.max_record_bytes)?;
                 if high_water.committed_epoch != self.committed_epoch {
                     return Err(MergeSidecarError::SigningGuard(
                         "signing-guard high-water changed during validation".to_owned(),
@@ -4304,18 +5053,18 @@ impl MergeSigningGuard {
                     "signing-guard aggregate byte count overflowed".to_owned(),
                 )
             })?;
-            if total_bytes > MAX_SIGNING_GUARD_TOTAL_BYTES {
+            if total_bytes > self.limits.max_total_bytes {
                 return Err(MergeSidecarError::SigningGuard(
                     "signing-guard aggregate bytes exceed hard limit".to_owned(),
                 ));
             }
             count = count.saturating_add(1);
-            if count > MAX_SIGNING_GUARD_RECORDS {
+            if count > self.limits.max_records {
                 return Err(MergeSidecarError::SigningGuard(
                     "signing-guard record count exceeds hard limit".to_owned(),
                 ));
             }
-            let record = Self::read_record(&path)?;
+            let record = Self::read_record(&path, self.limits.max_record_bytes)?;
             if self.record_path(&record.context) != path {
                 return Err(MergeSidecarError::SigningGuard(
                     "signing-guard record path/context mismatch".to_owned(),
@@ -4363,12 +5112,17 @@ impl MergeSigningGuard {
             let bytes = norito::to_bytes(&record)
                 .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
             let temp = Self::high_water_temp_path(&self.directory);
-            Self::remove_regular_temp_if_present(&temp, "high-water")?;
+            Self::remove_regular_temp_if_present(
+                &temp,
+                "high-water",
+                self.limits.max_record_bytes,
+            )?;
             {
-                let total_bytes = Self::guard_directory_bytes(&self.directory)?;
+                let total_bytes =
+                    Self::guard_directory_bytes(&self.directory, self.limits.max_total_bytes)?;
                 if total_bytes
                     .checked_add(bytes.len())
-                    .is_none_or(|total| total > MAX_SIGNING_GUARD_TOTAL_BYTES)
+                    .is_none_or(|total| total > self.limits.max_total_bytes)
                 {
                     return Err(MergeSidecarError::SigningGuard(
                         "signing-guard aggregate bytes reached hard limit".to_owned(),
@@ -4408,7 +5162,7 @@ impl MergeSigningGuard {
                     path.display()
                 )));
             }
-            let record = Self::read_record(&path)?;
+            let record = Self::read_record(&path, self.limits.max_record_bytes)?;
             if record.context.epoch_id <= self.committed_epoch
                 || record.context.carrier_height <= self.committed_carrier_height
             {
@@ -4437,7 +5191,7 @@ impl MergeSigningGuard {
         if !path.exists() {
             return Ok(None);
         }
-        let record = Self::read_record(&path)?;
+        let record = Self::read_record(&path, self.limits.max_record_bytes)?;
         if &record.context != context {
             return Err(MergeSidecarError::SigningGuard(
                 "signing-guard record context/path mismatch".to_owned(),
@@ -4460,7 +5214,7 @@ impl MergeSigningGuard {
         if !path.exists() {
             return Ok(None);
         }
-        let record = Self::read_record(&path)?;
+        let record = Self::read_record(&path, self.limits.max_record_bytes)?;
         if &record.context != context {
             return Err(MergeSidecarError::SigningGuard(
                 "signing-guard record context/path mismatch".to_owned(),
@@ -4520,14 +5274,14 @@ impl MergeSigningGuard {
         Self::decode_record_candidate(&record)?;
         let bytes = norito::to_bytes(&record)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        if bytes.len() > MAX_SIGNING_GUARD_RECORD_BYTES {
+        if bytes.len() > self.limits.max_record_bytes {
             return Err(MergeSidecarError::SigningGuard(
                 "signing-guard record exceeds hard byte limit".to_owned(),
             ));
         }
         let path = self.record_path(&record.context);
         if path.exists() {
-            let existing = Self::read_record(&path)?;
+            let existing = Self::read_record(&path, self.limits.max_record_bytes)?;
             return if existing == record {
                 Ok(())
             } else {
@@ -4535,7 +5289,8 @@ impl MergeSigningGuard {
             };
         }
         let mut count = 0_usize;
-        let total_bytes = Self::guard_directory_bytes(&self.directory)?;
+        let total_bytes =
+            Self::guard_directory_bytes(&self.directory, self.limits.max_total_bytes)?;
         for item in fs::read_dir(&self.directory)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
         {
@@ -4554,7 +5309,7 @@ impl MergeSigningGuard {
                     ));
                 }
                 count = count.saturating_add(1);
-                if count >= MAX_SIGNING_GUARD_RECORDS {
+                if count >= self.limits.max_records {
                     break;
                 }
             } else {
@@ -4564,21 +5319,25 @@ impl MergeSigningGuard {
                 )));
             }
         }
-        if count >= MAX_SIGNING_GUARD_RECORDS {
+        if count >= self.limits.max_records {
             return Err(MergeSidecarError::SigningGuard(
                 "signing-guard record count reached hard limit".to_owned(),
             ));
         }
         if total_bytes
             .checked_add(bytes.len())
-            .is_none_or(|total| total > MAX_SIGNING_GUARD_TOTAL_BYTES)
+            .is_none_or(|total| total > self.limits.max_total_bytes)
         {
             return Err(MergeSidecarError::SigningGuard(
                 "signing-guard aggregate bytes reached hard limit".to_owned(),
             ));
         }
         let temp = path.with_extension("norito.tmp");
-        Self::remove_regular_temp_if_present(&temp, "candidate-record")?;
+        Self::remove_regular_temp_if_present(
+            &temp,
+            "candidate-record",
+            self.limits.max_record_bytes,
+        )?;
         {
             let mut file = OpenOptions::new()
                 .create_new(true)
@@ -4592,7 +5351,7 @@ impl MergeSigningGuard {
         }
         if path.exists() {
             let _ = fs::remove_file(&temp);
-            let existing = Self::read_record(&path)?;
+            let existing = Self::read_record(&path, self.limits.max_record_bytes)?;
             return if existing == record {
                 Ok(())
             } else {
@@ -4639,6 +5398,166 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::merge::{MergeQuorumCertificate, MergeSignerProof};
 
+    #[test]
+    fn runtime_limit_constructors_reject_degenerate_and_overflowing_geometry() {
+        use iroha_config::parameters::defaults::sumeragi as defaults;
+
+        let valid = MergeSidecarLimits::defaults();
+        assert!(MergeSidecarTransport::with_limits(1, valid).is_ok());
+        assert!(MergeSidecarTransport::with_limits(usize::MAX, valid).is_err());
+
+        let sidecar_limits = |inbound_sessions,
+                              inbound_sessions_per_peer,
+                              inbound_bytes,
+                              inbound_bytes_per_peer,
+                              deferred_blocks,
+                              request_timeout,
+                              outbound_sessions,
+                              outbound_bytes,
+                              request_gates| {
+            MergeSidecarLimits::new(
+                NonZeroUsize::new(inbound_sessions).expect("non-zero fixture"),
+                NonZeroUsize::new(inbound_sessions_per_peer).expect("non-zero fixture"),
+                NonZeroUsize::new(inbound_bytes).expect("non-zero fixture"),
+                NonZeroUsize::new(inbound_bytes_per_peer).expect("non-zero fixture"),
+                NonZeroUsize::new(deferred_blocks).expect("non-zero fixture"),
+                defaults::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE,
+                request_timeout,
+                NonZeroUsize::new(outbound_sessions).expect("non-zero fixture"),
+                NonZeroUsize::new(outbound_bytes).expect("non-zero fixture"),
+                NonZeroUsize::new(request_gates).expect("non-zero fixture"),
+            )
+        };
+        let minimum_inbound = 2 * MAX_MERGE_LEDGER_ENTRY_BYTES;
+        assert!(
+            sidecar_limits(
+                1,
+                1,
+                minimum_inbound,
+                minimum_inbound,
+                2,
+                Duration::from_secs(1),
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                3,
+                minimum_inbound,
+                minimum_inbound,
+                2,
+                Duration::from_secs(1),
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                2,
+                minimum_inbound - 1,
+                minimum_inbound - 1,
+                2,
+                Duration::from_secs(1),
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                2,
+                minimum_inbound,
+                minimum_inbound,
+                1,
+                Duration::from_secs(1),
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                2,
+                minimum_inbound,
+                minimum_inbound,
+                2,
+                Duration::ZERO,
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                2,
+                minimum_inbound,
+                minimum_inbound,
+                2,
+                Duration::from_secs(1),
+                1,
+                MAX_MERGE_LEDGER_ENTRY_BYTES - 1,
+                1,
+            )
+            .is_err()
+        );
+        assert!(
+            sidecar_limits(
+                2,
+                2,
+                minimum_inbound,
+                minimum_inbound,
+                2,
+                Duration::from_secs(1),
+                2,
+                MAX_MERGE_LEDGER_ENTRY_BYTES,
+                1,
+            )
+            .is_err()
+        );
+
+        let metadata_headroom =
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
+        let minimum_record = MAX_MERGE_LEDGER_ENTRY_BYTES + metadata_headroom;
+        assert!(
+            MergeSigningGuardLimits::new(
+                NonZeroUsize::new(1).expect("non-zero fixture"),
+                NonZeroUsize::new(minimum_record - 1).expect("non-zero fixture"),
+                NonZeroUsize::new(minimum_record + metadata_headroom).expect("non-zero fixture"),
+            )
+            .is_err()
+        );
+        assert!(
+            MergeSigningGuardLimits::new(
+                NonZeroUsize::new(1).expect("non-zero fixture"),
+                NonZeroUsize::new(minimum_record).expect("non-zero fixture"),
+                NonZeroUsize::new(minimum_record + metadata_headroom - 1)
+                    .expect("non-zero fixture"),
+            )
+            .is_err()
+        );
+        assert!(
+            MergeSigningGuardLimits::new(
+                NonZeroUsize::new(1).expect("non-zero fixture"),
+                NonZeroUsize::MAX,
+                NonZeroUsize::MAX,
+            )
+            .is_err()
+        );
+    }
+
     fn peer(label: &[u8]) -> PeerId {
         PeerId::new(
             KeyPair::try_from_seed(label.to_vec(), Algorithm::BlsNormal)
@@ -4662,6 +5581,7 @@ mod tests {
             lane_snapshots: Vec::new(),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new_from_chunks(&[b"state", label]),
         }
     }
@@ -4739,6 +5659,7 @@ mod tests {
             .enumerate()
             .map(|(index, chunk)| CertifiedMergeSidecarChunkV1 {
                 version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                semantic_sequence: request.semantic_sequence,
                 request_id: request.request_id,
                 entry_hash: request.entry_hash,
                 encoded_len: request.encoded_len,
@@ -4807,13 +5728,15 @@ mod tests {
     fn routed_server_request(
         base: &CertifiedMergeSidecarRequestV1,
         requester: PeerId,
-        request_label: &[u8],
+        _request_label: &[u8],
         encoded_len: usize,
     ) -> CertifiedMergeSidecarRequestV1 {
         let mut request = base.clone();
         request.requester = requester;
-        request.request_id = Hash::new(request_label);
+        request.semantic_sequence = 1;
+        request.closed_through = 0;
         request.encoded_len = encoded_len as u64;
+        request.bind_canonical_request_id();
         request
     }
 
@@ -4879,6 +5802,7 @@ mod tests {
         let mut transport = MergeSidecarTransport::new();
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: 1,
+            semantic_sequence: 1,
             request_id: Hash::new(b"request"),
             entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"entry")),
             encoded_len: 1,
@@ -5003,7 +5927,9 @@ mod tests {
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("rotated request");
         assert_ne!(next.request_id, first.request_id);
@@ -5029,7 +5955,9 @@ mod tests {
                 .into_iter()
                 .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                     CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                    CertifiedMergeSidecarMessage::Chunk(_) => None,
+                    CertifiedMergeSidecarMessage::Close(_)
+                    | CertifiedMergeSidecarMessage::CloseAck(_)
+                    | CertifiedMergeSidecarMessage::Chunk(_) => None,
                 })
                 .expect("withheld holder must be retried indefinitely");
         }
@@ -5830,7 +6758,7 @@ mod tests {
             None
         );
 
-        let reconnect_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
+        let reconnect_at = now + Duration::from_secs(301);
         let reconnected = routes.mint(requester.clone());
         assert!(
             !server
@@ -6384,7 +7312,7 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_server_request_id_reuse_is_rejected_before_materialization() {
+    fn equal_sequence_with_different_semantic_identity_is_rejected_before_materialization() {
         let (_, requester, _, request, now) = start_session(1, 3);
         let local_peer = request.responder.clone();
         let mut server = MergeSidecarTransport::new();
@@ -6395,11 +7323,195 @@ mod tests {
         );
         let mut conflicting = request;
         conflicting.reference_digest = Hash::new(b"conflicting sidecar reference");
+        conflicting.bind_canonical_request_id();
         assert!(matches!(
             server.admit_server_request(&requester, &conflicting, None, &local_peer, now,),
             Err(MergeSidecarError::UnsolicitedResponse)
         ));
         assert_eq!(server.server_request_gates.len(), 1);
+    }
+
+    #[test]
+    fn request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix() {
+        let mut stream = RequestStreamState::default();
+        let (first, first_floor) = stream.allocate().expect("allocate sequence one");
+        let (second, second_floor) = stream.allocate().expect("allocate sequence two");
+        let (third, third_floor) = stream.allocate().expect("allocate sequence three");
+        assert_eq!((first, second, third), (1, 2, 3));
+        assert_eq!((first_floor, second_floor, third_floor), (0, 0, 0));
+
+        stream.close(second);
+        assert_eq!(stream.closed_through, 0);
+        stream.close(first);
+        assert_eq!(stream.closed_through, 2);
+        stream.close(third);
+        assert_eq!(stream.closed_through, 3);
+        assert!(stream.open_sequences.is_empty());
+    }
+
+    #[test]
+    fn authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression() {
+        let (_, requester, _, first, now) = start_session(1, 3);
+        let local_peer = first.responder.clone();
+        let first_key = (requester.clone(), first.request_id);
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &first, None, &local_peer, now)
+                .expect("admit sequence one")
+        );
+        server
+            .enqueue_response(first.clone(), None, vec![0x41], now)
+            .expect("retain sequence-one output");
+        assert!(server.outbound.contains_key(&first_key));
+
+        let mut second = first.clone();
+        second.semantic_sequence = 2;
+        second.closed_through = 1;
+        assert_eq!(
+            second.request_id,
+            second.canonical_request_id(),
+            "stream metadata must not alter semantic identity"
+        );
+        assert!(
+            server
+                .admit_server_request(&requester, &second, None, &local_peer, now)
+                .expect("the next occurrence authenticates the cumulative close floor")
+        );
+        assert_eq!(server.server_closed_through.get(&requester), Some(&1));
+        assert!(!server.outbound.contains_key(&first_key));
+        assert_eq!(
+            server.server_request_gates[&first_key].semantic_sequence, 2,
+            "the covered occurrence is replaced without creating a second semantic gate"
+        );
+        assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
+
+        assert!(matches!(
+            server.admit_server_request(&requester, &first, None, &local_peer, now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+
+        let mut regressed = second;
+        regressed.semantic_sequence = 3;
+        regressed.closed_through = 0;
+        assert!(matches!(
+            server.admit_server_request(&requester, &regressed, None, &local_peer, now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert_eq!(server.server_closed_through.get(&requester), Some(&1));
+    }
+
+    #[test]
+    fn standalone_close_retries_until_exact_ack_then_terminates() {
+        let (mut client, requester, _, request, now) = start_session(1, 3);
+        let responder = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("server observes sequence one")
+        );
+        client.close_request_sequence(&responder, request.semantic_sequence);
+
+        let close_post = client
+            .tick_bounded(&requester, now, 1)
+            .pop()
+            .expect("terminal local work emits a standalone close");
+        let CertifiedMergeSidecarMessage::Close(close) = Arc::unwrap_or_clone(close_post.message)
+        else {
+            panic!("close work must not be encoded as a data request")
+        };
+        assert_eq!(close_post.peer, responder);
+        assert!(close_post.reply_route.is_none());
+
+        let ack_post = server
+            .admit_server_close(&requester, &close, &responder)
+            .expect("server applies the authenticated close");
+        assert_eq!(
+            server.drain_closed_server_prefixes(),
+            vec![CertifiedMergeSidecarClosedPrefix {
+                requester: requester.clone(),
+                closed_through: request.semantic_sequence,
+            }]
+        );
+        let CertifiedMergeSidecarMessage::CloseAck(ack) = Arc::unwrap_or_clone(ack_post.message)
+        else {
+            panic!("standalone close must produce an explicit ACK")
+        };
+        assert!(
+            client
+                .acknowledge_close(&responder, &ack, &requester)
+                .expect("accept exact close ACK")
+        );
+        assert!(
+            client
+                .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+                .into_iter()
+                .all(|post| !matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Close(_)
+                )),
+            "an exact ACK terminates local close retry work"
+        );
+
+        let duplicate_ack = server
+            .admit_server_close(&requester, &close, &responder)
+            .expect("an exact close retry remains idempotent");
+        assert!(server.drain_closed_server_prefixes().is_empty());
+        let CertifiedMergeSidecarMessage::CloseAck(duplicate_ack) =
+            Arc::unwrap_or_clone(duplicate_ack.message)
+        else {
+            unreachable!("idempotent close returns the same ACK kind")
+        };
+        assert!(
+            !client
+                .acknowledge_close(&responder, &duplicate_ack, &requester)
+                .expect("duplicate ACK is a harmless no-op")
+        );
+    }
+
+    #[test]
+    fn close_beyond_the_highest_observed_sequence_is_rejected_atomically() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let responder = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("server observes sequence one")
+        );
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: request.semantic_sequence + 1,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.bind_canonical_close_id();
+        assert!(matches!(
+            server.admit_server_close(&requester, &close, &responder),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert_eq!(server.server_closed_through.get(&requester), Some(&0));
+        assert!(server.pending_server_closures.is_empty());
+        assert_eq!(server.server_request_gates.len(), 1);
+    }
+
+    #[test]
+    fn rejected_request_does_not_consume_server_stream_state() {
+        let (_, requester, _, mut request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        request.semantic_sequence =
+            u64::try_from(MAX_INBOUND_SESSIONS_PER_PEER).expect("bounded test geometry") + 1;
+        let mut server = MergeSidecarTransport::new();
+        assert!(matches!(
+            server.admit_server_request(&requester, &request, None, &local_peer, now),
+            Err(MergeSidecarError::Capacity(
+                "semantic request forward window"
+            ))
+        ));
+        assert!(!server.server_closed_through.contains_key(&requester));
+        assert!(server.server_request_gates.is_empty());
     }
 
     #[test]
@@ -6677,7 +7789,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_delivery_retry_rematerializes_after_rate_gate_expiry() {
+    fn exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon() {
         let (_, requester, _, request, now) = start_session(1, 3);
         let local_peer = request.responder.clone();
         let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
@@ -6701,30 +7813,23 @@ mod tests {
                 .expect("the first exact writer receipt advances")
         );
 
-        let retry_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
+        let retry_at = now + Duration::from_secs(301);
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, retry_at,)
+                .expect("elapsed time cannot reopen a completed semantic request")
+        );
         assert!(
             server
-                .admit_server_request(&requester, &request, Some(&route), &local_peer, retry_at,)
-                .expect("expired delivery dedup admits exact durable rematerialization")
+                .drain_outbound_chunks(usize::MAX, retry_at)
+                .is_empty()
         );
-        server
-            .enqueue_response(request, Some(route.clone()), vec![0x11], retry_at)
-            .expect("same live delivery rematerializes from durable source");
-        let retry = server.drain_outbound_chunks(usize::MAX, retry_at);
-        assert!(matches!(
-            retry.as_slice(),
-            [MergeSidecarPost {
-                reply_route: Some(emitted),
-                ..
-            }] if emitted.same_delivery(&route)
-        ));
         assert!(
             !server
                 .acknowledge_outbound_chunk(&stale_first_admission, retry_at)
                 .expect("a consumed old receipt is a harmless no-op"),
-            "a cloned receipt from the expired gate cannot advance its byte-identical replacement"
+            "a cloned receipt cannot reopen or advance the terminal source"
         );
-        assert!(acknowledge_reply_chunk(&mut server, &retry[0], retry_at));
     }
 
     #[test]
@@ -7489,7 +8594,7 @@ mod tests {
     fn outbound_chunk_drain_is_fair_across_bounded_sessions() {
         let (_, _, _, first, now) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
         let (_, _, _, mut second, _) = start_session(1, 3);
-        second.request_id = Hash::new(b"second fair outbound request");
+        second.semantic_sequence = 2;
         let mut server = MergeSidecarTransport::new();
         for request in [&first, &second] {
             assert!(
@@ -7522,7 +8627,11 @@ mod tests {
             .into_iter()
             .map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.request_id,
-                CertifiedMergeSidecarMessage::Request(_) => panic!("response emitted a request"),
+                CertifiedMergeSidecarMessage::Request(_)
+                | CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    panic!("response emitted a control message")
+                }
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -7535,8 +8644,8 @@ mod tests {
     fn completed_short_session_replacement_cannot_starve_an_older_long_session() {
         let (_, _, _, mut short, now) = start_session(1, 3);
         let (_, _, _, mut long, _) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
-        short.request_id = Hash::prehashed([0; Hash::LENGTH]);
-        long.request_id = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        short.semantic_sequence = 1;
+        long.semantic_sequence = 2;
         let mut routes = NetworkReplyRouteTestFixture::new(peer(b"replacement fairness hub"));
         let short_route = routes.mint(short.requester.clone());
         let long_route = routes.mint(long.requester.clone());
@@ -7577,7 +8686,8 @@ mod tests {
         assert!(acknowledge_reply_chunk(&mut server, &first, now));
 
         let mut replacement = short;
-        replacement.request_id = Hash::prehashed([1; Hash::LENGTH]);
+        replacement.semantic_sequence = 3;
+        replacement.closed_through = 1;
         let replacement_route = routes.mint(replacement.requester.clone());
         assert!(
             server
@@ -7836,18 +8946,24 @@ mod tests {
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("unsent request is immediately reissued");
         assert_eq!(reissued.responder, first.responder);
-        assert_ne!(reissued.request_id, first.request_id);
+        assert_eq!(reissued.request_id, first.request_id);
+        assert!(reissued.semantic_sequence > first.semantic_sequence);
+        assert_eq!(reissued.closed_through, first.semantic_sequence);
 
         let rotated = transport
             .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("first real attempt expires at the base timeout");
         assert_ne!(rotated.responder, reissued.responder);
@@ -7885,7 +9001,9 @@ mod tests {
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("one timed-out or idle request is scheduled");
         assert_eq!((request.entry_hash, request.reference_digest), expected);
@@ -8144,8 +9262,13 @@ mod tests {
                 .expect("ordinary global block finalizes carrier height");
         }
         drop(guard);
-        let restarted = MergeSigningGuard::open_with_committed_frontier(temp.path(), 0, rounds)
-            .expect("restart after many ordinary blocks");
+        let restarted = MergeSigningGuard::open_with_committed_frontier(
+            temp.path(),
+            0,
+            rounds,
+            MergeSigningGuardLimits::defaults(),
+        )
+        .expect("restart after many ordinary blocks");
         assert_eq!(restarted.committed_carrier_height, rounds);
 
         let later = MergeSigningContextV1 {
@@ -8277,8 +9400,13 @@ mod tests {
         // fsynced but immediately before the now-idempotent record GC.
         fs::write(&record_path, record_bytes).expect("restore stale durable decision");
         drop(guard);
-        let restarted = MergeSigningGuard::open_with_committed_frontier(temp.path(), 1, 2)
-            .expect("restart completes stale-record GC");
+        let restarted = MergeSigningGuard::open_with_committed_frontier(
+            temp.path(),
+            1,
+            2,
+            MergeSigningGuardLimits::defaults(),
+        )
+        .expect("restart completes stale-record GC");
         assert!(!record_path.exists());
         assert_eq!(
             restarted.authorize(context, Hash::new(b"conflict"), &candidate),

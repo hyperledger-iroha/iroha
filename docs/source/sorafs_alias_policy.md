@@ -173,10 +173,12 @@ available.
 
 ## Pin Registry Alignment
 
-- The `/v1/sorafs/pin` and `/v1/sorafs/pin/{digest}` endpoints hydrate each
-  alias response with `cache_evaluation.successor` (lineage head, approval
-  status, anomalies) and `cache_evaluation.governance` (revocation/freeze/rotation flags) sourced
-  from the pin registry snapshot.
+- The alias-facing `/v1/sorafs/pin` catalogue and `/v1/sorafs/aliases` endpoint
+  hydrate alias responses with `cache_evaluation.successor` (lineage head,
+  approval status, anomalies) and `cache_evaluation.governance`
+  (revocation/freeze/rotation flags) sourced from the pin registry snapshot.
+  `GET /v1/sorafs/pin/{digest_hex}` is deliberately separate: it returns the
+  exact finalized native pin record and does not carry alias-cache projections.
 - Aliases referencing manifests that are absent from the registry immediately
   refuse with `cache_decision: "refuse"` and log the `ManifestMissing` reason so
   operators can remediate the underlying data drift.

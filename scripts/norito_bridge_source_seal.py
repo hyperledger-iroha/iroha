@@ -51,6 +51,7 @@ APPLE_ROOT_INPUTS = (
     "IrohaSwift/Sources/IrohaSwift",
     "IrohaSwift/Sources/IrohaSwiftMobileTransports",
     "scripts/build_norito_xcframework.sh",
+    "scripts/exec_with_file_lock.py",
 )
 # CBSI consumes these Gradle builds directly through composite substitution, so
 # their shipping JVM sources must be bound alongside the native `.so` closure.

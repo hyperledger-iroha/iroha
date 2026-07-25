@@ -31,6 +31,38 @@ private func loadNativeAmxGroupedFixture() throws -> [String: Any] {
     return document
 }
 
+private final class NativeAmxGroupedEndpointURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(
+                self,
+                didFailWithError: NSError(domain: "NativeAmxGroupedEndpoint", code: -1)
+            )
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if let data {
+                client?.urlProtocol(self, didLoad: data)
+            }
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 private func pointerTokens(_ pointer: String) throws -> [String] {
     guard pointer.first == "/" else {
         throw NativeAmxGroupedFixtureError.malformed(
@@ -388,8 +420,29 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         )
         let sourceOrder = try XCTUnwrap(golden["ordered_source_ids"] as? [String])
         let group = try XCTUnwrap(diagnostics.laneSettlementCommitments.first)
-        XCTAssertEqual(group.nativeAmxReceipts.map(\.sourceId), sourceOrder)
+        XCTAssertEqual(group.nativeAmxReceipts.map(\.sourceId.rawValue), sourceOrder)
         XCTAssertEqual(group.nativeAmxReceipts.count, 2)
+        let firstLeg = try XCTUnwrap(group.nativeAmxReceipts.first?.legs.first)
+        XCTAssertEqual(
+            firstLeg.participantProposal.descriptor.validatorSetHash,
+            "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8"
+        )
+        XCTAssertEqual(
+            firstLeg.participantProposal.descriptor.descriptorHash,
+            "hash:568077DEBB5ECE0F6655571DBD81F8B8935CA5FB064F6B74864B4F58F3CB1A33#E6A5"
+        )
+        XCTAssertEqual(
+            firstLeg.participantProposal.proposalHash,
+            "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
+        )
+        XCTAssertEqual(
+            firstLeg.participantSettlementHash,
+            "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C"
+        )
+        let firstValidator = try XCTUnwrap(
+            firstLeg.participantProposal.descriptor.validatorSet.first
+        )
+        XCTAssertTrue(ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(firstValidator))
         for receipt in group.nativeAmxReceipts {
             XCTAssertEqual(receipt.legs.count, 2)
             XCTAssertEqual(receipt.laneBlockView, 9)
@@ -414,9 +467,164 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
         try validateApplicationEvidenceFixture(document)
     }
 
+    func testRustOwnedGroupedNativeAmxV2EndpointSeparation() async throws {
+        let document = try loadNativeAmxGroupedFixture()
+        let golden = try XCTUnwrap(document["golden"] as? [String: Any])
+        let diagnosticsObject = try XCTUnwrap(
+            golden["expected_diagnostics"] as? [String: Any]
+        )
+        let diagnosticsData = try JSONSerialization.data(
+            withJSONObject: diagnosticsObject
+        )
+        let applicationRows = try XCTUnwrap(
+            diagnosticsObject[
+                "native_amx_participant_applications"
+            ] as? [[String: Any]]
+        )
+        let canonicalHash = try XCTUnwrap(
+            applicationRows.first?["lane_incarnation"] as? String
+        )
+        let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
+        let statusObject: [String: Any] = [
+            "protocol_version": 3,
+            "node_fingerprint": canonicalHash,
+            "build_fingerprint": canonicalHash,
+            "config_fingerprint": canonicalHash,
+            "restart_required": false,
+            "height_context_id": [canonicalHash],
+            "height": 1,
+            "view": 0,
+            "phase": ["phase": "awaiting_proposal", "details": NSNull()],
+            "leader": 0,
+            "body_state": ["state": "missing", "details": NSNull()],
+            "last_committed_height": 0,
+            "height_context": [
+                "epoch": 0,
+                "epoch_end_height": 1,
+                "mode": ["mode": "permissioned", "details": NSNull()],
+                "epoch_seed": [UInt8](repeating: 1, count: 32),
+                "validator_count": 1,
+                "quorum": ["min_signers": 1, "total_power": 1],
+            ],
+            "liveness": [
+                "generation": 0,
+                "prepare_quorums": [],
+                "commit_quorums": [],
+                "timeout_quorums": [],
+                "outbound_intents": [],
+                "work": [
+                    "candidate": idle,
+                    "body_recovery": idle,
+                    "body_store": idle,
+                    "validation": idle,
+                    "application": idle,
+                    "successor_height": idle,
+                ],
+                "queues": [],
+                "no_progress_age_ms": 0,
+                "ignore_counts": [],
+            ],
+        ]
+        let statusData = try JSONSerialization.data(withJSONObject: statusObject)
+        _ = try JSONDecoder().decode(
+            ToriiSumeragiStatusSnapshot.self,
+            from: statusData
+        )
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NativeAmxGroupedEndpointURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(
+            baseURL: URL(string: "https://native-amx-grouped.test")!,
+            session: session
+        )
+        defer {
+            NativeAmxGroupedEndpointURLProtocol.handler = nil
+            client.invalidateAndCancel()
+        }
+
+        func response(
+            for request: URLRequest,
+            body: Data
+        ) -> (HTTPURLResponse, Data?) {
+            (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                body
+            )
+        }
+
+        var requestedPaths: [String] = []
+        NativeAmxGroupedEndpointURLProtocol.handler = { request in
+            requestedPaths.append(request.url?.path ?? "<missing>")
+            return response(for: request, body: diagnosticsData)
+        }
+        let diagnostics = try await client.getSumeragiDiagnostics()
+        XCTAssertEqual(
+            diagnostics.nativeAmxParticipantApplications.first?.sourceCount,
+            2
+        )
+        XCTAssertEqual(requestedPaths, ["/v1/sumeragi/diagnostics"])
+
+        requestedPaths = []
+        NativeAmxGroupedEndpointURLProtocol.handler = { request in
+            requestedPaths.append(request.url?.path ?? "<missing>")
+            return response(for: request, body: diagnosticsData)
+        }
+        do {
+            _ = try await client.getSumeragiStatus()
+            XCTFail("status endpoint must reject a diagnostics-shaped payload")
+        } catch let error as ToriiClientError {
+            guard case .decoding = error else {
+                XCTFail("expected status decoding failure, got \(error)")
+                return
+            }
+        }
+        XCTAssertEqual(requestedPaths, ["/v1/sumeragi/status"])
+
+        requestedPaths = []
+        NativeAmxGroupedEndpointURLProtocol.handler = { request in
+            requestedPaths.append(request.url?.path ?? "<missing>")
+            return response(for: request, body: statusData)
+        }
+        do {
+            _ = try await client.getSumeragiDiagnostics()
+            XCTFail("diagnostics endpoint must reject a status-shaped payload")
+        } catch let error as ToriiClientError {
+            guard case .decoding = error else {
+                XCTFail("expected diagnostics decoding failure, got \(error)")
+                return
+            }
+        }
+        XCTAssertEqual(requestedPaths, ["/v1/sumeragi/diagnostics"])
+    }
+
     func testRustOwnedGroupedNativeAmxV2NegativeCorpus() throws {
         let canonical = try loadNativeAmxGroupedFixture()
         let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
+        let identifiers = Set(controls.compactMap { $0["id"] as? String })
+        XCTAssertTrue(
+            Set([
+                "coherent_forged_validator_set_hash",
+                "coherent_stale_descriptor_hash",
+                "coherent_stale_proposal_hash",
+                "coherent_stale_settlement_hash",
+                "non_canonical_validator_peer_id",
+            ]).isSubset(of: identifiers)
+        )
+
+        // This value has the exact multihash tag and byte length expected for
+        // BLS-Normal, but its all-zero compressed point is invalid. Exercise
+        // key admission directly so rejection does not depend on stale hashes
+        // in the corpus mutation.
+        let invalidCompressedPoint = "ea0130" + String(repeating: "00", count: 48)
+        XCTAssertFalse(
+            ToriiNativeAmxWire.isCanonicalBlsNormalPeerId(invalidCompressedPoint)
+        )
         for control in controls {
             let identifier = try XCTUnwrap(control["id"] as? String)
             try XCTContext.runActivity(named: identifier) { _ in

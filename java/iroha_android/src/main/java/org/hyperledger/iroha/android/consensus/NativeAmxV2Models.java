@@ -806,6 +806,23 @@ public final class NativeAmxV2Models {
     }
   }
 
+  /** Return true only for a canonical non-infinity BLS-Normal subgroup point. */
+  public static boolean isCanonicalBlsNormalPeerId(final String value) {
+    return NativeAmxV2.isCanonicalBlsNormalPeerId(value);
+  }
+
+  /** Return whether this entrypoint needs block-wide mixed-role anchor validation. */
+  public static boolean requiresMixedRoleAnchorValidation(
+      final ParticipantDescriptor descriptor,
+      final String transactionEntrypointHash) {
+    if (descriptor == null) {
+      throw new IllegalArgumentException("descriptor must be provided");
+    }
+    return NativeAmxV2.requiresMixedRoleAnchorValidation(
+        descriptor.delegate,
+        new NativeAmxV2.TransactionEntrypointHash(transactionEntrypointHash));
+  }
+
   /** Parse and strictly validate a Native AMX receipt-group JSON string. */
   public static ReceiptGroup parseReceiptGroup(final String json) {
     return new ReceiptGroup(NativeAmxV2.parseReceiptGroup(json));

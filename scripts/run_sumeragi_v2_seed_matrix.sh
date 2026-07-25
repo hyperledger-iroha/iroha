@@ -55,6 +55,53 @@ sha256_file() {
   fi
 }
 
+wait_for_external_cargo() {
+  local active_compilers
+  while true; do
+    ps -axo pid,etime,command
+    active_compilers="$(
+      ps -axo pid=,command= | awk '
+        {
+          executable = $2
+          sub(/^.*\//, "", executable)
+          if (executable == "cargo" || executable == "rustc") {
+            print
+          }
+        }
+      '
+    )"
+    if [[ -z "$active_compilers" ]]; then
+      return
+    fi
+    printf '%s\n' \
+      "waiting for active Cargo/rustc processes before seed-matrix command:" \
+      "$active_compilers" >&2
+    sleep 10
+  done
+}
+
+run_cargo() {
+  wait_for_external_cargo
+  command cargo "$@"
+}
+
+source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
+
+localnet_binary_attestation_valid() {
+  sumeragi_v2_localnet_binary_attestation_valid \
+    "$repo_root" "$source_manifest_sha256"
+}
+
+ensure_source_bound_localnet_binaries() {
+  sumeragi_v2_ensure_source_bound_localnet_binaries \
+    "$repo_root" "$source_manifest_sha256"
+}
+
+export_source_bound_localnet_binaries() {
+  sumeragi_v2_export_source_bound_localnet_binaries \
+    "$repo_root" "$source_manifest_sha256"
+}
+
 observed_source_manifest_sha256="$(workspace_source_manifest)"
 if [[ ! "$observed_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "workspace source manifest helper returned an invalid digest" >&2
@@ -88,7 +135,6 @@ readonly release_head_commit release_head_tree release_cargo_lock_sha256
 readonly source_bound_root="${repo_root}/target/sumeragi-v2-release/${source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
 export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
-export IROHA_TEST_TARGET_DIR="${source_bound_root}/programs"
 # A release/PR corridor must fail if the real four-peer network cannot start;
 # sandbox skips are useful for ad-hoc developer runs but are not gate evidence.
 export IROHA_TEST_REQUIRE_NETWORK=1
@@ -96,13 +142,16 @@ export IROHA_TEST_REQUIRE_NETWORK=1
 # retry which hides a protocol-induced startup stall.
 export IROHA_TEST_NETWORK_START_ATTEMPTS=1
 # Explicit binary paths bypass the test-network freshness check. Clear them in
-# this standalone runner as well as in the parent release gate, and force the
-# re-entrant source-fingerprint build path for every scenario process.
+# this standalone runner as well as in the parent release gate. All binaries
+# are prebuilt and attested before Cargo starts a test process.
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
-export IROHA_TEST_SKIP_BUILD=0
-export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
+export IROHA_TEST_SKIP_BUILD=1
+export IROHA_TEST_ALLOW_REENTRANT_BUILD=0
+export IROHA_TEST_BUILD_PROFILE=release
+export PROFILE=release
+export CARGO_NET_OFFLINE=true
 # These are the bounded waits implemented by the integration harness itself.
 # The launcher intentionally does not signal Cargo, rustc, or validator process
 # groups. If an unbounded path escapes these internal deadlines, the invocation
@@ -110,6 +159,8 @@ export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
 export IROHA_TEST_PROCESS_TIMEOUT_MS=300
 export IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300
+ensure_source_bound_localnet_binaries
+export_source_bound_localnet_binaries
 # This source-bound corridor is deliberately the fixed five-scenario,
 # four-validator acceptance matrix. The independent nine-peer signed-observer
 # pressure test is useful stress coverage, but is not one of these 32-by-5
@@ -169,6 +220,7 @@ printf '%s\t%s\n' \
   source_bound_root "$source_bound_root" \
   cargo_target_dir "$CARGO_TARGET_DIR" \
   iroha_test_target_dir "$IROHA_TEST_TARGET_DIR" \
+  prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
   expected_runs "$expected_runs" \
   build_timeout_seconds 3600 \
   process_timeout_seconds 300 \
@@ -183,10 +235,10 @@ echo "seed-matrix command evidence: ${summary}" >&2
 # Pin the inventory first so a rename, cfg exclusion, or accidental `#[ignore]`
 # cannot turn the real-network corridor into zero-test success.
 set +e
-cargo test --locked -p integration_tests --test "${target}" -- --list \
+run_cargo test --locked --offline -p integration_tests --test "${target}" -- --list \
   >"$inventory_log" 2>&1
 inventory_status=$?
-cargo test --locked -p integration_tests --test "${target}" -- --list --ignored \
+run_cargo test --locked --offline -p integration_tests --test "${target}" -- --list --ignored \
   >"$ignored_inventory_log" 2>&1
 ignored_inventory_status=$?
 set -e
@@ -239,12 +291,12 @@ for scenario_spec in "${scenarios[@]}"; do
     # Record a canonical replay command. The placeholder keeps the receipt
     # independent of the invocation's incidental absolute archive path; the
     # adjacent `localnet` field binds it to the exact retained directory.
-    command="IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${source_manifest_sha256} IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1 IROHA_TEST_SKIP_BUILD=0 IROHA_TEST_ALLOW_REENTRANT_BUILD=1 IROHA_TEST_BUILD_TIMEOUT_MS=3600 IROHA_TEST_PROCESS_TIMEOUT_MS=300 IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 IROHA_TEST_NETWORK_BASE_SEED=${seed} TEST_NETWORK_TMP_DIR=\${SEED_MATRIX_EVIDENCE_DIRECTORY}/${localnet_output} IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test --locked -p integration_tests --test ${target} ${module}::${test_name} -- ${test_args[*]}"
+    command="CARGO_TARGET_DIR=${CARGO_TARGET_DIR} IROHA_TEST_TARGET_DIR=${IROHA_TEST_TARGET_DIR} IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${source_manifest_sha256} IROHA_RELEASE_PREBUILT_MANIFEST_SHA256=${IROHA_RELEASE_PREBUILT_MANIFEST_SHA256} TEST_NETWORK_BIN_IROHAD=${TEST_NETWORK_BIN_IROHAD} TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=${TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL} TEST_NETWORK_BIN_IROHA=${TEST_NETWORK_BIN_IROHA} KAGAMI_BIN=${KAGAMI_BIN} CARGO_NET_OFFLINE=true IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_NETWORK_START_ATTEMPTS=1 IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_ALLOW_REENTRANT_BUILD=0 IROHA_TEST_BUILD_PROFILE=release PROFILE=release IROHA_TEST_BUILD_TIMEOUT_MS=3600 IROHA_TEST_PROCESS_TIMEOUT_MS=300 IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 IROHA_TEST_NETWORK_BASE_SEED=${seed} TEST_NETWORK_TMP_DIR=\${SEED_MATRIX_EVIDENCE_DIRECTORY}/${localnet_output} IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test --locked --offline -p integration_tests --test ${target} ${module}::${test_name} -- ${test_args[*]}"
     ((run_index += 1))
 
     set +e
     TEST_NETWORK_TMP_DIR="$localnet_dir" IROHA_TEST_NETWORK_KEEP_DIRS=1 \
-      cargo test --locked -p integration_tests --test "${target}" \
+      run_cargo test --locked --offline -p integration_tests --test "${target}" \
       "${module}::${test_name}" -- "${test_args[@]}" \
       2>&1 | tee "$run_log"
     pipeline_status=("${PIPESTATUS[@]}")
@@ -331,6 +383,10 @@ if [[ "$localnet_manifest_count" != "$expected_runs" ]]; then
   exit 1
 fi
 require_source_manifest "before completion attestation" || exit 1
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed before seed-matrix completion" >&2
+  exit 1
+fi
 summary_sha256="$(sha256_file "$summary")"
 if [[ ! "$summary_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "failed to hash the seed-matrix summary" >&2
@@ -341,12 +397,19 @@ if [[ ! "$localnet_manifests_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "failed to hash the retained-localnet manifest index" >&2
   exit 1
 fi
-completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
-{
+if ! require_source_manifest "immediately before completion publication"; then
+  exit 1
+fi
+if ! localnet_binary_attestation_valid; then
+  echo "source-bound localnet binary bundle changed while publishing seed-matrix completion" >&2
+  exit 1
+fi
+completion_body="$(
   printf '%s\t%s\n' \
     schema_version 2 \
     profile "$profile" \
-    source_manifest_sha256 "$source_manifest_sha256"
+    source_manifest_sha256 "$source_manifest_sha256" \
+    prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"
   if [[ "$profile" == "release" ]]; then
     printf '%s\t%s\n' \
       head_commit "$release_head_commit" \
@@ -365,16 +428,18 @@ completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
     printf 'localnet_manifest_%03d_path\t%s\n' "$manifest_index" "$manifest_path"
     printf 'localnet_manifest_%03d_sha256\t%s\n' "$manifest_index" "$manifest_sha256"
   done <"$localnet_manifests"
-} >"$completion_tmp"
-mv -- "$completion_tmp" "$completion_attestation"
-if ! require_source_manifest "after completion attestation"; then
-  rm -f -- "$completion_attestation"
-  exit 1
-fi
+)"
+marker_publish_args=(
+  --output "$completion_attestation"
+  --maximum-bytes 131072
+)
 if [[ -n "${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE:-}" ]]; then
-  completion_path_tmp="${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE}.$$"
-  printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
-  mv -- "$completion_path_tmp" "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
+  marker_publish_args+=(
+    --pointer "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
+  )
 fi
+printf '%s\n' "$completion_body" |
+  python3 -I -S "${repo_root}/scripts/publish_release_marker.py" \
+    "${marker_publish_args[@]}"
 
 echo "seed-matrix completed ${run_index} command runs; evidence: ${summary}; completion: ${completion_attestation}" >&2

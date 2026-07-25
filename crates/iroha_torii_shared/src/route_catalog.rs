@@ -714,6 +714,8 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 AuthenticationPolicy::OperatorSignature
                     | AuthenticationPolicy::OperatorCredentialExchange
             )
+            && !(route.stable_route_id == "operator.internal_torii_proxy"
+                && route.authentication == AuthenticationPolicy::IdentityBoundSignature)
         {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
@@ -1332,7 +1334,7 @@ pub mod core {
         Listener::Torii,
     )
     .with_feature_gate(FeatureGate::Any(&["p2p_ws", "connect"]))
-    .with_authentication(AuthenticationPolicy::OperatorSignature);
+    .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
     /// Read the VPN client profile.
     pub const VPN_PROFILE: RouteDescriptor = RouteDescriptor::new(
         "vpn.profile",
@@ -3301,9 +3303,6 @@ pub mod sorafs {
         "sorafs.storage_chunk.read",
         "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
     );
-    /// Request a proof-of-replication sample.
-    pub const STORAGE_POR_SAMPLE: RouteDescriptor =
-        documented_post("sorafs.storage_por.sample", "/v1/sorafs/storage/por-sample");
     /// Build a bounded proof-stream payload.
     pub const PROOF_STREAM: RouteDescriptor =
         documented_post("sorafs.proof_stream.build", "/v1/sorafs/proof/stream")
@@ -3564,7 +3563,6 @@ pub mod sorafs {
         STORAGE_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,
-        STORAGE_POR_SAMPLE,
         PROOF_STREAM,
         PDP_CHALLENGE,
         PDP_NEXT,
@@ -3993,6 +3991,10 @@ pub mod contracts_and_verification_keys {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
 
+    const fn app_signed_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_signed_get(id, path).with_projections(RouteProjections::SDK)
+    }
+
     const fn app_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path).with_projections(RouteProjections::SDK)
     }
@@ -4092,25 +4094,29 @@ pub mod contracts_and_verification_keys {
         SORAFS_ORDERBOOK_EVENTS_GET => app_sdk_get("contracts.sorafs_orderbook_events_get", "/v1/sorafs/orderbook/events");
         SORAFS_ORDERBOOK_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_stream_get", "/v1/sorafs/orderbook/events/stream");
         SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
-        SORAFS_RESERVE_LIFECYCLE_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_post", "/v1/sorafs/reserve/lifecycle");
-        SORAFS_RESERVE_LIFECYCLE_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_get", "/v1/sorafs/reserve/lifecycle");
-        SORAFS_RESERVE_LIFECYCLE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}");
-        SORAFS_RESERVE_LIFECYCLE_POLICY_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_policy_post", "/v1/sorafs/reserve/lifecycle/policy");
-        SORAFS_RESERVE_LIFECYCLE_POLICY_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_policy_get", "/v1/sorafs/reserve/lifecycle/policy");
-        SORAFS_RESERVE_LIFECYCLE_ADVANCE_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_advance_post", "/v1/sorafs/reserve/lifecycle/advance");
-        SORAFS_RESERVE_CREDIT_LINES_GET => app_sdk_get("contracts.sorafs_reserve_credit_lines_get", "/v1/sorafs/reserve/credit-lines");
-        SORAFS_RESERVE_CREDIT_LINES_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_credit_lines_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_events_get", "/v1/sorafs/reserve/lifecycle/events");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_lifecycle_events_stream_get", "/v1/sorafs/reserve/lifecycle/events/stream");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_lifecycle_events_ws_get", "/v1/sorafs/reserve/lifecycle/events/ws");
+        SORAFS_RESERVE_POLICY_GET => app_signed_sdk_get("contracts.sorafs_reserve_policy_get", "/v1/sorafs/reserve/policy");
+        SORAFS_RESERVE_PROVIDERS_GET => app_signed_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
+        SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");
         SORAFS_RESERVE_TOP_UP_POST => app_sdk_post("contracts.sorafs_reserve_top_up_post", "/v1/sorafs/reserve/top-up");
         SORAFS_RESERVE_WITHDRAW_POST => app_sdk_post("contracts.sorafs_reserve_withdraw_post", "/v1/sorafs/reserve/withdraw");
-        SORAFS_RESERVE_MOVEMENTS_GET => app_sdk_get("contracts.sorafs_reserve_movements_get", "/v1/sorafs/reserve/movements");
-        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_CUSTODY_POST => app_sdk_post("contracts.sorafs_reserve_movements_by_movement_id_hex_custody_post", "/v1/sorafs/reserve/movements/{movement_id_hex}/custody");
-        SORAFS_RESERVE_BALANCES_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_balances_by_provider_id_hex_get", "/v1/sorafs/reserve/balances/{provider_id_hex}");
+        SORAFS_RESERVE_MOVEMENTS_GET => app_signed_sdk_get("contracts.sorafs_reserve_movements_get", "/v1/sorafs/reserve/movements");
+        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_movements_by_movement_id_hex_get", "/v1/sorafs/reserve/movements/{movement_id_hex}");
+        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST => app_sdk_post("contracts.sorafs_reserve_movements_by_movement_id_hex_decision_post", "/v1/sorafs/reserve/movements/{movement_id_hex}/decision");
+        SORAFS_RESERVE_CREDIT_DRAW_POST => app_sdk_post("contracts.sorafs_reserve_credit_draw_post", "/v1/sorafs/reserve/credit/draw");
+        SORAFS_RESERVE_CREDIT_REPAY_POST => app_sdk_post("contracts.sorafs_reserve_credit_repay_post", "/v1/sorafs/reserve/credit/repay");
         SORAFS_RESERVE_APPEALS_POST => app_sdk_post("contracts.sorafs_reserve_appeals_post", "/v1/sorafs/reserve/appeals");
-        SORAFS_RESERVE_APPEALS_GET => app_sdk_get("contracts.sorafs_reserve_appeals_get", "/v1/sorafs/reserve/appeals");
+        SORAFS_RESERVE_APPEALS_GET => app_signed_sdk_get("contracts.sorafs_reserve_appeals_get", "/v1/sorafs/reserve/appeals");
+        SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_appeals_by_appeal_id_hex_get", "/v1/sorafs/reserve/appeals/{appeal_id_hex}");
         SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST => app_sdk_post("contracts.sorafs_reserve_appeals_by_appeal_id_hex_decision_post", "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision");
+        SORAFS_RESERVE_EVENTS_GET => app_signed_sdk_get("contracts.sorafs_reserve_events_get", "/v1/sorafs/reserve/events");
+        SORAFS_RESERVE_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_stream_get", "/v1/sorafs/reserve/events/stream");
+        SORAFS_RESERVE_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_ws_get", "/v1/sorafs/reserve/events/ws");
+        SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET => app_signed_get("contracts.sorafs_gateway_compliance_feeds_by_feed_id_get", "/v1/sorafs/gateway/compliance/feeds/{feed_id}");
+        SORAFS_GATEWAY_COMPLIANCE_STATUS_GET => app_signed_get("contracts.sorafs_gateway_compliance_status_get", "/v1/sorafs/gateway/compliance/status");
+        SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => app_signed_post("contracts.sorafs_gateway_compliance_stage_post", "/v1/sorafs/gateway/compliance/stage");
+        SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST => app_signed_post("contracts.sorafs_gateway_compliance_acknowledge_post", "/v1/sorafs/gateway/compliance/acknowledge");
+        SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST => app_signed_post("contracts.sorafs_gateway_compliance_promote_post", "/v1/sorafs/gateway/compliance/promote");
+        SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST => app_signed_post("contracts.sorafs_gateway_compliance_rollback_post", "/v1/sorafs/gateway/compliance/rollback");
         SORAFS_APPEALS_PRICING_CONFIG_GET => app_get("contracts.sorafs_appeals_pricing_config_get", "/v1/sorafs/appeals/pricing/config");
         SORAFS_APPEALS_PRICING_STATUS_GET => app_get("contracts.sorafs_appeals_pricing_status_get", "/v1/sorafs/appeals/pricing/status");
         SORAFS_APPEALS_PRICING_QUOTE_POST => app_post("contracts.sorafs_appeals_pricing_quote_post", "/v1/sorafs/appeals/pricing/quote");
@@ -4126,6 +4132,10 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_BALLOTS_GET => app_get("contracts.sorafs_moderation_ballots_get", "/v1/sorafs/moderation/ballots");
         SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET => app_get("contracts.sorafs_moderation_ballots_by_case_id_by_round_id_get", "/v1/sorafs/moderation/ballots/{case_id}/{round_id}");
         SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET => app_get("contracts.sorafs_moderation_ballots_by_case_id_by_round_id_no_show_plan_get", "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan");
+        SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST => app_post("contracts.sorafs_moderation_ballots_eligibility_post", "/v1/sorafs/moderation/ballots/eligibility");
+        SORAFS_MODERATION_BALLOTS_SORTITION_POST => app_post("contracts.sorafs_moderation_ballots_sortition_post", "/v1/sorafs/moderation/ballots/sortition");
+        SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST => app_post("contracts.sorafs_moderation_ballots_assignments_accept_post", "/v1/sorafs/moderation/ballots/assignments/accept");
+        SORAFS_MODERATION_BALLOTS_ACTIVATE_POST => app_post("contracts.sorafs_moderation_ballots_activate_post", "/v1/sorafs/moderation/ballots/activate");
         SORAFS_MODERATION_BALLOTS_COMMITS_POST => app_post("contracts.sorafs_moderation_ballots_commits_post", "/v1/sorafs/moderation/ballots/commits");
         SORAFS_MODERATION_BALLOTS_CHALLENGES_POST => app_post("contracts.sorafs_moderation_ballots_challenges_post", "/v1/sorafs/moderation/ballots/challenges");
         SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST => app_post("contracts.sorafs_moderation_ballots_challenges_resolve_post", "/v1/sorafs/moderation/ballots/challenges/resolve");
@@ -4141,7 +4151,6 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_review_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_release_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_appeal_handoff_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff");
-        SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_BALLOT_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_appeal_ballot_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_operator_panel_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
@@ -4555,7 +4564,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::STORAGE_TOKEN,
     sorafs::STORAGE_CAR,
     sorafs::STORAGE_CHUNK,
-    sorafs::STORAGE_POR_SAMPLE,
     sorafs::PROOF_STREAM,
     sorafs::PDP_CHALLENGE,
     sorafs::PDP_NEXT,
@@ -4834,25 +4842,23 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_GET,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_STREAM_GET,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_ADVANCE_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_STREAM_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_WS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_POLICY_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
     contracts_and_verification_keys::SORAFS_RESERVE_TOP_UP_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_WITHDRAW_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_CUSTODY_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_BALANCES_BY_PROVIDER_ID_HEX_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_DRAW_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_REPAY_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_CONFIG_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_STATUS_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_QUOTE_POST,
@@ -4868,6 +4874,10 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ELIGIBILITY_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_SORTITION_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ASSIGNMENTS_ACCEPT_POST,
+    contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_ACTIVATE_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_COMMITS_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_BALLOTS_CHALLENGES_RESOLVE_POST,
@@ -4883,7 +4893,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_REVIEW_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_RELEASE_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_HANDOFF_POST,
-    contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_APPEAL_BALLOT_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,
@@ -4997,6 +5006,30 @@ mod tests {
     }
 
     #[test]
+    fn internal_torii_proxy_is_the_only_identity_bound_operator_route() {
+        assert_eq!(core::INTERNAL_PROXY.surface(), ApiSurface::Operator);
+        assert_eq!(
+            core::INTERNAL_PROXY.authentication(),
+            AuthenticationPolicy::IdentityBoundSignature
+        );
+        assert_eq!(validate_catalog(&[core::INTERNAL_PROXY]), Ok(()));
+
+        let generic_identity_bound_operator = RouteDescriptor::new(
+            "test.identity_bound_operator",
+            HttpMethod::Post,
+            "/v1/tests/identity-bound-operator",
+            ApiSurface::Operator,
+            Listener::Torii,
+        )
+        .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
+        let errors = validate_catalog(&[generic_identity_bound_operator])
+            .expect_err("generic identity-bound keys must not receive operator privileges");
+        assert!(errors.iter().any(|error| {
+            error.kind == CatalogValidationErrorKind::OperatorSurfaceRequiresAuthentication
+        }));
+    }
+
+    #[test]
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
@@ -5090,6 +5123,7 @@ mod tests {
             (HttpMethod::Post, "/v1/sorafs/capacity/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por"),
             (HttpMethod::Post, "/v1/sorafs/por/trigger"),
+            (HttpMethod::Post, "/v1/sorafs/storage/por-sample"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-proof"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-verdict"),
@@ -5258,6 +5292,7 @@ mod tests {
         for unsupported_path in [
             "/ws/reputation",
             "/sorafs/cid/{cid}/",
+            "/v1/sorafs/storage/por-sample",
             "/v1/sorafs/storage/por-challenge",
             "/v1/sorafs/storage/por-proof",
             "/v1/sorafs/storage/por-verdict",

@@ -58,7 +58,8 @@ const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// Maximum participant route/incarnation leaves committed by one global block.
-pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 = 1_024;
+pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 =
+    crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
 /// Maximum ordered source/result members in one participant application leaf.
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
 const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN: &[u8] =
@@ -830,7 +831,6 @@ impl NativeAmxApplicationManifestLeafV1 {
         {
             return Err(ValidationError::InvalidNativeAmxApplicationManifestMembership);
         }
-        let missing_hash = Hash::prehashed([0; Hash::LENGTH]);
         let identities = [
             self.lane_incarnation,
             self.descriptor_hash,
@@ -839,12 +839,18 @@ impl NativeAmxApplicationManifestLeafV1 {
             Hash::from(self.application_block_hash),
             self.executed_block_wire_hash,
         ];
-        if identities.contains(&missing_hash)
-            || self.predecessor_descriptor_hash == Some(missing_hash)
+        let is_zero_like = |hash: &Hash| {
+            let bytes = hash.as_ref();
+            bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] <= 1
+        };
+        if identities.iter().any(is_zero_like)
+            || self
+                .predecessor_descriptor_hash
+                .is_some_and(|hash| is_zero_like(&hash))
             || self.members.iter().any(|member| {
-                member.source_id == [0; Hash::LENGTH]
-                    || Hash::from(member.entrypoint_hash) == missing_hash
-                    || Hash::from(member.result_hash) == missing_hash
+                member.source_id.iter().all(|byte| *byte == 0)
+                    || is_zero_like(&Hash::from(member.entrypoint_hash))
+                    || is_zero_like(&Hash::from(member.result_hash))
             })
         {
             return Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf);

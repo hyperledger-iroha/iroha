@@ -46,6 +46,8 @@ pub mod sorafs_orderbook;
 pub mod sorafs_pop_registry;
 /// Finalized chain-authoritative `SoraFS` PDP and PoTR outcome handlers.
 pub mod sorafs_proof_outcome;
+/// Authoritative native `SoraFS` reputation recorder policy and source journal.
+pub mod sorafs_reputation;
 /// Authoritative `SoraFS` reserve/rent instruction handlers.
 pub mod sorafs_reserve;
 pub mod space_directory;
@@ -196,6 +198,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDeclaration>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordCapacityTelemetry>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
@@ -222,6 +225,13 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy
+    >,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,

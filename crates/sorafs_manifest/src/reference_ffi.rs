@@ -42,10 +42,6 @@ pub const SORAFS_REFERENCE_REPAIR_KIND_SLASH_PROPOSAL: u32 = 4;
 pub const SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_POLICY: u32 = 5;
 /// FFI repair payload kind selector for `RepairEscalationApprovalV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_APPROVAL: u32 = 6;
-/// FFI repair payload kind selector for `SignedAuditorRequestV1`.
-pub const SORAFS_REFERENCE_REPAIR_KIND_SIGNED_AUDITOR_REQUEST: u32 = 7;
-/// FFI repair payload kind selector for `RepairWorkerSignaturePayloadV1`.
-pub const SORAFS_REFERENCE_REPAIR_KIND_WORKER_SIGNATURE: u32 = 8;
 /// FFI repair payload kind selector for `RepairTaskEventV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_TASK_EVENT: u32 = 9;
 /// FFI repair payload kind selector for `RepairAuditEventV1`.
@@ -61,8 +57,6 @@ pub const SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT: u32 = 3;
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL: u32 = 4;
 /// FFI orderbook payload kind selector for `SettlementReceiptV1`.
 pub const SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT: u32 = 5;
-/// FFI orderbook payload kind selector for `OrderbookRuntimeSnapshotV1`.
-pub const SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT: u32 = 6;
 
 /// FFI PoP payload kind selector for `PopCredentialV1`.
 pub const SORAFS_REFERENCE_POP_KIND_CREDENTIAL: u32 = 1;
@@ -126,8 +120,6 @@ pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT: u32 = 17;
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_CHALLENGE: u32 = 18;
 /// FFI bundle payload kind selector for `PdpProofV1`.
 pub const SORAFS_REFERENCE_BUNDLE_KIND_PDP_PROOF: u32 = 19;
-/// FFI bundle payload kind selector for `OrderbookRuntimeSnapshotV1`.
-pub const SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT: u32 = 20;
 
 /// FFI proof-stream profile selector for an omitted PoTR profile.
 pub const SORAFS_REFERENCE_PROFILE_NONE: u32 = 0;
@@ -1573,12 +1565,6 @@ fn repair_kind_from_ffi(
         SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_APPROVAL => {
             Ok(RepairValidationPayloadKindV1::EscalationApproval)
         }
-        SORAFS_REFERENCE_REPAIR_KIND_SIGNED_AUDITOR_REQUEST => {
-            Ok(RepairValidationPayloadKindV1::SignedAuditorRequest)
-        }
-        SORAFS_REFERENCE_REPAIR_KIND_WORKER_SIGNATURE => {
-            Ok(RepairValidationPayloadKindV1::WorkerSignaturePayload)
-        }
         SORAFS_REFERENCE_REPAIR_KIND_TASK_EVENT => Ok(RepairValidationPayloadKindV1::TaskEvent),
         SORAFS_REFERENCE_REPAIR_KIND_AUDIT_EVENT => Ok(RepairValidationPayloadKindV1::AuditEvent),
         other => Err(unsupported_selector_error(
@@ -1608,9 +1594,6 @@ fn orderbook_kind_from_ffi(
         }
         SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT => {
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
-        }
-        SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
         }
         other => Err(unsupported_selector_error(
             "orderbook_kind",
@@ -1709,9 +1692,6 @@ fn bundle_kind_from_ffi(
         }
         SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_SETTLEMENT_RECEIPT => {
             Ok(FixtureBundlePayloadKindV1::OrderbookSettlementReceipt)
-        }
-        SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT => {
-            Ok(FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot)
         }
         SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT => {
             Ok(FixtureBundlePayloadKindV1::PdpCommitment)
@@ -1830,21 +1810,19 @@ fn ffi_error(
 mod tests {
     use std::{fs, path::PathBuf, slice};
 
-    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
+    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::json::Value;
 
     use crate::{
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
         GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
-        HedgingPriceFeedV1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-        ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderRequestV1, OrderSideV1,
-        OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
-        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
-        PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
+        HedgingPriceFeedV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
+        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1,
+        PopSignatureAlgorithmV1, PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
         SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
         SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorQuantity,
         build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
-        sign_pop_credential_ed25519_v1,
+        sign_pop_credential_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     };
 
     use super::*;
@@ -1889,98 +1867,35 @@ mod tests {
     }
 
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
-        SettlementReceiptV1 {
-            version: SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x81; 32],
-            channel_id: [0x82; 32],
-            trade_id: [0x83; 32],
-            range: ByteRangeV1 {
-                start: 128,
-                end: 384,
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
+        sign_settlement_receipt_ed25519_v1(
+            SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: [0x81; 32],
+                channel_id: [0x82; 32],
+                trade_id: [0x83; 32],
+                range: ByteRangeV1 {
+                    start: 128,
+                    end: 384,
+                },
+                chunk_hash: [0x84; 32],
+                bytes_delivered: 256,
+                xor_debited: XorQuantity::try_from_micro(100)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: XorQuantity::try_from_micro(90)
+                    .expect("legacy micro-XOR value is representable"),
+                fee_amount: XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
+                issued_at_unix: 1_800_000_010,
+                settlement_signature: OrderbookSignatureV1 {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                    signature: Vec::new(),
+                },
             },
-            chunk_hash: [0x84; 32],
-            bytes_delivered: 256,
-            xor_debited: XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            provider_credit: XorQuantity::try_from_micro(90)
-                .expect("legacy micro-XOR value is representable"),
-            fee_amount: XorQuantity::try_from_micro(10)
-                .expect("legacy micro-XOR value is representable"),
-            issued_at_unix: 1_800_000_010,
-            settlement_signature: OrderbookSignatureV1 {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
-                signature: vec![0x57; SIGNATURE_LENGTH],
-            },
-        }
-    }
-
-    fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
-        let signature = OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
-            signature: vec![0x57; SIGNATURE_LENGTH],
-        };
-        let owner_account = b"provider@sora".to_vec();
-        let nonce = 8;
-        let order = OrderRequestV1 {
-            version: ORDERBOOK_ORDER_VERSION_V1,
-            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
-            side: OrderSideV1::Ask,
-            tier: OrderTierV1::Hot,
-            price_per_gib: XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            quantity_gib: 4,
-            remaining_gib: 4,
-            owner_account,
-            expiry_unix: 1_800_000_500,
-            nonce,
-            maker_fee_bps: 10,
-            taker_fee_bps: 15,
-            signature,
-        };
-        let trade = TradeEventV1 {
-            version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
-            trade_id: [0x83; 32],
-            maker_order_id: [0x71; 32],
-            taker_order_id: [0x72; 32],
-            tier: OrderTierV1::Hot,
-            price_per_gib: XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            filled_gib: 2,
-            maker_fee: XorQuantity::try_from_micro(2_500)
-                .expect("legacy micro-XOR value is representable"),
-            taker_fee: XorQuantity::try_from_micro(3_750)
-                .expect("legacy micro-XOR value is representable"),
-            timestamp_unix: 1_800_000_005,
-        };
-        let channel = crate::open_settlement_channel_for_trade_v1(
-            &trade,
-            [0x82; 32],
-            b"buyer@sora".to_vec(),
-            [0x91; 32],
-            1_800_000_005,
+            &signing_key,
         )
-        .expect("orderbook fixture channel should open");
-        let mut receipt = orderbook_settlement_receipt();
-        receipt.channel_id = channel.channel_id;
-        receipt.trade_id = channel.trade_id;
-        let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
-            .expect("orderbook fixture receipt should apply");
-        OrderbookRuntimeSnapshotV1 {
-            version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-            next_sequence: 4,
-            generated_at_unix: 1_800_000_020,
-            owner_nonce_high_waters: vec![crate::OrderbookOwnerNonceHighWaterV1 {
-                owner_account: order.owner_account.clone(),
-                highest_nonce: order.nonce,
-            }],
-            open_orders: vec![OrderBookEntryV1 { order, sequence: 3 }],
-            trades: vec![trade],
-            settlement_channels: vec![channel],
-            settlement_receipts: vec![receipt],
-            expired_order_ids: vec![[0x74; 32]],
-        }
+        .expect("sign orderbook settlement receipt")
     }
 
     fn hedging_digest(label: &str) -> [u8; 32] {
@@ -2542,15 +2457,58 @@ mod tests {
     }
 
     #[test]
-    fn ffi_orderbook_validator_accepts_runtime_snapshot_selector() {
-        let snapshot = orderbook_runtime_snapshot();
-        let bytes = norito::to_bytes(&snapshot).expect("encode runtime snapshot");
-        let label = b"orderbook-runtime-snapshot.to";
+    fn ffi_orderbook_validator_rejects_bad_signature_fixture() {
+        let payload = fs::read(workspace_fixture(
+            "fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
+        ))
+        .expect("read bad-signature order request fixture");
+        let label = b"order_request_bad_signature_v1.to";
 
         // SAFETY: the pointers reference live test vectors for the duration of the call.
         let outcome = outcome_from_buffer(unsafe {
             sorafs_reference_validate_orderbook_json(
-                SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT,
+                SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                payload.as_ptr(),
+                payload.len(),
+                label.as_ptr(),
+                label.len(),
+                123,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-SIG-007")
+        );
+        assert_eq!(
+            outcome.get("category").and_then(Value::as_str),
+            Some("signature")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(Value::as_u64),
+            Some(123)
+        );
+        assert_eq!(
+            outcome
+                .get("inputs")
+                .and_then(Value::as_array)
+                .and_then(|inputs| inputs.first())
+                .and_then(|input| input.get("path"))
+                .and_then(Value::as_str),
+            Some("order_request_bad_signature_v1.to")
+        );
+    }
+
+    #[test]
+    fn ffi_orderbook_validator_rejects_retired_runtime_snapshot_selector() {
+        let bytes = b"retired runtime snapshot";
+        let label = b"orderbook-runtime-snapshot.to";
+
+        // SAFETY: the pointers reference live test arrays for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_orderbook_json(
+                6,
                 bytes.as_ptr(),
                 bytes.len(),
                 label.as_ptr(),
@@ -2559,10 +2517,10 @@ mod tests {
             )
         });
 
-        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
-            Some("SFS-OK-000")
+            Some("SFS-FFI-001")
         );
     }
 
@@ -2938,14 +2896,9 @@ mod tests {
             "fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
         ))
         .expect("read orderbook receipt fixture");
-        let snapshot = fs::read(workspace_fixture(
-            "fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to",
-        ))
-        .expect("read orderbook runtime snapshot fixture");
         let order_label = b"order.to";
         let proof_label = b"proof.to";
         let receipt_label = b"orderbook/settlement_receipt_v1.to";
-        let snapshot_label = b"orderbook/runtime_snapshot_v1.to";
         let payloads = [
             SorafsReferenceFfiBundlePayload {
                 kind: SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER,
@@ -2968,13 +2921,6 @@ mod tests {
                 label_ptr: receipt_label.as_ptr(),
                 label_len: receipt_label.len(),
             },
-            SorafsReferenceFfiBundlePayload {
-                kind: SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_RUNTIME_SNAPSHOT,
-                bytes_ptr: snapshot.as_ptr(),
-                bytes_len: snapshot.len(),
-                label_ptr: snapshot_label.as_ptr(),
-                label_len: snapshot_label.len(),
-            },
         ];
 
         // SAFETY: payload descriptors point at live fixture bytes and labels.
@@ -2986,20 +2932,6 @@ mod tests {
         assert_eq!(
             outcome.get("code").and_then(Value::as_str),
             Some("SFS-OK-000")
-        );
-        let inputs = outcome
-            .get("inputs")
-            .and_then(Value::as_array)
-            .expect("bundle outcome should include inputs");
-        assert!(
-            inputs.iter().any(|input| {
-                input.get("kind").and_then(Value::as_str) == Some("orderbook_runtime_snapshot")
-                    && input
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .is_some_and(|path| path.ends_with("orderbook/runtime_snapshot_v1.to"))
-            }),
-            "{outcome:?}"
         );
     }
 
@@ -3024,26 +2956,33 @@ mod tests {
     }
 
     #[test]
-    fn ffi_rejects_unknown_repair_kind() {
+    fn ffi_rejects_retired_and_unknown_repair_kinds() {
         let bytes = b"not norito";
 
-        // SAFETY: the pointer references live test bytes for the duration of the call.
-        let outcome = outcome_from_buffer(unsafe {
-            sorafs_reference_validate_repair_json(
-                999,
-                bytes.as_ptr(),
-                bytes.len(),
-                std::ptr::null(),
-                0,
-                123,
-            )
-        });
+        for kind in [7, 8, 999] {
+            // SAFETY: the pointer references live test bytes for the duration of the call.
+            let outcome = outcome_from_buffer(unsafe {
+                sorafs_reference_validate_repair_json(
+                    kind,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::null(),
+                    0,
+                    123,
+                )
+            });
 
-        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
-        assert_eq!(
-            outcome.get("code").and_then(Value::as_str),
-            Some("SFS-FFI-001")
-        );
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("Error"),
+                "repair kind {kind} must be rejected"
+            );
+            assert_eq!(
+                outcome.get("code").and_then(Value::as_str),
+                Some("SFS-FFI-001"),
+                "repair kind {kind} must map to an unsupported selector"
+            );
+        }
     }
 
     #[test]

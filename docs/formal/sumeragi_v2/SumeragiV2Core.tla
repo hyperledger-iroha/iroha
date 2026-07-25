@@ -598,14 +598,11 @@ StrictSameRoundTcUpgrade(node, tc) ==
 InstalledTcAuthorizesCommitVote(commitVote) == FALSE
 
 (***************************************************************************
-An honest timeout ordinarily fences later Commit creation in that view.  The
-one production exception is a Commit for the exact PrepareQC selected by a
-durably installed TC: installation first promotes that QC to the node's lock,
-and local body validation may then persist the matching historical intent only
-when no higher local Prepare origin or known PrepareQC exists.  Subject
-equality cannot make a later proposal origin equivalent to the locked origin.
-The installed-TC record is retained as durable provenance after the lock later
-advances, so old timeout/Commit compatibility remains state-checkable.
+An honest timeout unconditionally fences later Commit creation in that view.
+Installed TCs may recover, fetch, and validate their exact selected PrepareQC,
+but they do not authorize a new historical Commit.  This strict first-release
+rule keeps the timeout-protection argument independent of later recovery
+provenance and makes every durable Commit subject to the same timeout report.
 ***************************************************************************)
 TimeoutVoteProtectsCommitSet(timeoutVote, commitSet) ==
   \A commitVote \in commitSet:
@@ -692,8 +689,8 @@ HistoricalLockedPrepareSource(node, qc) ==
 HistoricalLockedPrepareForCommit(node, qc) == FALSE
 
 \* Compatibility aliases for proof modules whose theorem names predate the
-\* ordinary LockAndCommit -> no-high-TC recovery source.  New statements use
-\* the source-neutral names above.
+\* source-neutral recovery vocabulary. Recovery remains available, while the
+\* fresh historical-Commit authorization predicate is unconditionally false.
 HistoricalTcLockedPrepareSource(node, qc) ==
   HistoricalLockedPrepareSource(node, qc)
 
@@ -707,15 +704,14 @@ LockedPrepareRecoverySource(node, qc) ==
 
 (***************************************************************************
 The certified-body wire protocol accepts either the local durable Commit
-Decision or the current durable locked PrepareQC.  A locked Prepare has one of
+Decision or the current durable locked PrepareQC. A locked Prepare has one of
 two durable origins: an installed TC selected it, or an earlier LockAndCommit
 already recorded its exact local Commit intent before a later no-high TC
-carried the lock forward.  Both origins authorize Fetch/Validate/retransmit;
-only the installed-TC origin with no existing intent can authorize a fresh
-historical BeginLockCommit.  Recovery intentionally excludes the
-higher-origin signing fence: Rust still fetches and validates that locked
-body, then returns IrrelevantView instead of creating a late Commit when any
-higher Prepare origin exists.
+carried the lock forward. Both origins authorize Fetch/Validate; only an
+already durable same-round Commit intent authorizes old-round retransmission.
+Neither origin authorizes a fresh historical BeginLockCommit: recovery fetches
+and validates the body for unchanged later reproposal, then terminates without
+creating a late Commit.
 
 The timeout certificate, durable lock, and recovery candidates retain the
 same complete PrepareQC value.  Rank and subject remain scheduling/safety
@@ -732,12 +728,11 @@ CertifiedBodyRecoveryAuthority(node, qc) ==
   \/ HistoricalLockedPrepareSource(node, qc)
 
 (***************************************************************************
-TC acknowledgement clears the installing node's volatile vote pool.  If the
-resulting lock still has the node's exact durable Commit intent, production
-queues that intent for re-signing.  A newly promoted lock without such an
-intent does not sign immediately: its exact body must first become durable and
-validate, after which HistoricalLockedPrepareForCommit authorizes the normal
-persistence-before-sign pipeline for that one historical round and subject.
+TC acknowledgement clears the installing node's volatile vote pool. If the
+resulting lock still has the node's exact durable same-round Commit intent,
+production may queue that intent for re-signing without changing its round. A
+newly promoted lock without such an intent is recovered for later unchanged
+reproposal and never enters a historical LockAndCommit path.
 ***************************************************************************)
 ActiveLockedCommitSignRequestsAfterInstall(node, tc) ==
   {VoteSign(node, vote):

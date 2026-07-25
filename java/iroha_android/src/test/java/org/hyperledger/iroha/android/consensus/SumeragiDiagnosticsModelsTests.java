@@ -5,12 +5,20 @@ package org.hyperledger.iroha.android.consensus;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.AutonomousLaneExecution;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.AutonomousLaneExecutionStage;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.AutonomousLaneExecutionStuckReason;
@@ -18,6 +26,8 @@ import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.Autonom
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplication;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplications;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.PipelineExecutionStatus;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.junit.Test;
 
@@ -196,7 +206,210 @@ public final class SumeragiDiagnosticsModelsTests {
                 BigInteger.valueOf(7L),
                 2,
                 hash(0x77),
-                U64_MAX.add(BigInteger.ONE)));
+            U64_MAX.add(BigInteger.ONE)));
+  }
+
+  @Test
+  public void completeDiagnosticsModelMirrorsRequiredVectorsAndBounds() {
+    final SumeragiDiagnosticsStatus status =
+        diagnostics(BigInteger.ZERO, BigInteger.ONE, Collections.emptyList(), 0, Collections.emptyList());
+    assertEquals(BigInteger.ONE, status.txQueueCapacity());
+    assertEquals(0, status.nativeAmxParticipantApplications().size());
+    assertEquals(0, status.autonomousLaneExecutions().size());
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.valueOf(2),
+                BigInteger.ONE,
+                Collections.emptyList(),
+                0,
+                Collections.emptyList()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.ZERO,
+                BigInteger.ONE,
+                Collections.nCopies(SumeragiDiagnosticsModels.DIAGNOSTIC_LANES_MAX + 1, new Object()),
+                0,
+                Collections.emptyList()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.ZERO,
+                BigInteger.ONE,
+                Collections.emptyList(),
+                1,
+                Collections.emptyList()));
+  }
+
+  @Test
+  public void completeDiagnosticsModelValidatesNativeAmxSettlementAndRelayEvidence()
+      throws Exception {
+    final Map<String, Object> settlement = nativeAmxReceiptGroupFixture();
+    final Map<String, Object> relay = new LinkedHashMap<>();
+    relay.put("settlement_commitment", settlement);
+
+    final SumeragiDiagnosticsStatus status =
+        diagnosticsWithNativeEvidence(
+            Collections.singletonList(settlement), Collections.singletonList(relay));
+
+    assertEquals(Collections.singletonList(settlement), status.laneSettlementCommitments());
+    assertEquals(Collections.singletonList(relay), status.laneRelayEnvelopes());
+  }
+
+  @Test
+  public void completeDiagnosticsModelRejectsMalformedNativeAmxSettlementAndRelayEvidence()
+      throws Exception {
+    final Map<String, Object> malformed =
+        malformedNativeAmxReceiptGroup(nativeAmxReceiptGroupFixture());
+
+    final IllegalArgumentException directError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                diagnosticsWithNativeEvidence(
+                    Collections.singletonList(malformed), Collections.emptyList()));
+    assertStrictNativeAmxFailure(directError);
+
+    final Map<String, Object> relay = new LinkedHashMap<>();
+    relay.put("settlement_commitment", malformed);
+    final IllegalArgumentException relayError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                diagnosticsWithNativeEvidence(
+                    Collections.emptyList(), Collections.singletonList(relay)));
+    assertStrictNativeAmxFailure(relayError);
+  }
+
+  private static SumeragiDiagnosticsStatus diagnostics(
+      final BigInteger depth,
+      final BigInteger capacity,
+      final List<?> laneCommitments,
+      final long sealedTotal,
+      final List<String> sealedAliases) {
+    return new SumeragiDiagnosticsStatus(
+        pipeline(),
+        depth,
+        capacity,
+        BigInteger.ZERO,
+        BigInteger.ONE,
+        false,
+        false,
+        false,
+        false,
+        BigInteger.ZERO,
+        null,
+        laneCommitments,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        sealedTotal,
+        sealedAliases,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList());
+  }
+
+  private static SumeragiDiagnosticsStatus diagnosticsWithNativeEvidence(
+      final List<?> laneSettlementCommitments, final List<?> laneRelayEnvelopes) {
+    return new SumeragiDiagnosticsStatus(
+        pipeline(),
+        BigInteger.ZERO,
+        BigInteger.ONE,
+        BigInteger.ZERO,
+        BigInteger.ONE,
+        false,
+        false,
+        false,
+        false,
+        BigInteger.ZERO,
+        null,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        laneSettlementCommitments,
+        laneRelayEnvelopes,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        0,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> malformedNativeAmxReceiptGroup(
+      final Map<String, Object> group) {
+    final Map<String, Object> malformed = new LinkedHashMap<>(group);
+    final List<Object> receipts =
+        new ArrayList<>((List<Object>) group.get("native_amx_receipts"));
+    final Map<String, Object> first =
+        new LinkedHashMap<>((Map<String, Object>) receipts.get(0));
+    first.put("version", 1L);
+    receipts.set(0, first);
+    malformed.put("native_amx_receipts", receipts);
+    return malformed;
+  }
+
+  private static void assertStrictNativeAmxFailure(final IllegalArgumentException error) {
+    assertTrue(error.getCause() instanceof IllegalArgumentException);
+    assertTrue(error.getCause().getMessage().contains("version must equal 2"));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> nativeAmxReceiptGroupFixture() throws Exception {
+    final Map<String, Object> fixture =
+        (Map<String, Object>)
+            JsonParser.parse(
+                new String(
+                    Files.readAllBytes(nativeAmxFixturePath()), StandardCharsets.UTF_8));
+    return (Map<String, Object>)
+        ((Map<String, Object>) fixture.get("golden")).get("receipt_group");
+  }
+
+  private static Path nativeAmxFixturePath() {
+    Path current = Paths.get("").toAbsolutePath();
+    while (current != null) {
+      final Path candidate =
+          current.resolve("fixtures/sumeragi_v2/native_amx_v2_grouped.json");
+      if (Files.isRegularFile(candidate)) {
+        return candidate;
+      }
+      current = current.getParent();
+    }
+    throw new AssertionError(
+        "fixtures/sumeragi_v2/native_amx_v2_grouped.json was not found");
+  }
+
+  private static PipelineExecutionStatus pipeline() {
+    final BigInteger zero = BigInteger.ZERO;
+    return new PipelineExecutionStatus(
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero);
   }
 
   private static NativeAmxParticipantApplication application(final long laneId) {

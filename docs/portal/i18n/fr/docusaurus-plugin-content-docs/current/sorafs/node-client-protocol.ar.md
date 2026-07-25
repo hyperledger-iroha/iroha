@@ -114,10 +114,12 @@ Voici la liste des SDK :
 
 - `iroha app sorafs pin list|show` et `alias list` et `replication list` pour REST
   Les broches sont également Norito JSON pour l'attestation.
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` manifestes
-  Utilisez Norito et JSON pour les preuves pour l'alias et le successeur. تؤدي preuves
-  المشوهة إلى `400`, وتُظهر proofs القديمة `503` مع `Warning: 110`, بينما تعيد
-  preuves المنتهية تمامًا `412`.
+- `torii /v1/sorafs/pin/register` accepte la requête JSON V1 fermée.
+  `manifest_payload` doit être le base64 canonique avec padding exact des octets
+  Norito `ManifestV1` canoniques. Torii dérive le digest, le chunker, la longueur
+  du contenu, la politique de pin et les entrées de frais uniquement du manifest
+  décodé, et rejette les champs de résumé dupliqués retirés. `alias` et un
+  predecessor `successor_of_hex` non nul restent optionnels.
 - Fonction REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.

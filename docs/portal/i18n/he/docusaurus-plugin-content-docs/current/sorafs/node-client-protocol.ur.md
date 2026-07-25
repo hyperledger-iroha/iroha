@@ -125,10 +125,12 @@ Operators/SDKs کو ملنے والی عام errors:
 ## עוזרי CLI או REST- `iroha app sorafs pin list|show`, `alias list`, אוור `replication list` PIN-registry
   REST endpoints wrap کرتے ہیں اور audit evidence کے لیے attestation blocks کے ساتھ
   raw Norito JSON print کرتے ہیں۔
-- `iroha app sorafs storage pin` אור `torii /v1/sorafs/pin/register` Norito או JSON
-  manifests کے ساتھ optional alias proofs اور successors accept کرتے ہیں؛ פגום
-  proofs پر `400`, stale proofs پر `503` مع `Warning: 110`, اور hard-expired proofs
-  پر `412`۔
+- `torii /v1/sorafs/pin/register` מקבל את בקשת JSON V1 הסגורה.
+  `manifest_payload` חייב להיות base64 קנוני מרופד ומדויק של בתי
+  `ManifestV1` הקנוניים של Norito. ‏Torii גוזר את ה-digest, ה-chunker, אורך
+  התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest המפוענח, ודוחה שדות סיכום
+  כפולים שהוצאו משימוש. `alias` ו-predecessor לא-אפס ב-`successor_of_hex`
+  נשארים אופציונליים.
 - נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   attestation structures شامل کرتے ہیں تاکہ clients latest block headers کے
   خلاف data verify کر سکیں۔

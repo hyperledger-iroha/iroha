@@ -1335,11 +1335,15 @@ mod tests {
     fn build_manifest(plan: &CarBuildPlan, stats: &CarWriteStats) -> ManifestV1 {
         let mut car_digest = [0u8; 32];
         car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
+        let payload = sample_payload();
         ManifestBuilder::new()
             .root_cid(stats.root_cids[0].clone())
             .dag_codec(DagCodecId(stats.dag_codec))
             .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256(crate::compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(
+                crate::compute_por_root(&payload, plan).expect("derive canonical fixture PoR root"),
+            )
             .content_length(plan.content_length)
             .car_digest(car_digest)
             .car_size(stats.car_size)

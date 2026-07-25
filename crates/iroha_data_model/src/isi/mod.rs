@@ -976,6 +976,11 @@ impl From<crate::isi::sorafs::RegisterCapacityDispute> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::ResolveSorafsCapacityDispute> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ResolveSorafsCapacityDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of SoraFS pin registry instructions
 impl From<crate::isi::sorafs::RegisterPinManifest> for InstructionBox {
@@ -1087,6 +1092,21 @@ impl From<crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy> for Instruction
 }
 impl From<crate::isi::sorafs::SubmitSorafsProofOutcome> for InstructionBox {
     fn from(i: crate::isi::sorafs::SubmitSorafsProofOutcome) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::AppendSorafsPorReputationJournalEntry> for InstructionBox {
+    fn from(i: crate::isi::sorafs::AppendSorafsPorReputationJournalEntry) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry> for InstructionBox {
+    fn from(i: crate::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -4040,7 +4060,8 @@ pub mod prelude {
         },
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            AdvanceSorafsReserveLifecycle, ApprovePinManifest, BindManifestAlias,
+            AdvanceSorafsReserveLifecycle, AppendSorafsPorReputationJournalEntry,
+            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, BindManifestAlias,
             CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
             CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
             DrawSorafsReserveCredit, ExpireReplicationOrder, FinalizeSorafsModerationCase,
@@ -4049,10 +4070,11 @@ pub mod prelude {
             RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+            RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
             ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
             SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
-            SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,
             UpsertProviderCredit,
         },

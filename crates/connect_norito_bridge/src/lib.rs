@@ -33355,6 +33355,25 @@ fn java_sorafs_orderbook_fixed32(bytes: Vec<u8>, field: &str) -> Result<[u8; 32]
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_orderbook_provider_id(
+    bytes: Vec<u8>,
+) -> Result<Option<[u8; 32]>, String> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let provider_id = java_sorafs_orderbook_fixed32(bytes, "providerId")?;
+    if provider_id == [0; 32] {
+        return Err("providerId must not be all zero".to_owned());
+    }
+    Ok(Some(provider_id))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_orderbook_non_empty(bytes: Vec<u8>, field: &str) -> Result<Vec<u8>, String> {
     if bytes.is_empty() {
         return Err(format!("{field} must not be empty"));
@@ -33403,6 +33422,10 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
                 .ok_or_else(|| "invalid ownerAccount bytes".to_owned())?,
             "ownerAccount",
         )?;
+        let provider_id = java_sorafs_orderbook_provider_id(
+            read_java_byte_array(env, &inputs.provider_id, "providerId")
+                .ok_or_else(|| "invalid providerId bytes".to_owned())?,
+        )?;
         let nonce = java_sorafs_orderbook_u64(inputs.nonce, "nonce")?;
         let expected_order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
         if supplied_order_id != expected_order_id {
@@ -33428,6 +33451,7 @@ fn java_sorafs_reference_build_signed_orderbook_order_request(
             quantity_gib: java_sorafs_orderbook_u64(inputs.quantity_gib, "quantityGib")?,
             remaining_gib: java_sorafs_orderbook_u64(inputs.remaining_gib, "remainingGib")?,
             owner_account,
+            provider_id,
             expiry_unix: java_sorafs_orderbook_u64(inputs.expiry_unix, "expiryUnix")?,
             nonce,
             maker_fee_bps: java_sorafs_orderbook_fee_bps(inputs.maker_fee_bps, "makerFeeBps")?,
@@ -33465,6 +33489,7 @@ struct JavaSorafsOrderbookOrderRequestArrays<'a> {
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'a>,
+    provider_id: jni::objects::JByteArray<'a>,
     expiry_unix: jni::sys::jlong,
     nonce: jni::sys::jlong,
     maker_fee_bps: jni::sys::jint,
@@ -41204,6 +41229,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'_>,
+    provider_id: jni::objects::JByteArray<'_>,
     expiry_unix: jni::sys::jlong,
     nonce: jni::sys::jlong,
     maker_fee_bps: jni::sys::jint,
@@ -41220,6 +41246,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
             quantity_gib,
             remaining_gib,
             owner_account,
+            provider_id,
             expiry_unix,
             nonce,
             maker_fee_bps,
@@ -41609,6 +41636,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     quantity_gib: jni::sys::jlong,
     remaining_gib: jni::sys::jlong,
     owner_account: jni::objects::JByteArray<'_>,
+    provider_id: jni::objects::JByteArray<'_>,
     expiry_unix: jni::sys::jlong,
     nonce: jni::sys::jlong,
     maker_fee_bps: jni::sys::jint,
@@ -41625,6 +41653,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
             quantity_gib,
             remaining_gib,
             owner_account,
+            provider_id,
             expiry_unix,
             nonce,
             maker_fee_bps,
@@ -45725,11 +45754,15 @@ fn proof_report_to_json(report: &ProofReport) -> JsonValue {
         ),
     );
     map.insert(
-        "chunk_roots_hex".into(),
+        "chunk_count".into(),
+        JsonValue::from(report.proof.chunk_count),
+    );
+    map.insert(
+        "chunk_merkle_path_hex".into(),
         JsonValue::Array(
             report
                 .proof
-                .chunk_roots
+                .chunk_merkle_path
                 .iter()
                 .map(|digest| JsonValue::from(hex::encode(digest)))
                 .collect(),
@@ -45859,9 +45892,6 @@ fn sorafs_reference_orderbook_kind_from_bridge(
         sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT => {
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         }
-        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
         _ => Err(ERR_SORAFS_REFERENCE),
     }
 }
@@ -45930,6 +45960,20 @@ unsafe fn sorafs_read_fixed32(ptr_: *const c_uchar, len: c_ulong) -> Result<[u8;
     let mut out = [0u8; 32];
     out.copy_from_slice(bytes);
     Ok(out)
+}
+
+unsafe fn sorafs_read_orderbook_provider_id(
+    ptr_: *const c_uchar,
+    len: c_ulong,
+) -> Result<Option<[u8; 32]>, c_int> {
+    if len == 0 {
+        return Ok(None);
+    }
+    let provider_id = unsafe { sorafs_read_fixed32(ptr_, len) }?;
+    if provider_id == [0; 32] {
+        return Err(ERR_SORAFS_REFERENCE);
+    }
+    Ok(Some(provider_id))
 }
 
 unsafe fn sorafs_read_orderbook_owner_account(
@@ -46206,6 +46250,8 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
     remaining_gib: u64,
     owner_account_ptr: *const c_uchar,
     owner_account_len: c_ulong,
+    provider_id_ptr: *const c_uchar,
+    provider_id_len: c_ulong,
     expiry_unix: u64,
     nonce: u64,
     maker_fee_bps: u32,
@@ -46257,6 +46303,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         quantity_gib,
         remaining_gib,
         owner_account,
+        provider_id: match unsafe {
+            sorafs_read_orderbook_provider_id(provider_id_ptr, provider_id_len)
+        } {
+            Ok(value) => value,
+            Err(code) => return code,
+        },
         expiry_unix,
         nonce,
         maker_fee_bps: match sorafs_fee_bps_from_bridge(maker_fee_bps) {
@@ -54392,7 +54444,7 @@ mod da_proof_summary_tests {
 mod sorafs_tests {
     use std::{ffi::CString, fs, ptr, slice};
 
-    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
+    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_plan_to_string};
     use sorafs_chunker::ChunkProfile;
     use tempfile::tempdir;
 
@@ -54437,8 +54489,7 @@ mod sorafs_tests {
             .collect();
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            chunk_fetch_specs_to_string(&plan.chunk_fetch_specs()).expect("plan json render");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json render");
 
         let alpha_path = tempdir.path().join("alpha.bin");
         fs::write(&alpha_path, &payload).expect("write payload");
@@ -54607,6 +54658,56 @@ mod sorafs_tests {
         assert_eq!(
             outcome.get("code").and_then(JsonValue::as_str),
             Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_validator_rejects_bad_signature_via_bridge_ffi() {
+        let payload = repo_fixture(
+            "fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
+        );
+        let label = b"order_request_bad_signature_v1.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_orderbook_json(
+                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge validator call should succeed");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Error")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-SIG-007")
+        );
+        assert_eq!(
+            outcome.get("category").and_then(JsonValue::as_str),
+            Some("signature")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(JsonValue::as_u64),
+            Some(123)
+        );
+        assert_eq!(
+            outcome
+                .get("inputs")
+                .and_then(JsonValue::as_array)
+                .and_then(|inputs| inputs.first())
+                .and_then(|input| input.get("path"))
+                .and_then(JsonValue::as_str),
+            Some("order_request_bad_signature_v1.to")
         );
     }
 
@@ -54794,7 +54895,10 @@ mod sorafs_tests {
         assert_eq!(rc, 0, "bridge signer call should succeed");
         let signed = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize).to_vec() };
         assert!(!signed.is_empty(), "signed payload should be returned");
-        assert_ne!(signed, payload, "signature must change the encoded payload");
+        assert_eq!(
+            signed, payload,
+            "signing the canonical fixture with its deterministic key must be byte-identical"
+        );
         if !signed_ptr.is_null() {
             connect_norito_free(signed_ptr);
         }
@@ -54823,15 +54927,15 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn sorafs_reference_orderbook_signing_rejects_runtime_payload_via_bridge_ffi() {
-        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to");
+    fn sorafs_reference_orderbook_signing_rejects_retired_snapshot_selector_via_bridge_ffi() {
+        let payload = b"retired runtime snapshot";
         let private_key = [0xB7; 32];
         let mut signed_ptr: *mut c_uchar = ptr::null_mut();
         let mut signed_len: c_ulong = 0;
 
         let rc = unsafe {
             connect_norito_sorafs_reference_sign_orderbook_payload(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT,
+                6,
                 payload.as_ptr(),
                 payload.len() as c_ulong,
                 private_key.as_ptr(),
@@ -54899,6 +55003,8 @@ mod sorafs_tests {
                 12,
                 owner.as_ptr(),
                 owner.len() as c_ulong,
+                ptr::null(),
+                0,
                 1_700_010_000,
                 7,
                 25,
@@ -54922,6 +55028,47 @@ mod sorafs_tests {
         );
         assert_eq!(
             order_outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+
+        let provider_id = [0x72; 32];
+        let ask_order_id = derive_orderbook_order_id_v1(owner, 8);
+        order_ptr = ptr::null_mut();
+        order_len = 0;
+        let ask_rc = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                ask_order_id.as_ptr(),
+                ask_order_id.len() as c_ulong,
+                SORAFS_ORDERBOOK_SIDE_ASK,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                4,
+                4,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                provider_id.as_ptr(),
+                provider_id.len() as c_ulong,
+                1_700_010_000,
+                8,
+                25,
+                30,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut order_ptr,
+                &mut order_len,
+            )
+        };
+        assert_eq!(ask_rc, 0, "provider-bound ask builder should succeed");
+        let ask_bytes = unsafe { slice::from_raw_parts(order_ptr, order_len as usize).to_vec() };
+        connect_norito_free(order_ptr);
+        let ask_outcome = validate_signed_orderbook_payload(
+            sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST,
+            &ask_bytes,
+            b"built-provider-bound-ask.to",
+        );
+        assert_eq!(
+            ask_outcome.get("status").and_then(JsonValue::as_str),
             Some("Ok")
         );
 
@@ -55074,6 +55221,8 @@ mod sorafs_tests {
                 12,
                 owner.as_ptr(),
                 owner.len() as c_ulong,
+                ptr::null(),
+                0,
                 1_700_010_000,
                 7,
                 25,
@@ -55085,6 +55234,73 @@ mod sorafs_tests {
             )
         };
         assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_bridge_enforces_provider_side_binding() {
+        let owner = b"merchant@paynet";
+        let price = b"1";
+        let private_key = [0xB7; 32];
+        let provider_id = [0x72; 32];
+        let order_id = derive_orderbook_order_id_v1(owner, 17);
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let bid_with_provider = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                order_id.as_ptr(),
+                order_id.len() as c_ulong,
+                SORAFS_ORDERBOOK_SIDE_BID,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                1,
+                1,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                provider_id.as_ptr(),
+                provider_id.len() as c_ulong,
+                1_700_010_000,
+                17,
+                0,
+                0,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(bid_with_provider, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let ask_without_provider = unsafe {
+            connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                order_id.as_ptr(),
+                order_id.len() as c_ulong,
+                SORAFS_ORDERBOOK_SIDE_ASK,
+                SORAFS_ORDERBOOK_TIER_HOT,
+                price.as_ptr(),
+                price.len() as c_ulong,
+                1,
+                1,
+                owner.as_ptr(),
+                owner.len() as c_ulong,
+                ptr::null(),
+                0,
+                1_700_010_000,
+                17,
+                0,
+                0,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(ask_without_provider, ERR_SORAFS_REFERENCE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
@@ -55153,6 +55369,8 @@ mod sorafs_tests {
                     1,
                     owner.as_ptr(),
                     owner.len() as c_ulong,
+                    ptr::null(),
+                    0,
                     1,
                     1,
                     0,
@@ -55222,6 +55440,8 @@ mod sorafs_tests {
                     1,
                     oversized.as_ptr(),
                     oversized.len() as c_ulong,
+                    ptr::null(),
+                    0,
                     1,
                     1,
                     0,

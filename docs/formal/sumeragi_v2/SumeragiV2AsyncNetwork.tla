@@ -3608,9 +3608,6 @@ CommandExecutionReady(command) ==
     \/ ExecuteChunkDeliveryReady(selectedCommand)
     \/ ExecuteRejectAuthenticatedJunkReady(selectedCommand)
 
-CommandExecutionEnabled(command) ==
-  CommandExecutionReady(command)
-
 LocalAssemblyBusyDispatchAllowed(command) ==
   /\ command.class = "Normal"
   /\ command.kind = "AssembleBody"

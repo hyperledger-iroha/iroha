@@ -535,7 +535,7 @@ case "$profile" in
 esac
 
 if [[ -z "$binary_path" ]]; then
-  build_cmd=(cargo build -p sorafs_manifest --bin sorafs-validate "${build_profile_args[@]}")
+  build_cmd=(cargo build --locked -p sorafs_manifest --bin sorafs-validate "${build_profile_args[@]}")
   if [[ -n "$target" ]]; then
     build_cmd+=(--target "$target")
   fi
@@ -750,7 +750,7 @@ def fail(message):
     raise SystemExit(1)
 
 def write_open_flags():
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow:
         flags |= nofollow
@@ -835,7 +835,7 @@ def read_open_flags():
     return flags
 
 def write_open_flags():
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow:
         flags |= nofollow
@@ -950,7 +950,7 @@ import sys
 manifest_path = Path(sys.argv[1])
 
 def write_open_flags():
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow:
         flags |= nofollow

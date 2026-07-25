@@ -2344,6 +2344,7 @@ mod tests {
             activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
             lane_snapshots: Vec::new(),
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             execution_batch: None,
             global_state_root: Hash::new(label),
             merge_qc: MergeQuorumCertificate::new(
@@ -2366,7 +2367,7 @@ mod tests {
     fn merge_entry_with_reservation(
         context: &wire::HeightContext,
         entrypoint: TransactionEntrypoint,
-        reservation: crate::queue::LaneQueueReservationKeyV1,
+        reservation: crate::queue::LaneQueueReservationKeyV2,
     ) -> (SignedBlock, MergeLedgerEntry) {
         let parent_key = KeyPair::try_from_seed(vec![0xC8; 32], Algorithm::BlsNormal)
             .expect("derive execution-carrier parent signer");
@@ -2537,7 +2538,7 @@ mod tests {
         queue: &Queue,
         transaction: iroha_data_model::transaction::SignedTransaction,
     ) -> (
-        crate::queue::LaneQueueReservationKeyV1,
+        crate::queue::LaneQueueReservationKeyV2,
         TransactionEntrypoint,
     ) {
         let entrypoint = TransactionEntrypoint::External(transaction.clone());

@@ -16,7 +16,7 @@ inputs without regenerating them ad hoc.
 fixtures/sorafs_orchestrator/
   multi_peer_parity_v1/
     metadata.json   # summary + payload location
-    plan.json       # `chunk_index`, `offset`, `length`, `digest_blake3`
+    plan.json       # payload-bound `sorafs.chunk_fetch_plan.v1` envelope
     providers.json  # provider metadata + range/stream budgets
     telemetry.json  # qos/latency/failure-rate snapshot per provider
     options.json    # orchestrator options + scoreboard parameters
@@ -35,8 +35,10 @@ changes:
 python3 scripts/build_sorafs_orchestrator_fixture.py
 ```
 
-The script derives the plan from `fixtures/sorafs_chunker/sf1_profile_v1.json`,
-applies the deterministic provider template (`fixture-provider-{i}`), and writes
-refreshed JSON files under `multi_peer_parity_v1/`. Rerun all parity suites
-after regeneration (`ci/sdk_sorafs_orchestrator.sh`) to capture the updated
-metrics in `docs/source/sorafs/reports/orchestrator_ga.md`.
+The script derives the chunk specs from
+`fixtures/sorafs_chunker/sf1_profile_v1.json`, binds the BLAKE3 digest of the
+complete referenced payload, applies the deterministic provider template
+(`fixture-provider-{i}`), and writes refreshed JSON files under
+`multi_peer_parity_v1/`. Bare-array plans are retired and rejected. Rerun all
+parity suites after regeneration (`ci/sdk_sorafs_orchestrator.sh`) to capture
+the updated metrics in `docs/source/sorafs/reports/orchestrator_ga.md`.

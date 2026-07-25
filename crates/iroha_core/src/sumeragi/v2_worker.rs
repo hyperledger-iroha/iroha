@@ -94,8 +94,9 @@ use crate::{
     lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
-        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
-        MergeSidecarError, reliable_flush_topic_tag,
+        CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarClosedPrefix,
+        CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1, MergeSidecarError,
+        reliable_flush_topic_tag,
     },
     native_amx::NativeAmxMessage,
 };
@@ -2277,6 +2278,7 @@ impl ExactOutputCreationScope {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CertifiedSidecarTransferIdentity {
+    semantic_sequence: u64,
     request_id: Hash,
     entry_hash: HashOf<iroha_data_model::merge::MergeLedgerEntry>,
     encoded_len: u64,
@@ -2289,6 +2291,7 @@ struct CertifiedSidecarTransferIdentity {
 impl CertifiedSidecarTransferIdentity {
     fn from_request(request: &CertifiedMergeSidecarRequestV1) -> Self {
         Self {
+            semantic_sequence: request.semantic_sequence,
             request_id: request.request_id,
             entry_hash: request.entry_hash,
             encoded_len: request.encoded_len,
@@ -2301,6 +2304,7 @@ impl CertifiedSidecarTransferIdentity {
 
     fn from_chunk(chunk: &CertifiedMergeSidecarChunkV1) -> Self {
         Self {
+            semantic_sequence: chunk.semantic_sequence,
             request_id: chunk.request_id,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
@@ -2374,6 +2378,11 @@ enum ExactOutputRolloverClaim {
         transfer: CertifiedSidecarTransferIdentity,
         request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
     },
+    CertifiedSidecarControl {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        message_hash: HashOf<CertifiedMergeSidecarMessage>,
+    },
     CertifiedSidecarChunk {
         scope: ExactOutputCreationScope,
         target: PeerId,
@@ -2418,6 +2427,7 @@ impl ExactOutputRolloverClaim {
             | Self::LaneDrainVote { scope, .. }
             | Self::MergeShare { scope, .. }
             | Self::CertifiedSidecarRequest { scope, .. }
+            | Self::CertifiedSidecarControl { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
         }
     }
@@ -2664,6 +2674,30 @@ impl ExactOutputRolloverClaim {
                     || HashOf::new(request) != *request_hash
                 {
                     return Err("sidecar-request rollover claim changed identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::CertifiedSidecarControl {
+                target,
+                message_hash,
+                ..
+            } => {
+                let [NetworkMessage::CertifiedMergeSidecar(message)] = messages else {
+                    return Err(
+                        "sidecar-control rollover claim requires one exact message".to_owned()
+                    );
+                };
+                if !matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::Close(_)
+                        | CertifiedMergeSidecarMessage::CloseAck(_)
+                ) {
+                    return Err("sidecar-control rollover claim covers a data transfer".to_owned());
+                }
+                if peers != std::slice::from_ref(target)
+                    || HashOf::new(message.as_ref()) != *message_hash
+                {
+                    return Err("sidecar-control rollover claim changed identity".to_owned());
                 }
                 Ok(())
             }
@@ -4056,6 +4090,115 @@ impl PendingExactOutput {
                     .iter()
                     .any(|target| target.pending_flush.is_some())
         }) || !self.admitted_sidecar_chunks.is_empty()
+    }
+
+    fn close_certified_sidecar_prefix(
+        &mut self,
+        prefix: &CertifiedMergeSidecarClosedPrefix,
+    ) -> Result<usize, String> {
+        let covered = |fanout: &PendingExactFanout| {
+            matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::CertifiedSidecarChunk { transfer, .. }
+                    if transfer.requester == prefix.requester
+                        && transfer.semantic_sequence <= prefix.closed_through
+            )
+        };
+        let mut current_sources = BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+        let mut current_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
+        let mut retained_sources =
+            BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
+        let mut retained_reservations = BTreeMap::<ExactTargetReservation, usize>::new();
+        let mut removed = 0usize;
+        for fanout in &self.fanouts {
+            if fanout.message_hashes.len() != fanout.messages.len()
+                || fanout
+                    .messages
+                    .iter()
+                    .zip(&fanout.message_hashes)
+                    .any(|(message, expected)| HashOf::new(message) != *expected)
+            {
+                return Err(
+                    "Sumeragi v2 sidecar close found altered exact-output payload".to_owned(),
+                );
+            }
+            let fifo_id = fanout.fifo_id.ok_or_else(|| {
+                "Sumeragi v2 sidecar close found an unowned exact-output fanout".to_owned()
+            })?;
+            let sources = fanout.outstanding_sources()?;
+            let reservations = fanout.outstanding_reservation_counts()?;
+            for source in &sources {
+                current_sources
+                    .entry(source.clone())
+                    .or_default()
+                    .insert(fifo_id);
+            }
+            for (reservation, count) in &reservations {
+                let aggregate = current_reservations.entry(reservation.clone()).or_default();
+                *aggregate = aggregate.checked_add(*count).ok_or_else(|| {
+                    "Sumeragi v2 sidecar close ownership count overflowed".to_owned()
+                })?;
+            }
+            if covered(fanout) {
+                if !fanout.is_certified_sidecar_chunk_fanout() {
+                    return Err(
+                        "Sumeragi v2 sidecar close claim covers a different output kind".to_owned(),
+                    );
+                }
+                removed = removed
+                    .checked_add(1)
+                    .ok_or_else(|| "Sumeragi v2 sidecar close count overflowed".to_owned())?;
+                continue;
+            }
+            for source in sources {
+                retained_sources.entry(source).or_default().insert(fifo_id);
+            }
+            for (reservation, count) in reservations {
+                let aggregate = retained_reservations.entry(reservation).or_default();
+                *aggregate = aggregate.checked_add(count).ok_or_else(|| {
+                    "Sumeragi v2 retained sidecar ownership count overflowed".to_owned()
+                })?;
+            }
+        }
+        if current_sources != self.source_fifo_owners
+            || current_reservations != self.reservation_owner_counts
+        {
+            return Err(
+                "Sumeragi v2 sidecar close found inconsistent exact-output ownership".to_owned(),
+            );
+        }
+
+        let mut retained_units = 0usize;
+        let mut retained_shared_units = 0usize;
+        for (reservation, count) in &retained_reservations {
+            retained_units = retained_units
+                .checked_add(*count)
+                .ok_or_else(|| "Sumeragi v2 retained sidecar units overflowed".to_owned())?;
+            let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
+            retained_shared_units = retained_shared_units
+                .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
+                    "Sumeragi v2 retained sidecar frozen credit exceeded ownership".to_owned()
+                })?)
+                .ok_or_else(|| "Sumeragi v2 retained shared units overflowed".to_owned())?;
+        }
+
+        self.fanouts.retain(|fanout| !covered(fanout));
+        self.admitted_sidecar_chunks.retain(|admission| {
+            let projection = admission.projection();
+            projection.requester != prefix.requester
+                || projection.semantic_sequence > prefix.closed_through
+        });
+        self.source_fifo_owners = retained_sources;
+        self.reservation_owner_counts = retained_reservations;
+        self.ownership_units = retained_units;
+        self.shared_ownership_units = retained_shared_units;
+        self.next_fanout_index = if self.fanouts.is_empty() {
+            0
+        } else {
+            self.next_fanout_index % self.fanouts.len()
+        };
+        debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
+        Ok(removed)
     }
 
     fn pending_sidecar_flushes(&self) -> usize {
@@ -5570,7 +5713,9 @@ impl PendingExactOutput {
                         message_cursor_before,
                         message_cursor_after,
                     )),
-                    CertifiedMergeSidecarMessage::Request(_) => None,
+                    CertifiedMergeSidecarMessage::Request(_)
+                    | CertifiedMergeSidecarMessage::Close(_)
+                    | CertifiedMergeSidecarMessage::CloseAck(_) => None,
                 },
                 _ => None,
             };
@@ -6175,6 +6320,7 @@ fn applied_height_reconstruction_covers(
             | ExactOutputRolloverClaim::LaneDrainVote { .. }
             | ExactOutputRolloverClaim::MergeShare { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarRequest { .. }
+            | ExactOutputRolloverClaim::CertifiedSidecarControl { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
     ) {
         return Ok(());
@@ -8176,6 +8322,16 @@ impl ProductionV2Services {
         Ok(pending.admitted_sidecar_chunks.drain(..count).collect())
     }
 
+    /// Cancel every queued or writer-pending response occurrence covered by an
+    /// authenticated cumulative close before any newer output is dispatched.
+    pub(crate) fn close_certified_merge_sidecar_prefix(
+        &self,
+        prefix: &CertifiedMergeSidecarClosedPrefix,
+    ) -> Result<usize, String> {
+        self.lock_pending_exact_output()?
+            .close_certified_sidecar_prefix(prefix)
+    }
+
     fn exact_target_geometry(
         peer: &PeerId,
         reply_routes: Option<&NetworkReplyRoutes>,
@@ -8361,7 +8517,9 @@ impl ProductionV2Services {
                     message,
                 } => {
                     let valid = match message.as_ref() {
-                        CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+                        CertifiedMergeSidecarMessage::Request(_)
+                        | CertifiedMergeSidecarMessage::Close(_)
+                        | CertifiedMergeSidecarMessage::CloseAck(_) => reply_routes.is_none(),
                         CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
                     };
                     if !valid {
@@ -8381,6 +8539,32 @@ impl ProductionV2Services {
                                 target: peer.clone(),
                                 transfer: CertifiedSidecarTransferIdentity::from_request(request),
                                 request_hash: HashOf::new(request),
+                            }
+                        }
+                        CertifiedMergeSidecarMessage::Close(close)
+                            if close.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                                && close.closed_through != 0
+                                && close.close_id == close.canonical_close_id()
+                                && close.requester == self.local_peer
+                                && close.responder == *peer =>
+                        {
+                            ExactOutputRolloverClaim::CertifiedSidecarControl {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                message_hash: HashOf::new(message.as_ref()),
+                            }
+                        }
+                        CertifiedMergeSidecarMessage::CloseAck(ack)
+                            if ack.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                                && ack.closed_through != 0
+                                && ack.close_id == ack.canonical_close_id()
+                                && ack.responder == self.local_peer
+                                && ack.requester == *peer =>
+                        {
+                            ExactOutputRolloverClaim::CertifiedSidecarControl {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                message_hash: HashOf::new(message.as_ref()),
                             }
                         }
                         CertifiedMergeSidecarMessage::Chunk(chunk)
@@ -8823,7 +9007,9 @@ impl ProductionV2Services {
             .begin_fail_stop_operation()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let route_shape_is_valid = match message.as_ref() {
-            CertifiedMergeSidecarMessage::Request(_) => reply_routes.is_none(),
+            CertifiedMergeSidecarMessage::Request(_)
+            | CertifiedMergeSidecarMessage::Close(_)
+            | CertifiedMergeSidecarMessage::CloseAck(_) => reply_routes.is_none(),
             CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
         };
         if !route_shape_is_valid {
@@ -8843,6 +9029,32 @@ impl ProductionV2Services {
                     target: peer.clone(),
                     transfer: CertifiedSidecarTransferIdentity::from_request(request),
                     request_hash: HashOf::new(request),
+                }
+            }
+            CertifiedMergeSidecarMessage::Close(close)
+                if close.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                    && close.closed_through != 0
+                    && close.close_id == close.canonical_close_id()
+                    && close.requester == self.local_peer
+                    && close.responder == peer =>
+            {
+                ExactOutputRolloverClaim::CertifiedSidecarControl {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    message_hash: HashOf::new(message.as_ref()),
+                }
+            }
+            CertifiedMergeSidecarMessage::CloseAck(ack)
+                if ack.version == CERTIFIED_MERGE_SIDECAR_VERSION_V1
+                    && ack.closed_through != 0
+                    && ack.close_id == ack.canonical_close_id()
+                    && ack.responder == self.local_peer
+                    && ack.requester == peer =>
+            {
+                ExactOutputRolloverClaim::CertifiedSidecarControl {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    message_hash: HashOf::new(message.as_ref()),
                 }
             }
             CertifiedMergeSidecarMessage::Chunk(chunk)
@@ -10327,6 +10539,8 @@ pub(super) mod tests {
         let reference_digest = Hash::new(b"worker sidecar reference");
         let request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: 1,
+            closed_through: 0,
             request_id: Hash::new(b"worker sidecar request"),
             entry_hash,
             encoded_len: 4,
@@ -10337,6 +10551,7 @@ pub(super) mod tests {
         };
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: 1,
             request_id: Hash::new(b"worker sidecar response request"),
             entry_hash,
             encoded_len: 4,
@@ -11312,7 +11527,9 @@ pub(super) mod tests {
         let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
         let chunk = match &chunk_message {
             CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.clone(),
-            CertifiedMergeSidecarMessage::Request(_) => {
+            CertifiedMergeSidecarMessage::Request(_)
+            | CertifiedMergeSidecarMessage::Close(_)
+            | CertifiedMergeSidecarMessage::CloseAck(_) => {
                 unreachable!("sidecar fixture returns one response chunk")
             }
         };

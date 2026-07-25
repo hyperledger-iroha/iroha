@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -487,6 +488,88 @@ def test_rejects_hardlinked_and_unsafe_key_or_verifier_inputs(
             verifier_digest=verifier_digest,
         )
 
+    verifier.chmod(0o700)
+    signer_hardlink = tmp_path / "signer-hardlink"
+    os.link(signer, signer_hardlink)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="exactly one hard link",
+    ):
+        _sign(
+            tmp_path,
+            manifest,
+            tmp_path / "signer-hardlink.sig",
+            tmp_path / "signer-hardlink.pub",
+            signer=signer,
+            raw_public_key=raw_key,
+            verifier=verifier,
+            verifier_digest=verifier_digest,
+        )
+    signer_hardlink.unlink()
+    signer.chmod(0o722)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="group- or world-writable",
+    ):
+        _sign(
+            tmp_path,
+            manifest,
+            tmp_path / "signer-unsafe.sig",
+            tmp_path / "signer-unsafe.pub",
+            signer=signer,
+            raw_public_key=raw_key,
+            verifier=verifier,
+            verifier_digest=verifier_digest,
+        )
+
+
+def test_rejects_hardlinked_and_unsafe_signature_inputs(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path)
+    signer = _external_signer(tmp_path)
+    raw_key = _raw_public_key(tmp_path)
+    verifier, verifier_digest, _ = _native_verifier(tmp_path)
+    signature = tmp_path / "release.sig"
+    public_key = tmp_path / "release.pub"
+    _sign(
+        tmp_path,
+        manifest,
+        signature,
+        public_key,
+        signer=signer,
+        raw_public_key=raw_key,
+        verifier=verifier,
+        verifier_digest=verifier_digest,
+    )
+
+    signature_hardlink = tmp_path / "release-hardlink.sig"
+    os.link(signature, signature_hardlink)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="exactly one hard link",
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            public_key,
+            TEST_FINGERPRINT,
+            verifier,
+            verifier_digest,
+        )
+    signature_hardlink.unlink()
+    signature.chmod(0o666)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="group- or world-writable",
+    ):
+        signing.verify_release_manifest(
+            manifest,
+            signature,
+            public_key,
+            TEST_FINGERPRINT,
+            verifier,
+            verifier_digest,
+        )
+
 
 @pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
 def test_rejects_external_signer_link_outputs(
@@ -545,7 +628,7 @@ def test_detects_manifest_and_native_verifier_identity_drift(
     )
     with pytest.raises(
         signing.ReleaseManifestSignatureError,
-        match="changed during verification",
+        match="external signer exited|signer manifest snapshot changed",
     ):
         _sign(
             tmp_path,
@@ -557,6 +640,7 @@ def test_detects_manifest_and_native_verifier_identity_drift(
             verifier=verifier,
             verifier_digest=verifier_digest,
         )
+    assert manifest.read_bytes() == TEST_MANIFEST
 
     manifest.write_bytes(TEST_MANIFEST)
     drifting_verifier, drifting_digest, _ = _native_verifier(
@@ -576,6 +660,107 @@ def test_detects_manifest_and_native_verifier_identity_drift(
             verifier=drifting_verifier,
             verifier_digest=drifting_digest,
         )
+
+
+def test_external_signer_executes_pinned_snapshot_during_path_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path)
+    raw_key = _raw_public_key(tmp_path)
+    signer = _external_signer(tmp_path)
+    verifier, verifier_digest, _ = _native_verifier(tmp_path)
+    malicious_marker = tmp_path / "substituted-signer-ran"
+    replacement = tmp_path / "replacement-signer"
+    _write_executable(
+        replacement,
+        "from pathlib import Path\n"
+        f"Path({str(malicious_marker)!r}).write_text('ran', encoding='utf-8')\n"
+        "raise SystemExit(91)\n",
+    )
+    real_run = subprocess.run
+    signer_substituted = False
+
+    def substitute_before_execution(*args: object, **kwargs: object) -> object:
+        nonlocal signer_substituted
+        command = args[0]
+        if (
+            not signer_substituted
+            and isinstance(command, list)
+            and len(command) == 3
+            and Path(command[0]).name.startswith(
+                "external-ed25519-signer-pinned"
+            )
+        ):
+            os.replace(replacement, signer)
+            signer_substituted = True
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(signing.subprocess, "run", substitute_before_execution)
+    with pytest.raises(
+        signing.ReleaseManifestSignatureError,
+        match="external signer changed during execution",
+    ):
+        _sign(
+            tmp_path,
+            manifest,
+            tmp_path / "substitution.sig",
+            tmp_path / "substitution.pub",
+            signer=signer,
+            raw_public_key=raw_key,
+            verifier=verifier,
+            verifier_digest=verifier_digest,
+        )
+    assert signer_substituted
+    assert not malicious_marker.exists()
+
+
+def test_external_signer_receives_private_manifest_snapshot(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(tmp_path)
+    raw_key = _raw_public_key(tmp_path)
+    verifier, verifier_digest, _ = _native_verifier(tmp_path)
+    observation = tmp_path / "signer-observation.json"
+    signer = tmp_path / "snapshot-observing-signer"
+    _write_executable(
+        signer,
+        "import json\n"
+        "import stat\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"original = Path({str(manifest)!r})\n"
+        "snapshot = Path(sys.argv[1])\n"
+        "if snapshot.resolve() == original.resolve():\n"
+        "    raise SystemExit(92)\n"
+        f"Path({str(observation)!r}).write_text(\n"
+        "    json.dumps({\n"
+        "        'mode': stat.S_IMODE(snapshot.stat().st_mode),\n"
+        "        'payload': snapshot.read_bytes().hex(),\n"
+        "    }),\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        f"Path(sys.argv[2]).write_bytes(bytes.fromhex({TEST_SIGNATURE.hex()!r}))\n",
+    )
+
+    result = _sign(
+        tmp_path,
+        manifest,
+        tmp_path / "snapshot.sig",
+        tmp_path / "snapshot.pub",
+        signer=signer,
+        raw_public_key=raw_key,
+        verifier=verifier,
+        verifier_digest=verifier_digest,
+    )
+
+    assert result["signature_verified"] is True
+    observed = json.loads(observation.read_text(encoding="utf-8"))
+    assert observed == {
+        "mode": 0o600,
+        "payload": TEST_MANIFEST.hex(),
+    }
+    assert manifest.read_bytes() == TEST_MANIFEST
 
 
 @pytest.mark.parametrize("mutated_input", ["manifest", "public_key", "signature"])

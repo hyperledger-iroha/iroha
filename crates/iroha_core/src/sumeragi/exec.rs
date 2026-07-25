@@ -479,8 +479,8 @@ mod tests {
         settlement_hash: HashOf<LaneBlockCommitment>,
     }
 
-    struct ManifestBlockFixture {
-        block: SignedBlock,
+    pub(super) struct ManifestBlockFixture {
+        pub(super) block: SignedBlock,
         source_ids: [[u8; Hash::LENGTH]; 2],
         first_route: (LaneId, DataSpaceId),
         second_route: (LaneId, DataSpaceId),
@@ -756,7 +756,7 @@ mod tests {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn result_bearing_native_manifest_block() -> ManifestBlockFixture {
+    pub(super) fn result_bearing_native_manifest_block() -> ManifestBlockFixture {
         let transaction_keys = [
             fixture_key(0x31, Algorithm::Ed25519),
             fixture_key(0x32, Algorithm::Ed25519),
@@ -1281,4 +1281,9 @@ mod tests {
             parent_state_from_witness(&with_fastpq)
         );
     }
+}
+
+#[cfg(test)]
+pub(crate) fn result_bearing_native_manifest_block_for_tests() -> SignedBlock {
+    tests::result_bearing_native_manifest_block().block
 }

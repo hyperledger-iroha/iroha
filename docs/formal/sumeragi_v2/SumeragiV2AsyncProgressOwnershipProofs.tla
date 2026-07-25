@@ -4913,7 +4913,7 @@ PROOF
              PublishControlItems
   <1> QED BY <1>1
 
-THEOREM EnabledBusyArmImpliesCommandExecutionEnabled ==
+THEOREM EnabledBusyArmImpliesCommandExecutionReady ==
   \A command:
     (\/ ENABLED ExecuteRegularCommand(command)
      \/ ENABLED ExecutePersistInstall(command)
@@ -4921,8 +4921,8 @@ THEOREM EnabledBusyArmImpliesCommandExecutionEnabled ==
      \/ ENABLED ExecuteSignProposal(command)
      \/ ENABLED ExecuteSignVote(command)
      \/ ENABLED ExecuteSignTimeout(command))
-      => CommandExecutionEnabled(command)
-BY Isa DEF CommandExecutionEnabled
+      => CommandExecutionReady(command)
+BY Isa DEF CommandExecutionReady
 
 THEOREM InstallGenerationBudgetExcludesExhaustion ==
   \A node \in ValidatorIds:
@@ -4938,7 +4938,7 @@ THEOREM BusyCompletionCandidateExecutionIsEnabled ==
       /\ AsyncTypeInvariant
       /\ AsyncBusyReadinessInvariant
       /\ candidate \in BusyCompletionCandidates(node)
-      => \/ CommandExecutionEnabled(candidate)
+      => \/ CommandExecutionReady(candidate)
          \/ InstallGenerationExhausted(node)
 BY PersistProposalBusyArmEnabled,
    PersistPrepareBusyArmEnabled,
@@ -4950,7 +4950,7 @@ BY PersistProposalBusyArmEnabled,
    SignProposalBusyArmEnabled,
    SignVoteBusyArmEnabled,
    SignTimeoutBusyArmEnabled,
-   EnabledBusyArmImpliesCommandExecutionEnabled,
+   EnabledBusyArmImpliesCommandExecutionReady,
    Isa
    DEF BusyCompletionCandidates, InstallGenerationExhausted,
        CommandMatches, TypeInvariant, Generations
@@ -4983,11 +4983,11 @@ PROOF
     <2>5. /\ CandidateConsumerCurrent(candidate)
            /\ candidate.class = "Completion"
       BY <1>1 DEF BusyCompletionCandidates
-    <2>6. \/ CommandExecutionEnabled(candidate)
+    <2>6. \/ CommandExecutionReady(candidate)
            \/ InstallGenerationExhausted(node)
       BY <1>1, <2>1, <2>3,
          BusyCompletionCandidateExecutionIsEnabled
-    <2>7. CASE CommandExecutionEnabled(candidate)
+    <2>7. CASE CommandExecutionReady(candidate)
       BY <2>4, <2>5, <2>7 DEF CommandDispatchable
     <2>8. CASE InstallGenerationExhausted(node)
       BY <2>8
@@ -5387,146 +5387,6 @@ PROOF
                     /\ AsyncProgressOwnershipInvariant)
       BY <2>1, <2>2, PTL DEF AsyncSpecAt
     <2> QED BY <2>3, PTL
-  <1> QED BY <1>1
-
-(***************************************************************************
-Protected deferred progress has one semantic slot per validator's exact
-locked Commit delivery and one per validator's TimeoutVote delivery, plus
-PrepareQC, CommitQC, and TC delivery.  Mapping indices to that finite carrier
-makes the 2 * N + 3 reservation bound a theorem of the duplicate exclusion
-rule rather than an independent queue-size guess.
-***************************************************************************)
-
-ProtectedProgressSlotUniverse ==
-  ({"CommitVote", "TimeoutVote"} \X ValidatorIds)
-    \cup ({"PrepareQC", "CommitQC", "TimeoutCertificate"} \X {0})
-
-ProtectedProgressSlot(command) ==
-  CASE command.kind = "DeliverVote" ->
-         <<"CommitVote", command.item.envelope.vote.signer>>
-    [] command.kind = "DeliverTimeout" ->
-         <<"TimeoutVote", command.item.envelope.vote.signer>>
-    [] command.kind = "DeliverQC" -> <<command.item.kind, 0>>
-    [] OTHER -> <<"TimeoutCertificate", 0>>
-
-ProtectedProgressSlotMap(node) ==
-  [index \in ProtectedDeferredProgressIndices(node) |->
-     ProtectedProgressSlot(
-       asyncDeferredProgressQueues[node][index])]
-
-THEOREM ProtectedProgressSlotUniverseSize ==
-  ModelConfiguration
-    => /\ IsFiniteSet(ProtectedProgressSlotUniverse)
-       /\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3
-PROOF
-  <1>1. ASSUME ModelConfiguration
-         PROVE /\ IsFiniteSet(ProtectedProgressSlotUniverse)
-               /\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3
-    <2> DEFINE VoteKinds == {"CommitVote", "TimeoutVote"}
-    <2> DEFINE VoteSlots == VoteKinds \X ValidatorIds
-    <2> DEFINE CertificateKinds ==
-           {"PrepareQC", "CommitQC", "TimeoutCertificate"}
-    <2> DEFINE CertificateSlots == CertificateKinds \X {0}
-    <2>1. /\ N \in Nat \ {0}
-           /\ IsFiniteSet(ValidatorIds)
-           /\ Cardinality(ValidatorIds) = N
-      BY <1>1, FS_Interval, SMT
-         DEF ValidatorIds, ModelConfiguration, QuorumConfiguration
-    <2>2. /\ IsFiniteSet(VoteKinds)
-           /\ Cardinality(VoteKinds) = 2
-      BY FS_EmptySet, FS_AddElement, SMT DEF VoteKinds
-    <2>3. /\ IsFiniteSet(VoteSlots)
-           /\ Cardinality(VoteSlots) = 2 * N
-      BY <2>1, <2>2, FS_Product, SMT DEF VoteSlots
-    <2>4. /\ IsFiniteSet(CertificateKinds)
-           /\ Cardinality(CertificateKinds) = 3
-      BY FS_EmptySet, FS_AddElement, SMT DEF CertificateKinds
-    <2>5. /\ IsFiniteSet({0})
-           /\ Cardinality({0}) = 1
-      BY FS_Singleton
-    <2>6. /\ IsFiniteSet(CertificateSlots)
-           /\ Cardinality(CertificateSlots) = 3
-      BY <2>4, <2>5, FS_Product, SMT DEF CertificateSlots
-    <2>7. VoteSlots \cap CertificateSlots = {}
-      BY Isa DEF VoteSlots, CertificateSlots, CertificateKinds
-    <2>8. /\ IsFiniteSet(VoteSlots \cup CertificateSlots)
-           /\ Cardinality(VoteSlots \cup CertificateSlots) = 2 * N + 3
-      BY <2>3, <2>6, <2>7, FS_Union, FS_EmptySet, SMT
-    <2> QED BY <2>8
-         DEF ProtectedProgressSlotUniverse, VoteKinds, VoteSlots,
-             CertificateSlots, CertificateKinds
-  <1> QED BY <1>1
-
-THEOREM ProtectedProgressSlotCharacterization ==
-  \A left, right:
-    /\ AsyncCandidateTyped(left)
-    /\ AsyncCandidateTyped(right)
-    /\ ProtectedProgressCommand(left)
-    /\ ProtectedProgressCommand(right)
-    => /\ ProtectedProgressSlot(left)
-              \in ProtectedProgressSlotUniverse
-       /\ ProtectedProgressSlot(right)
-              \in ProtectedProgressSlotUniverse
-       /\ (ProtectedProgressSlot(left)
-              = ProtectedProgressSlot(right)
-             <=> SameProtectedProgressSlot(left, right))
-BY SMTT(30)
-   DEF ProtectedProgressSlot, ProtectedProgressSlotUniverse,
-       ProtectedProgressCommand, SameProtectedProgressSlot,
-       HistoricalLockedCommitItem, AsyncCandidateTyped,
-       AsyncItemTyped, VoteEnvelopeSet, VoteEnvelope, VoteRecordSet,
-       Vote, TimeoutEnvelopeSet, TimeoutVoteRecordSet, ValidatorIds
-
-THEOREM ProtectedDeferredProgressCountFollowsUniqueness ==
-  \A node \in ValidatorIds:
-    /\ ModelConfiguration
-    /\ AsyncDeferredContentTypeInvariant
-    /\ \A left, right \in ProtectedDeferredProgressIndices(node):
-         SameProtectedProgressSlot(
-           asyncDeferredProgressQueues[node][left],
-           asyncDeferredProgressQueues[node][right])
-           => left = right
-    => Cardinality(ProtectedDeferredProgressIndices(node)) <= 2 * N + 3
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                ModelConfiguration,
-                AsyncDeferredContentTypeInvariant,
-                \A left, right
-                    \in ProtectedDeferredProgressIndices(node):
-                  SameProtectedProgressSlot(
-                    asyncDeferredProgressQueues[node][left],
-                    asyncDeferredProgressQueues[node][right])
-                    => left = right
-         PROVE Cardinality(ProtectedDeferredProgressIndices(node))
-                 <= 2 * N + 3
-    <2> DEFINE Indices == ProtectedDeferredProgressIndices(node)
-    <2> DEFINE Slots == ProtectedProgressSlotUniverse
-    <2> DEFINE SlotMap == ProtectedProgressSlotMap(node)
-    <2>1. /\ IsFiniteSet(Slots)
-           /\ Cardinality(Slots) = 2 * N + 3
-      BY <1>1, ProtectedProgressSlotUniverseSize DEF Slots
-    <2>2. \A index \in Indices:
-             /\ index \in 1..Len(asyncDeferredProgressQueues[node])
-             /\ AsyncCandidateTyped(
-                  asyncDeferredProgressQueues[node][index])
-             /\ ProtectedProgressCommand(
-                  asyncDeferredProgressQueues[node][index])
-      BY <1>1, Isa
-         DEF Indices, ProtectedDeferredProgressIndices,
-             AsyncDeferredContentTypeInvariant, AsyncQueueTyped
-    <2>3. SlotMap \in [Indices -> Slots]
-      BY <2>2, ProtectedProgressSlotCharacterization, Isa
-         DEF SlotMap, ProtectedProgressSlotMap, Slots
-    <2>4. \A left, right \in Indices:
-             SlotMap[left] = SlotMap[right] => left = right
-      BY <1>1, <2>2, ProtectedProgressSlotCharacterization, Isa
-         DEF SlotMap, ProtectedProgressSlotMap
-    <2>5. SlotMap \in Injection(Indices, Slots)
-      BY <2>3, <2>4 DEF Injection, IsInjective
-    <2>6. /\ IsFiniteSet(Indices)
-           /\ Cardinality(Indices) <= Cardinality(Slots)
-      BY <2>1, <2>5, FS_Injection
-    <2> QED BY <2>1, <2>6
   <1> QED BY <1>1
 
 =============================================================================

@@ -11,7 +11,8 @@ the one-member council. These keys are public fixture material and must never be
 provider or governance council. Binary `.to` files are canonical Norito; matching `.json` files
 are human-readable summaries, not alternative wire payloads.
 
-Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling
-end-to-end.
+Additional artifacts include a payload-bound `sorafs.chunk_fetch_plan.v1` multi-source plan so SDKs
+can exercise chunk scheduling end-to-end. Standalone plans are strict V1 envelopes; the retired
+bare-array representation is not an accepted interchange format.
 
 Do not edit manually; rerun the generator if data changes.

@@ -5,11 +5,29 @@ use norito::json::{Map, Value, to_string_pretty};
 
 use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec, TaikaiSegmentHint};
 
+/// Canonical schema identifier for standalone SoraFS chunk fetch plans.
+pub const CHUNK_FETCH_PLAN_SCHEMA_V1: &str = "sorafs.chunk_fetch_plan.v1";
+/// Schema identifier for manifest-builder reports that embed chunk specs.
+pub const MANIFEST_BUILDER_REPORT_SCHEMA_V1: &str = "sorafs.manifest_builder_report.v1";
+/// Schema identifier for `iroha app sorafs toolkit pack` reports.
+pub const TOOLKIT_PACK_REPORT_SCHEMA_V1: &str = "sorafs.toolkit_pack_report.v1";
+/// Schema identifier for chunk-store reports that embed chunk specs.
+pub const CHUNK_STORE_REPORT_SCHEMA_V1: &str = "sorafs.chunk_store_report.v1";
+
+/// Canonical standalone chunk fetch plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkFetchPlanV1 {
+    /// BLAKE3 digest of the complete unchunked payload.
+    pub payload_digest: [u8; 32],
+    /// Ordered chunk locations and digests used to fetch the payload.
+    pub chunk_fetch_specs: Vec<ChunkFetchSpec>,
+}
+
 /// Errors that can occur while parsing chunk fetch specifications from JSON.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchPlanError {
-    #[error("expected chunk fetch plan JSON array or object containing chunk_fetch_specs")]
-    MissingChunkFetchSpecs,
+    #[error("embedded chunk fetch specifications must be a JSON array")]
+    InvalidEmbeddedChunkFetchSpecs,
     #[error("chunk fetch spec entry {index} is not an object")]
     InvalidEntry { index: usize },
     #[error("chunk fetch spec entry {index} missing or invalid {field}")]
@@ -29,22 +47,102 @@ pub enum FetchPlanError {
         field: &'static str,
         reason: String,
     },
+    #[error("standalone chunk fetch plan must be a JSON object")]
+    InvalidPlanRoot,
+    #[error("standalone chunk fetch plan missing required `{field}` field")]
+    MissingPlanField { field: &'static str },
+    #[error(
+        "standalone chunk fetch plan schema must be `{CHUNK_FETCH_PLAN_SCHEMA_V1}`, found `{found}`"
+    )]
+    InvalidPlanSchema { found: String },
+    #[error("standalone chunk fetch plan contains unsupported field `{field}`")]
+    UnsupportedPlanField { field: String },
+    #[error(
+        "standalone chunk fetch plan `payload_digest_blake3_hex` must be canonical lowercase 32-byte hex"
+    )]
+    InvalidPlanPayloadDigest,
+    #[error("standalone chunk fetch plan payload digest must not be all zeroes")]
+    ZeroPlanPayloadDigest,
 }
 
-/// Parses chunk fetch specs from either an array of objects or an object that
-/// contains a `chunk_fetch_specs` array (as emitted by
-/// `sorafs_manifest_builder --json-out`).
-pub fn chunk_fetch_specs_from_json(value: &Value) -> Result<Vec<ChunkFetchSpec>, FetchPlanError> {
-    if let Some(array) = value.as_array() {
-        return parse_chunk_fetch_specs(array);
+/// Errors that can occur while rendering a standalone chunk fetch plan.
+#[derive(Debug, thiserror::Error)]
+pub enum FetchPlanRenderError {
+    #[error("failed to derive chunk fetch specifications: {0}")]
+    Plan(#[from] CarPlanError),
+    #[error("failed to render chunk fetch plan JSON: {0}")]
+    Json(#[from] norito::json::Error),
+    #[error("standalone chunk fetch plan payload digest must not be all zeroes")]
+    ZeroPayloadDigest,
+}
+
+/// Parses a chunk-spec array already selected from a canonical versioned
+/// envelope.
+///
+/// This helper deliberately does not accept an object or a standalone
+/// bare-array plan. Callers must first validate the containing envelope and
+/// select its typed `chunk_fetch_specs` field. Standalone interchange uses
+/// [`chunk_fetch_plan_from_json`] exclusively.
+pub fn chunk_fetch_specs_from_embedded_array(
+    value: &Value,
+) -> Result<Vec<ChunkFetchSpec>, FetchPlanError> {
+    value
+        .as_array()
+        .ok_or(FetchPlanError::InvalidEmbeddedChunkFetchSpecs)
+        .and_then(|values| parse_chunk_fetch_specs(values))
+}
+
+/// Parses the canonical V1 standalone chunk fetch plan envelope.
+///
+/// The parser intentionally rejects the retired bare-array representation and
+/// requires the exact whole-payload BLAKE3 digest committed by the producer.
+pub fn chunk_fetch_plan_from_json(value: &Value) -> Result<ChunkFetchPlanV1, FetchPlanError> {
+    let obj = value.as_object().ok_or(FetchPlanError::InvalidPlanRoot)?;
+    for field in obj.keys() {
+        if !matches!(
+            field.as_str(),
+            "schema" | "payload_digest_blake3_hex" | "chunk_fetch_specs"
+        ) {
+            return Err(FetchPlanError::UnsupportedPlanField {
+                field: field.clone(),
+            });
+        }
     }
-    if let Some(obj) = value.as_object()
-        && let Some(specs) = obj.get("chunk_fetch_specs")
-        && let Some(array) = specs.as_array()
-    {
-        return parse_chunk_fetch_specs(array);
+
+    let schema = obj
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or(FetchPlanError::MissingPlanField { field: "schema" })?;
+    if schema != CHUNK_FETCH_PLAN_SCHEMA_V1 {
+        return Err(FetchPlanError::InvalidPlanSchema {
+            found: schema.to_owned(),
+        });
     }
-    Err(FetchPlanError::MissingChunkFetchSpecs)
+
+    let payload_digest_hex = obj
+        .get("payload_digest_blake3_hex")
+        .and_then(Value::as_str)
+        .ok_or(FetchPlanError::MissingPlanField {
+            field: "payload_digest_blake3_hex",
+        })?;
+    let payload_digest = decode_digest_hex(payload_digest_hex)
+        .map_err(|()| FetchPlanError::InvalidPlanPayloadDigest)?;
+    if payload_digest == [0; 32] {
+        return Err(FetchPlanError::ZeroPlanPayloadDigest);
+    }
+
+    let chunk_fetch_specs = obj
+        .get("chunk_fetch_specs")
+        .and_then(Value::as_array)
+        .ok_or(FetchPlanError::MissingPlanField {
+            field: "chunk_fetch_specs",
+        })
+        .and_then(|specs| parse_chunk_fetch_specs(specs))?;
+
+    Ok(ChunkFetchPlanV1 {
+        payload_digest,
+        chunk_fetch_specs,
+    })
 }
 
 /// Extracts an expected payload digest from a manifest JSON report, if present.
@@ -123,26 +221,46 @@ pub fn parse_digest_hex(hex: &str) -> Result<[u8; 32], FetchPlanError> {
     })
 }
 
-/// Serialises the chunk fetch specifications contained in the provided plan
-/// into a JSON array matching the format emitted by SoraFS manifests.
+/// Serialises chunk fetch specifications for a typed field in another
+/// canonical versioned envelope.
+///
+/// This value is never a standalone plan. Use
+/// [`try_chunk_fetch_plan_to_json`] for interchange.
 pub fn chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Value {
     let specs = plan.chunk_fetch_specs();
     Value::Array(chunk_fetch_specs_to_array(&specs))
 }
 
-/// Fallible counterpart to [`chunk_fetch_specs_to_json`] for production paths handling
-/// untrusted plans.
+/// Fallible counterpart to [`chunk_fetch_specs_to_json`] for a typed embedded
+/// field in another canonical versioned envelope.
 pub fn try_chunk_fetch_specs_to_json(plan: &CarBuildPlan) -> Result<Value, CarPlanError> {
     let specs = plan.try_chunk_fetch_specs()?;
     Ok(Value::Array(chunk_fetch_specs_to_array(&specs)))
 }
 
-/// Serialises chunk fetch specifications into a pretty-printed JSON string,
+/// Serialises a plan into the canonical V1 standalone chunk fetch plan envelope.
+pub fn try_chunk_fetch_plan_to_json(plan: &CarBuildPlan) -> Result<Value, FetchPlanRenderError> {
+    if plan.payload_digest.as_bytes() == &[0; 32] {
+        return Err(FetchPlanRenderError::ZeroPayloadDigest);
+    }
+    let specs = plan.try_chunk_fetch_specs()?;
+    let mut obj = Map::new();
+    obj.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));
+    obj.insert(
+        "payload_digest_blake3_hex".into(),
+        Value::from(digest_to_hex(plan.payload_digest.as_bytes())),
+    );
+    obj.insert(
+        "chunk_fetch_specs".into(),
+        Value::Array(chunk_fetch_specs_to_array(&specs)),
+    );
+    Ok(Value::Object(obj))
+}
+
+/// Serialises a plan into a pretty-printed canonical V1 standalone envelope,
 /// appending a trailing newline for CLI friendliness.
-pub fn chunk_fetch_specs_to_string(
-    specs: &[ChunkFetchSpec],
-) -> Result<String, norito::json::Error> {
-    let json = Value::Array(chunk_fetch_specs_to_array(specs));
+pub fn chunk_fetch_plan_to_string(plan: &CarBuildPlan) -> Result<String, FetchPlanRenderError> {
+    let json = try_chunk_fetch_plan_to_json(plan)?;
     let mut rendered = to_string_pretty(&json)?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');
@@ -369,6 +487,68 @@ fn digest_to_hex(digest: &[u8; 32]) -> String {
 mod tests {
     use super::*;
 
+    fn sample_plan() -> CarBuildPlan {
+        CarBuildPlan::single_file(b"canonical fetch plan").expect("sample plan")
+    }
+
+    #[test]
+    fn standalone_plan_round_trips_payload_digest_and_specs() {
+        let plan = sample_plan();
+        let json = try_chunk_fetch_plan_to_json(&plan).expect("render plan");
+        let parsed = chunk_fetch_plan_from_json(&json).expect("parse plan");
+
+        assert_eq!(parsed.payload_digest, *plan.payload_digest.as_bytes());
+        assert_eq!(parsed.chunk_fetch_specs, plan.chunk_fetch_specs());
+    }
+
+    #[test]
+    fn standalone_plan_rejects_retired_array_and_missing_payload_digest() {
+        let plan = sample_plan();
+        let retired = chunk_fetch_specs_to_json(&plan);
+        assert!(matches!(
+            chunk_fetch_plan_from_json(&retired),
+            Err(FetchPlanError::InvalidPlanRoot)
+        ));
+
+        let mut missing_digest = Map::new();
+        missing_digest.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));
+        missing_digest.insert("chunk_fetch_specs".into(), chunk_fetch_specs_to_json(&plan));
+        let missing_digest = Value::Object(missing_digest);
+        assert!(matches!(
+            chunk_fetch_plan_from_json(&missing_digest),
+            Err(FetchPlanError::MissingPlanField {
+                field: "payload_digest_blake3_hex"
+            })
+        ));
+    }
+
+    #[test]
+    fn standalone_plan_rejects_zero_or_noncanonical_payload_digest() {
+        let plan = sample_plan();
+        let specs = chunk_fetch_specs_to_json(&plan);
+        for payload_digest in ["0".repeat(64), "A1".repeat(32), "deadbeef".to_owned()] {
+            let mut value = Map::new();
+            value.insert("schema".into(), Value::from(CHUNK_FETCH_PLAN_SCHEMA_V1));
+            value.insert(
+                "payload_digest_blake3_hex".into(),
+                Value::from(payload_digest.clone()),
+            );
+            value.insert("chunk_fetch_specs".into(), specs.clone());
+            let value = Value::Object(value);
+            assert!(
+                chunk_fetch_plan_from_json(&value).is_err(),
+                "payload digest must be rejected: {payload_digest}"
+            );
+        }
+
+        let mut zero_plan = plan;
+        zero_plan.payload_digest = blake3::Hash::from_bytes([0; 32]);
+        assert!(matches!(
+            try_chunk_fetch_plan_to_json(&zero_plan),
+            Err(FetchPlanRenderError::ZeroPayloadDigest)
+        ));
+    }
+
     #[test]
     fn parse_specs_from_array() {
         let value = norito::json!([
@@ -385,7 +565,7 @@ mod tests {
                 "digest_blake3": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
             }
         ]);
-        let specs = chunk_fetch_specs_from_json(&value).expect("parse specs");
+        let specs = chunk_fetch_specs_from_embedded_array(&value).expect("parse embedded specs");
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].chunk_index, 0);
         assert_eq!(specs[1].offset, 512);
@@ -405,7 +585,12 @@ mod tests {
             "payload_digest_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "payload_len": 128
         });
-        let specs = chunk_fetch_specs_from_json(&value).expect("parse specs");
+        let specs = chunk_fetch_specs_from_embedded_array(
+            value
+                .get("chunk_fetch_specs")
+                .expect("versioned report chunk_fetch_specs"),
+        )
+        .expect("parse embedded specs");
         assert_eq!(specs.len(), 1);
         let digest = expected_payload_digest_from_json(&value)
             .expect("parse digest")
@@ -548,10 +733,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_missing_specs_returns_error() {
+    fn embedded_parser_rejects_containing_object() {
         let value = norito::json!({ "payload_digest_hex": "deadbeef" });
-        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
-        assert!(matches!(err, FetchPlanError::MissingChunkFetchSpecs));
+        let err = chunk_fetch_specs_from_embedded_array(&value).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidEmbeddedChunkFetchSpecs
+        ));
     }
 
     #[test]
@@ -564,7 +752,7 @@ mod tests {
                 "digest_blake3": "ABCDEF0000000000000000000000000000000000000000000000000000000000"
             }
         ]);
-        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        let err = chunk_fetch_specs_from_embedded_array(&value).unwrap_err();
         assert!(matches!(
             err,
             FetchPlanError::InvalidDigest { index: 0, .. }
@@ -585,7 +773,7 @@ mod tests {
                 "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
             }
         ]);
-        let err = chunk_fetch_specs_from_json(&zero).unwrap_err();
+        let err = chunk_fetch_specs_from_embedded_array(&zero).unwrap_err();
         assert!(matches!(
             err,
             FetchPlanError::InvalidField {
@@ -604,7 +792,7 @@ mod tests {
                 "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
             }
         ]);
-        let err = chunk_fetch_specs_from_json(&oversized).unwrap_err();
+        let err = chunk_fetch_specs_from_embedded_array(&oversized).unwrap_err();
         assert!(matches!(
             err,
             FetchPlanError::InvalidField {
@@ -626,7 +814,7 @@ mod tests {
                 "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
             }
         ]);
-        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        let err = chunk_fetch_specs_from_embedded_array(&value).unwrap_err();
         assert!(matches!(
             err,
             FetchPlanError::InvalidField {
@@ -648,7 +836,7 @@ mod tests {
                 "taikai_segment_hint": "ignored-before-hardening"
             }
         ]);
-        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        let err = chunk_fetch_specs_from_embedded_array(&value).unwrap_err();
         assert!(matches!(
             err,
             FetchPlanError::InvalidField {
@@ -676,7 +864,8 @@ mod tests {
             }),
         }];
         let json = Value::Array(chunk_fetch_specs_to_array(&specs));
-        let parsed = chunk_fetch_specs_from_json(&json).expect("parse specs");
+        let parsed =
+            chunk_fetch_specs_from_embedded_array(&json).expect("parse embedded chunk specs");
         assert_eq!(parsed.len(), 1);
         let hint = parsed[0]
             .taikai_segment_hint

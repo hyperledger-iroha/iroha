@@ -434,14 +434,14 @@ BY ExpandENABLED, IsaT(300)
        CommandMatches, NodeHasApplication, NoDecisionForNode,
        AsyncAuxVars, vars
 
-THEOREM EnabledDecisionOwnerImpliesCommandExecutionEnabled ==
+THEOREM EnabledDecisionOwnerImpliesCommandExecutionReady ==
   \A node, qc, candidate:
     /\ AsyncStrongTypeInvariant
     /\ DecisionsUniqueByNodeContext
     /\ DecisionExecutableStageOwner(node, qc, candidate)
-    => CommandExecutionEnabled(candidate)
+    => CommandExecutionReady(candidate)
 BY DecisionExecutableStageOwnerEnablesExecution, Isa
-   DEF CommandExecutionEnabled, ExecuteCommand
+   DEF CommandExecutionReady, ExecuteCommand
 
 THEOREM DecisionExecutableStageOwnerIsDispatchable ==
   \A node, qc, candidate:
@@ -464,8 +464,8 @@ PROOF
       BY <1>1
          DEF DecisionExecutableStageOwner,
              DecisionPipelineCandidate
-    <2>3. CommandExecutionEnabled(candidate)
-      BY <1>1, EnabledDecisionOwnerImpliesCommandExecutionEnabled
+    <2>3. CommandExecutionReady(candidate)
+      BY <1>1, EnabledDecisionOwnerImpliesCommandExecutionReady
     <2> QED BY <2>1, <2>2, <2>3 DEF CommandDispatchable
   <1> QED BY <1>1
 

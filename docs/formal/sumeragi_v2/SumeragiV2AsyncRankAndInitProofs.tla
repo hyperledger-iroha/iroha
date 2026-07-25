@@ -575,9 +575,10 @@ PROOF
       BY <1>1, <2>24, Isa
          DEF CommandSuccessors, CausalCandidate,
              NoItemCandidate, SequenceSet
-    <2>25. CASE command.kind = "FormTC"
+    <2>25. CASE command.kind = "SignTimeout"
       BY <1>1, <2>25, Isa
-         DEF CommandSuccessors, CausalCandidate,
+         DEF CommandSuccessors, SignTimeoutFormsTC,
+             CausalCandidateWithEvidence, AsyncCandidateWithIdentity,
              NoItemCandidate, SequenceSet
     <2>26. CASE command.kind = "DeliverTC"
       BY <1>1, <2>26, Isa

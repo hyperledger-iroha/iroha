@@ -134,6 +134,18 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             args.extend(["--language", language])
             args.extend(["--artifact", f"{language}-orderbook:{ARTIFACT_DIGEST}"])
     elif kind == "observability":
+        args.extend(
+            [
+                "--metrics-scraped-at-unix",
+                str(GENERATED_AT),
+                "--finalized-projection-height",
+                "42",
+                "--finalized-projection-timestamp-seconds",
+                str(GENERATED_AT),
+                "--finalized-projection-failure-delta",
+                "0",
+            ]
+        )
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
     elif kind == "reconciliation":
@@ -948,6 +960,46 @@ def test_unknown_observability_metric_fails_closed(tmp_path: Path, capsys) -> No
         tmp_path=tmp_path,
         capsys=capsys,
         expected_error="--metric contains an unknown value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "expected_error"),
+    (
+        (
+            "--metrics-scraped-at-unix",
+            "--metrics-scraped-at-unix is required for observability",
+        ),
+        (
+            "--finalized-projection-height",
+            "--finalized-projection-height is required for observability",
+        ),
+        (
+            "--finalized-projection-timestamp-seconds",
+            "--finalized-projection-timestamp-seconds is required for observability",
+        ),
+        (
+            "--finalized-projection-failure-delta",
+            "--finalized-projection-failure-delta is required for observability",
+        ),
+    ),
+)
+def test_observability_requires_fresh_projection_inputs(
+    option: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    index = args.index(option)
+    del args[index : index + 2]
+
+    assert_rejected_without_artifact(
+        args,
+        kind="observability",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
     )
 
 

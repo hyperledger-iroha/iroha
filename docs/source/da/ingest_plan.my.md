@@ -274,10 +274,14 @@ pub struct DaIngestReceipt {
   အထောက်အထားအစုအဝေးများတွင် `policy_source` တန်ဖိုးများကို အဓိပ္ပါယ်ရှိစေရန် ကြိုးများ။ ကြည့်ပါ။
   subcommand အတွက် `crates/iroha_cli/src/commands/da.rs` နှင့် `docs/source/da/rent_policy.md`
   မူဝါဒအစီအစဉ်အတွက်။ 【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- Pin registry parity ကို ယခု SDKs တွင် တိုးချဲ့ထားသည်- `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK သည် `iroha app sorafs pin register` မှအသုံးပြုသော တိကျသော payload ကိုတည်ဆောက်သည်၊ canonical ကိုလိုက်နာသည်
-  chunker metadata၊ pin policy၊ alias proofs နှင့် ပို့စ်မတင်မီ ဆက်ခံမည့် digest များ
-  `/v1/sorafs/pin/register`။ ၎င်းသည် CI ဘော့တ်များနှင့် အလိုအလျောက်လုပ်ဆောင်မှုကို CLI ထံသို့ မည်သည့်အချိန်တွင် ဖယ်ရှားခြင်းမှ ကာကွယ်ပေးသည်။
+- Pin registry parity ကို ယခု SDKs တွင် တိုးချဲ့ထားသည်။
+  `ToriiClient.registerSorafsPinManifest(...)` သည် `manifest_payload` ထဲတွင်
+  တိကျသော canonical padded-base64 `ManifestV1` ပါသည့် ပိတ်ထားသော JSON V1 request
+  ကို တည်ဆောက်သည်။ Torii သည် digest၊ chunker၊ content length၊ pin policy နှင့်
+  fee input များကို decoded manifest တစ်ခုတည်းမှ ထုတ်ယူပြီး duplicate summary
+  များကို ငြင်းပယ်သည်။ optional alias နှင့် nonzero predecessor သည် ကျန်ရှိသည်။
+  ထို့ကြောင့် `/v1/sorafs/pin/register` အသုံးပြုရာတွင် CI ဘော့တ်များနှင့်
+  အလိုအလျောက်လုပ်ဆောင်မှုက CLI ကို ခေါ်ရန် မလိုတော့ပါ။
   ထင်ရှားသော မှတ်ပုံတင်မှုများကို မှတ်တမ်းတင်ခြင်း နှင့် ကူညီသူသည် TypeScript/README လွှမ်းခြုံမှုဖြင့် ပို့ဆောင်ပေးသောကြောင့် DA-8 ၏
   "submit/get/prove" tooling parity သည် Rust/Swift နှင့်အတူ JS တွင် အပြည့်အဝ စိတ်ကျေနပ်မှုရှိပါသည်။ 【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` သည် အထက်ဖော်ပြပါ အားလုံးကို ချိတ်ဆက်ထားသည်- ၎င်းသည် သိုလှောင်မှု လက်မှတ်တစ်ခုယူသည်၊ ဒေါင်းလုဒ်လုပ်သည်

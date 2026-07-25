@@ -451,7 +451,17 @@ fn soranet_pop_bundle_writes_manifest_and_assets() {
             .exists()
     );
     assert!(output_dir.join("checklist.md").exists());
-    assert!(output_dir.join("ci").join("pop_bringup.yml").exists());
+    let ci_job_path = output_dir.join("ci").join("pop_bringup.yml");
+    assert!(ci_job_path.exists());
+    let ci_job = fs::read_to_string(&ci_job_path).expect("read generated CI job");
+    assert!(
+        ci_job.contains("uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4"),
+        "generated CI job must pin checkout to the reviewed full commit SHA:\n{ci_job}"
+    );
+    assert!(
+        !ci_job.contains("uses: actions/checkout@v4"),
+        "generated CI job must not use a floating checkout tag:\n{ci_job}"
+    );
     let signoff_path = output_dir.join("attestations").join("signoff.json");
     assert!(signoff_path.exists());
     let signoff: json::Value =

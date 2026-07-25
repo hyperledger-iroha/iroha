@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_repair_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location("check_sorafs_repair_rollout_evidence", MODULE_PATH)
@@ -20,6 +22,17 @@ NOW_UNIX = 1_800_400_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+
+
+def options() -> MODULE.ValidationOptions:
+    return MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        max_route_latency_ms=MODULE.DEFAULT_MAX_ROUTE_LATENCY_MS,
+        max_event_lag_secs=MODULE.DEFAULT_MAX_EVENT_LAG_SECS,
+        max_repair_latency_secs=MODULE.DEFAULT_MAX_REPAIR_LATENCY_SECS,
+        min_auditors=MODULE.DEFAULT_MIN_AUDITORS,
+    )
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -85,11 +98,21 @@ def failure_capture() -> dict:
     return payload
 
 
-def route(name: str, *, authz: bool = True, latency_ms: int = 200) -> dict:
+def route(
+    name: str,
+    *,
+    authz: bool = True,
+    latency_ms: int = 200,
+    status_code: int | None = None,
+) -> dict:
     return {
         "name": name,
         "passed": True,
-        "status_code": 200,
+        "status_code": (
+            MODULE.REQUIRED_ROUTE_STATUS_CODES.get(name, 200)
+            if status_code is None
+            else status_code
+        ),
         "body_blake3_hex": DIGEST,
         "latency_ms": latency_ms,
         "authz_enforced": authz,
@@ -103,8 +126,10 @@ def auditor_api(*, authz: bool = True) -> dict:
         for name in (
             "repair_report",
             "repair_slash",
+            "repair_appeal",
             "repair_status",
-            "repair_status_manifest",
+            "repair_tasks",
+            "repair_task",
         )
     ]
     payload = base("sorafs.repair.auditor_api_canary.v1")
@@ -113,10 +138,11 @@ def auditor_api(*, authz: bool = True) -> dict:
             "route_count": len(routes),
             "passed_route_count": len(routes),
             "roster_digest_hex": DIGEST,
-            "signed_auditor_envelope_required": True,
-            "nonce_replay_rejected": True,
-            "legacy_raw_payload_rejected": True,
-            "per_auditor_rate_limit_enforced": True,
+            "caller_signed_transaction_required": True,
+            "single_native_instruction_required": True,
+            "transaction_replay_rejected": True,
+            "non_transaction_payload_rejected": True,
+            "per_authority_rate_limit_enforced": True,
             "response_bodies_included": False,
             "routes": routes,
         }
@@ -149,7 +175,11 @@ def worker_lifecycle(*, repair_latency_seconds: int = 900, missing_status: bool 
             "worker_permission_enforced": True,
             "lease_heartbeat_enforced": True,
             "idempotency_enforced": True,
-            "norito_snapshot_persisted": True,
+            "finalized_task_projection_verified": True,
+            "exact_live_lease_execution_verified": True,
+            "durable_transaction_forwarding_verified": True,
+            "restart_reconciliation_verified": True,
+            "single_terminal_outcome_verified": True,
             "gc_protection_verified": True,
             "repair_latency_seconds": repair_latency_seconds,
             "raw_repair_payloads_included": False,
@@ -160,10 +190,7 @@ def worker_lifecycle(*, repair_latency_seconds: int = 900, missing_status: bool 
 
 
 def event_streams(*, event_lag_seconds: int = 30) -> dict:
-    routes = [
-        route(name)
-        for name in ("repair_events", "repair_events_sse", "repair_events_ws")
-    ]
+    routes = [route("repair_events")]
     payload = base("sorafs.repair.event_streams_canary.v1")
     payload.update(
         {
@@ -171,9 +198,10 @@ def event_streams(*, event_lag_seconds: int = 30) -> dict:
             "passed_route_count": len(routes),
             "roster_digest_hex": DIGEST,
             "evidence_bundle_digest_hex": DIGEST,
-            "backlog_replay_verified": True,
-            "sse_delivery_verified": True,
-            "websocket_delivery_verified": True,
+            "finalized_chain_projection_verified": True,
+            "cursor_resume_verified": True,
+            "etag_revalidation_verified": True,
+            "cross_peer_consistency_verified": True,
             "event_lag_seconds": event_lag_seconds,
             "response_bodies_included": False,
             "routes": routes,
@@ -353,6 +381,69 @@ def test_fixture_inventories_cover_checker_required_sets() -> None:
         MODULE.REQUIRED_GOVERNANCE_TARGETS
     )
     assert tuple(observability()["metrics"]) == MODULE.REQUIRED_METRICS
+
+
+def test_repair_routes_use_exact_command_and_query_status_codes() -> None:
+    records = (
+        *auditor_api()["routes"],
+        *worker_lifecycle()["routes"],
+        *event_streams()["routes"],
+    )
+
+    assert {record["name"]: record["status_code"] for record in records} == (
+        MODULE.REQUIRED_ROUTE_STATUS_CODES
+    )
+
+
+def test_wrong_success_status_for_route_fails_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_api()
+    payload["routes"][0]["status_code"] = 200
+    write_json(tmp_path / "auditor-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["auditor_api"]["artifacts"][0]["errors"]
+    assert "routes[0].status_code must equal 202 for repair_report" in errors
+
+
+def test_retired_signed_auditor_request_payload_is_still_sensitive() -> None:
+    payload = auditor_api()
+    payload["signed_auditor_request"] = {"bytes": "redacted"}
+
+    kind, errors = MODULE.validate_evidence_payload(payload, options())
+
+    assert kind == "auditor_api"
+    assert "<sensitive-key> must not be present in rollout evidence" in errors
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "finalized_task_projection_verified",
+        "exact_live_lease_execution_verified",
+        "durable_transaction_forwarding_verified",
+        "restart_reconciliation_verified",
+        "single_terminal_outcome_verified",
+    ),
+)
+def test_worker_lifecycle_requires_chain_authority_evidence(
+    field: str,
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = worker_lifecycle()
+    payload[field] = False
+    write_json(tmp_path / "worker-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = result["required"]["worker_lifecycle"]["artifacts"][0]["errors"]
+    assert f"{field} must be true" in errors
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:

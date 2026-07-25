@@ -11,16 +11,13 @@ use blake3::Hasher;
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     Error as NoritoError,
-    derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
+    derive::{NoritoDeserialize, NoritoSerialize},
 };
 use thiserror::Error;
 
 use crate::{
-    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, PinPolicy, chunker_registry,
-    validation::{
-        ManifestValidationError, PinPolicyConstraints, validate_manifest_root_cid,
-        validate_pin_policy,
-    },
+    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, chunker_registry,
+    validation::{ManifestValidationError, validate_manifest_root_cid},
 };
 
 fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidationError> {
@@ -29,123 +26,6 @@ fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidat
         chunker_registry::MANIFEST_DAG_CODEC,
         BLAKE3_256_MULTIHASH_CODE,
     )
-}
-
-/// Canonical pin registry record for a manifest.
-#[derive(
-    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
-)]
-pub struct PinRecordV1 {
-    /// IPLD/CID of the manifest (binary multibase form).
-    pub manifest_cid: Vec<u8>,
-    /// SHA3-256 digest of the ordered chunk plan emitted during build.
-    pub chunk_plan_digest: [u8; 32],
-    /// Merkle root of the Proof-of-Retrievability transcript.
-    pub por_root: [u8; 32],
-    /// Canonical chunker profile handle (`namespace.name@semver`).
-    pub profile_handle: String,
-    /// Epoch when the manifest was approved (inclusive).
-    pub approved_at: u64,
-    /// Epoch (inclusive) until which the manifest must remain pinned.
-    pub retention_epoch: u64,
-    /// Governance-enforced pin policy captured at approval time.
-    pub pin_policy: PinPolicy,
-    /// Optional predecessor manifest CID for succession chains.
-    #[norito(default)]
-    pub successor_of: Option<Vec<u8>>,
-    /// Optional digest of the council envelope that approved the manifest.
-    #[norito(default)]
-    pub governance_envelope_hash: Option<[u8; 32]>,
-}
-
-impl PinRecordV1 {
-    /// Validates structural invariants for the pin record.
-    pub fn validate(&self) -> Result<(), PinRecordValidationError> {
-        if self.manifest_cid.is_empty() {
-            return Err(PinRecordValidationError::EmptyManifestCid);
-        }
-        validate_first_release_manifest_cid(&self.manifest_cid).map_err(|error| {
-            PinRecordValidationError::MalformedManifestCid {
-                reason: error.to_string(),
-            }
-        })?;
-        if self.chunk_plan_digest.iter().all(|&byte| byte == 0) {
-            return Err(PinRecordValidationError::InvalidChunkPlanDigest);
-        }
-        if self.por_root.iter().all(|&byte| byte == 0) {
-            return Err(PinRecordValidationError::InvalidPorRoot);
-        }
-        let descriptor =
-            chunker_registry::lookup_by_handle(&self.profile_handle).ok_or_else(|| {
-                PinRecordValidationError::UnknownProfileHandle {
-                    handle: self.profile_handle.clone(),
-                }
-            })?;
-        let canonical = format!(
-            "{}.{}@{}",
-            descriptor.namespace, descriptor.name, descriptor.semver
-        );
-        if self.profile_handle != canonical {
-            return Err(PinRecordValidationError::NonCanonicalProfileHandle {
-                provided: self.profile_handle.clone(),
-                canonical,
-            });
-        }
-        if self.retention_epoch < self.approved_at {
-            return Err(PinRecordValidationError::RetentionBeforeApproval {
-                approved_at: self.approved_at,
-                retention_epoch: self.retention_epoch,
-            });
-        }
-        validate_pin_policy(&self.pin_policy, &PinPolicyConstraints::default())
-            .map_err(PinRecordValidationError::InvalidPinPolicy)?;
-        if let Some(parent) = &self.successor_of {
-            if parent.is_empty() {
-                return Err(PinRecordValidationError::EmptySuccessorCid);
-            }
-            validate_first_release_manifest_cid(parent).map_err(|error| {
-                PinRecordValidationError::MalformedSuccessorCid {
-                    reason: error.to_string(),
-                }
-            })?;
-        }
-        if let Some(hash) = self.governance_envelope_hash
-            && hash.iter().all(|&byte| byte == 0)
-        {
-            return Err(PinRecordValidationError::InvalidGovernanceEnvelopeHash);
-        }
-        Ok(())
-    }
-}
-
-/// Errors produced when a [`PinRecordV1`] fails validation.
-#[derive(Debug, Error)]
-pub enum PinRecordValidationError {
-    #[error("manifest CID must not be empty")]
-    EmptyManifestCid,
-    #[error("manifest CID is not canonical first-release CIDv1: {reason}")]
-    MalformedManifestCid { reason: String },
-    #[error("chunk plan digest must be non-zero")]
-    InvalidChunkPlanDigest,
-    #[error("PoR root must be non-zero")]
-    InvalidPorRoot,
-    #[error("unknown chunker profile handle `{handle}`")]
-    UnknownProfileHandle { handle: String },
-    #[error("non-canonical profile handle `{provided}` (expected `{canonical}`)")]
-    NonCanonicalProfileHandle { provided: String, canonical: String },
-    #[error("retention epoch {retention_epoch} precedes approval epoch {approved_at}")]
-    RetentionBeforeApproval {
-        approved_at: u64,
-        retention_epoch: u64,
-    },
-    #[error("pin policy invalid: {0}")]
-    InvalidPinPolicy(ManifestValidationError),
-    #[error("successor manifest CID must not be empty")]
-    EmptySuccessorCid,
-    #[error("successor manifest CID is not canonical first-release CIDv1: {reason}")]
-    MalformedSuccessorCid { reason: String },
-    #[error("governance envelope hash must be non-zero")]
-    InvalidGovernanceEnvelopeHash,
 }
 
 /// Alias binding that maps a human-friendly alias to a manifest CID.
@@ -771,8 +651,6 @@ mod tests {
     use std::convert::TryInto;
 
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
-    use norito::{decode_from_bytes, to_bytes};
-
     use super::*;
 
     const SMALL_ORDER_R: [u8; 32] = [
@@ -796,64 +674,6 @@ mod tests {
             bound_at: 1_700_000_000,
             expiry_epoch: 1_700_086_400,
         }
-    }
-
-    fn sample_pin_policy() -> PinPolicy {
-        PinPolicy {
-            min_replicas: 3,
-            storage_class: crate::StorageClass::Hot,
-            retention_epoch: 1_700_086_400,
-        }
-    }
-
-    fn sample_pin_record() -> PinRecordV1 {
-        PinRecordV1 {
-            manifest_cid: canonical_cid(0x20),
-            chunk_plan_digest: [0x11; 32],
-            por_root: [0x22; 32],
-            profile_handle: "sorafs.sf1@1.0.0".to_owned(),
-            approved_at: 1_700_000_000,
-            retention_epoch: 1_700_172_800,
-            pin_policy: sample_pin_policy(),
-            successor_of: None,
-            governance_envelope_hash: Some([0x33; 32]),
-        }
-    }
-
-    #[test]
-    fn pin_record_roundtrip_and_validate() {
-        let record = sample_pin_record();
-        record.validate().expect("valid pin record");
-        let bytes = to_bytes(&record).expect("encode");
-        let decoded: PinRecordV1 = decode_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded, record);
-    }
-
-    #[test]
-    fn pin_record_rejects_empty_cid() {
-        let mut record = sample_pin_record();
-        record.manifest_cid.clear();
-        let err = record.validate().unwrap_err();
-        assert!(matches!(err, PinRecordValidationError::EmptyManifestCid));
-    }
-
-    #[test]
-    fn pin_record_rejects_malformed_and_inert_cids() {
-        for malformed in [vec![0xAA; 36], crate::canonical_manifest_root_cid([0; 32])] {
-            let mut record = sample_pin_record();
-            record.manifest_cid = malformed;
-            assert!(matches!(
-                record.validate(),
-                Err(PinRecordValidationError::MalformedManifestCid { .. })
-            ));
-        }
-
-        let mut record = sample_pin_record();
-        record.successor_of = Some(vec![0xAA; 36]);
-        assert!(matches!(
-            record.validate(),
-            Err(PinRecordValidationError::MalformedSuccessorCid { .. })
-        ));
     }
 
     #[test]

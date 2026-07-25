@@ -527,7 +527,7 @@ pub enum NetworkMessage {
     /// Soracloud local-read proxy response returned to the ingress node.
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
-    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV3>),
+    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV5>),
     /// Torii proxy response returned to the ingress node.
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
@@ -627,7 +627,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 _ => T::Other,
             },
             NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                CertifiedMergeSidecarMessage::Request(_) => T::Consensus,
+                CertifiedMergeSidecarMessage::Request(_)
+                | CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_) => T::Consensus,
                 CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
             },
             NetworkMessage::LaneRelay(_)
@@ -990,8 +992,8 @@ mod tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -1603,6 +1605,7 @@ mod tests {
 
         use crate::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         };
 
@@ -1633,6 +1636,8 @@ mod tests {
         );
         let request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: 1,
+            closed_through: 0,
             request_id: Hash::new(b"merge-sidecar-request"),
             entry_hash,
             encoded_len: 3,
@@ -1661,8 +1666,42 @@ mod tests {
                 if message.as_ref() == &CertifiedMergeSidecarMessage::Request(request.clone())
         ));
 
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: request.semantic_sequence,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.close_id = close.canonical_close_id();
+        let close_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::Close(close.clone()),
+        ));
+        assert_eq!(close_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
+        let decoded =
+            norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar close");
+        assert_eq!(decoded, close_message);
+
+        let close_ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        let close_ack_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::CloseAck(close_ack),
+        ));
+        assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&close_ack_message).expect("encode sidecar close ACK");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode sidecar close ACK");
+        assert_eq!(decoded, close_ack_message);
+
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: request.semantic_sequence,
             request_id: request.request_id,
             entry_hash,
             encoded_len: 3,
@@ -1733,13 +1772,13 @@ mod tests {
                 ),
             },
         ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
             request_id: Hash::prehashed([0x14; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,

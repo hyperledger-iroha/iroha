@@ -355,10 +355,19 @@ def test_verus_invocation_without_no_cheating_is_rejected(tmp_path: Path) -> Non
 
     module = load_module()
     runner = tmp_path / "scripts" / "verify_sumeragi_v2.sh"
+    harness = tmp_path / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
     runner.parent.mkdir(parents=True)
-    source = (ROOT / "scripts" / "verify_sumeragi_v2.sh").read_text(encoding="utf-8")
+    harness.parent.mkdir(parents=True)
     runner.write_text(
-        source.replace("  --no-cheating \\\n", "", 1), encoding="utf-8"
+        (ROOT / "scripts" / "verify_sumeragi_v2.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="runner command has drifted"):
+    harness_source = (
+        ROOT / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
+    ).read_text(encoding="utf-8")
+    harness.write_text(
+        harness_source.replace("      --no-cheating\n", "", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="harness command has drifted"):
         module._verify_invocation_contract(tmp_path)

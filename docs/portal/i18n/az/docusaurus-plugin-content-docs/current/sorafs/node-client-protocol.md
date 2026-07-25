@@ -126,10 +126,12 @@ Operatorlara/SDK-lara verilən ümumi səhvlər:
 - `iroha app sorafs pin list|show`, `alias list` və `replication list`
   pin-reyestr REST son nöqtələri və attestasiya blokları ilə xam Norito JSON çap edin
   audit sübutları üçün.
-- `iroha app sorafs storage pin` və `torii /v1/sorafs/pin/register` Norito qəbul edir
-  və ya JSON manifestləri üstəgəl əlavə ləqəb sübutları və varisləri; qüsurlu sübutlar
-  `400` qaldırın, köhnəlmiş səthi `503` ilə `Warning: 110` və
-  müddəti bitmiş sübutlar `412` qaytarır.
+- `torii /v1/sorafs/pin/register` qapalı JSON V1 sorğusunu qəbul edir.
+  `manifest_payload` canonical Norito `ManifestV1` baytlarının dəqiq, canonical
+  padding-li base64 kodu olmalıdır. Torii digest, chunker, məzmun uzunluğu, pin
+  siyasəti və ödəniş girişlərini yalnız dekodlaşdırılmış manifestdən çıxarır və
+  ləğv edilmiş təkrar xülasə sahələrini rədd edir. `alias` və sıfır olmayan
+  `successor_of_hex` predecessor seçimli olaraq qalır.
 - `iroha app sorafs repair list` güzgüləri isə növbə filtrlərini təmir edir
   `repair claim|complete|fail|escalate` imzalanmış işçi hərəkətləri və ya slash göndərin
   təkliflər Torii. Slash təkliflərinə idarəetmənin təsdiqi xülasəsi daxil ola bilər

@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - "scripts/build_norito_xcframework.sh"
+      - "scripts/exec_with_file_lock.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_android_app_native_archive.py"
@@ -19,9 +20,13 @@ on:
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "scripts/package_mobile_sdk_artifacts.sh"
+      - "scripts/check_sorafs_release_automation.py"
+      - "scripts/tests/check_sorafs_release_automation_test.py"
       - "IrohaSwift/**"
       - "kotlin/**"
+      - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "fixtures/sorafs_manifest/governance/**"
   push:
     tags:
       - "v*"
@@ -62,7 +67,7 @@ jobs:
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+        run: python3 -I -m py_compile scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/exec_with_file_lock.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
       - name: Android app native archive authenticator fixtures
         run: python3 -I scripts/tests/check_android_app_native_archive_test.py
       - name: Kotlin production reflection guard
@@ -76,6 +81,8 @@ jobs:
     needs: checker-self-test
     runs-on: macos-14
     timeout-minutes: 120
+    env:
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -151,6 +158,9 @@ jobs:
     needs: checker-self-test
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
@@ -206,9 +216,10 @@ jobs:
           gradle_home="$artifact_dir/gradle-user-home"
           project_cache="$artifact_dir/project-cache"
           gradle_tmp="$artifact_dir/tmp"
+          java_sorafs_tmp="$gradle_tmp/java-sorafs"
           maven_repo="$artifact_dir/maven"
           package_dir="$RUNNER_TEMP/iroha-mobile-sdk-package"
-          mkdir -p "$artifact_dir" "$gradle_home" "$project_cache" "$gradle_tmp" "$maven_repo" "$package_dir"
+          mkdir -p "$artifact_dir" "$gradle_home" "$project_cache" "$gradle_tmp" "$java_sorafs_tmp" "$maven_repo" "$package_dir"
           echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_ANDROID_MAVEN_REPO_DIR=$maven_repo" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR=$project_cache" >> "$GITHUB_ENV"
@@ -217,6 +228,8 @@ jobs:
           echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Compile candidate Android lab main and instrumentation sources only
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - name: Build host SoraFS reference native bridge
+        run: cargo build --locked -p connect_norito_bridge
       - name: Require fresh ABI-21 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
@@ -256,6 +269,20 @@ jobs:
             :core-jvm:publishReleasePublicationToMobileSdkRepository \
             :client-android:publishReleasePublicationToMobileSdkRepository \
             :offline-wallet-android:publishReleasePublicationToMobileSdkRepository
+      - name: Test mirrored Java Android Governance DAG reference validators
+        working-directory: java/iroha_android
+        env:
+          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests
+        run: >-
+          ./gradlew
+          --no-daemon
+          --no-configuration-cache
+          --project-cache-dir "$MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR/java-sorafs"
+          -Djava.io.tmpdir="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/java-sorafs"
+          -Dkotlin.daemon.runFilesPath="$MOBILE_SDK_ANDROID_GRADLE_TMP_DIR/kotlin-daemon-java-sorafs"
+          :core:test
+          --tests org.hyperledger.iroha.android.GradleHarnessTests
+          --console=plain
       - name: Validate Android mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact

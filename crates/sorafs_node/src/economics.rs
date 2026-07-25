@@ -925,7 +925,7 @@ mod tests {
 
         crate::write_local_checkpoint_atomic(&auxiliary_path, &original)
             .expect("restore auxiliary checkpoint");
-        let mut checkpoint: crate::AuxiliaryRuntimeCheckpointV1 =
+        let mut checkpoint: crate::AuxiliaryRuntimeCheckpointV2 =
             crate::decode_local_checkpoint_canonical(
                 &original,
                 retention.checkpoint_max_bytes(),

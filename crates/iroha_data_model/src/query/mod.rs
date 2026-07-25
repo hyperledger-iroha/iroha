@@ -1063,6 +1063,8 @@ mod model {
         FindFxCorridorPolicyById(self::settlement::prelude::FindFxCorridorPolicyById),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
+        /// Fetch one finalized chain-authoritative `SoraFS` pin manifest.
+        FindSorafsPinManifest(sorafs::prelude::FindSorafsPinManifest),
         /// Fetch the active authoritative `SoraFS` orderbook policy.
         FindSorafsOrderbookPolicy(sorafs::prelude::FindSorafsOrderbookPolicy),
         /// Fetch one authoritative `SoraFS` order by identifier.
@@ -1097,6 +1099,12 @@ mod model {
         FindSorafsReserveMovementById(sorafs::prelude::FindSorafsReserveMovementById),
         /// Fetch one authoritative reserve appeal.
         FindSorafsReserveAppealById(sorafs::prelude::FindSorafsReserveAppealById),
+        /// Fetch a cursor-bounded page of authoritative provider reserve accounts.
+        FindSorafsReserveProviders(sorafs::prelude::FindSorafsReserveProviders),
+        /// Fetch a cursor-bounded page of authoritative reserve movements.
+        FindSorafsReserveMovements(sorafs::prelude::FindSorafsReserveMovements),
+        /// Fetch a cursor-bounded page of authoritative reserve appeals.
+        FindSorafsReserveAppeals(sorafs::prelude::FindSorafsReserveAppeals),
         /// Fetch a cursor-bounded page of committed `SoraFS` reserve events.
         FindSorafsReserveEvents(sorafs::prelude::FindSorafsReserveEvents),
         /// Fetch the active authoritative `SoraFS` `PoP` issuer policy.
@@ -1131,6 +1139,8 @@ mod model {
         FindSorafsProofOutcome(sorafs::prelude::FindSorafsProofOutcome),
         /// Fetch a cursor-bounded page of finalized PDP/PoTR proof-outcome events.
         FindSorafsProofOutcomeEvents(sorafs::prelude::FindSorafsProofOutcomeEvents),
+        /// Fetch a cursor-bounded page of finalized reputation-journal events.
+        FindSorafsReputationJournalEvents(sorafs::prelude::FindSorafsReputationJournalEvents),
         /// Fetch the active authoritative `SoraFS` moderation policy.
         FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
         /// Fetch one authoritative moderation appeal intake and sortition lifecycle.
@@ -1243,6 +1253,8 @@ mod model {
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Fee sponsor policy payload.
         FeeSponsorProgram(crate::nexus::FeeSponsorProgram),
+        /// Finalized chain-authoritative `SoraFS` pin manifest.
+        SorafsPinManifest(crate::sorafs::pin_registry::PinManifestFinalizedRecordV1),
         /// Active authoritative `SoraFS` orderbook policy payload.
         SorafsOrderbookPolicy(crate::sorafs::orderbook::OrderbookAdmissionPolicyRecord),
         /// Authoritative `SoraFS` order payload.
@@ -1275,6 +1287,12 @@ mod model {
         SorafsReserveMovement(crate::sorafs::reserve::ReserveMovementRecordV1),
         /// Authoritative reserve appeal.
         SorafsReserveAppeal(crate::sorafs::reserve::ReserveAppealRecordV1),
+        /// Cursor-bounded authoritative provider reserve-account page.
+        SorafsReserveProviderPage(crate::sorafs::reserve::ReserveProviderAccountPageV1),
+        /// Cursor-bounded authoritative reserve-movement page.
+        SorafsReserveMovementPage(crate::sorafs::reserve::ReserveMovementPageV1),
+        /// Cursor-bounded authoritative reserve-appeal page.
+        SorafsReserveAppealPage(crate::sorafs::reserve::ReserveAppealPageV1),
         /// Cursor-bounded page of committed `SoraFS` reserve events.
         SorafsReserveEventPage(crate::sorafs::reserve::ReserveFinalizedEventPageV1),
         /// Active authoritative `SoraFS` `PoP` issuer policy.
@@ -1305,6 +1323,10 @@ mod model {
         SorafsProofOutcome(crate::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1),
         /// Cursor-bounded page of committed PDP/PoTR proof-outcome events.
         SorafsProofOutcomeEventPage(crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1),
+        /// Cursor-bounded page of committed reputation-journal events.
+        SorafsReputationJournalEventPage(
+            crate::sorafs::reputation::ReputationJournalFinalizedEventPageV1,
+        ),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
         /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
@@ -5393,9 +5415,13 @@ pub mod sorafs {
                 OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
                 OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
             },
+            pin_registry::{ManifestDigest, PinManifestFinalizedCursorV1},
             proof_ledger::{
                 ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
                 ProofOutcomeKindV1,
+            },
+            reputation::{
+                ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
             },
             reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
@@ -5407,6 +5433,15 @@ pub mod sorafs {
         pub struct FindSorafsProviderOwner {
             /// Provider identifier to resolve.
             pub provider_id: ProviderId,
+        }
+
+        /// Fetch one chain-authoritative pin manifest at a finalized state anchor.
+        #[derive(Copy)]
+        pub struct FindSorafsPinManifest {
+            /// Canonical manifest digest to resolve.
+            pub digest: ManifestDigest,
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<PinManifestFinalizedCursorV1>,
         }
 
         /// Fetch the active authoritative `SoraFS` orderbook policy.
@@ -5546,6 +5581,39 @@ pub mod sorafs {
             pub appeal_id: [u8; 32],
         }
 
+        /// Fetch an exclusive-provider-id page of authoritative reserve accounts.
+        #[derive(Copy)]
+        pub struct FindSorafsReserveProviders {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
+            /// Exclusive provider-id cursor.
+            pub after_provider_id: Option<ProviderId>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-movement-id page of authoritative reserve movements.
+        #[derive(Copy)]
+        pub struct FindSorafsReserveMovements {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
+            /// Exclusive movement-id cursor.
+            pub after_movement_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-appeal-id page of authoritative reserve appeals.
+        #[derive(Copy)]
+        pub struct FindSorafsReserveAppeals {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
+            /// Exclusive appeal-id cursor.
+            pub after_appeal_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
         /// Fetch an exclusive-cursor page of committed reserve-ledger events.
         #[derive(Copy)]
         pub struct FindSorafsReserveEvents {
@@ -5660,6 +5728,17 @@ pub mod sorafs {
             pub expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
             /// Exclusive committed-event cursor.
             pub after: Option<ProofOutcomeFinalizedEventCursorV1>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page from the one global reputation journal.
+        #[derive(Copy)]
+        pub struct FindSorafsReputationJournalEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReputationJournalFinalizedCursorV1>,
+            /// Exclusive globally sequenced committed-event cursor.
+            pub after: Option<ReputationJournalFinalizedEventCursorV1>,
             /// Requested page size; validated against the hard query ceiling.
             pub limit: u32,
         }
@@ -5789,6 +5868,16 @@ pub mod sorafs {
                 f,
                 "Find SoraFS provider owner for `{}`",
                 hex::encode(self.provider_id.as_bytes())
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsPinManifest {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find finalized SoraFS pin manifest `{}`",
+                hex::encode(self.digest.as_bytes())
             )
         }
     }
@@ -5929,6 +6018,24 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsReserveProviders {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS reserve providers with limit {}", self.limit)
+        }
+    }
+
+    impl fmt::Display for FindSorafsReserveMovements {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS reserve movements with limit {}", self.limit)
+        }
+    }
+
+    impl fmt::Display for FindSorafsReserveAppeals {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS reserve appeals with limit {}", self.limit)
+        }
+    }
+
     impl fmt::Display for FindSorafsReserveEvents {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -6050,6 +6157,16 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsReputationJournalEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS reputation-journal events with limit {}",
+                self.limit
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsModerationPolicy {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find active SoraFS moderation policy")
@@ -6165,14 +6282,16 @@ pub mod sorafs {
             FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
             FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
-            FindSorafsOrderbookTrades, FindSorafsPopAuditDigestBySequence,
+            FindSorafsOrderbookTrades, FindSorafsPinManifest, FindSorafsPopAuditDigestBySequence,
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
+            FindSorafsReputationJournalEvents,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
-            FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveAppeals,
+            FindSorafsReserveEvents, FindSorafsReserveMovementById, FindSorafsReserveMovements,
+            FindSorafsReservePolicy, FindSorafsReserveProviderById, FindSorafsReserveProviders,
         };
     }
 }
@@ -6180,6 +6299,19 @@ pub mod sorafs {
 impl seal::SingularQuery for sorafs::prelude::FindSorafsProviderOwner {}
 impl SingularQuery for sorafs::prelude::FindSorafsProviderOwner {
     type Output = crate::account::AccountId;
+
+    fn dyn_encode(&self) -> Vec<u8> {
+        self.encode()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl seal::SingularQuery for sorafs::prelude::FindSorafsPinManifest {}
+impl SingularQuery for sorafs::prelude::FindSorafsPinManifest {
+    type Output = crate::sorafs::pin_registry::PinManifestFinalizedRecordV1;
 
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()
@@ -6272,6 +6404,18 @@ impl_sorafs_orderbook_singular_query!(
         => crate::sorafs::reserve::ReserveAppealRecordV1
 );
 impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReserveProviders
+        => crate::sorafs::reserve::ReserveProviderAccountPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReserveMovements
+        => crate::sorafs::reserve::ReserveMovementPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReserveAppeals
+        => crate::sorafs::reserve::ReserveAppealPageV1
+);
+impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsReserveEvents
         => crate::sorafs::reserve::ReserveFinalizedEventPageV1
 );
@@ -6326,6 +6470,10 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsProofOutcomeEvents
         => crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReputationJournalEvents
+        => crate::sorafs::reputation::ReputationJournalFinalizedEventPageV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationPolicy
@@ -6781,6 +6929,8 @@ pub mod error {
             DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),
+            /// Failed to find chain-authoritative `SoraFS` pin manifest: `{0:?}`
+            SorafsPinManifest(crate::sorafs::pin_registry::ManifestDigest),
             /// Failed to find the active authoritative `SoraFS` orderbook policy
             SorafsOrderbookPolicy,
             /// Failed to find authoritative `SoraFS` orderbook order: `{0:?}`
@@ -7344,6 +7494,12 @@ mod tests {
             height: 9,
             block_hash: [0xA9; 32],
         };
+        let reputation_cursor =
+            crate::sorafs::reputation::ReputationJournalFinalizedCursorV1 {
+                height: 10,
+                block_hash: [0xAA; 32],
+                finalized_at_unix_ms: 1_700_000_010_000,
+            };
         let queries: Vec<SingularQueryBox> = vec![
             sorafs::prelude::FindSorafsOrderbookPolicy.into(),
             sorafs::prelude::FindSorafsOrderbookOrderById::new([0x11; 32]).into(),
@@ -7397,6 +7553,24 @@ mod tests {
             .into(),
             sorafs::prelude::FindSorafsReserveMovementById::new([0x1C; 32]).into(),
             sorafs::prelude::FindSorafsReserveAppealById::new([0x1D; 32]).into(),
+            sorafs::prelude::FindSorafsReserveProviders::new(
+                Some(reserve_cursor),
+                Some(crate::sorafs::capacity::ProviderId::new([0x1E; 32])),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsReserveMovements::new(
+                Some(reserve_cursor),
+                Some([0x1F; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsReserveAppeals::new(
+                Some(reserve_cursor),
+                Some([0x20; 32]),
+                25,
+            )
+            .into(),
             sorafs::prelude::FindSorafsReserveEvents::new(
                 Some(reserve_cursor),
                 Some(crate::sorafs::reserve::ReserveFinalizedEventCursorV1 {
@@ -7447,6 +7621,19 @@ mod tests {
                         block_height: 9,
                         block_hash: [0xA9; 32],
                         event_index: 0,
+                    },
+                ),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsReputationJournalEvents::new(
+                Some(reputation_cursor),
+                Some(
+                    crate::sorafs::reputation::ReputationJournalFinalizedEventCursorV1 {
+                        sequence: 8,
+                        block_height: 10,
+                        block_hash: reputation_cursor.block_hash,
+                        event_index: 1,
                     },
                 ),
                 25,

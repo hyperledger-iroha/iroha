@@ -251,6 +251,9 @@ REQUIRED_METRICS = (
     "torii_sorafs_reserve_appeal_backlog",
     "torii_sorafs_reserve_custody_movements",
     "torii_sorafs_reserve_chain_reconciled_movements",
+    "torii_sorafs_reserve_finalized_projection_ready",
+    "torii_sorafs_reserve_finalized_projection_height",
+    "torii_sorafs_reserve_finalized_projection_failure_total",
     "torii_sorafs_reserve_service_requests_total",
     "torii_sorafs_reserve_service_rate_limit_total",
 )
@@ -552,6 +555,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "matrix_digest_hex",
         "ledger_digest_hex",
         "metrics_scrape_success",
+        "metrics_scrape_blake3_hex",
+        "metrics_scraped_at_unix",
+        "finalized_projection_ready",
+        "finalized_projection_height",
+        "finalized_projection_failure_increase_5m",
         "dashboard_provisioned",
         "alert_rules_installed",
         "critical_alerts_firing",
@@ -1192,9 +1200,24 @@ def validate_appeal_policy(payload: dict[str, Any], errors: list[str]) -> None:
     require_false(payload, "appeal_payloads_included", errors)
 
 
-def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
+def validate_metrics_alerts(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
     require_bool_true(payload, "metrics_scrape_success", errors)
+    require_hex(payload, "metrics_scrape_blake3_hex", HEX64_LEN, errors)
+    require_recent_timestamp(
+        payload,
+        "metrics_scraped_at_unix",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=options.max_lifecycle_lag_secs,
+    )
+    require_bool_true(payload, "finalized_projection_ready", errors)
+    require_positive_int(payload, "finalized_projection_height", errors)
+    require_zero_count(payload, "finalized_projection_failure_increase_5m", errors)
     require_bool_true(payload, "dashboard_provisioned", errors)
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
@@ -1487,7 +1510,7 @@ def validate_kind_specific(
     elif kind.name == "appeal_policy":
         validate_appeal_policy(payload, errors)
     elif kind.name == "metrics_alerts":
-        validate_metrics_alerts(payload, errors)
+        validate_metrics_alerts(payload, errors, options)
     elif kind.name == "provider_bake":
         validate_provider_bake(payload, errors, options)
     elif kind.name == "governance_approval":

@@ -34,7 +34,6 @@ extern "C" {
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_TRADE_EVENT 3
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL 4
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT 5
-#define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT 6
 #define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION 2
 #define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM 3
@@ -1044,6 +1043,8 @@ int32_t connect_norito_sorafs_reference_build_signed_orderbook_order_request(
     uint64_t remaining_gib,
     const uint8_t* owner_account_ptr,
     unsigned long owner_account_len,
+    const uint8_t* provider_id_ptr,
+    unsigned long provider_id_len,
     uint64_t expiry_unix,
     uint64_t nonce,
     uint32_t maker_fee_bps,

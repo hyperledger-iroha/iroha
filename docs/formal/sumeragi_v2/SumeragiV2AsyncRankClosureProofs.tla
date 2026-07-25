@@ -15,11 +15,11 @@ of the aggregate results below, or any of the still-open temporal claims in
 THEOREM AsyncRankClosureProtectedServiceRankProgressObligation ==
   \A initialContext:
     ProtectedServiceRanksProgressProperty(
-      AsyncLiveSpecAt(initialContext))
+      AsyncSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext
          PROVE ProtectedServiceRanksProgressProperty(
-                 AsyncLiveSpecAt(initialContext))
+                 AsyncSpecAt(initialContext))
     <2>1. ProtectedStage3RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage3RankProgressFromFairSchedulerObligation
@@ -40,14 +40,10 @@ PROOF
              AsyncSpecAt(initialContext))
       BY <2>5, ProtectedStage2RankProgressWithExactHandoffObligation,
          PTL
-    <2>8. ProtectedStage2RankProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY <2>6, PTL DEF AsyncLiveSpecAt,
-         ProtectedStage2RankProgressProperty
-    <2>9. ProtectedServeRankProgressProperty(
+    <2>7. ProtectedServeRankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedServeRankProgressFromFairFifo
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>8, <2>9,
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>6, <2>7,
          ProtectedServiceRanksProgressLeafCompositionObligation
   <1> QED BY <1>1
 
@@ -58,11 +54,15 @@ PROOF
   <1>1. ASSUME NEW initialContext
          PROVE StarvationFreedomProperty(
                  AsyncLiveSpecAt(initialContext))
-    <2>1. ProtectedServiceRanksProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY ProtectedServiceRankProgressObligation
-    <2> QED BY <2>1,
+    <2>1. AsyncSpecAt(initialContext)
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec
+    <2>2. ProtectedServiceRanksProgressProperty(
+             AsyncSpecAt(initialContext))
+      BY AsyncRankClosureProtectedServiceRankProgressObligation
+    <2>3. StarvationFreedomProperty(AsyncSpecAt(initialContext))
+      BY <2>1, <2>2,
          ProtectedServiceRankProgressImpliesStarvation
+    <2> QED BY <2>3, PTL DEF StarvationFreedomProperty
   <1> QED BY <1>1
 
 =============================================================================

@@ -600,4 +600,4 @@ RFC before SF-1 is marked complete.
 - Keep `docs/source/sorafs/migration_roadmap.md` and the migration ledger
   aligned as hosted rollout evidence lands.
 - Socialise the new CLI sample (`docs/source/examples/sorafs_manifest/cli_end_to_end.md`) with release engineering and expand with SDK-driven retrieval examples.
-- Harden the Torii pin-registration endpoint beyond validator wiring: keep `manifest_b64` admission and structured error labels aligned with `docs/source/sorafs/pin_registry_validation_plan.md`, and keep new SDK request builders mirroring the Rust client payload shape.
+- Keep Torii's required canonical `manifest_payload` admission, structured error labels, and SDK request builders aligned with `docs/source/sorafs/pin_registry_validation_plan.md`; reject retired duplicate summary fields.

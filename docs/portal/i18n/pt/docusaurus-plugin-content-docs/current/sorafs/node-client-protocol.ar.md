@@ -120,10 +120,12 @@ Você pode usar o SF-6 para usar (CLI Rust عبر `sorafs_fetch`, وSDKs عبر
 
 - `iroha app sorafs pin list|show` e `alias list` e `replication list` para REST
   Os pinos Norito JSON são usados para atestação.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` manifestos
-  بنمط Norito e JSON com provas اختيارية للـ alias e sucessor; Provas
-  `400`, e provas de `503`, `Warning: 110`, بينما تعيد
-  provas `412`.
+- `torii /v1/sorafs/pin/register` aceita a requisicao JSON V1 fechada.
+  `manifest_payload` deve ser o base64 canonico com padding exato dos bytes
+  Norito `ManifestV1` canonicos. Torii deriva o digest, chunker, comprimento do
+  conteudo, politica de pin e entradas de taxa somente do manifest decodificado,
+  e rejeita os campos de resumo duplicados retirados. `alias` e um predecessor
+  `successor_of_hex` nao zero continuam opcionais.
 - RESTO (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل atestado حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.## المراجع

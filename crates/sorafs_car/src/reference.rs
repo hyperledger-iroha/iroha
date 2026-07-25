@@ -222,6 +222,8 @@ fn manifest_validation_code_category(
         | ManifestValidationError::UnsupportedDagCodec { .. }
         | ManifestValidationError::InertCarDigest
         | ManifestValidationError::InertChunkDigest
+        | ManifestValidationError::InertPorRoot
+        | ManifestValidationError::NonCanonicalEmptyPorRoot
         | ManifestValidationError::InvalidCarSize
         | ManifestValidationError::CarSmallerThanContent { .. }
         | ManifestValidationError::TooManyAliasClaims { .. }
@@ -267,14 +269,19 @@ fn trustless_replay_error(
             CATEGORY_INTERNAL,
             "Update the trustless verifier config or report the replay metadata derivation failure to maintainers.",
         ),
-        TrustlessVerificationError::PinRecordInvalid(_)
-        | TrustlessVerificationError::PinRecordManifestCidMismatch { .. }
-        | TrustlessVerificationError::PinRecordProfileMismatch { .. }
-        | TrustlessVerificationError::PinRecordChunkPlanMismatch { .. }
-        | TrustlessVerificationError::PinRecordPorRootMismatch { .. } => (
+        TrustlessVerificationError::ManifestChunkPlanMismatch { .. }
+        | TrustlessVerificationError::ManifestPorRootMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinCursorInvalid { .. }
+        | TrustlessVerificationError::FinalizedPinStatusInvalid { .. }
+        | TrustlessVerificationError::FinalizedPinManifestDigestMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinManifestCidMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinProfileMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinChunkPlanMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinPorRootMismatch { .. }
+        | TrustlessVerificationError::FinalizedPinContentLengthMismatch { .. } => (
             "SFS-CAR-001",
             CATEGORY_VALIDATION,
-            "Regenerate the pin record from the verified manifest/CAR replay metadata.",
+            "Resolve an approved finalized native pin record matching the verified manifest/CAR replay metadata.",
         ),
     };
 

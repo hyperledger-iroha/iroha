@@ -126,10 +126,12 @@ SDK-ები `sorafs_orchestrator`-ით):
 - `iroha app sorafs pin list|show`, `alias list` და `replication list` ახვევენ
   დაარეგისტრირეთ REST ბოლო წერტილები და დაბეჭდეთ დაუმუშავებელი Norito JSON საატესტაციო ბლოკებით
   აუდიტორული მტკიცებულებისთვის.
-- `iroha app sorafs storage pin` და `torii /v1/sorafs/pin/register` მიიღება Norito
-  ან JSON მანიფესტები პლუს არჩევითი მეტსახელის მტკიცებულებები და მემკვიდრეები; არასწორი მტკიცებულებები
-  აწიეთ `400`, შემოიფარგლება ზედაპირი `503` `Warning: 110`-ით და
-  ვადაგასული მტკიცებულებები ბრუნდება `412`.
+- `torii /v1/sorafs/pin/register` იღებს დახურულ JSON V1 მოთხოვნას.
+  `manifest_payload` უნდა იყოს canonical Norito `ManifestV1` ბაიტების ზუსტი,
+  canonical padding-იანი base64. Torii digest-ს, chunker-ს, content length-ს,
+  pin policy-სა და fee input-ებს მხოლოდ decoded manifest-იდან გამოითვლის და
+  უარყოფს გაუქმებულ duplicate summary ველებს. `alias` და არანულოვანი
+  `successor_of_hex` predecessor კვლავ არჩევითია.
 - `iroha app sorafs repair list` სარკეების სარემონტო რიგის ფილტრები, ხოლო
   `repair claim|complete|fail|escalate` წარადგინეთ მუშაკის ხელმოწერილი ქმედებები ან სლეი
   წინადადებები Torii-ზე. Slash წინადადებები შეიძლება შეიცავდეს მმართველობის დამტკიცების შეჯამებას

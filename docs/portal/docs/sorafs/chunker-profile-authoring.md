@@ -90,8 +90,9 @@ notes.
   stdout for automated comparisons.
 - `sorafs_manifest_builder --chunker-profile=<handle>` – confirm manifests and CAR
   plans embed the canonical handle plus aliases.
-- `sorafs_manifest_builder --plan=-` – feed the previous `chunk_fetch_specs` back
-  in to verify offsets/digests post-change.
+- `sorafs_manifest_builder --plan=-` – feed the previous strict
+  `sorafs.chunk_fetch_plan.v1` object back in to verify its whole-payload
+  binding and offsets/digests post-change.
 
 Record the command output (digests, PoR roots, manifest hashes) in the proposal
 so reviewers can reproduce them verbatim.

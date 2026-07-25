@@ -10,9 +10,16 @@ pub mod concurrency;
 pub mod delegated_routing;
 pub mod discovery;
 pub mod gateway;
+#[cfg(feature = "app_api")]
+pub(crate) mod gateway_compliance_api;
 pub mod gc;
 pub mod hosts;
 pub mod limits;
+#[cfg(feature = "app_api")]
+pub mod moderation_runtime;
+#[cfg(feature = "app_api")]
+pub(crate) mod orderbook_runtime;
+pub(crate) mod orderbook_worker;
 pub mod pin;
 #[cfg(feature = "app_api")]
 pub mod pop_api;
@@ -20,7 +27,11 @@ pub mod por;
 pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
-pub mod repair;
+#[cfg(feature = "app_api")]
+pub(crate) mod reserve_runtime;
+#[cfg(feature = "app_api")]
+pub(crate) mod reserve_api;
+pub(crate) mod reserve_worker;
 pub mod site;
 pub mod token;
 
@@ -62,8 +73,6 @@ pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
 pub(crate) use registry::{
     CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
 };
-#[cfg(feature = "app_api")]
-pub use repair::RepairWorkerRuntime;
 pub use sorafs_manifest::{
     pin_registry::ReplicationOrderV1,
     provider_advert::{EndpointKind, TransportProtocol},
