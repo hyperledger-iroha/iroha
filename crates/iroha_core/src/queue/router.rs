@@ -5005,6 +5005,18 @@ fn account_dataspace_target<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let world = world?;
+    // A persisted scope-directory entry is the committed routing view. Do not
+    // let a partial alias index narrow or override it.
+    if world.account_scope_directory().get(account_id).is_some() {
+        let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
+        let mut dataspaces = hierarchy.keys();
+        let dataspace_id = *dataspaces.next()?;
+        if dataspaces.next().is_some() {
+            return Some(DataSpaceId::UNIVERSAL);
+        }
+        return (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id);
+    }
+
     let account = world.accounts().get(account_id)?;
     let mut dataspaces = BTreeSet::new();
     let mut primary_dataspace = None;
@@ -7012,6 +7024,24 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
         return false;
     }
 
+    // When the committed directory has an entry, it is authoritative: malformed
+    // or missing scope material must not fall through to a partial alias index.
+    if world.account_scope_directory().get(account_id).is_some() {
+        return world
+            .account_scope_hierarchy(account_id)
+            .ok()
+            .is_some_and(|hierarchy| {
+                hierarchy.into_iter().any(|(dataspace_id, domains)| {
+                    dataspace_catalog
+                        .by_id(dataspace_id)
+                        .is_some_and(|entry| entry.alias.eq_ignore_ascii_case(scope.as_str()))
+                        || domains
+                            .into_iter()
+                            .any(|domain| domain.to_string().eq_ignore_ascii_case(scope.as_str()))
+                })
+            });
+    }
+
     let Some(now_ms) = ledger_time_ms else {
         return false;
     };
@@ -8551,7 +8581,33 @@ mod tests {
                 .insert(alias.clone(), account_id.clone());
             world
                 .account_aliases_by_account
-                .insert(account_id, BTreeSet::from([alias.clone()]));
+                .insert(account_id.clone(), BTreeSet::from([alias.clone()]));
+            world.account_rekey_records.insert(
+                alias.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    alias.clone(),
+                    account_id.clone(),
+                ),
+            );
+
+            let selector = crate::sns::selector_for_account_alias(alias, &dataspace_catalog)
+                .expect("fixture account alias selector");
+            let address = AccountAddress::from_account_id(&account_id)
+                .expect("fixture account address must be canonical");
+            let record = NameRecordV1::new(
+                selector.clone(),
+                account_id.clone(),
+                vec![NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(crate::sns::record_storage_key(&selector), record.encode());
         }
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();

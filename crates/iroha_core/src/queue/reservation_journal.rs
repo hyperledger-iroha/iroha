@@ -1814,6 +1814,32 @@ mod tests {
     }
 
     #[test]
+    fn compaction_failure_after_rename_is_recovered_on_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ambiguous-compaction.norito");
+        let record = record(1, 1);
+        let (mut journal, _) = LaneQueueReservationJournal::open(&path, 1).expect("open journal");
+        journal
+            .put_batch(vec![record.clone()])
+            .expect("put live reservation");
+        journal.inject_next_compaction_fault(
+            ReservationJournalCompactionFault::AfterRenameBeforeParentSync,
+        );
+        assert!(
+            journal
+                .compact_if_needed(core::slice::from_ref(&record), &[], &[], &[])
+                .is_err(),
+            "a post-rename durability ambiguity must fail closed"
+        );
+        assert!(journal.durability_ambiguous());
+        drop(journal);
+
+        let (_journal, replay) =
+            LaneQueueReservationJournal::open(&path, 1).expect("reopen renamed journal");
+        assert_eq!(replay.records(), &[record]);
+    }
+
+    #[test]
     fn compaction_preserves_prepared_and_completed_release_state() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("release-compaction.norito");

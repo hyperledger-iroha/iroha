@@ -2174,11 +2174,17 @@ mod tests {
     }
 
     fn set_epoch_length(state: &mut State, epoch_length_blocks: u64) {
+        assert!(
+            epoch_length_blocks >= 2,
+            "signed NPoS fixtures need one block for each VRF window"
+        );
         let mut wb = state.world.block();
         {
             let params = wb.parameters.get_mut();
             params.set_parameter(Parameter::Custom(
                 SumeragiNposParameters {
+                    vrf_commit_window_blocks: 1,
+                    vrf_reveal_window_blocks: 1,
                     epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)
                         .expect("staking test epoch length must be non-zero"),
                     ..SumeragiNposParameters::default()
@@ -2824,7 +2830,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn mixed_mode_respects_lane_validator_modes() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 1);
+        set_epoch_length(&mut state, 2);
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -4313,7 +4319,7 @@ mod tests {
     #[test]
     fn slashed_validator_can_exit_and_reregister() {
         let mut state = setup_state();
-        set_epoch_length(&mut state, 1);
+        set_epoch_length(&mut state, 2);
 
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());

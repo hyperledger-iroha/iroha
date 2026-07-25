@@ -1385,8 +1385,12 @@ macro_rules! pending_round_can_begin_body {
                 | refinement_tag_value!(WAL_RECORD_TIMEOUT_INTENT) => $pending.view == $owner.view,
                 refinement_tag_value!(WAL_RECORD_OBSERVE_PREPARE)
                 | refinement_tag_value!(WAL_RECORD_LOCK_AND_COMMIT) => $pending.view <= $owner.view,
+                // A second certificate for the immediately preceding timeout
+                // round may reveal a strictly higher PrepareQC while keeping
+                // the reducer in the already-installed successor view.
                 refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) => {
-                    $pending.view >= $owner.view && $pending.view < u64::MAX
+                    $pending.view < u64::MAX
+                        && ($pending.view >= $owner.view || $pending.view + 1u64 == $owner.view)
                 }
                 // A valid CommitQC decides independently of how far the local
                 // view has advanced. Its exact round remains in `pending` and
@@ -1402,8 +1406,9 @@ macro_rules! pending_round_can_acknowledge_body {
         if $pending.record_kind == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT) {
             $pending.height == $owner_before.height
                 && $pending.height == $owner_after.height
-                && $owner_before.view <= $pending.view
                 && $pending.view < u64::MAX
+                && ($owner_before.view <= $pending.view
+                    || $pending.view + 1u64 == $owner_before.view)
                 && $owner_after.view == $pending.view + 1u64
                 && $owner_before.generation < u64::MAX
                 && $owner_after.generation == $owner_before.generation + 1u64

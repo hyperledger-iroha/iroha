@@ -1352,7 +1352,7 @@ mod tests {
             ..ivm::ProgramMetadata::default()
         }
         .encode();
-        program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(u32::MAX).to_le_bytes());
+        program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(0x00ff_ffff).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
         assert!(

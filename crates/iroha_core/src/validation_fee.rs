@@ -4090,6 +4090,92 @@ mod tests {
         (artifact, verified.manifest)
     }
 
+    fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
+        use iroha_data_model::prelude::{Account, AssetDefinition, Domain};
+
+        let contract_domain =
+            Domain::new(DomainId::try_new("contracts", "universal").expect("contract domain id"))
+                .build(deployer);
+        let fee_domain =
+            Domain::new(DomainId::try_new("fees", "paynet").expect("fee-asset domain id"))
+                .build(deployer);
+        let mut accounts = vec![Account::new(deployer.clone()).build(deployer)];
+        accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(deployer)));
+        let fee_definition = AssetDefinition::new(
+            fee_asset(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(deployer);
+        let xor_definition = AssetDefinition::new(
+            xor_asset(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(deployer);
+        crate::state::World::with(
+            [contract_domain, fee_domain],
+            accounts,
+            [fee_definition, xor_definition],
+        )
+    }
+
+    fn install_active_bound_validation_fee_policy(
+        state_tx: &mut StateTransaction<'_, '_>,
+        deployer: &AccountId,
+        deployer_key: &KeyPair,
+    ) -> ValidationFeePolicyV1 {
+        use iroha_data_model::{
+            nexus::DataSpaceId, prelude::Account, smart_contract::ContractAddress,
+        };
+
+        let deployment_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        crate::smartcontracts::Execute::execute(
+            iroha_data_model::isi::Grant::account_permission(
+                deployment_permission,
+                deployer.clone(),
+            ),
+            deployer,
+            state_tx,
+        )
+        .expect("grant contract lifecycle authority");
+        let (code, manifest) = minimal_bound_contract_artifact();
+        let code_hash =
+            crate::smartcontracts::code::register_code_bytes(deployer, code.clone(), state_tx)
+                .expect("register contract bytes");
+        crate::smartcontracts::code::register_manifest(
+            deployer,
+            manifest.signed(deployer_key),
+            state_tx,
+        )
+        .expect("register signed contract manifest");
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            deployer,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        crate::smartcontracts::code::activate_instance(
+            deployer,
+            contract_address.clone(),
+            code_hash,
+            state_tx,
+        )
+        .expect("activate contract instance");
+
+        let binding = treasury_payout_binding(contract_address, &code);
+        crate::smartcontracts::Execute::execute(
+            Register::account(Account::new(binding.treasury_account_id.clone())),
+            deployer,
+            state_tx,
+        )
+        .expect("register immutable contract subject account");
+        let policy = policy_with_treasury_payout_lifecycle(binding);
+        install_policy_registry_fixture(&policy_registry(std::slice::from_ref(&policy)), state_tx);
+        policy
+    }
+
     fn minor_units(value: u64) -> Numeric {
         Numeric::new(value, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
     }
@@ -6267,11 +6353,14 @@ mod tests {
             .expect("a bound pool may report no payout when no batch is available"),
             OpaqueDeferredValidationOutcome::NoOp,
         );
+        let payout_credit_minor_units =
+            numeric_to_minor_units(binding.batch_sbd.as_numeric(), policy.ds_scale, usize::MAX)
+                .expect("payout batch must fit the policy minor-unit domain");
         let payout_credit = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
             policy_fee_asset(&policy),
             policy.ds_scale,
-            100,
+            payout_credit_minor_units,
         )
         .expect("convert payout credit into nominal quantity");
         commit_validation_fee_credit(&mut state_tx, Some(&payout_credit))
@@ -6354,7 +6443,7 @@ mod tests {
         assert_eq!(
             decode_validation_fee_credit_state_value(&canonical_credit_state)
                 .expect("decode canonical nominal credit"),
-            Quantity::one()
+            payout_credit.amount
         );
 
         state_tx.world.smart_contract_state.insert(
@@ -6438,19 +6527,26 @@ mod tests {
             )
         ));
 
+        let excessive_debit_minor_units = payout_credit_minor_units
+            .checked_mul(2)
+            .expect("fixture debit must fit minor-unit domain");
         let excessive_debit = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
             policy_fee_asset(&policy),
             policy.ds_scale,
-            200,
+            excessive_debit_minor_units,
         )
         .expect("construct underflow fixture");
+        let excessive_debit_amount = payout_credit
+            .amount
+            .checked_add(&payout_credit.amount)
+            .expect("fixture debit must fit nominal quantity");
         assert!(matches!(
             consume_validation_fee_credit(&mut state_tx, &excessive_debit),
             Err(ValidationFeeAdmissionError::InsufficientCreditBalance {
                 available,
                 requested,
-            }) if available == Quantity::one() && requested == Quantity::from(2_u64)
+            }) if available == payout_credit.amount && requested == excessive_debit_amount
         ));
 
         let wide: Quantity = "18446744073709551616"
@@ -6519,10 +6615,14 @@ mod tests {
             .expect("convert exact policy fee into nominal quantity");
             commit_validation_fee_credit(&mut failed_signed_transaction, Some(&exact_fee_credit))
                 .expect("stage exact transaction-bound fee credit");
+            let staged_credit = payout_credit
+                .amount
+                .checked_add(&exact_fee_credit.amount)
+                .expect("staged fixture credit must fit nominal quantity");
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_signed_transaction, &payout_credit,)
                     .expect("read staged fee credit"),
-                "1.1".parse::<Quantity>().expect("canonical staged credit")
+                staged_credit
             );
             // Simulate a later transaction/data-trigger failure: no staged credit is applied.
         }
@@ -6532,7 +6632,7 @@ mod tests {
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit)
                     .expect("read credit after failed signed transaction"),
-                Quantity::one(),
+                payout_credit.amount,
                 "a failed signed transaction must not create fee credit"
             );
             assert_eq!(
@@ -6570,7 +6670,7 @@ mod tests {
         assert_eq!(
             read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
                 .expect("read rolled-back debit"),
-            Quantity::one(),
+            payout_credit.amount,
             "a failed trigger subtransaction must roll its staged credit debit back"
         );
         assert!(
@@ -6676,11 +6776,10 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
 
-        let treasury = account(3);
-        let policy = policy(&treasury);
-        let registry = policy_registry(std::slice::from_ref(&policy));
+        let deployer_key = key_pair(55);
+        let deployer = AccountId::new(deployer_key.public_key().clone());
         let state = crate::state::State::new_with_chain_for_testing(
-            crate::state::World::default(),
+            validation_fee_payout_world(&deployer),
             crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
             "generic-testnet".parse().expect("chain id"),
@@ -6694,7 +6793,14 @@ mod tests {
         let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
-        install_policy_registry_fixture(&registry, &mut state_tx);
+        let policy =
+            install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
+        assert_eq!(
+            active_policy(&state_tx)
+                .expect("active policy lookup succeeds")
+                .expect("bound policy is active"),
+            policy
+        );
 
         let error = enforce_ivm_proved_completed_axt_admission(1, &state_tx)
             .expect_err("active policy must reject opaque IvmProved AXT effects");

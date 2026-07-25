@@ -176,6 +176,18 @@ pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
     ConsensusTransitionGuard { _guard: guard }
 }
 
+/// Clear poison left by an intentionally caught canonical-transition panic.
+///
+/// Production treats transition-gate poison as process-fatal. Kura fault
+/// injection tests emulate a crash with `catch_unwind`, so they must explicitly
+/// reset only this process-global test latch before exercising restart recovery.
+#[cfg(test)]
+pub(crate) fn clear_consensus_transition_poison_for_tests() {
+    if let Some(gate) = CONSENSUS_TRANSITION_GATE.get() {
+        gate.clear_poison();
+    }
+}
+
 fn fail_closed_after_consensus_transition_poison() -> ! {
     iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
     #[cfg(not(test))]

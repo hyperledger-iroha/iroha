@@ -7,6 +7,8 @@ use std::{
     process::Command,
 };
 
+use ivm::kotodama::compiler::CompilerOptions;
+
 const INVENTORY: &str = include_str!("../../../scripts/ivm_artifacts.tsv");
 const EXPECTED_ARTIFACTS: usize = 75;
 
@@ -119,7 +121,6 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
     );
 
     let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    let compiler = ivm::KotodamaCompiler::new();
     let predecoder = ivm::predecoder_fixtures::generated_predecoder_mixed_artifacts();
 
     for artifact in inventory {
@@ -160,14 +161,17 @@ fn every_checked_in_ivm_artifact_is_owned_authenticated_and_fresh() {
                     "{} has the wrong declared execution mode",
                     path.display()
                 );
-                compiler
-                    .compile_source(&source_text)
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "compile {} for artifact parity: {error}",
-                            source_path.display()
-                        )
-                    })
+                ivm::KotodamaCompiler::new_with_options(CompilerOptions {
+                    force_zk: expected_zk,
+                    ..CompilerOptions::default()
+                })
+                .compile_source(&source_text)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "compile {} for artifact parity: {error}",
+                        source_path.display()
+                    )
+                })
             }
             "predecoder" => {
                 let tag: usize = artifact

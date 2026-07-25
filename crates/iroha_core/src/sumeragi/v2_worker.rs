@@ -11175,19 +11175,19 @@ pub(super) mod tests {
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(fanout(&reconnected))
-                .expect("a replacement tenure retries the current item"),
+                .expect("a replacement tenure observes the unapplied exact receipt"),
             ExactFanoutOwnership::Owned
         );
         assert_eq!(pending.fanouts.len(), 1);
-        assert_eq!(pending.fanouts[0].targets.len(), 2);
+        assert_eq!(pending.fanouts[0].targets.len(), 1);
         assert!(pending.fanouts[0].targets.iter().all(|target| {
             target.message_index == 0 && target.current.is_none() && target.ticket.is_none()
         }));
         assert!(pending.fanouts[0].targets.iter().any(|target| {
             matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&alternate))
         }));
-        assert!(pending.fanouts[0].targets.iter().any(|target| {
-            matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected))
+        assert!(pending.fanouts[0].targets.iter().all(|target| {
+            !matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected))
         }));
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
     }

@@ -675,8 +675,8 @@ impl NativeAmxSigningGuard {
         max_records: NonZeroUsize,
     ) -> Result<Self, NativeAmxSigningGuardError> {
         if active_height == 0
-            || chain_id_hash.as_ref().iter().all(|byte| *byte == 0)
-            || context_id.0.as_ref().iter().all(|byte| *byte == 0)
+            || native_amx_hash_is_zero_sentinel(chain_id_hash.as_ref())
+            || native_amx_hash_is_zero_sentinel(context_id.0.as_ref())
             || max_records.get() > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD
         {
             return Err(NativeAmxSigningGuardError::InvalidInput(
@@ -872,19 +872,8 @@ impl NativeAmxSigningGuard {
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
         if anchor.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || anchor.binding.active_height == 0
-            || anchor
-                .binding
-                .context_id
-                .0
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-            || anchor
-                .binding
-                .chain_id_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+            || native_amx_hash_is_zero_sentinel(anchor.binding.context_id.0.as_ref())
+            || native_amx_hash_is_zero_sentinel(anchor.binding.chain_id_hash.as_ref())
             || anchor.binding.max_records == 0
             || usize::try_from(anchor.binding.max_records)
                 .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
@@ -2432,6 +2421,12 @@ fn peer_uses_bls_normal(peer: &PeerId) -> bool {
         .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
 }
 
+fn native_amx_hash_is_zero_sentinel(bytes: &[u8]) -> bool {
+    bytes.len() == Hash::LENGTH
+        && bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0)
+        && bytes[Hash::LENGTH - 1] <= 1
+}
+
 fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
     let Ok(validator_count) = usize::try_from(body.participant_validator_count) else {
         return false;
@@ -2442,33 +2437,15 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
     let expected_quorum =
         crate::sumeragi::network_topology::commit_quorum_from_len(validator_count).max(1);
     body.round.height != 0
-        && body
-            .round
-            .context_id
-            .0
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
+        && !native_amx_hash_is_zero_sentinel(body.round.context_id.0.as_ref())
         && body.authority_context_height == body.round.height
         && body.planned_coordinator_block_height != 0
-        && body.chain_id_hash.as_ref().iter().any(|byte| *byte != 0)
+        && !native_amx_hash_is_zero_sentinel(body.chain_id_hash.as_ref())
         && body.source_id.iter().any(|byte| *byte != 0)
-        && body
-            .tx_entrypoint_hash
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
-        && body.plan_digest.as_ref().iter().any(|byte| *byte != 0)
-        && body
-            .coordinator_lane_incarnation
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
-        && body
-            .participant_lane_incarnation
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
+        && !native_amx_hash_is_zero_sentinel(body.tx_entrypoint_hash.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.plan_digest.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.coordinator_lane_incarnation.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.participant_lane_incarnation.as_ref())
         && body.participant_lane_block_height != 0
         && body.participant_previous_block_height.checked_add(1)
             == Some(body.participant_lane_block_height)
@@ -2476,27 +2453,11 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
             == body.participant_previous_block_descriptor_hash.is_none()
         && body
             .participant_previous_block_descriptor_hash
-            .is_none_or(|hash| hash.as_ref().iter().any(|byte| *byte != 0))
-        && body
-            .participant_proposal_hash
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
-        && body
-            .participant_settlement_commitment
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
-        && body
-            .participant_validator_set_hash
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
-        && body
-            .coordinator_proposal_hash
-            .as_ref()
-            .iter()
-            .any(|byte| *byte != 0)
+            .is_none_or(|hash| !native_amx_hash_is_zero_sentinel(hash.as_ref()))
+        && !native_amx_hash_is_zero_sentinel(body.participant_proposal_hash.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.participant_settlement_commitment.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.participant_validator_set_hash.as_ref())
+        && !native_amx_hash_is_zero_sentinel(body.coordinator_proposal_hash.as_ref())
         && validator_count != 0
         && validator_count <= MAX_NATIVE_AMX_VALIDATORS
         && min_quorum == expected_quorum
@@ -2527,11 +2488,11 @@ impl NativeAmxVoteV2 {
         if !native_amx_body_shape_valid(&self.body) {
             return Err(NativeAmxVoteIngressError::InvalidBody);
         }
-        if self.bls_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
-            return Err(NativeAmxVoteIngressError::InvalidSignature);
-        }
         if !peer_uses_bls_normal(&self.signer) {
             return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
+        }
+        if self.bls_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES {
+            return Err(NativeAmxVoteIngressError::InvalidSignature);
         }
         Ok(())
     }
@@ -4234,6 +4195,7 @@ mod tests {
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
 
+        guard.record(&body).expect("record valid body");
         let mut mismatched_view = body;
         mismatched_view.coordinator_lane_block_view += 1;
         assert_eq!(

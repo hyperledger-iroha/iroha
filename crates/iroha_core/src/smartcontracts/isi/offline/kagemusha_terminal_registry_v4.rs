@@ -2495,7 +2495,25 @@ mod tests {
     #[test]
     fn catalog_preflight_rejects_inexact_proving_key_before_halo_parsing() {
         let (authenticated, _) = authenticated_candidate_binding_release();
-        let error = validate_catalog_artifact_encoding_sizes_v4(authenticated.manifest())
+        let mut manifest = authenticated.manifest().clone();
+        for profile in &mut manifest.profiles {
+            let sizes =
+                kagemusha_artifact_encoding_sizes_v4(&profile.circuit_params, profile.parity)
+                    .expect("fixture artifact encoding sizes");
+            for descriptor in &mut profile.artifacts {
+                match descriptor.kind {
+                    KagemushaPastaCycleArtifactKindV4::ParamsIpa => {
+                        descriptor.payload_size_bytes = sizes.parameters_bytes;
+                    }
+                    KagemushaPastaCycleArtifactKindV4::VerifyingKey => {
+                        descriptor.payload_size_bytes = sizes.verifying_key_bytes;
+                    }
+                    KagemushaPastaCycleArtifactKindV4::ProvingKey
+                    | KagemushaPastaCycleArtifactKindV4::BootstrapWitness => {}
+                }
+            }
+        }
+        let error = validate_catalog_artifact_encoding_sizes_v4(&manifest)
             .expect_err("an inexact proving-key descriptor must fail before parsing");
 
         assert!(error.contains("proving key descriptor length 64"));

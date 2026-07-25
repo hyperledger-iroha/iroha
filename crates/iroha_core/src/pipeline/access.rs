@@ -3069,7 +3069,9 @@ mod tests {
             .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        test_contract_artifact(code, None, vec![default_test_entrypoint()]).0
+        let mut entrypoint = default_test_entrypoint();
+        entrypoint.read_keys = vec!["state:*".to_owned()];
+        test_contract_artifact(code, None, vec![entrypoint]).0
     }
 
     fn generic_prepass_test_state(authority: &AccountId) -> State {
@@ -3428,7 +3430,15 @@ seiyaku StaticAccessCounter {
             assert_ne!(descriptor.write_keys[0], "state:*");
 
             manifest_access_set_from_bytecode(&manifest, code_hash, &program, false, Some(name))
-                .unwrap_or_else(|| panic!("static bytecode proof rejected `{name}`"))
+                .unwrap_or_else(|| {
+                    let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program.clone()))
+                        .expect("prepare static-access contract for failure diagnostics");
+                    let analysis = ivm::analysis::analyze_prepared_static_state_accesses(
+                        &prepared,
+                        Some(name),
+                    );
+                    panic!("static bytecode proof rejected `{name}`: {analysis:?}")
+                })
                 .0
         };
 
@@ -3821,7 +3831,7 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn isi_access_transfer_and_mint() {
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -3841,7 +3851,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(exec)
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
@@ -3904,14 +3914,14 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn log_instruction_has_no_access_keys() {
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             "chain".parse().unwrap(),
             alice.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "hello".to_owned())])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
         let authority = tx.authority().clone();
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
@@ -4291,7 +4301,7 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn register_access_includes_domain_reads() {
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -4310,7 +4320,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(Executable::from_iter(isis))
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
 
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
@@ -5052,10 +5062,11 @@ seiyaku DynamicAccessCounter {
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
 
-        let mut prog = ivm::ProgramMetadata::default().encode();
-        prog.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        ivm::ProgramMetadata::parse(&prog).expect("header parse");
-        let code_hash = ivm::contract_code_hash(&prog);
+        let (prog, code_hash, _) = test_contract_artifact(
+            ivm::encoding::wide::encode_halt().to_le_bytes().to_vec(),
+            None,
+            vec![default_test_entrypoint()],
+        );
 
         let hints_a = AccessSetHints {
             read_keys: vec!["state:alpha".to_owned()],
@@ -5481,7 +5492,7 @@ seiyaku DynamicAccessCounter {
     #[test]
     fn grant_revoke_role_and_permission_have_static_keys() {
         use iroha_data_model::permission::Permission;
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let role_id: RoleId = "auditor".parse().unwrap();
         let perm = Permission::new(
             "CanMintAsset".to_string(),
@@ -5504,7 +5515,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(exec)
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,
@@ -5534,7 +5545,7 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn execute_trigger_keys_cover_definition_and_repetitions() {
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let trig: TriggerId = "t0".parse().unwrap();
         let isi: InstructionBox = ExecuteTrigger::new(trig.clone()).into();
         let exec = Executable::from_iter([isi]);
@@ -5544,7 +5555,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(exec)
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,
@@ -5931,7 +5942,7 @@ seiyaku DynamicAccessCounter {
     fn register_trigger_keys_cover_definition_and_repetitions() {
         use iroha_primitives::const_vec::ConstVec;
 
-        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let (alice, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
         let trig: TriggerId = "t_reg".parse().unwrap();
         let trigger = Trigger::new(
             trig.clone(),
@@ -5950,7 +5961,7 @@ seiyaku DynamicAccessCounter {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(Register::trigger(trigger))])
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+        .sign(alice_keypair.private_key());
         let set = derive_for_transaction::<crate::state::StateView<'_>>(
             &tx,
             None,

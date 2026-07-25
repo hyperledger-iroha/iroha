@@ -83,9 +83,9 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
 #[cfg(test)]
-use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
+use reservation_journal::ReservationJournalAppendFault;
+use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -10476,11 +10476,6 @@ pub mod tests {
         created_height: u64,
         committed_height: u64,
     ) -> State {
-        let mut state = State::new(
-            world_with_test_domains(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
         let mut future_elastic = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_owned(),
@@ -10488,6 +10483,23 @@ pub mod tests {
             visibility: LaneVisibility::Public,
             ..LaneConfig::default()
         };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        future_elastic.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                .expect("future-created autoscale lane catalog");
+        let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing_with_lane_config(&lane_config),
+            LiveQueryStore::start_test(),
+        );
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
@@ -10497,20 +10509,11 @@ pub mod tests {
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = nonzero!(1_u32);
         nexus.autoscale.max_lanes = nonzero!(8_u32);
-        future_elastic
-            .metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        future_elastic.metadata.insert(
-            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-            created_height.to_string(),
-        );
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
-        nexus.lane_catalog =
-            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
-                .expect("future-created autoscale lane catalog");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = lane_config;
         *state.nexus.get_mut() = nexus;
+        state.reseed_static_lane_incarnations_for_tests();
+        state.install_active_lane_markers_for_tests();
         assert_eq!(
             crate::state::nexus_active_lane_dataspace_at_height(
                 LaneId::new(1),
@@ -17005,15 +17008,17 @@ pub mod tests {
     }
 
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
-        const IVM_MAGIC: [u8; 4] = *b"IVM\0";
-        const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
-
-        let mut program = Vec::new();
-        program.extend_from_slice(&IVM_MAGIC);
-        program.extend_from_slice(&HEADER_SUFFIX);
-        program.extend_from_slice(&max_cycles.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        ProgramMetadata::parse(&program).expect("parse minimal IVM program");
         program
     }
 
@@ -17370,6 +17375,18 @@ pub mod tests {
         let close_height = 5;
         let lane_id = LaneId::new(1);
         let state = Arc::new(state_with_future_created_autoscale_lane(1, close_height));
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy.rules = vec![LaneRoutingRule {
+                lane: lane_id,
+                dataspace: Some(DataSpaceId::UNIVERSAL),
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("unregister::domain".to_owned()),
+                    description: Some("late drain lifecycle-fence fixture".to_owned()),
+                },
+            }];
+        }
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(queue_with_state_free_future_created_router(
             state.as_ref(),
@@ -18837,6 +18854,7 @@ pub mod tests {
         // Keep the state snapshot aligned with the queue so route activity checks
         // do not replace the explicit test router.
         *state.nexus.write() = nexus;
+        state.reseed_static_lane_incarnations_for_tests();
     }
 
     fn world_with_uaid_account(
@@ -19681,12 +19699,11 @@ pub mod tests {
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(42);
         install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
-        let mut nexus = state.nexus_snapshot();
-        nexus.routing_policy.default_lane = test_lane;
-        nexus.routing_policy.default_dataspace = test_dataspace;
-        state
-            .set_nexus(nexus)
-            .expect("apply routed TEU test Nexus state");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.routing_policy.default_lane = test_lane;
+            nexus.routing_policy.default_dataspace = test_dataspace;
+        }
         let state = Arc::new(state);
         let router = Arc::new(StaticRouter {
             lane: test_lane,
@@ -23148,11 +23165,14 @@ pub mod tests {
         let (kura, _) =
             Kura::new_with_configured_lane_catalog(&kura_config, &lane_geometry, &lane_catalog)
                 .expect("open authenticated two-lane reservation Kura");
-        let mut state = State::new(
+        let mut state = State::try_new(
             world_with_test_domains(),
             kura,
             LiveQueryStore::start_test(),
-        );
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("open reservation-test State without replacing authenticated Kura markers");
         state
             .prepare_configured_primary_geometry_anchor(&lane_catalog)
             .expect("anchor authenticated reservation-test primary");
@@ -23161,6 +23181,10 @@ pub mod tests {
             .expect("restore reservation-test startup cursor");
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.lane_catalog = (*lane_catalog).clone();
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = lane_geometry;

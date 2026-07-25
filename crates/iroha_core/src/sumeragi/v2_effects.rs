@@ -10156,7 +10156,7 @@ mod tests {
     }
 
     fn tag(view: u64) -> EventTag {
-        EventTag::new(1, view, Generation::new(7))
+        EventTag::new(1, view, Generation::new(7 + view))
     }
 
     fn vote(fixture: &Fixture) -> wire::Vote {

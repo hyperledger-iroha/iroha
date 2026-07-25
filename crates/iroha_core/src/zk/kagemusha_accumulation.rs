@@ -750,18 +750,12 @@ mod tests {
 
     #[test]
     fn v4_dynamic_sizes_and_headers_are_exact() {
-        assert_eq!(
-            kagemusha_ipa_accumulator_instance_limbs_v4(12).unwrap(),
-            106
-        );
+        assert_eq!(kagemusha_ipa_accumulator_instance_limbs_v4(12).unwrap(), 28);
         assert_eq!(
             kagemusha_ipa_accumulation_proof_bytes_v4(12).unwrap(),
             1_024
         );
-        assert_eq!(
-            kagemusha_ipa_accumulator_instance_limbs_v4(20).unwrap(),
-            170
-        );
+        assert_eq!(kagemusha_ipa_accumulator_instance_limbs_v4(20).unwrap(), 44);
         assert_eq!(
             kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap(),
             1_536
@@ -792,7 +786,7 @@ mod tests {
         let parent = eq_accumulator(&params, 19);
         let wire = KagemushaIpaAccumulatorWireV4::from_eq(&current, K).unwrap();
         assert_eq!(wire.to_eq(K).unwrap().xi, current.xi);
-        assert_eq!(wire.instance_limbs(K).unwrap().len(), 106);
+        assert_eq!(wire.instance_limbs(K).unwrap().len(), 28);
         let mut noncanonical = wire;
         noncanonical.round_challenges[0] = [0xFF; 32];
         assert!(noncanonical.to_eq(K).is_err());

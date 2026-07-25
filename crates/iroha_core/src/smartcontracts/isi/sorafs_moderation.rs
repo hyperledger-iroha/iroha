@@ -104,8 +104,15 @@ const APPEAL_PROOF_TOKEN_KEY_DOMAIN_V1: &[u8] =
 const PROOF_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-proof-payload.v1";
 const STATE_MAX_BYTES: usize = 512 * 1024;
 const PAYLOAD_MAX_BYTES: usize = 64 * 1024;
-const STATE_LIMITS: DecodeLimits =
-    DecodeLimits::new(256, STATE_MAX_BYTES, 4_096, 2 * STATE_MAX_BYTES, 64);
+// Persisted records embed canonical instruction payloads as byte sequences, so
+// their sequence limit must admit every payload accepted by `decode_payload`.
+const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
+    PAYLOAD_MAX_BYTES,
+    STATE_MAX_BYTES,
+    4_096,
+    2 * STATE_MAX_BYTES,
+    64,
+);
 const PAYLOAD_LIMITS: DecodeLimits =
     DecodeLimits::new(256, PAYLOAD_MAX_BYTES, 2_048, 2 * PAYLOAD_MAX_BYTES, 64);
 const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(

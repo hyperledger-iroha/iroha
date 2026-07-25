@@ -1445,7 +1445,12 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("invalid cycle header must fail trigger admission");
             assert!(
-                error.to_string().contains(expected),
+                matches!(
+                    &error,
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    ) if message.contains(expected)
+                ),
                 "unexpected trigger admission error: {error}"
             );
             assert!(

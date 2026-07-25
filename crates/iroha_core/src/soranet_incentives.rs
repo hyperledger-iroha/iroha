@@ -548,7 +548,7 @@ fn skip_reason_label(reason: RewardSkipReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, PublicKey};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
@@ -617,10 +617,10 @@ mod tests {
         }
     }
 
-    fn sample_account(_domain: &str) -> AccountId {
-        let key_hex = "01".repeat(32);
-        let public_key = PublicKey::from_hex(Algorithm::Ed25519, &key_hex).expect("public key");
-        AccountId::new(public_key)
+    fn sample_account(domain: &str) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(domain.as_bytes().to_vec(), Algorithm::Ed25519)
+            .expect("derive deterministic sample account key");
+        AccountId::new(key_pair.public_key().clone())
     }
 
     fn budget_id() -> [u8; 32] {

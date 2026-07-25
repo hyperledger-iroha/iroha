@@ -1259,6 +1259,14 @@ pub mod isi {
             event_destination_id: AssetId,
             amount: Numeric,
         ) -> Result<Self, Error> {
+            // Reject no-op transfers before account admission, control usage, transcripts,
+            // balances, or events can be staged.
+            if amount.is_zero() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset transfer amount must be non-zero".into(),
+                )
+                .into());
+            }
             ensure_global_asset_write_on_authoritative_route(
                 state_transaction,
                 event_source_id.definition(),
@@ -3517,7 +3525,7 @@ pub mod query {
         use iroha_crypto::{Algorithm, Hash, KeyPair};
         use iroha_data_model::account::{
             NewAccount,
-            rekey::{AccountAlias, AccountAliasDomain},
+            rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
         };
         use iroha_data_model::asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
@@ -3569,6 +3577,56 @@ pub mod query {
 
         fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
             state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+        }
+
+        fn seed_test_account_alias_lease(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            owner: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            let selector = crate::sns::active_account_alias_selector(
+                state_transaction.world(),
+                &state_transaction.nexus.dataspace_catalog,
+                alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .expect("account alias selector");
+            let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+                .expect("account address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            state_transaction.world.smart_contract_state.insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
+        fn seed_test_account_alias_binding(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            owner: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            state_transaction
+                .world
+                .account_mut(owner)
+                .expect("canonical account exists")
+                .set_label(Some(alias.clone()));
+            state_transaction
+                .world
+                .insert_account_alias_binding(alias.clone(), owner.clone());
+            state_transaction.world.account_rekey_records.insert(
+                alias.clone(),
+                AccountRekeyRecord::new(alias.clone(), owner.clone()),
+            );
         }
 
         fn fee_sponsor_custody_state() -> (State, AccountId, AssetDefinitionId, AssetId) {
@@ -3670,15 +3728,7 @@ pub mod query {
             let domain_id: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = Account::new(ALICE_ID.clone())
-                .with_label(Some(AccountAlias::new(
-                    "alice".parse().expect("alias label"),
-                    Some(AccountAliasDomain::new(
-                        "wonderland".parse().expect("alias domain"),
-                    )),
-                    DataSpaceId::UNIVERSAL,
-                )))
-                .build(&ALICE_ID);
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_definition_id: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(
@@ -4274,6 +4324,15 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            let alice_alias = AccountAlias::new(
+                "alice".parse().expect("account alias label"),
+                Some(AccountAliasDomain::new(
+                    "wonderland".parse().expect("account alias domain"),
+                )),
+                DataSpaceId::UNIVERSAL,
+            );
+            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
+            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
 
             let err = SetAssetTransferFreeze::new(
                 ALICE_ID.clone(),
@@ -4307,40 +4366,34 @@ pub mod query {
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let delegate = Account::new(BOB_ID.clone()).build(&ALICE_ID);
-            let labeled_account =
-                |id: AccountId, label: &str, domain: &str, dataspace: DataSpaceId| {
-                    Account::new(id)
-                        .with_label(Some(AccountAlias::new(
-                            label.parse().expect("alias label"),
-                            Some(AccountAliasDomain::new(
-                                domain.parse().expect("alias domain"),
-                            )),
-                            dataspace,
-                        )))
-                        .build(&ALICE_ID)
-                };
             let hbl_sbp_id = iroha_test_samples::gen_account_in("hbl").0;
             let hbl_other_id = iroha_test_samples::gen_account_in("hbl_other").0;
             let ubl_sbp_id = iroha_test_samples::gen_account_in("ubl").0;
             let unlabeled_id = iroha_test_samples::gen_account_in("unlabeled").0;
-            let hbl_sbp = labeled_account(
-                hbl_sbp_id.clone(),
-                "retail_hbl_sbp",
-                "hbl",
+            let hbl_sbp_alias = AccountAlias::new(
+                "retail_hbl_sbp".parse().expect("alias label"),
+                Some(AccountAliasDomain::new(
+                    "hbl".parse().expect("alias domain"),
+                )),
                 DataSpaceId::new(10),
             );
-            let hbl_other = labeled_account(
-                hbl_other_id.clone(),
-                "retail_hbl_other",
-                "hbl",
+            let hbl_other_alias = AccountAlias::new(
+                "retail_hbl_other".parse().expect("alias label"),
+                Some(AccountAliasDomain::new(
+                    "hbl".parse().expect("alias domain"),
+                )),
                 DataSpaceId::new(11),
             );
-            let ubl_sbp = labeled_account(
-                ubl_sbp_id.clone(),
-                "retail_ubl_sbp",
-                "ubl",
+            let ubl_sbp_alias = AccountAlias::new(
+                "retail_ubl_sbp".parse().expect("alias label"),
+                Some(AccountAliasDomain::new(
+                    "ubl".parse().expect("alias domain"),
+                )),
                 DataSpaceId::new(10),
             );
+            let hbl_sbp = Account::new(hbl_sbp_id.clone()).build(&ALICE_ID);
+            let hbl_other = Account::new(hbl_other_id.clone()).build(&ALICE_ID);
+            let ubl_sbp = Account::new(ubl_sbp_id.clone()).build(&ALICE_ID);
             let unlabeled = Account::new(unlabeled_id.clone()).build(&ALICE_ID);
             let asset_definition_id =
                 AssetDefinitionId::new(domain_id, "pkr".parse().expect("asset definition name"));
@@ -4378,9 +4431,34 @@ pub mod query {
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
             );
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: DataSpaceId::new(10),
+                    alias: "banking".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: DataSpaceId::new(11),
+                    alias: "alternate".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("transfer-control dataspace catalog");
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
             let mut block = state.block(header);
+            block.nexus.dataspace_catalog = dataspace_catalog.clone();
             let mut stx = block.transaction();
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            seed_test_account_alias_binding(&mut stx, &hbl_sbp_id, &hbl_sbp_alias);
+            seed_test_account_alias_binding(&mut stx, &hbl_other_id, &hbl_other_alias);
+            seed_test_account_alias_binding(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
+            seed_test_account_alias_lease(&mut stx, &hbl_sbp_id, &hbl_sbp_alias);
+            seed_test_account_alias_lease(&mut stx, &hbl_other_id, &hbl_other_alias);
+            seed_test_account_alias_lease(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
 
             SetAssetTransferFreeze::new(
                 hbl_sbp_id.clone(),
@@ -6848,20 +6926,18 @@ pub mod query {
             let allowed_domain = Domain::new(allowed_domain_id.clone()).build(&ALICE_ID);
 
             let allowed_dataspace_id = DataSpaceId::UNIVERSAL;
-            let alice_account = Account::new(ALICE_ID.clone())
-                .with_label(Some(AccountAlias::new(
-                    "alice".parse().expect("account alias label"),
-                    Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
-                    allowed_dataspace_id,
-                )))
-                .build(&ALICE_ID);
-            let bob_account = Account::new(BOB_ID.clone())
-                .with_label(Some(AccountAlias::new(
-                    "bob".parse().expect("account alias label"),
-                    Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
-                    allowed_dataspace_id,
-                )))
-                .build(&BOB_ID);
+            let alice_alias = AccountAlias::new(
+                "alice".parse().expect("account alias label"),
+                Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
+                allowed_dataspace_id,
+            );
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob_alias = AccountAlias::new(
+                "bob".parse().expect("account alias label"),
+                Some(AccountAliasDomain::new(allowed_domain_id.name().clone())),
+                allowed_dataspace_id,
+            );
+            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
             let mut asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
@@ -6907,6 +6983,10 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx, 0xB4);
+            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
+            seed_test_account_alias_binding(&mut stx, &BOB_ID, &bob_alias);
+            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
+            seed_test_account_alias_lease(&mut stx, &BOB_ID, &bob_alias);
             Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("one matching allowed domain membership should authorize transfer");
@@ -6946,20 +7026,18 @@ pub mod query {
                 .with_metadata(domain_metadata)
                 .build(&ALICE_ID);
             let domain_dataspace_id = DataSpaceId::UNIVERSAL;
-            let alice_account = Account::new(ALICE_ID.clone())
-                .with_label(Some(AccountAlias::new(
-                    "alice".parse().expect("account alias label"),
-                    Some(AccountAliasDomain::new(domain_id.name().clone())),
-                    domain_dataspace_id,
-                )))
-                .build(&ALICE_ID);
-            let bob_account = Account::new(BOB_ID.clone())
-                .with_label(Some(AccountAlias::new(
-                    "bob".parse().expect("account alias label"),
-                    Some(AccountAliasDomain::new(domain_id.name().clone())),
-                    domain_dataspace_id,
-                )))
-                .build(&BOB_ID);
+            let alice_alias = AccountAlias::new(
+                "alice".parse().expect("account alias label"),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                domain_dataspace_id,
+            );
+            let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let bob_alias = AccountAlias::new(
+                "bob".parse().expect("account alias label"),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                domain_dataspace_id,
+            );
+            let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
 
             let mut asset_def = {
                 let __asset_definition_id = asset_def_id.clone();
@@ -7001,6 +7079,10 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
+            seed_test_account_alias_binding(&mut stx, &BOB_ID, &bob_alias);
+            seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
+            seed_test_account_alias_lease(&mut stx, &BOB_ID, &bob_alias);
             let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("domain deny policy must reject transfer");

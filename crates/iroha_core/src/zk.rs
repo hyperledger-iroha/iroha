@@ -798,6 +798,9 @@ fn halo2_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> 
 }
 
 fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
+    // Confidential relation identifiers are inner `OpenVerifyEnvelope` CIDs;
+    // their outer proof backend is the generic `halo2/ipa`, so they must not
+    // be advertised as independently reachable backend labels here.
     matches!(
         circuit_id,
         "halo2/pasta/tiny-add"
@@ -828,19 +831,6 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle16"
     ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
         || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
-        || {
-            #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-            {
-                confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id)
-                    || confidential_v2::is_confidential_unshield_v2_circuit_id(circuit_id)
-                    || confidential_v2::is_confidential_unshield_v3_circuit_id(circuit_id)
-            }
-            #[cfg(not(any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-            {
-                let _ = circuit_id;
-                false
-            }
-        }
 }
 
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
@@ -7085,10 +7075,6 @@ mod stark_backend_tag_tests {
             ("halo2/ipa:ivm-execution-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
-            (
-                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-                BackendTag::Halo2IpaPasta,
-            ),
             ("stark/fri", BackendTag::Stark),
             ("stark/fri/sha256-goldilocks", BackendTag::Stark),
             ("stark/fri/poseidon2-goldilocks", BackendTag::Stark),
@@ -7109,6 +7095,14 @@ mod stark_backend_tag_tests {
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "HALO2/IPA",
             "stark/FRI",
             " halo2/ipa",
@@ -13944,6 +13938,77 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     {
         return reject("proof header k does not match verifying key IPAK");
     }
+
+    // These canonical identifiers already carry the `/ipa/` component.
+    // Dispatch them before the legacy built-in normalization below removes
+    // that component; otherwise exact circuit predicates can never match and
+    // a proof that passed raw IPA verification is rejected at the envelope
+    // boundary.
+    if confidential_v2::is_confidential_transfer_v2_circuit_id(backend) {
+        if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    if confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(backend) {
+        if col_refs.len() != 11 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v2_circuit_id(backend) {
+        if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+    if confidential_v2::is_confidential_unshield_v3_circuit_id(backend) {
+        if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+            return false;
+        }
+        return cached_vk_for!(
+            &params,
+            backend,
+            vk_box,
+            confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
+                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+            >::default(),
+            |vk| {
+                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
+            }
+        );
+    }
+
     // For IPA, we normalize backend tag to reuse circuit mapping
     let normalized = backend.replace("/ipa/", "/");
     match normalized.as_str() {
@@ -14115,69 +14180,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Err(_) => return false,
             };
             verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
-        }
-        circuit_id if confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id) => {
-            if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
-                return false;
-            }
-            cached_vk_for!(
-                &params,
-                normalized.as_str(),
-                vk_box,
-                confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
-                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
-                >::default(),
-                |vk| {
-                    verify_halo2_ipa_payload_columns(
-                        &params,
-                        vk,
-                        proof_payload.as_slice(),
-                        &col_refs,
-                    )
-                }
-            )
-        }
-        circuit_id if confidential_v2::is_confidential_unshield_v2_circuit_id(circuit_id) => {
-            if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
-                return false;
-            }
-            cached_vk_for!(
-                &params,
-                normalized.as_str(),
-                vk_box,
-                confidential_v2::secure_relation_v3::ConfidentialUnshieldFullCircuitV3::<
-                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
-                >::default(),
-                |vk| {
-                    verify_halo2_ipa_payload_columns(
-                        &params,
-                        vk,
-                        proof_payload.as_slice(),
-                        &col_refs,
-                    )
-                }
-            )
-        }
-        circuit_id if confidential_v2::is_confidential_unshield_v3_circuit_id(circuit_id) => {
-            if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
-                return false;
-            }
-            cached_vk_for!(
-                &params,
-                normalized.as_str(),
-                vk_box,
-                confidential_v2::secure_relation_v3::ConfidentialUnshieldChangeCircuitV4::<
-                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
-                >::default(),
-                |vk| {
-                    verify_halo2_ipa_payload_columns(
-                        &params,
-                        vk,
-                        proof_payload.as_slice(),
-                        &col_refs,
-                    )
-                }
-            )
         }
         "halo2/pasta/anon-transfer-2x2" => {
             // Instances: 5 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf], 1 row
