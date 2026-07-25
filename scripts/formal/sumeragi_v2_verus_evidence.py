@@ -33,7 +33,7 @@ EXPECTED_VERUS_VERSION = "0.2026.05.31.5dd6d83"
 EXPECTED_DEPENDENCY_VERIFIED = 1690
 # The local proof expansion adds 31 roots to the historical 126-root source;
 # the proposal-origin closure adds one independent root.
-EXPECTED_ROOT_VERIFIED = 158
+EXPECTED_ROOT_VERIFIED = 172
 EXPECTED_LOG_PATH = "target/formal/sumeragi_v2/verus.log"
 EXPECTED_INVOCATION = (
     "bash",
@@ -73,6 +73,8 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
     "crates/iroha_core/src/sumeragi/v2_core/scheduler.rs",
+    "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
+    "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
     "crates/iroha_core/src/sumeragi/v2_body_store.rs",
     "crates/iroha_core/src/sumeragi/v2_effects.rs",
     "crates/iroha_core/src/sumeragi/mod.rs",
@@ -111,12 +113,12 @@ EXPECTED_VERIFY_COMMAND_SOURCE = "\\\n".join(
 
 EXPECTED_TOOL_SHA256 = {
     "Darwin-arm64": {
-        "platform": "arm64-macos",
+        "platform": "macos_aarch64",
         "verus": "f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451",
         "cargo_verus": "f918c6229c8d714640c9c9ec3d60b9c1d2e0aafc09bba8ff037332b04f85d078",
     },
     "Linux-x86_64": {
-        "platform": "x86-linux",
+        "platform": "linux_x86_64",
         "verus": "c5911ee43c7a92c49a48d2c8646c604d252a38c71c87bda88ad4d33eb9e7e0fc",
         "cargo_verus": "42a79c9afd700f8312a9ac7ab212070723e71beeb07f5ab855453010455bdc6d",
     },
@@ -246,7 +248,8 @@ def _verus_version(binary: Path) -> tuple[str, str]:
     )
     version = ""
     verifier_platform = ""
-    for line in result.stdout.splitlines():
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
         if line.startswith("Version:"):
             version = line.partition(":")[2].strip()
         elif line.startswith("Platform:"):

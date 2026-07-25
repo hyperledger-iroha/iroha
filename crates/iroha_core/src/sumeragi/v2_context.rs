@@ -499,6 +499,12 @@ pub(crate) fn finalized_next_epoch_snapshot(
     height: wire::Height,
     election: &FrozenElectionInputs,
 ) -> Result<Option<wire::finality::FinalizedNextEpochSnapshot>, V2ContextBuildError> {
+    // The terminal height is also necessarily the end of its epoch, but it
+    // has no representable successor whose election could consume a frozen
+    // snapshot.
+    if height == wire::Height::MAX {
+        return Ok(None);
+    }
     if height != election.epoch_end_height {
         return Ok(None);
     }
@@ -1192,5 +1198,30 @@ mod tests {
             error,
             V2ContextBuildError::Wire(wire::ValidationError::PermissionedPowerNotOne)
         ));
+    }
+
+    #[test]
+    fn terminal_height_never_derives_an_unrepresentable_epoch_snapshot() {
+        let chain_id = ChainId::from("terminal-v2-context-builder-test");
+        let state = State::new_with_chain_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let view = state.view();
+        let election = FrozenElectionInputs {
+            epoch: u64::MAX,
+            epoch_end_height: u64::MAX,
+            mode: wire::ConsensusMode::Permissioned,
+            roster: Vec::new(),
+            leader_seed: [0x7A; 32],
+        };
+
+        assert_eq!(
+            finalized_next_epoch_snapshot(&view, &chain_id, u64::MAX, &election),
+            Ok(None),
+            "terminal construction must not inspect or increment next-epoch state"
+        );
     }
 }

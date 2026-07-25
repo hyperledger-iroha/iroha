@@ -32,15 +32,14 @@ BY AdmitHiddenPacketPreservesIngressCapacityType
 
 THEOREM AdmitFirstRelayedTransportCompletionPreservesIngressCapacityType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
-    /\ AsyncTypeInvariant
-    /\ source = AsyncUntrustedSource
-    /\ IngressLaneDepth(recipient, source) = 0
-    /\ DueSourcePackets(recipient, source) # {}
-    /\ IngressAdmissionClass(
-         OldestDueSourcePacket(recipient, source).item) =
-           "TransportCompletion"
-    /\ AdmitHiddenPacket(recipient, source)
-    => AsyncIngressCapacityTypeInvariant'
+    LET item == OldestDueSourcePacket(recipient, source).item
+        resourceSource == IngressResourceSource(item)
+    IN /\ AsyncTypeInvariant
+       /\ IngressLaneDepth(recipient, resourceSource) = 0
+       /\ DueSourcePackets(recipient, source) # {}
+       /\ IngressUsesPhysicalCompletionOwner(item)
+       /\ AdmitHiddenPacket(recipient, source)
+       => AsyncIngressCapacityTypeInvariant'
 BY AdmitHiddenPacketPreservesIngressCapacityType
 
 THEOREM AdmitHiddenPacketPreservesSchedulerType ==
@@ -104,7 +103,10 @@ PROOF
              AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
              AsyncIoCapacityTypeVars, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
-             AsyncTransportHistoryTypeVars, LeaveCausalQueues,
+             AsyncTransportHistoryTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
+             AsyncCertifiedResponseClaimCoreAuthorityVars,
+             LeaveCausalQueues,
              AsyncSchedulerVars, vars
     <2>3. /\ AsyncRuntimeScalarTypeInvariant'
            /\ AsyncCausalTypeInvariant'
@@ -175,12 +177,139 @@ BY CoalesceHiddenPacketPreservesNonIngressType,
    DEF AsyncSchedulerTypeInvariant, CoalesceHiddenPacket,
        AsyncHistoricalRecoveryFrameVars, vars
 
+THEOREM DropPolicyRejectedHiddenPacketPreservesNonIngressType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant
+      /\ DropPolicyRejectedHiddenPacket(recipient, source)
+    => /\ AsyncRuntimeTypeInvariant'
+       /\ AsyncIoTypeInvariant'
+       /\ AsyncDeferredTypeInvariant'
+       /\ AsyncTransportTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                DropPolicyRejectedHiddenPacket(recipient, source)
+         PROVE /\ AsyncRuntimeTypeInvariant'
+               /\ AsyncIoTypeInvariant'
+               /\ AsyncDeferredTypeInvariant'
+               /\ AsyncTransportTypeInvariant'
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoContentTypeInvariant
+           /\ AsyncIoCapacityTypeInvariant
+           /\ AsyncDeferredTopologyTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncTransportClockTypeInvariant
+           /\ AsyncTransportHistoryTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+    <2>2. /\ UNCHANGED AsyncRuntimeScalarTypeVars
+           /\ UNCHANGED asyncCausalQueues
+           /\ UNCHANGED AsyncIoTopologyTypeVars
+           /\ UNCHANGED AsyncIoContentTypeVars
+           /\ UNCHANGED AsyncIoCapacityTypeVars
+           /\ UNCHANGED AsyncDeferredTopologyTypeVars
+           /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                          asyncDeferredProgressQueues,
+                          asyncDeferredNormalQueues>>
+           /\ UNCHANGED AsyncTransportClockTypeVars
+           /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED asyncHeldChunks
+      BY <1>1, Isa
+         DEF DropPolicyRejectedHiddenPacket, AsyncRuntimeScalarTypeVars,
+             AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+             AsyncIoCapacityTypeVars, AsyncDeferredVars,
+             AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
+             AsyncTransportHistoryTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
+             AsyncCertifiedResponseClaimCoreAuthorityVars,
+             LeaveCausalQueues, AsyncSchedulerVars, vars
+    <2>3. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncCausalTypeInvariant'
+           /\ AsyncIoTopologyTypeInvariant'
+           /\ AsyncIoContentTypeInvariant'
+           /\ AsyncIoCapacityTypeInvariant'
+           /\ AsyncDeferredTopologyTypeInvariant'
+           /\ AsyncDeferredContentTypeInvariant'
+           /\ AsyncTransportClockTypeInvariant'
+           /\ AsyncTransportHistoryTypeInvariant'
+           /\ AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>2, AsyncRuntimeScalarTypeStutter,
+         AsyncCausalTypeStutter, AsyncIoTopologyTypeStutter,
+         AsyncIoContentTypeStutter, AsyncIoCapacityTypeStutter,
+         AsyncDeferredTopologyTypeStutter,
+         AsyncDeferredContentTypeStutter,
+         AsyncTransportClockTypeStutter,
+         AsyncTransportHistoryTypeStutter, AsyncHeldChunksTypeStutter
+    <2>4. asyncTransport' \subseteq asyncTransport
+      BY <1>1, Isa DEF DropPolicyRejectedHiddenPacket
+    <2>5. /\ IsFiniteSet(asyncTransport')
+           /\ \A packet \in asyncTransport': AsyncPacketTyped(packet)
+      BY <2>1, <2>4, FS_Subset, SMT
+         DEF AsyncPacketContentTypeInvariant
+    <2>6. AsyncPacketContentTypeInvariant'
+      BY <2>5 DEF AsyncPacketContentTypeInvariant
+    <2> QED BY <2>3, <2>6
+         DEF AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM DropPolicyRejectedHiddenPacketPreservesIngressType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant
+      /\ DropPolicyRejectedHiddenPacket(recipient, source)
+    => AsyncIngressTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                DropPolicyRejectedHiddenPacket(recipient, source)
+         PROVE AsyncIngressTypeInvariant'
+    <2>1. /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressCapacityTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIngressTypeInvariant
+    <2>2. /\ UNCHANGED AsyncIngressTopologyTypeVars
+           /\ UNCHANGED asyncIngressLanes
+      BY <1>1, Isa
+         DEF DropPolicyRejectedHiddenPacket,
+             AsyncIngressTopologyTypeVars
+    <2>3. /\ AsyncIngressTopologyTypeInvariant'
+           /\ AsyncIngressCapacityTypeInvariant'
+           /\ AsyncIngressContentTypeInvariant'
+      BY <2>1, <2>2, AsyncIngressTopologyTypeStutter,
+         AsyncIngressCapacityTypeStutter, AsyncIngressContentTypeStutter
+    <2> QED BY <2>3 DEF AsyncIngressTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM DropPolicyRejectedHiddenPacketPreservesSchedulerType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant
+      /\ DropPolicyRejectedHiddenPacket(recipient, source)
+    => AsyncSchedulerTypeInvariant'
+BY DropPolicyRejectedHiddenPacketPreservesNonIngressType,
+   DropPolicyRejectedHiddenPacketPreservesIngressType,
+   HistoricalRecoveryFramePreservesType, Isa
+   DEF AsyncSchedulerTypeInvariant, DropPolicyRejectedHiddenPacket,
+       AsyncHistoricalRecoveryFrameVars, vars
+
 THEOREM AdmitIngressPacketPreservesSchedulerType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     AsyncTypeInvariant /\ AdmitIngressPacket(recipient, source)
       => AsyncSchedulerTypeInvariant'
 BY AdmitHiddenPacketPreservesSchedulerType,
-   CoalesceHiddenPacketPreservesSchedulerType
+   CoalesceHiddenPacketPreservesSchedulerType,
+   DropPolicyRejectedHiddenPacketPreservesSchedulerType
    DEF AdmitIngressPacket
 
 THEOREM AsyncNetworkStepPreservesSchedulerType ==
@@ -482,7 +611,7 @@ IngressItemIsNonTimeoutProgress(item) ==
 IngressItemIsTimeoutVote(item) == item.kind = "TimeoutVote"
 
 IngressItemIsTransportCompletion(item) ==
-  IngressAdmissionClass(item) = "TransportCompletion"
+  IngressUsesPhysicalCompletionOwner(item)
 
 IngressSequenceHasNonTimeoutProgress(sequence) ==
   \E queued \in SequenceSet(sequence):
@@ -817,6 +946,7 @@ PROOF
       BY DEF IngressItemIsNonTimeoutProgress,
              IngressItemIsTimeoutVote,
              IngressItemIsTransportCompletion,
+             IngressUsesPhysicalCompletionOwner,
              IngressAdmissionClass, IngressTransportCompletionKinds
     <2> QED BY <2>3, <2>4, <2>4c, <2>5, <2>6, <2>6c, <2>7 DEF After
   <1> QED BY <1>1
@@ -1024,6 +1154,7 @@ PROOF
              IngressItemIsNonTimeoutProgress,
              IngressItemIsTimeoutVote,
              IngressItemIsTransportCompletion,
+             IngressUsesPhysicalCompletionOwner,
              IngressProtectedSourcesFor,
              IngressTimeoutVoteProtectedSourcesFor,
              IngressTransportCompletionProtectedSourcesFor,
@@ -2438,23 +2569,44 @@ PROOF
            DEF DeliveryHeight, DeliveryView, DeliverySubject,
                TcEnvelopeSet, SubjectOrNone, AsyncCandidateTyped
     <2>8. CASE item.kind = "CommitCertificateResponse"
-      <3>1. item.envelope \in QcEnvelopeSet
+      <3>1. AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
         BY <1>1, <2>8, SMT DEF AsyncItemTyped
       <3> QED BY <1>1, <2>2, <2>8, <3>1,
            DeliveryCandidateShape, SMT
            DEF DeliveryHeight, DeliveryView, DeliverySubject,
-               QcEnvelopeSet, SubjectOrNone, AsyncCandidateTyped
-    <2>9. CASE item.kind \in
-      {"Chunk", "CertifiedRequest", "CertifiedResponse",
-       "CommitCertificateRequest", "NormalJunk", "ProgressJunk", "Noise"}
-      <3>1. AsyncBodyEnvelopeTyped(item.envelope)
+               AsyncCommitCertificateResponseEnvelopeTyped,
+               QcRecordSet, SubjectOrNone, AsyncCandidateTyped
+    <2>9. CASE item.kind = "CertifiedResponse"
+      <3>1. AsyncCertifiedResponseEnvelopeTyped(item.envelope)
         BY <1>1, <2>9, SMT DEF AsyncItemTyped
       <3> QED BY <1>1, <2>2, <2>9, <3>1,
            DeliveryCandidateShape, SMT
            DEF DeliveryHeight, DeliveryView, DeliverySubject,
+               AsyncCertifiedResponseEnvelopeTyped,
+               AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped,
+               SubjectOrNone, AsyncCandidateTyped
+    <2>10. CASE item.kind = "CertifiedRequest"
+      <3>1. AsyncReplyRequestItemTyped(item, "CertifiedRequest")
+        BY <1>1, <2>10, SMT DEF AsyncItemTyped
+      <3> QED BY <1>1, <2>2, <2>10, <3>1,
+           DeliveryCandidateShape, SMT
+           DEF DeliveryHeight, DeliveryView, DeliverySubject,
+               AsyncReplyRequestItemTyped, QcRecordSet, SubjectOrNone,
+               AsyncCandidateTyped
+    <2>11. CASE item.kind \in
+      {"Chunk", "CommitCertificateRequest",
+       "NormalJunk", "ProgressJunk", "Noise"}
+      <3>1. AsyncBodyEnvelopeTyped(item.envelope)
+        BY <1>1, <2>11, SMT
+           DEF AsyncItemTyped, AsyncReplyRequestItemTyped,
+               AsyncCommitCertificateRequestEnvelopeTyped
+      <3> QED BY <1>1, <2>2, <2>11, <3>1,
+           DeliveryCandidateShape, SMT
+           DEF DeliveryHeight, DeliveryView, DeliverySubject,
                AsyncBodyEnvelopeTyped, SubjectOrNone,
                AsyncCandidateTyped
-    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9,
+    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8,
+                <2>9, <2>10, <2>11,
                 SMT DEF AsyncNetworkKinds
   <1> QED BY <1>1
 
@@ -2558,6 +2710,7 @@ THEOREM TypedRequestMakesTypedServeJob ==
   \A node \in ValidatorIds:
   \A item:
     /\ AsyncConfiguration
+    /\ TypeInvariant
     /\ AsyncIoQueueContentTypeInvariant
     /\ CanEnqueueIoClass(node, "Serve")
     /\ AsyncItemTyped(item)
@@ -2568,6 +2721,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW item,
                 AsyncConfiguration,
+                TypeInvariant,
                 AsyncIoQueueContentTypeInvariant,
                 CanEnqueueIoClass(node, "Serve"),
                 AsyncItemTyped(item),
@@ -2577,13 +2731,9 @@ PROOF
                  AsyncIoCertifiedServeJob(node, DeliveryCandidate(item)))
     <2>1. /\ item.kind \in AsyncNetworkKinds
            /\ item.envelope.recipient \in ValidatorIds
-           /\ AsyncBodyEnvelopeTyped(item.envelope)
-      BY <1>1, SMT DEF AsyncItemTyped
+      BY <1>1 DEF AsyncItemTyped
     <2>2. AsyncCandidateTyped(DeliveryCandidate(item))
-      BY <1>1, <2>1, DeliveryCandidateShape,
-         TypedNetworkKindMakesTypedDeliveryDiscriminants, SMT
-         DEF AsyncCandidateTyped, DeliveryHeight, DeliveryView,
-             DeliverySubject, AsyncBodyEnvelopeTyped, SubjectOrNone
+      BY <1>1, TypedItemMakesTypedDeliveryCandidate
     <2>3. /\ FreshAsyncIoServeNonce(node) \in 0..AsyncIoAuxCapacity
            /\ FreshAsyncIoServeNonce(node)
                 \notin AsyncIoServeNonces(node)
@@ -2864,7 +3014,36 @@ PROOF
       BY <2>3
     <2>5. \A other \in DrainableIngressIndices(node): least <= other
       BY <2>4, SMT DEF DrainableIngressIndices
-    <2> QED BY <2>4, <2>5, Zenon DEF FirstDrainableIngressIndex
+    <2>6. CASE DrainableClaimedResponseReadyIndices(node) # {}
+      <3>1. (CHOOSE priority \in
+                    DrainableClaimedResponseReadyIndices(node): TRUE)
+                  \in DrainableClaimedResponseReadyIndices(node)
+        BY <2>6, FS_EmptySet, Zenon
+      <3>2. (CHOOSE priority \in
+                    DrainableClaimedResponseReadyIndices(node): TRUE)
+                  \in DrainableIngressIndices(node)
+        BY <3>1 DEF DrainableClaimedResponseReadyIndices
+      <3> QED BY <2>6, <3>1, <3>2, Zenon
+           DEF FirstDrainableIngressIndex
+    <2>7. CASE /\ DrainableClaimedResponseReadyIndices(node) = {}
+                /\ DrainableRequestFencedCompletionReadyIndices(node) # {}
+      <3>1. (CHOOSE priority \in
+                    DrainableRequestFencedCompletionReadyIndices(node):
+                    TRUE)
+                  \in DrainableRequestFencedCompletionReadyIndices(node)
+        BY <2>7, FS_EmptySet, Zenon
+      <3>2. (CHOOSE priority \in
+                    DrainableRequestFencedCompletionReadyIndices(node):
+                    TRUE)
+                  \in DrainableIngressIndices(node)
+        BY <3>1 DEF DrainableRequestFencedCompletionReadyIndices
+      <3> QED BY <2>7, <3>1, <3>2, Zenon
+         DEF FirstDrainableIngressIndex
+    <2>8. CASE /\ DrainableClaimedResponseReadyIndices(node) = {}
+                /\ DrainableRequestFencedCompletionReadyIndices(node) = {}
+      BY <2>4, <2>5, <2>8, Zenon
+         DEF FirstDrainableIngressIndex
+    <2> QED BY <2>6, <2>7, <2>8
   <1> QED BY <1>1
 
 THEOREM FirstDrainableIngressLaneIndexIsDrainable ==
@@ -2895,8 +3074,44 @@ PROOF
     <2>5. \A other \in DrainableIngressLaneIndices(node, source):
              least <= other
       BY <2>4, SMT DEF DrainableIngressLaneIndices
-    <2> QED BY <2>4, <2>5, Zenon
+    <2>6. CASE DrainableClaimedResponseLaneIndices(node, source) # {}
+      <3>1. (CHOOSE priority \in
+                    DrainableClaimedResponseLaneIndices(node, source):
+                    TRUE)
+                  \in DrainableClaimedResponseLaneIndices(node, source)
+        BY <2>6, FS_EmptySet, Zenon
+      <3>2. (CHOOSE priority \in
+                    DrainableClaimedResponseLaneIndices(node, source):
+                    TRUE)
+                  \in DrainableIngressLaneIndices(node, source)
+        BY <3>1 DEF DrainableClaimedResponseLaneIndices
+      <3> QED BY <2>6, <3>1, <3>2, Zenon
+           DEF FirstDrainableIngressLaneIndex
+    <2>7. CASE /\ DrainableClaimedResponseLaneIndices(node, source) = {}
+                /\ DrainableRequestFencedCompletionLaneIndices(
+                     node, source) # {}
+      <3>1. (CHOOSE priority \in
+                    DrainableRequestFencedCompletionLaneIndices(
+                      node, source):
+                    TRUE)
+                  \in DrainableRequestFencedCompletionLaneIndices(
+                       node, source)
+        BY <2>7, FS_EmptySet, Zenon
+      <3>2. (CHOOSE priority \in
+                    DrainableRequestFencedCompletionLaneIndices(
+                      node, source):
+                    TRUE)
+                  \in DrainableIngressLaneIndices(node, source)
+        BY <3>1
+           DEF DrainableRequestFencedCompletionLaneIndices
+      <3> QED BY <2>7, <3>1, <3>2, Zenon
          DEF FirstDrainableIngressLaneIndex
+    <2>8. CASE /\ DrainableClaimedResponseLaneIndices(node, source) = {}
+                /\ DrainableRequestFencedCompletionLaneIndices(
+                     node, source) = {}
+      BY <2>4, <2>5, <2>8, Zenon
+         DEF FirstDrainableIngressLaneIndex
+    <2> QED BY <2>6, <2>7, <2>8
   <1> QED BY <1>1
 
 THEOREM DrainableIngressBypassesBlockedHeadWithinSource ==
@@ -2981,11 +3196,12 @@ THEOREM SelectedIngressItemHasLaneOwnership ==
       \A laneIndex \in
            1..Len(IngressLane(node, asyncIngressReady[node][index])):
         AsyncIngressTypeInvariant
-          => /\ IngressLane(
+         => /\ IngressLane(
                    node, asyncIngressReady[node][index])[laneIndex]
                    .envelope.recipient = node
-             /\ IngressLane(
-                   node, asyncIngressReady[node][index])[laneIndex].source =
+             /\ IngressResourceSource(
+                  IngressLane(
+                    node, asyncIngressReady[node][index])[laneIndex]) =
                   asyncIngressReady[node][index]
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
@@ -2997,9 +3213,10 @@ PROOF
          PROVE /\ IngressLane(
                         node, asyncIngressReady[node][index])[laneIndex]
                         .envelope.recipient = node
-               /\ IngressLane(
-                        node, asyncIngressReady[node][index])[laneIndex]
-                        .source = asyncIngressReady[node][index]
+               /\ IngressResourceSource(
+                    IngressLane(
+                      node, asyncIngressReady[node][index])[laneIndex]) =
+                    asyncIngressReady[node][index]
     <2>1. asyncIngressReady[node][index]
                \in SequenceSet(asyncIngressReady[node])
       BY <1>1, RangeEquality
@@ -3016,16 +3233,45 @@ PROOF
                      node, asyncIngressReady[node][index])[
                        candidateLaneIndex]
                      .envelope.recipient = node
-                /\ IngressLane(
-                     node, asyncIngressReady[node][index])[
-                       candidateLaneIndex]
-                     .source = asyncIngressReady[node][index]
+                /\ IngressResourceSource(
+                     IngressLane(
+                       node, asyncIngressReady[node][index])[
+                         candidateLaneIndex]) =
+                     asyncIngressReady[node][index]
       BY <1>1, <2>1
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant,
              AsyncIngressContentTypeInvariant
     <2> QED BY <1>1, <2>2 DEF IngressLaneDepth
   <1> QED BY <1>1
+
+THEOREM PopIngressLanePreservesCertifiedResponseClaimIngressOwnership ==
+  \A recipient \in ValidatorIds,
+     source \in AsyncIngressSources:
+    \A index \in 1..IngressLaneDepth(recipient, source):
+      LET item == IngressLane(recipient, source)[index]
+      IN /\ AsyncIngressTypeInvariant
+         /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+         /\ asyncIngressLanes' =
+              [asyncIngressLanes EXCEPT
+                 ![recipient][source] =
+                   SequenceWithoutIndex(@, index)]
+         /\ asyncCertifiedResponseClaim'
+              \subseteq asyncCertifiedResponseClaim
+         /\ (item.kind = "CertifiedResponse"
+               /\ CertifiedResponseClaimMatches(item)
+               => AsyncCertifiedResponseCanonicalWireIdentity(item)
+                    \notin asyncCertifiedResponseClaim')
+         => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY IngressSequenceWithoutIndexFacts,
+   IngressSequenceWithoutIndexRetainsOtherValues,
+   SMTT(90), Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner,
+       CertifiedResponseClaimMatches,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant,
+       IngressLane, IngressLaneDepth, SequenceSet
 
 THEOREM RunnerServiceFramePreservesClockType ==
   \A node \in ValidatorIds:
@@ -3055,20 +3301,19 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM HistoricalIdleRunnerPreservesSchedulerType ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncResponsiveAppliedArchiveServers:
     /\ AsyncTypeInvariant
     /\ RunHistoricalServer(node)
     /\ HistoricalDrainableIngressIndices(node) = {}
     => AsyncSchedulerTypeInvariant'
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncResponsiveAppliedArchiveServers,
                 AsyncTypeInvariant,
                 RunHistoricalServer(node),
                 HistoricalDrainableIngressIndices(node) = {}
          PROVE AsyncSchedulerTypeInvariant'
     <2>1. node \in ValidatorIds
-      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
-         DEF AsyncTypeInvariant
+      BY <1>1, AsyncResponsiveAppliedArchiveServersAreValidators
     <2>2. HistoricalIdleStep
       BY <1>1 DEF RunHistoricalServer
     <2>3. /\ AsyncRuntimeScalarTypeInvariant
@@ -3107,6 +3352,7 @@ PROOF
              AsyncIoCapacityTypeVars, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars,
              AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncIngressTopologyTypeVars, vars
     <2>5. /\ AsyncRuntimeScalarTypeInvariant'
            /\ AsyncCausalTypeInvariant'
@@ -3258,13 +3504,13 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM HistoricalDrainRunnerPreservesSchedulerType ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncResponsiveAppliedArchiveServers:
     /\ AsyncTypeInvariant
     /\ RunHistoricalServer(node)
     /\ HistoricalDrainableIngressIndices(node) # {}
     => AsyncSchedulerTypeInvariant'
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncResponsiveAppliedArchiveServers,
                 AsyncTypeInvariant,
                 RunHistoricalServer(node),
                 HistoricalDrainableIngressIndices(node) # {}
@@ -3276,8 +3522,7 @@ PROOF
     <2> DEFINE DrainItem ==
            HistoricalSelectedIngressItemAt(node, DrainIndex)
     <2>1. node \in ValidatorIds
-      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
-         DEF AsyncTypeInvariant
+      BY <1>1, AsyncResponsiveAppliedArchiveServersAreValidators
     <2>2. /\ DrainHistoricalIngressSelected(node)
            /\ PopSelectedIngress(node, DrainIndex, DrainLaneIndex)
       BY <1>1
@@ -3393,7 +3638,8 @@ PROOF
          DEF RunHistoricalServer, DrainHistoricalIngressSelected,
              AsyncRuntimeScalarTypeVars, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars,
-             AsyncTransportContentTypeVars, vars
+             AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars, vars
     <2>11. /\ AsyncRuntimeScalarTypeInvariant'
             /\ AsyncCausalTypeInvariant'
             /\ AsyncDeferredTopologyTypeInvariant'

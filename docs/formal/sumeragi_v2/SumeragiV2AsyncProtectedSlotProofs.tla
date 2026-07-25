@@ -11,21 +11,8 @@ weak-fairness frontier and well-founded service-rank chains are discharged.
 
 THEOREM AsyncTypeInvariantObligation ==
   \A initialContext:
-    AsyncSpecAt(initialContext) => []AsyncTypeInvariant
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE AsyncSpecAt(initialContext) => []AsyncTypeInvariant
-    <2>1. AsyncInitAt(initialContext) => AsyncStrongTypeInvariant
-      BY AsyncInitEstablishesStrongTypeInvariant
-    <2>2. AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
-             => AsyncStrongTypeInvariant'
-      BY AsyncBracketNextPreservesStrongTypeInvariant
-    <2>3. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
-      BY <2>1, <2>2, PTL DEF AsyncSpecAt
-    <2>4. AsyncStrongTypeInvariant => AsyncTypeInvariant
-      BY AsyncStrongTypeProjectsAsyncType
-    <2> QED BY <2>3, <2>4, PTL
-  <1> QED BY <1>1
+    AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+BY AsyncSpecAlwaysStrongTypeInvariant
 
 THEOREM GenerationScopedVoteDeliveryObligation ==
   \A initialContext:
@@ -912,8 +899,10 @@ PROOF
 THEOREM CommitCertificateResponseCandidateHasProgressCommitSource ==
   \A item:
     ProgressCommitSource(CommitCertificateResponseCandidate(item))
-BY DeliveryCandidateHasProgressCommitSource
-   DEF CommitCertificateResponseCandidate
+BY DEF ProgressCommitSource, ProgressCommitVoteHistory,
+       CommitCertificateResponseCandidate, DeliveryKind,
+       DiscoveredCommitQcItem, AsyncNetworkItem,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
 
 THEOREM CausalCandidateHasProgressCommitSource ==
   \A commandClass, kind, command:
@@ -1140,7 +1129,9 @@ PROOF
         BY <3>7, CompletionCandidateHasProgressCommitSource,
            EmptySequenceHasProgressCommitSources,
            SingletonSequenceHasProgressCommitSources, Isa
-           DEF CommandSuccessors, PersistDecisionFetchSuccessor,
+           DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
+               PersistDecisionRecoveryKind, PersistDecisionBody,
+               PersistDecisionValidationHeld, PersistDecisionRequest,
                AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
       <3> QED BY <2>3, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                      <3>7, SMT

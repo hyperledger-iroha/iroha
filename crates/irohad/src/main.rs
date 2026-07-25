@@ -5946,7 +5946,7 @@ mod network_relay_tests {
                 )),
                 manifest: sample_v2_manifest(),
                 body: b"body".to_vec(),
-                responder: 0,
+                cited_responder: 0,
                 signature: vec![0x69],
             }),
         )))

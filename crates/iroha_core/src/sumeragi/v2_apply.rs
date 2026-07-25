@@ -743,9 +743,8 @@ impl DurableApplicationEvidence {
                 == artifact.commit_qc.aggregate_signature.as_slice()
             && self.validated_context_id() == context.id()
             && self.validated_round().height == context.height
-            // The durable body must be the exact immutable proposal origin
-            // authenticated by the CommitQC, independently of its later
-            // finality round.
+            // The durable body must be the exact same-round proposal body
+            // authenticated by the CommitQC.
             && self.validated_round() == certificate.proposal_round
             && self.validated_subject() == self.subject()
             && self.validated_manifest_hash() == self.validated_receipt().durable().manifest_hash()
@@ -3558,7 +3557,7 @@ mod tests {
     );
 
     v2_apply_test!(
-        resigned_later_view_commit_qc_applies_exact_locked_origin_body,
+        same_body_reproposal_commit_qc_applies_exact_reproposal_body,
         {
             let mut fixture = ApplyFixture::new();
             let mut keys = (1_u8..=4)
@@ -3570,6 +3569,7 @@ mod tests {
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let mut certificate = fixture.task.certificate().clone();
             certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
+            certificate.proposal_round = certificate.round;
             let preimage = wire::Vote {
                 round: certificate.round,
                 proposal_round: certificate.proposal_round,
@@ -3588,7 +3588,7 @@ mod tests {
                         keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
                         &preimage,
                     )
-                    .expect("sign later-view Commit vote")
+                    .expect("sign same-round reproposal Commit vote")
                     .payload()
                     .to_vec()
                 })
@@ -3596,7 +3596,7 @@ mod tests {
             certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
                 &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             )
-            .expect("aggregate later-view Commit votes");
+            .expect("aggregate same-round reproposal Commit votes");
             let later_round = certificate.round;
             let later_tag = EventTag::new(
                 fixture.context.height,
@@ -3626,7 +3626,7 @@ mod tests {
 
             fixture
                 .execute(&mut store)
-                .expect("later-view CommitQC applies the exact locked origin body");
+                .expect("reproposal CommitQC applies the exact unchanged body");
             fixture.assert_complete();
         }
     );

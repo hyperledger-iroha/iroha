@@ -35,6 +35,10 @@ AdvanceContext(subject) ==
           [node \in ValidatorIds |->
              IF generation[node] < MaxGeneration
              THEN generation[node] + 1 ELSE generation[node]]
+     /\ lastInstalledTc' =
+          [node \in ValidatorIds |-> NoTimeoutCertificate]
+     /\ lockPrepareQc' = [node \in ValidatorIds |-> NoPrepareQC]
+     /\ highestPrepareQc' = [node \in ValidatorIds |-> NoPrepareQC]
      /\ lockRank' = [node \in ValidatorIds |-> NoRank]
      /\ lockSubject' = [node \in ValidatorIds |-> NoSubject]
      /\ highestRank' = [node \in ValidatorIds |-> NoRank]

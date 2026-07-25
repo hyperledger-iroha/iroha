@@ -866,7 +866,7 @@ struct GlobalBodyLock {
 
 #[derive(Clone, Copy, Debug)]
 enum LockedGlobalBodyOrigin<'a> {
-    ExactProposalView,
+    AuthenticatedHeaderAtOrBeforeLock,
     FixedGenesisViewZero {
         authenticated_genesis: &'a SignedBlock,
     },
@@ -3408,11 +3408,14 @@ impl V2LaneWorkAdapter {
     /// Bind lane proposals reconstructed from the exact durable globally
     /// locked body, then release their bounded lane-local consensus sessions.
     ///
-    /// This ordinary path requires the immutable block header view to equal the
-    /// exact locked proposal round. Height-one recovery must use
+    /// This ordinary path authenticates an immutable block header from the
+    /// locked round or an earlier unchanged reproposal round. Height-one recovery must use
     /// [`Self::bind_locked_genesis_body`] instead.
     pub(crate) fn bind_locked_global_body(&mut self, block: &SignedBlock) -> V2LaneIngressOutcome {
-        self.bind_locked_global_body_from_origin(block, LockedGlobalBodyOrigin::ExactProposalView)
+        self.bind_locked_global_body_from_origin(
+            block,
+            LockedGlobalBodyOrigin::AuthenticatedHeaderAtOrBeforeLock,
+        )
     }
 
     /// Bind the exact authenticated fixed view-zero genesis body under its
@@ -3458,8 +3461,9 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         };
         let origin_matches = match origin {
-            LockedGlobalBodyOrigin::ExactProposalView => {
-                global_lock.round.view == block.header().view_change_index()
+            LockedGlobalBodyOrigin::AuthenticatedHeaderAtOrBeforeLock => {
+                self.context.height != 1
+                    && block.header().view_change_index() <= global_lock.round.view
             }
             LockedGlobalBodyOrigin::FixedGenesisViewZero {
                 authenticated_genesis,
@@ -13744,6 +13748,107 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn late_old_sidecar_flush_removes_only_reconnected_source_retry() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let requester = adapter.context.roster[1].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+            hub_a.clone(),
+            adapter.limits.reply_source_capacity.get(),
+        );
+        let route_a = routes.mint_via(requester.clone(), hub_a.clone());
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let message = Arc::new(CertifiedMergeSidecarMessage::Chunk(
+            CertifiedMergeSidecarChunkV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                request_id: Hash::new(b"late old lane sidecar flush request"),
+                entry_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"late old lane sidecar flush entry",
+                )),
+                encoded_len: 1,
+                epoch_id: 1,
+                reference_digest: Hash::new(b"late old lane sidecar flush reference"),
+                requester: requester.clone(),
+                responder: adapter.local_peer.clone(),
+                chunk_index: 0,
+                chunk_count: 1,
+                bytes: vec![0xA6],
+            },
+        ));
+        let canonical_post = iroha_p2p::Post {
+            data: crate::NetworkMessage::CertifiedMergeSidecar(Arc::clone(&message)),
+            peer_id: requester.clone(),
+            priority: iroha_p2p::Priority::High,
+        };
+        let (mut flush_control, flush_ack) =
+            iroha_p2p::network::NetworkReplyFlushAckTestFixture::for_reply(
+                &canonical_post,
+                &route_a,
+            );
+        assert!(flush_control.flush(), "publish the old successful flush");
+        let mut old_admission = CertifiedMergeSidecarChunkAdmission::from_admitted_reply(
+            &canonical_post,
+            &route_a,
+            0,
+            1,
+            flush_ack.identity(),
+        )
+        .expect("bind the old exact response occurrence");
+        let trace = crate::sumeragi::v2_worker::reliable_flush_trace_projection(
+            &old_admission,
+            iroha_p2p::network::NetworkReplyFlushAckStatus::Flushed,
+            1,
+            0,
+            0,
+            1,
+            1,
+        )
+        .expect("project the successful old writer transition");
+        old_admission
+            .bind_confirmed_worker_trace(trace)
+            .expect("bind the successful old writer transition");
+
+        let effect = |route| V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: requester.clone(),
+            reply_routes: Some(
+                NetworkReplyRoutes::try_from_route(route)
+                    .expect("test reply route has bounded source geometry"),
+            ),
+            message: Arc::clone(&message),
+        };
+        assert!(adapter.push_merge_sidecar_effect(effect(route_a.clone())));
+        assert!(adapter.push_merge_sidecar_effect(effect(route_b.clone())));
+        assert_eq!(adapter.sidecar_effects.len(), 1);
+
+        assert!(routes.retire(&route_a));
+        let reconnected_a = routes.mint_via(requester.clone(), hub_a);
+        assert!(adapter.push_merge_sidecar_effect(effect(reconnected_a.clone())));
+        assert!(old_admission.is_bound_to_source(&reconnected_a));
+        assert!(!old_admission.is_bound_to_source(&route_b));
+
+        adapter.remove_acknowledged_sidecar_retry_effect(&old_admission);
+        assert!(matches!(
+            adapter.sidecar_effects.front(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                message: queued,
+                ..
+            }) if reply_routes.len() == 1
+                && reply_routes.iter().any(|route| route.same_delivery(&route_b))
+                && Arc::ptr_eq(queued, &message)
+        ));
+        assert!(
+            adapter.sidecar_effect_keys.contains(&lane_work_effect_key(
+                adapter
+                    .sidecar_effects
+                    .front()
+                    .expect("the independent sibling retry remains queued")
+            ))
+        );
+    }
+
+    #[test]
     fn same_qc_reference_variants_reuse_bounded_positive_authentication() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let round = wire::ConsensusRound {
@@ -14294,12 +14399,13 @@ pub(super) mod tests {
 
     #[test]
     fn persisted_v2_lane_qc_records_globally_applied_receipt_and_unblocks_next_height() {
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (mut adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
         let lane_id = LaneId::SINGLE;
         let dataspace_id = DataSpaceId::UNIVERSAL;
         let incarnation = adapter
             .state
-            .lane_incarnation_at_height(lane_id, 1)
+            .lane_incarnation_at_height(lane_id, adapter.context.height)
             .expect("canonical lane incarnation is active");
         let transaction_key =
             KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519).expect("transaction key");
@@ -14311,7 +14417,15 @@ pub(super) mod tests {
         .sign(transaction_key.private_key());
         let entrypoint_hash = transaction.hash_as_entrypoint();
 
-        let base = proposal_for_route(&adapter, &keys, lane_id, dataspace_id, incarnation, 1, 1);
+        let base = proposal_for_route(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            adapter.context.height,
+            1,
+        );
         let mut ownership = ownership_from_proposal(&base);
         ownership.accepted_transaction_hashes = vec![Hash::from(entrypoint_hash)];
         let replay = ownership
@@ -14323,17 +14437,28 @@ pub(super) mod tests {
         ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
 
         let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero fixture height"),
-            None,
+            NonZeroU64::new(adapter.context.height).expect("non-zero fixture height"),
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
             None,
             None,
             1,
             0,
         );
-        let signature = SignatureOf::try_from_hash(keys[0].private_key(), header.hash())
+        let leader = usize::try_from(adapter.context.leader(0)).expect("leader index fits usize");
+        let signature = SignatureOf::try_from_hash(keys[leader].private_key(), header.hash())
             .expect("sign receipt fixture block");
-        let mut block =
-            SignedBlock::presigned(BlockSignature::new(0, signature), header, vec![transaction]);
+        let mut block = SignedBlock::presigned(
+            BlockSignature::new(
+                u64::try_from(leader).expect("leader index fits u64"),
+                signature,
+            ),
+            header,
+            vec![transaction],
+        );
         block.set_execution_context(Some(
             BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership.clone()]),
@@ -17949,7 +18074,7 @@ pub(super) mod tests {
 
     #[test]
     fn enabled_nexus_binds_independent_lane_author_distinct_from_global_leader() {
-        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         let lane_validators = enable_multilane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
@@ -20794,7 +20919,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn cross_view_global_lock_fails_exact_body_binding() {
+    fn higher_same_subject_lock_retains_unchanged_body_binding() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let (block, _) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
         let (original_round, subject) = global_lock_for_block(&adapter, &block);
@@ -20815,15 +20940,34 @@ pub(super) mod tests {
             adapter.mark_global_body_locked(higher_round, subject),
             Ok(GlobalBodyLockOutcome::Inserted)
         );
-        assert_eq!(
+        assert_ne!(
             adapter.bind_locked_global_body(&block),
             V2LaneIngressOutcome::Rejected,
-            "the exact lock round must match the immutable body header view"
+            "a higher same-subject lock must retain the immutable earlier-view body"
         );
         assert_eq!(
             adapter.bind_locked_genesis_body(&block, &block),
             V2LaneIngressOutcome::Rejected,
             "the fixed-view genesis path cannot weaken a successor-height lock"
+        );
+
+        let (mut future_adapter, future_keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (future_block, _) =
+            planned_lane_candidate_block_at_view(&future_adapter, &future_keys, 1);
+        let (_, future_subject) = global_lock_for_block(&future_adapter, &future_block);
+        let premature_lock = wire::ConsensusRound {
+            context_id: future_adapter.context.id(),
+            height: future_adapter.context.height,
+            view: 0,
+        };
+        assert_eq!(
+            future_adapter.mark_global_body_locked(premature_lock, future_subject),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        assert_eq!(
+            future_adapter.bind_locked_global_body(&future_block),
+            V2LaneIngressOutcome::Rejected,
+            "a body originating after the installed lock cannot borrow its authority"
         );
     }
 

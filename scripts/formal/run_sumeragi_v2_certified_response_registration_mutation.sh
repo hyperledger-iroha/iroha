@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Run the bounded exact certified-response registration mutation matrix.
+# Run the bounded exact certified/Commit-response registration mutation matrix.
 
 set -euo pipefail
 
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
-readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.11"'
+readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
+readonly SANY_SUCCESS_MARKER="Semantic processing of module SumeragiV2CertifiedResponseRegistrationMutation"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2CertifiedResponseRegistrationMutation.tla"
@@ -44,7 +45,7 @@ actual_sha256="$(hash_file "$TLA2TOOLS_JAR")"
 }
 java_version="$($JAVA_BIN -version 2>&1)"
 grep -Fq "$EXPECTED_JAVA_VERSION" <<<"$java_version" || {
-  echo "frozen Java 21.0.11 is required" >&2
+  echo "frozen Java 21.0.12 is required" >&2
   printf '%s\n' "$java_version" >&2
   exit 1
 }
@@ -56,13 +57,13 @@ trap 'rm -rf -- "$run_dir"' EXIT
   cd "$FORMAL_DIR"
   "$JAVA_BIN" -cp "$TLA2TOOLS_JAR" tla2sany.SANY "$MODEL"
 ) >"${run_dir}/sany.log" 2>&1
-grep -Fq "Semantic processing of module SumeragiV2CertifiedResponseRegistrationMutation" \
-  "${run_dir}/sany.log" || {
-    echo "SANY missed the expected semantic-processing marker" >&2
-    cat "${run_dir}/sany.log" >&2
-    exit 1
-  }
-echo "[sany] certified-response registration model parsed with frozen Java 21.0.11"
+sany_last_nonblank="$(awk 'NF { line = $0 } END { print line }' "${run_dir}/sany.log")"
+[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]] || {
+  echo "SANY did not end at the expected semantic-processing marker" >&2
+  cat "${run_dir}/sany.log" >&2
+  exit 1
+}
+echo "[sany] certified-response registration model parsed with frozen Java 21.0.12"
 
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
@@ -104,6 +105,11 @@ run_case duplicate-fixed \
   "Model checking completed. No error has been found." \
   "5 states generated, 5 distinct states found, 0 states left on queue." \
   "depth of the complete state graph search is 5"
+run_case commit-certificate-fanout-fixed \
+  certified_response_registration_commit_fanout_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "5 states generated, 5 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 5"
 run_case restart-fixed \
   certified_response_registration_restart_fixed.cfg 0 \
   "Model checking completed. No error has been found." \
@@ -119,6 +125,11 @@ run_case duplicate-missing-guard \
   "Invariant AcceptedOnlyWhileOutstanding is violated." \
   "5 states generated, 5 distinct states found, 0 states left on queue." \
   "depth of the complete state graph search is 5"
+run_case commit-certificate-route-only-retirement \
+  certified_response_registration_commit_fanout_route_only_bug.cfg 12 \
+  "Invariant CommitFanoutFirstAcceptedResponseRetiresAllRouteAliases is violated." \
+  "4 states generated, 4 distinct states found, 0 states left on queue." \
+  "depth of the complete state graph search is 4"
 run_case restart-missing-guard \
   certified_response_registration_restart_missing_guard.cfg 12 \
   "Invariant AcceptedOnlyWhileOutstanding is violated." \

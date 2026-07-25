@@ -921,11 +921,12 @@ geometry, compact offline QCs, and parent height-context identity to the
 authenticated origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. Six source-sealed command legs and the G-SCALE runner/validator
-preflight bring the current inventory to 515 tests across 38 modules and 65
-legs.
+a module. The per-source route-attempt, exact PrepareQC recovery, locked-body
+reproposal, runner/worker, sidecar, and daemon closure brings the current
+inventory to 569 tests across 39 modules. Together with the source-sealed
+command and tooling legs, the pre-network corridor contains 72 legs.
 The canonical module/test TSV inventory SHA-256 is
-`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+`be314a8e489645cec1d2e141fee08d8bc506bb12e107156f924f9651c83d727e`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1045,8 +1046,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 65 pre-network legs and the exact
-515-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 72 pre-network legs and the exact
+569-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

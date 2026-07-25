@@ -177,49 +177,184 @@ echo "[tlc] the cyclic deferred cursor closes the replenishment lasso"
 set +e
 (
   cd "$FORMAL_DIR"
-  "${common[@]}" -metadir "$run_dir/deferred-busy-cursor-old" \
-    -config deferred_busy_cursor_strict_bug.cfg \
-    SumeragiV2DeferredBusyCursorMutation.tla
-) >"$run_dir/deferred-busy-cursor-old.log" 2>&1
-deferred_busy_cursor_old_status=$?
+  "${common[@]}" -metadir "$run_dir/deferred-busy-priority-old" \
+    -config deferred_busy_priority_bug.cfg \
+    SumeragiV2DeferredBusyFenceMutation.tla
+) >"$run_dir/deferred-busy-priority-old.log" 2>&1
+deferred_busy_priority_old_status=$?
 set -e
 
-[[ $deferred_busy_cursor_old_status -eq 13 ]] || {
-  echo "old Busy deferred cursor mutation did not fail with TLC status 13" >&2
-  cat "$run_dir/deferred-busy-cursor-old.log" >&2
+[[ $deferred_busy_priority_old_status -eq 13 ]] || {
+  echo "old Busy/deferred priority mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/deferred-busy-priority-old.log" >&2
   exit 1
 }
 for marker in \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
   "2 distinct states" \
-  "busyAttemptParity = TRUE" \
+  "attemptParity = TRUE" \
   "Back to state 1"; do
-  grep -Fq "$marker" "$run_dir/deferred-busy-cursor-old.log" || {
-    echo "old Busy deferred cursor mutation missed expected marker: $marker" >&2
-    cat "$run_dir/deferred-busy-cursor-old.log" >&2
+  grep -Fq "$marker" "$run_dir/deferred-busy-priority-old.log" || {
+    echo "old Busy/deferred priority mutation missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-busy-priority-old.log" >&2
     exit 1
   }
 done
 
 (
   cd "$FORMAL_DIR"
-  "${common[@]}" -metadir "$run_dir/deferred-busy-cursor-cyclic" \
-    -config deferred_busy_cursor_cyclic.cfg \
-    SumeragiV2DeferredBusyCursorMutation.tla
-) >"$run_dir/deferred-busy-cursor-cyclic.log" 2>&1
+  "${common[@]}" -metadir "$run_dir/deferred-busy-fence" \
+    -config deferred_busy_fence.cfg \
+    SumeragiV2DeferredBusyFenceMutation.tla
+) >"$run_dir/deferred-busy-fence.log" 2>&1
 for marker in \
   "Model checking completed. No error has been found." \
-  "5 distinct states" \
-  "depth of the complete state graph search is 5"; do
-  grep -Fq "$marker" "$run_dir/deferred-busy-cursor-cyclic.log" || {
-    cat "$run_dir/deferred-busy-cursor-cyclic.log" >&2
+  "3 distinct states" \
+  "depth of the complete state graph search is 3"; do
+  grep -Fq "$marker" "$run_dir/deferred-busy-fence.log" || {
+    cat "$run_dir/deferred-busy-fence.log" >&2
     exit 1
   }
 done
 
-echo "[tlc] Busy Completion requeue without cursor advance has a fair lasso"
-echo "[tlc] Busy Completion requeue with cursor advance services Progress"
+echo "[tlc] Busy-first deferred retry priority has the required fair lasso"
+echo "[tlc] the production Busy fence services Completion before deferred work"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/busy-alias-old-rank" \
+    -config busy_alias_old_rank_bug.cfg \
+    SumeragiV2BusyAliasRankMutation.tla
+) >"$run_dir/busy-alias-old-rank.log" 2>&1
+busy_alias_old_rank_status=$?
+set -e
+
+[[ $busy_alias_old_rank_status -eq 12 ]] || {
+  echo "old aliased Busy rank did not fail with TLC status 12" >&2
+  cat "$run_dir/busy-alias-old-rank.log" >&2
+  exit 1
+}
+for marker in \
+  "Invariant OldIfRankDropped is violated." \
+  'phase = "AfterSign"' \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/busy-alias-old-rank.log" || {
+    echo "old aliased Busy rank missed expected marker: $marker" >&2
+    cat "$run_dir/busy-alias-old-rank.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/busy-alias-weighted-rank" \
+    -config busy_alias_weighted_rank.cfg \
+    SumeragiV2BusyAliasRankMutation.tla
+) >"$run_dir/busy-alias-weighted-rank.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/busy-alias-weighted-rank.log" || {
+    cat "$run_dir/busy-alias-weighted-rank.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/busy-alias-guarded-kernel" \
+    -config busy_alias_guarded_kernel.cfg \
+    SumeragiV2BusyAliasRankMutation.tla
+) >"$run_dir/busy-alias-guarded-kernel.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "3 distinct states" \
+  "depth of the complete state graph search is 3"; do
+  grep -Fq "$marker" "$run_dir/busy-alias-guarded-kernel.log" || {
+    cat "$run_dir/busy-alias-guarded-kernel.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] the retired IF rank misses the aliased signing-lane descent"
+echo "[tlc] weighted rank and guarded lane exclusion close the alias witness"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-debt-invariant-old" \
+    -config deferred_debt_inherited_invariant_bug.cfg \
+    SumeragiV2DeferredDebtMutation.tla
+) >"$run_dir/deferred-debt-invariant-old.log" 2>&1
+deferred_debt_invariant_old_status=$?
+set -e
+
+[[ $deferred_debt_invariant_old_status -eq 12 ]] || {
+  echo "inherited deferred debt did not fail with TLC status 12" >&2
+  cat "$run_dir/deferred-debt-invariant-old.log" >&2
+  exit 1
+}
+for marker in \
+  "Invariant DeferredDebtInvariant is violated." \
+  'phase = "CompleteBusy"' \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/deferred-debt-invariant-old.log" || {
+    echo "inherited deferred-debt invariant missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-debt-invariant-old.log" >&2
+    exit 1
+  }
+done
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-debt-liveness-old" \
+    -config deferred_debt_inherited_liveness_bug.cfg \
+    SumeragiV2DeferredDebtMutation.tla
+) >"$run_dir/deferred-debt-liveness-old.log" 2>&1
+deferred_debt_liveness_old_status=$?
+set -e
+
+[[ $deferred_debt_liveness_old_status -eq 13 ]] || {
+  echo "inherited deferred debt did not fail liveness with TLC status 13" >&2
+  cat "$run_dir/deferred-debt-liveness-old.log" >&2
+  exit 1
+}
+for marker in \
+  "Temporal properties were violated." \
+  'phase = "Drain"' \
+  "State 4: Stuttering" \
+  "3 distinct states"; do
+  grep -Fq "$marker" "$run_dir/deferred-debt-liveness-old.log" || {
+    echo "inherited deferred-debt liveness missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-debt-liveness-old.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-debt-armed" \
+    -config deferred_debt_armed.cfg \
+    SumeragiV2DeferredDebtMutation.tla
+) >"$run_dir/deferred-debt-armed.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "4 distinct states" \
+  "depth of the complete state graph search is 4"; do
+  grep -Fq "$marker" "$run_dir/deferred-debt-armed.log" || {
+    cat "$run_dir/deferred-debt-armed.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] inherited false deferred debt strands the post-Busy owner"
+echo "[tlc] admission-armed debt preserves the invariant and drains fairly"
 
 set +e
 (
@@ -484,3 +619,159 @@ done
 
 echo "[tlc] live Serve nonce reuse has the required fair replacement lasso"
 echo "[tlc] a fresh live nonce makes service exit the original occurrence"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-primed-selector-old" \
+    -config deferred_primed_selector_bug.cfg \
+    SumeragiV2DeferredPrimedSelectorMutation.tla
+) >"$run_dir/deferred-primed-selector-old.log" 2>&1
+deferred_primed_selector_old_status=$?
+set -e
+
+[[ $deferred_primed_selector_old_status -eq 12 ]] || {
+  echo "primed deferred selector did not fail with TLC status 12" >&2
+  cat "$run_dir/deferred-primed-selector-old.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Invariant OldPrimedSelectorClaimHeld is violated." \
+  'nextDeferredClass = [node |-> "Progress"]' \
+  'phase = "Drained"' \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/deferred-primed-selector-old.log" || {
+    echo "primed deferred selector missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-primed-selector-old.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-rigid-target-class" \
+    -config deferred_rigid_target_class.cfg \
+    SumeragiV2DeferredPrimedSelectorMutation.tla
+) >"$run_dir/deferred-rigid-target-class.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "6 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/deferred-rigid-target-class.log" || {
+    cat "$run_dir/deferred-rigid-target-class.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] priming the deferred selector switches the claimed queue after Completion drain"
+echo "[tlc] a rigid target class validates selected-tail and foreign-class preservation exhaustively"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/busy-witness-stale-readiness" \
+    -config busy_witness_stale_readiness_bug.cfg \
+    SumeragiV2BusyWitnessKernelMutation.tla
+) >"$run_dir/busy-witness-stale-readiness.log" 2>&1
+busy_witness_stale_readiness_status=$?
+set -e
+
+[[ $busy_witness_stale_readiness_status -eq 12 ]] || {
+  echo "stale Busy witness did not fail with TLC status 12" >&2
+  cat "$run_dir/busy-witness-stale-readiness.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Invariant OldActiveBusyWitnessInvariant is violated." \
+  'phase = "Deferred"' \
+  "activeCompletion = FALSE" \
+  "deferredCompletion = TRUE" \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/busy-witness-stale-readiness.log" || {
+    echo "stale Busy witness missed expected marker: $marker" >&2
+    cat "$run_dir/busy-witness-stale-readiness.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/busy-witness-combined-kernel" \
+    -config busy_witness_combined_kernel.cfg \
+    SumeragiV2BusyWitnessKernelMutation.tla
+) >"$run_dir/busy-witness-combined-kernel.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "8 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/busy-witness-combined-kernel.log" || {
+    cat "$run_dir/busy-witness-combined-kernel.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] stale Proposal readiness defers the sole active Busy completion witness"
+echo "[tlc] the combined serialized-owner/readiness kernel blocks every invalid row"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/persist-install-height-alias" \
+    -config persist_install_height_alias_bug.cfg \
+    SumeragiV2PersistInstallHeightAliasMutation.tla
+) >"$run_dir/persist-install-height-alias.log" 2>&1
+persist_install_height_alias_status=$?
+set -e
+
+[[ $persist_install_height_alias_status -eq 12 ]] || {
+  echo "redundant-height InstallTC alias did not fail with TLC status 12" >&2
+  cat "$run_dir/persist-install-height-alias.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Invariant SerializedBusyOwnershipInvariant is violated." \
+  'phase = "AfterInstall"' \
+  "signOwnerCount = 2" \
+  "2 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/persist-install-height-alias.log" || {
+    echo "redundant-height InstallTC alias missed expected marker: $marker" >&2
+    cat "$run_dir/persist-install-height-alias.log" >&2
+    exit 1
+  }
+done
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/persist-install-canonical-vote" \
+    -config persist_install_canonical_vote.cfg \
+    SumeragiV2PersistInstallHeightAliasMutation.tla
+) >"$run_dir/persist-install-canonical-vote.log" 2>&1
+persist_install_canonical_vote_status=$?
+set -e
+
+[[ $persist_install_canonical_vote_status -eq 0 ]] || {
+  echo "canonical full-Vote InstallTC mutation did not pass with TLC status 0" >&2
+  cat "$run_dir/persist-install-canonical-vote.log" >&2
+  exit 1
+}
+for marker in \
+  "Model checking completed. No error has been found." \
+  "4 distinct states generated" \
+  "8 distinct states" \
+  "depth of the complete state graph search is 2"; do
+  grep -Fq "$marker" "$run_dir/persist-install-canonical-vote.log" || {
+    echo "canonical full-Vote InstallTC mutation missed expected marker: $marker" >&2
+    cat "$run_dir/persist-install-canonical-vote.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] field-only locked Commit selection reproduces the two-owner height alias"
+echo "[tlc] canonical full-Vote selection exhaustively preserves empty/singleton readiness"

@@ -25731,7 +25731,7 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 54-entry ledger contains 33 `tlaps_proved`, 14 `specified_unproved`, 6
+The 54-entry ledger contains 34 `tlaps_proved`, 13 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. Outstanding release work:
 
@@ -25751,8 +25751,9 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 515-test, 38-module, 71-leg pre-network
-  corridor. Its proposal-origin additions cover strict same-round TC
+- execute the fresh source-sealed 569-test, 39-module, 72-leg pre-network
+  corridor. Its proposal-origin and per-source route-attempt additions cover
+  strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
   and persistence failure. Its final six regressions cover canonical view-zero
   genesis bytes first proposed in a later round, the contention-tolerant restart
@@ -25985,7 +25986,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  515-test target above supersedes that checkpoint. The 30-module pre-network
+  569-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

@@ -2,11 +2,11 @@
 EXTENDS SumeragiV2AsyncIngressRunnerTypeProofs
 
 THEOREM RunHistoricalServerPreservesSchedulerType ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncResponsiveAppliedArchiveServers:
     AsyncTypeInvariant /\ RunHistoricalServer(node)
       => AsyncSchedulerTypeInvariant'
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncResponsiveAppliedArchiveServers,
                 AsyncTypeInvariant,
                 RunHistoricalServer(node)
          PROVE AsyncSchedulerTypeInvariant'
@@ -15,6 +15,65 @@ PROOF
     <2>2. CASE HistoricalDrainableIngressIndices(node) # {}
       BY <1>1, <2>2, HistoricalDrainRunnerPreservesSchedulerType
     <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM DrainHistoricalIngressSelectedPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ DrainHistoricalIngressSelected(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                DrainHistoricalIngressSelected(node)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2> DEFINE DrainIndex ==
+          FirstHistoricalDrainableIngressIndex(node)
+    <2> DEFINE DrainSource == asyncIngressReady[node][DrainIndex]
+    <2> DEFINE DrainLaneIndex ==
+          HistoricalSelectedIngressLaneIndex(node, DrainIndex)
+    <2> DEFINE DrainItem ==
+          IngressLane(node, DrainSource)[DrainLaneIndex]
+    <2>1. /\ AsyncIngressTypeInvariant
+           /\ DrainIndex \in
+                HistoricalDrainableIngressIndices(node)
+      BY <1>1, FirstHistoricalDrainableIndexIsDrainable
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             DrainHistoricalIngressSelected, DrainIndex
+    <2>2. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
+           /\ DrainSource \in AsyncIngressSources
+           /\ DrainLaneIndex \in
+                1..IngressLaneDepth(node, DrainSource)
+      BY <2>1,
+         FirstHistoricalDrainableIngressLaneIndexIsDrainable, SMT
+         DEF HistoricalDrainableIngressIndices,
+             HistoricalIngressSourceCanDrain,
+             HistoricalDrainableIngressLaneIndices,
+             HistoricalSelectedIngressLaneIndex,
+             DrainSource, DrainLaneIndex
+    <2>3. /\ asyncIngressLanes' =
+                  [asyncIngressLanes EXCEPT
+                     ![node][DrainSource] =
+                       SequenceWithoutIndex(@, DrainLaneIndex)]
+           /\ DrainItem =
+                HistoricalSelectedIngressItemAt(node, DrainIndex)
+      BY <1>1, <2>2, Isa
+         DEF DrainHistoricalIngressSelected, PopSelectedIngress,
+             HistoricalSelectedIngressItemAt,
+             DrainIndex, DrainSource, DrainLaneIndex, DrainItem
+    <2>4. /\ asyncCertifiedResponseClaim'
+                  \subseteq asyncCertifiedResponseClaim
+           /\ (DrainItem.kind = "CertifiedResponse"
+                 /\ CertifiedResponseClaimMatches(DrainItem)
+                 => AsyncCertifiedResponseCanonicalWireIdentity(DrainItem)
+                      \notin asyncCertifiedResponseClaim')
+      BY <1>1, <2>3, FS_Subset, SMT
+         DEF DrainHistoricalIngressSelected, DrainItem
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
+         PopIngressLanePreservesCertifiedResponseClaimIngressOwnership
+         DEF DrainItem
   <1> QED BY <1>1
 
 
@@ -229,7 +288,8 @@ PROOF
     <2>1. CASE ~DeferredQueueNonempty(node)
       <3>1. UNCHANGED AsyncHistoricalRecoveryFrameVars
         BY <1>1, <2>1, Isa
-           DEF DeferredDrainStep, LeaveCausalQueues,
+           DEF DeferredDrainStep, DeferredWorkServiceable,
+               LeaveCausalQueues,
                AsyncHistoricalRecoveryFrameVars, vars
       <3> QED BY <1>1, <3>1, HistoricalRecoveryFramePreservesType
            DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant
@@ -302,6 +362,7 @@ THEOREM RunnerScalarClockAndSchedulerStutterPreservesType ==
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems,
                     asyncRetainedControl, asyncActiveRequests,
+                    asyncCertifiedResponseClaim,
                     asyncTransport, asyncIngressLanes,
                     asyncIngressReady, asyncHeldChunks>>
     => AsyncSchedulerTypeInvariant'
@@ -325,6 +386,7 @@ PROOF
                             asyncOutstandingTags, asyncNodeDeadlines,
                             asyncRetransmitDeadlines, asyncSentItems,
                             asyncRetainedControl, asyncActiveRequests,
+                            asyncCertifiedResponseClaim,
                             asyncTransport, asyncIngressLanes,
                             asyncIngressReady, asyncHeldChunks>>
          PROVE AsyncSchedulerTypeInvariant'
@@ -368,6 +430,7 @@ PROOF
              AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
              AsyncIoCapacityTypeVars, AsyncDeferredTopologyTypeVars,
              AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncIngressTopologyTypeVars
     <2>5. /\ AsyncCausalTypeInvariant'
            /\ AsyncIoTopologyTypeInvariant'
@@ -422,6 +485,7 @@ PROOF
                           asyncOutstandingTags, asyncNodeDeadlines,
                           asyncRetransmitDeadlines, asyncSentItems,
                           asyncRetainedControl, asyncActiveRequests,
+                          asyncCertifiedResponseClaim,
                           asyncTransport, asyncIngressLanes,
                           asyncIngressReady, asyncHeldChunks>>
       BY <1>1, Isa
@@ -1148,6 +1212,7 @@ PROOF
              LeaveCausalQueues, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars,
              AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncIngressTopologyTypeVars, vars
     <2>7. /\ AsyncCausalTypeInvariant'
            /\ AsyncDeferredTopologyTypeInvariant'
@@ -2656,13 +2721,12 @@ THEOREM StrictLessTransitive ==
     lower < middle /\ middle < upper => lower < upper
 BY SMT
 
-THEOREM EnqueueNonCompletionCandidatePreservesIoType ==
+THEOREM EnqueueCandidatePreservesIoType ==
   \A node \in ValidatorIds:
     \A candidate:
       /\ AsyncTypeInvariant
       /\ AsyncCandidateTyped(candidate)
       /\ candidate.node = node
-      /\ candidate.class # "Completion"
       /\ CanEnqueueClass(node, candidate.class)
       /\ asyncCommandQueues' =
            [asyncCommandQueues EXCEPT ![node] = Append(@, candidate)]
@@ -2674,7 +2738,6 @@ PROOF
                 AsyncTypeInvariant,
                 AsyncCandidateTyped(candidate),
                 candidate.node = node,
-                candidate.class # "Completion",
                 CanEnqueueClass(node, candidate.class),
                 asyncCommandQueues' =
                   [asyncCommandQueues EXCEPT
@@ -2865,35 +2928,32 @@ PROOF
         BY <1>1, <3>1, FunctionalAppendUpdateAtKey,
            AppendSequenceFacts, Isa
            DEF AsyncQueueDepth
-      <3>4. AsyncCompletionIndices(
-                    Append(asyncCommandQueues[node], candidate)) =
-                  AsyncCompletionIndices(asyncCommandQueues[node])
-        BY <1>1, <3>1, CompletionIndicesAfterNonCompletionAppend
-      <3>5. /\ QueuedCompletionCount(node)' =
-                    QueuedCompletionCount(node)
-             /\ AsyncOutstandingWorkCount(node)' =
+      <3>4. /\ AsyncOutstandingWorkCount(node)' =
                     AsyncOutstandingWorkCount(node)
              /\ AsyncIoQueueDepth(node)' = AsyncIoQueueDepth(node)
-        BY <1>1, <3>2, <3>3, <3>4, Isa
-           DEF QueuedCompletionCount, QueuedCompletionIndices,
-               AsyncCompletionIndices, AsyncOutstandingWorkCount,
-               AsyncIoQueueDepth
-      <3>6. AsyncQueueDepth(node) < AsyncQueueCapacity
-        <4>1. candidate.class \in {"Normal", "Progress"}
-          BY <1>1, SMT DEF AsyncCandidateTyped, AsyncCommandClasses
-        <4>2. /\ AsyncNormalLimit < AsyncQueueCapacity
+        BY <1>1, <3>2, <3>3, Isa
+           DEF AsyncOutstandingWorkCount, AsyncIoQueueDepth
+      <3>5. AsyncQueueDepth(node) < AsyncQueueCapacity
+        <4>1. CASE candidate.class = "Completion"
+          BY <1>1, <4>1 DEF CanEnqueueClass
+        <4>2. CASE candidate.class # "Completion"
+          <5>1. candidate.class \in {"Normal", "Progress"}
+            BY <1>1, <4>2, SMT
+               DEF AsyncCandidateTyped, AsyncCommandClasses
+          <5>2. /\ AsyncNormalLimit < AsyncQueueCapacity
                /\ AsyncProgressLimit < AsyncQueueCapacity
-          BY <2>1, AsyncAdmissionLimitsBelowQueueCapacity
-        <4>3. CASE candidate.class = "Normal"
-          <5>1. AsyncQueueDepth(node) < AsyncNormalLimit
-            BY <1>1, <4>3 DEF CanEnqueueClass
-          <5> QED BY <4>2, <5>1, StrictLessTransitive
-        <4>4. CASE candidate.class = "Progress"
-          <5>1. AsyncQueueDepth(node) < AsyncProgressLimit
-            BY <1>1, <4>4 DEF CanEnqueueClass
-          <5> QED BY <4>2, <5>1, StrictLessTransitive
-        <4> QED BY <4>1, <4>3, <4>4
-      <3>7. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
+            BY <2>1, AsyncAdmissionLimitsBelowQueueCapacity
+          <5>3. CASE candidate.class = "Normal"
+            <6>1. AsyncQueueDepth(node) < AsyncNormalLimit
+              BY <1>1, <5>3 DEF CanEnqueueClass
+            <6> QED BY <5>2, <6>1, StrictLessTransitive
+          <5>4. CASE candidate.class = "Progress"
+            <6>1. AsyncQueueDepth(node) < AsyncProgressLimit
+              BY <1>1, <5>4 DEF CanEnqueueClass
+            <6> QED BY <5>2, <6>1, StrictLessTransitive
+          <5> QED BY <5>1, <5>3, <5>4
+        <4> QED BY <4>1, <4>2
+      <3>6. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
              /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
              /\ AsyncOutstandingWorkCount(node)' <=
                     AsyncIoWorkCapacity
@@ -2902,14 +2962,14 @@ PROOF
                  /\ AsyncQueueCapacity \in Nat
             BY <2>1, <3>1 DEF AsyncConfiguration
           <5>2. AsyncQueueDepth(node) + 1 <= AsyncQueueCapacity
-            BY <3>6, <5>1, NaturalIncrementWithinBound
+            BY <3>5, <5>1, NaturalIncrementWithinBound
           <5> QED BY <3>3, <5>2
         <4>2. /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
                /\ AsyncOutstandingWorkCount(node) <=
                       AsyncIoWorkCapacity
           BY <2>1 DEF AsyncIoCapacityTypeInvariant
-        <4> QED BY <3>5, <4>1, <4>2
-      <3>8. \A other \in ValidatorIds:
+        <4> QED BY <3>4, <4>1, <4>2
+      <3>7. \A other \in ValidatorIds:
                /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
                /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
                /\ AsyncOutstandingWorkCount(other)' <=
@@ -2920,7 +2980,7 @@ PROOF
                      /\ AsyncOutstandingWorkCount(other)' <=
                             AsyncIoWorkCapacity
           <5>1. CASE other = node
-            BY <3>7, <5>1
+            BY <3>6, <5>1
           <5>2. CASE other # node
             <6>1. asyncCommandQueues'[other] =
                      asyncCommandQueues[other]
@@ -2939,10 +2999,24 @@ PROOF
                  DEF AsyncIoCapacityTypeInvariant
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>1
-      <3> QED BY <3>8 DEF AsyncIoCapacityTypeInvariant
+      <3> QED BY <3>7 DEF AsyncIoCapacityTypeInvariant
     <2> QED BY <2>2, <2>3, <2>4, <2>5
          DEF AsyncIoTypeInvariant, AsyncIoContentTypeInvariant
   <1> QED BY <1>1
+
+THEOREM EnqueueNonCompletionCandidatePreservesIoType ==
+  \A node \in ValidatorIds:
+    \A candidate:
+      /\ AsyncTypeInvariant
+      /\ AsyncCandidateTyped(candidate)
+      /\ candidate.node = node
+      /\ candidate.class # "Completion"
+      /\ CanEnqueueClass(node, candidate.class)
+      /\ asyncCommandQueues' =
+           [asyncCommandQueues EXCEPT ![node] = Append(@, candidate)]
+      /\ UNCHANGED <<AsyncIoVars, asyncDeferredCompletionQueues>>
+      => AsyncIoTypeInvariant'
+BY EnqueueCandidatePreservesIoType
 
 THEOREM CausalAdmissionRunnerPreservesSchedulerType ==
   \A node \in ValidatorIds:
@@ -2994,6 +3068,7 @@ PROOF
                             asyncOutstandingTags, asyncNodeDeadlines,
                             asyncRetransmitDeadlines, asyncSentItems,
                             asyncRetainedControl, asyncActiveRequests,
+                            asyncCertifiedResponseClaim,
                             asyncTransport, asyncIngressLanes,
                             asyncIngressReady, asyncHeldChunks>>
         <4>1. CandidateInFlight(HeadCausalCandidate(node))
@@ -3066,6 +3141,7 @@ PROOF
                AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
                AsyncIoCapacityTypeVars, AsyncDeferredTopologyTypeVars,
                AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars,
                AsyncIngressTopologyTypeVars, vars
       <3>14. /\ AsyncIoTopologyTypeInvariant'
               /\ AsyncIoContentTypeInvariant'
@@ -3122,6 +3198,7 @@ PROOF
                             asyncOutstandingTags, asyncNodeDeadlines,
                             asyncRetransmitDeadlines, asyncSentItems,
                             asyncRetainedControl, asyncActiveRequests,
+                            asyncCertifiedResponseClaim,
                             asyncTransport, asyncIngressLanes,
                             asyncIngressReady, asyncHeldChunks>>
         BY <2>2, <3>4, Isa
@@ -3189,6 +3266,7 @@ PROOF
         BY <3>5, <3>6, Isa
            DEF AsyncDeferredVars, AsyncDeferredTopologyTypeVars,
                AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars,
                AsyncIngressTopologyTypeVars, vars
       <3>15. /\ AsyncDeferredTopologyTypeInvariant'
               /\ AsyncDeferredContentTypeInvariant'
@@ -3249,6 +3327,7 @@ PROOF
                             asyncOutstandingTags, asyncNodeDeadlines,
                             asyncRetransmitDeadlines, asyncSentItems,
                             asyncRetainedControl, asyncActiveRequests,
+                            asyncCertifiedResponseClaim,
                             asyncTransport, asyncIngressLanes,
                             asyncIngressReady, asyncHeldChunks>>
         BY <2>3, <3>4, <3>5, Isa
@@ -3348,6 +3427,7 @@ PROOF
         BY <3>6, <3>7, Isa
            DEF AsyncDeferredVars, AsyncDeferredTopologyTypeVars,
                AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars,
                AsyncIngressTopologyTypeVars, vars
       <3>17. /\ AsyncDeferredTopologyTypeInvariant'
               /\ AsyncDeferredContentTypeInvariant'
@@ -3477,7 +3557,7 @@ PROOF
                /\ CertifiedResponseCandidate(item).class = "Completion"
     <2>1. TypeInvariant
       BY <1>1 DEF AsyncTypeInvariant
-    <2>2. AsyncBodyEnvelopeTyped(item.envelope)
+    <2>2. AsyncCertifiedResponseEnvelopeTyped(item.envelope)
       BY <1>1, Isa DEF AsyncItemTyped
     <2>3. /\ "Completion" \in AsyncCommandClasses
            /\ "FetchCertifiedBody" \in AsyncWorkKinds
@@ -3517,14 +3597,20 @@ PROOF
     <2>5. CertifiedResponseCandidate(item).node = node
       BY <1>1, <2>4a
     <2>6. CertifiedResponseCandidate(item).height \in Heights
-      BY <2>2, <2>4a DEF AsyncBodyEnvelopeTyped
+      BY <2>2, <2>4a
+         DEF AsyncCertifiedResponseEnvelopeTyped,
+             AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped
     <2>7. CertifiedResponseCandidate(item).view \in Views
-      BY <2>2, <2>4a DEF AsyncBodyEnvelopeTyped
+      BY <2>2, <2>4a
+         DEF AsyncCertifiedResponseEnvelopeTyped,
+             AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped
     <2>8. ValidSubjects \subseteq Subjects
       BY <2>1 DEF TypeInvariant, ModelConfiguration
     <2>9. CertifiedResponseCandidate(item).subject \in SubjectOrNone
       BY <2>2, <2>4a, <2>8
-         DEF AsyncBodyEnvelopeTyped, SubjectOrNone
+         DEF AsyncCertifiedResponseEnvelopeTyped,
+             AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped,
+             SubjectOrNone
     <2>10. /\ context \in ContextRecords
             /\ nodeView[item.envelope.recipient] \in Views
             /\ generation[item.envelope.recipient] \in Generations
@@ -3550,72 +3636,61 @@ THEOREM TypedCommitCertificateResponseCandidateFacts ==
               CommitCertificateResponseCandidate(item))
          /\ CommitCertificateResponseCandidate(item).node = node
          /\ CommitCertificateResponseCandidate(item).class # "Completion"
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                NEW item,
-                AsyncTypeInvariant,
-                AsyncItemTyped(item),
-                item.kind = "CommitCertificateResponse",
-                item.envelope.recipient = node
-         PROVE /\ AsyncItemTyped(DiscoveredCommitQcItem(item))
-               /\ AsyncCandidateTyped(
-                    CommitCertificateResponseCandidate(item))
-               /\ CommitCertificateResponseCandidate(item).node = node
-               /\ CommitCertificateResponseCandidate(item).class #
-                    "Completion"
-    <2>1. item.source \in ValidatorIds
-      BY <1>1 DEF AsyncItemTyped
-    <2>2. item.envelope \in QcEnvelopeSet
-      BY <1>1, SMTT(30) DEF AsyncItemTyped
-    <2>3. /\ DOMAIN DiscoveredCommitQcItem(item) =
-                  {"kind", "source", "envelope"}
-           /\ DiscoveredCommitQcItem(item).kind = "CommitQC"
-           /\ DiscoveredCommitQcItem(item).source = item.source
-           /\ DiscoveredCommitQcItem(item).envelope = item.envelope
-      BY Isa DEF DiscoveredCommitQcItem, AsyncNetworkItem
-    <2>4. /\ DiscoveredCommitQcItem(item).kind \in AsyncNetworkKinds
-           /\ DiscoveredCommitQcItem(item).source \in AsyncIngressSources
-           /\ (DiscoveredCommitQcItem(item).kind # "Noise"
-                 => DiscoveredCommitQcItem(item).source \in ValidatorIds)
-      BY <2>1, <2>3, SMT
-         DEF AsyncNetworkKinds, AsyncIngressSources
-    <2>5. /\ DiscoveredCommitQcItem(item).envelope.recipient
-                  \in ValidatorIds
-           /\ DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
-      BY <2>2, <2>3, SMT DEF QcEnvelopeSet
-    <2>6. (CASE DiscoveredCommitQcItem(item).kind = "Proposal" ->
-                 DiscoveredCommitQcItem(item).envelope \in ProposalEnvelopeSet
-           [] DiscoveredCommitQcItem(item).kind
-                \in {"PrepareVote", "CommitVote"} ->
-                 DiscoveredCommitQcItem(item).envelope \in VoteEnvelopeSet
-           [] DiscoveredCommitQcItem(item).kind
-                \in {"PrepareQC", "CommitQC"} ->
-                 DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
-           [] DiscoveredCommitQcItem(item).kind = "TimeoutVote" ->
-                 DiscoveredCommitQcItem(item).envelope \in TimeoutEnvelopeSet
-           [] DiscoveredCommitQcItem(item).kind = "TimeoutCertificate" ->
-                 AsyncTcEnvelopeTyped(
-                   DiscoveredCommitQcItem(item).envelope)
-           [] DiscoveredCommitQcItem(item).kind =
-                "CommitCertificateResponse" ->
-                 DiscoveredCommitQcItem(item).envelope \in QcEnvelopeSet
-           [] OTHER ->
-                 AsyncBodyEnvelopeTyped(
-                   DiscoveredCommitQcItem(item).envelope))
-      BY <2>3, <2>5, SMT
-    <2>7. AsyncItemTyped(DiscoveredCommitQcItem(item))
-      BY <2>3, <2>4, <2>5, <2>6 DEF AsyncItemTyped
-    <2>8. /\ DiscoveredCommitQcItem(item).envelope.recipient = node
-           /\ CommitCertificateResponseCandidate(item) =
-                DeliveryCandidate(DiscoveredCommitQcItem(item))
-      BY <1>1, <2>3 DEF CommitCertificateResponseCandidate
-    <2>9. /\ AsyncCandidateTyped(
-                  CommitCertificateResponseCandidate(item))
-           /\ CommitCertificateResponseCandidate(item).node = node
-           /\ CommitCertificateResponseCandidate(item).class # "Completion"
-      BY <1>1, <2>7, <2>8, TypedIngressDeliveryCandidateFacts
-    <2> QED BY <2>7, <2>9
-  <1> QED BY <1>1
+BY SMTT(90)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncItemTyped, AsyncCommitCertificateResponseEnvelopeTyped,
+       AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped,
+       HistoricalCommitQcSigner, DiscoveredCommitQcItem,
+       CommitCertificateResponseCandidate, AsyncCandidateAtConsumer,
+       AsyncCandidateWithIdentity, AsyncCandidateTyped,
+       AsyncCandidateDomain, AsyncEvidenceTyped, AsyncNetworkItem,
+       QcEnvelope, QcEnvelopeSet, DeliveryClass, DeliveryKind,
+       DeliveryHeight, DeliveryView, AsyncNetworkKinds,
+       AsyncIngressSources, AsyncCommandClasses, AsyncWorkKinds,
+       AsyncDeliveryKinds, SubjectOrNone, ValidatorIds,
+       TypeInvariant, ModelConfiguration, QuorumConfiguration
+
+THEOREM CommitCertificateCandidatePreservesOuterResponseEvidence ==
+  \A item:
+    /\ CommitCertificateResponseCandidate(item).class = "Progress"
+    /\ CommitCertificateResponseCandidate(item).kind = "DeliverQC"
+    /\ CommitCertificateResponseCandidate(item).item =
+         DiscoveredCommitQcItem(item)
+    /\ CommitCertificateResponseCandidate(item).evidence = item
+    /\ CommitCertificateResponseCandidate(item).item.source =
+         HistoricalCommitQcSigner(item)
+BY DEF CommitCertificateResponseCandidate, DiscoveredCommitQcItem,
+       AsyncNetworkItem, DeliveryClass, DeliveryKind,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
+
+THEOREM TypedCommitCertificateMatchingIsExactOutstandingRequest ==
+  \A item:
+    /\ AsyncItemTyped(item)
+    /\ item.kind = "CommitCertificateResponse"
+    => MatchingCommitCertificateRequests(item) =
+         {request \in asyncActiveRequests:
+            /\ request.kind = "CommitCertificateRequest"
+            /\ AsyncCommitCertificateRequestRegistrationIdentity(request)
+                 = AsyncCommitCertificateRequestRegistrationIdentity(
+                     item.envelope.request)}
+BY SMT DEF MatchingCommitCertificateRequests,
+           AsyncItemTyped,
+           AsyncCommitCertificateResponseEnvelopeTyped,
+           AsyncReplyRequestItemTyped
+
+THEOREM TypedCertifiedMatchingIsExactOutstandingRequest ==
+  \A item:
+    /\ AsyncItemTyped(item)
+    /\ item.kind = "CertifiedResponse"
+    => MatchingCertifiedRequests(item) =
+         {request \in asyncActiveRequests:
+            /\ request.kind = "CertifiedRequest"
+            /\ AsyncCertifiedRequestHash(request) =
+                 item.envelope.requestHash}
+BY SMT DEF MatchingCertifiedRequests, AsyncItemTyped,
+           AsyncCertifiedResponseEnvelopeTyped,
+           AsyncReplyRequestItemTyped, AsyncCertifiedRequestHash
 
 THEOREM RemoveRequestsAndAddSentPreservesTransportContentType ==
   \A removed, additions:
@@ -3625,7 +3700,10 @@ THEOREM RemoveRequestsAndAddSentPreservesTransportContentType ==
     /\ asyncSentItems' = asyncSentItems \cup additions
     /\ asyncActiveRequests' = asyncActiveRequests \ removed
     /\ asyncRetainedControl' = asyncRetainedControl
-    /\ UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+    /\ AsyncCertifiedResponseClaimInvariant'
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncTransport, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW removed, NEW additions,
@@ -3635,13 +3713,17 @@ PROOF
                 asyncSentItems' = asyncSentItems \cup additions,
                 asyncActiveRequests' = asyncActiveRequests \ removed,
                 asyncRetainedControl' = asyncRetainedControl,
-                UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+                AsyncCertifiedResponseClaimInvariant',
+                UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncTransport, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
            /\ AsyncRetainedControlType(
                 asyncRetainedControl, CurrentVoters)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -3669,9 +3751,14 @@ PROOF
                   /\ item.kind \in {"CertifiedRequest",
                                       "CommitCertificateRequest"}
         BY <1>1, <2>1, <3>1 DEF AsyncActiveRequestsType
-      <3> QED BY <3>2, <3>3 DEF AsyncActiveRequestsType
+      <3>4. AsyncCertifiedRequestLogicalIndexConsistent(
+               asyncActiveRequests')
+        BY <2>1, <3>1,
+           CertifiedRequestLogicalIndexConsistencyIsDownwardClosed
+           DEF AsyncActiveRequestsType
+      <3> QED BY <3>2, <3>3, <3>4 DEF AsyncActiveRequestsType
     <2>6. AsyncTransportHistoryTypeInvariant'
-      BY <2>2, <2>4, <2>5,
+      BY <1>1, <2>2, <2>4, <2>5,
          AsyncTransportHistoryTypeDecomposition
     <2>7. /\ AsyncPacketContentTypeInvariant'
            /\ AsyncHeldChunksTypeInvariant'
@@ -3688,6 +3775,9 @@ SelectedDrainItem(node) ==
 SelectedDrainCandidate(node) ==
   DeliveryCandidate(SelectedDrainItem(node))
 
+SelectedDrainCertifiedCandidate(node) ==
+  CertifiedResponseCandidate(SelectedDrainItem(node))
+
 SelectedDrainCommitCandidate(node) ==
   CommitCertificateResponseCandidate(SelectedDrainItem(node))
 
@@ -3702,8 +3792,8 @@ PROOF
     <2>2. DeliveryClass(DiscoveredCommitQcItem(item)) = "Progress"
       BY <2>1 DEF DeliveryClass
     <2> QED BY <2>2
-         DEF CommitCertificateResponseCandidate, DeliveryCandidate,
-             AsyncCandidate
+         DEF CommitCertificateResponseCandidate,
+             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity
   <1> QED BY <1>1
 
 THEOREM FreshAuthorizedCommitResponseCommandFrame ==
@@ -3807,6 +3897,72 @@ PROOF
              SelectedDrainCommitCandidate, EnqueueCandidate
   <1> QED BY <1>1
 
+THEOREM FreshAuthorizedCertifiedResponseSchedulerFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
+    /\ ~CandidateScheduled(
+         CertifiedResponseCandidate(SelectedDrainItem(node)))
+    => /\ asyncCommandQueues' =
+             [asyncCommandQueues EXCEPT
+                ![node] = Append(
+                  @, CertifiedResponseCandidate(SelectedDrainItem(node)))]
+       /\ UNCHANGED <<AsyncIoVars, asyncNextCommandClass>>
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                CertifiedResponseClaimAuthorized(SelectedDrainItem(node)),
+                ~CandidateScheduled(
+                  CertifiedResponseCandidate(SelectedDrainItem(node)))
+         PROVE /\ asyncCommandQueues' =
+                    [asyncCommandQueues EXCEPT
+                       ![node] = Append(
+                         @, CertifiedResponseCandidate(
+                              SelectedDrainItem(node)))]
+               /\ UNCHANGED <<AsyncIoVars, asyncNextCommandClass>>
+    <2>1. SelectedDrainItem(node).kind = "CertifiedResponse"
+      BY <1>1
+         DEF CertifiedResponseClaimAuthorized,
+             CertifiedResponseAuthorized
+    <2>2. SelectedDrainItem(node).kind # "Noise"
+      BY <2>1
+    <2>3. SelectedDrainItem(node).kind
+             \notin {"CertifiedRequest", "CommitCertificateRequest"}
+      BY <2>1
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             EnqueueCandidate, vars
+  <1> QED BY <1>1
+
+THEOREM ScheduledAuthorizedCertifiedResponseSchedulerFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
+    /\ CandidateScheduled(
+         CertifiedResponseCandidate(SelectedDrainItem(node)))
+    => UNCHANGED <<AsyncIoVars, asyncCommandQueues,
+                   asyncNextCommandClass>>
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                CertifiedResponseClaimAuthorized(SelectedDrainItem(node)),
+                CandidateScheduled(
+                  CertifiedResponseCandidate(SelectedDrainItem(node)))
+         PROVE UNCHANGED <<AsyncIoVars, asyncCommandQueues,
+                            asyncNextCommandClass>>
+    <2>1. SelectedDrainItem(node).kind = "CertifiedResponse"
+      BY <1>1
+         DEF CertifiedResponseClaimAuthorized,
+             CertifiedResponseAuthorized
+    <2>2. SelectedDrainItem(node).kind # "Noise"
+      BY <2>1
+    <2>3. SelectedDrainItem(node).kind
+             \notin {"CertifiedRequest", "CommitCertificateRequest"}
+      BY <2>1
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem, vars
+  <1> QED BY <1>1
+
 THEOREM DrainFairIngressRuntimeFrame ==
   \A node:
     /\ DrainFairIngressSelected(node)
@@ -3819,6 +3975,13 @@ THEOREM DrainFairIngressRuntimeFrame ==
                [asyncCommandQueues EXCEPT
                   ![SelectedDrainCandidate(node).node] =
                     Append(@, SelectedDrainCandidate(node))]
+          \/ /\ CertifiedResponseClaimAuthorized(
+                   SelectedDrainItem(node))
+                /\ asyncCommandQueues' =
+                     [asyncCommandQueues EXCEPT
+                        ![SelectedDrainCertifiedCandidate(node).node] =
+                          Append(
+                            @, SelectedDrainCertifiedCandidate(node))]
           \/ /\ SelectedDrainItem(node) \in asyncSentItems
                 /\ CommitCertificateResponseAuthorized(
                      SelectedDrainItem(node))
@@ -3838,6 +4001,14 @@ PROOF
                         [asyncCommandQueues EXCEPT
                            ![SelectedDrainCandidate(node).node] = Append(
                              @, SelectedDrainCandidate(node))]
+                   \/ /\ CertifiedResponseClaimAuthorized(
+                            SelectedDrainItem(node))
+                         /\ asyncCommandQueues' =
+                              [asyncCommandQueues EXCEPT
+                                 ![SelectedDrainCertifiedCandidate(node).node] =
+                                   Append(
+                                     @,
+                                     SelectedDrainCertifiedCandidate(node))]
                    \/ /\ SelectedDrainItem(node) \in asyncSentItems
                          /\ CommitCertificateResponseAuthorized(
                               SelectedDrainItem(node))
@@ -3851,13 +4022,21 @@ PROOF
                            asyncTimeoutEmitted>>
       BY <1>1, Isa
          DEF DrainFairIngressSelected, SelectedDrainItem,
-             SelectedDrainCandidate, SelectedDrainCommitCandidate,
+             SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+             SelectedDrainCommitCandidate,
              EnqueueCandidate, RunnerServiceFrame, vars
     <2>2. \/ asyncCommandQueues' = asyncCommandQueues
            \/ asyncCommandQueues' =
                 [asyncCommandQueues EXCEPT
                    ![SelectedDrainCandidate(node).node] = Append(
                      @, SelectedDrainCandidate(node))]
+           \/ /\ CertifiedResponseClaimAuthorized(
+                    SelectedDrainItem(node))
+                 /\ asyncCommandQueues' =
+                      [asyncCommandQueues EXCEPT
+                         ![SelectedDrainCertifiedCandidate(node).node] =
+                           Append(
+                             @, SelectedDrainCertifiedCandidate(node))]
            \/ /\ SelectedDrainItem(node) \in asyncSentItems
                  /\ CommitCertificateResponseAuthorized(
                       SelectedDrainItem(node))
@@ -3870,7 +4049,8 @@ PROOF
         \/ SelectedDrainItem(node) \notin asyncSentItems
         BY <1>1, <3>1, Isa
            DEF DrainFairIngressSelected, SelectedDrainItem,
-               SelectedDrainCandidate, SelectedDrainCommitCandidate,
+               SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+               SelectedDrainCommitCandidate,
                EnqueueCandidate
       <3>2. CASE
         /\ SelectedDrainItem(node).kind # "Noise"
@@ -3879,16 +4059,37 @@ PROOF
              \in {"CertifiedRequest", "CommitCertificateRequest"}
         BY <1>1, <3>2, Isa
            DEF DrainFairIngressSelected, SelectedDrainItem,
-               SelectedDrainCandidate, SelectedDrainCommitCandidate,
+               SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+               SelectedDrainCommitCandidate,
                EnqueueCandidate
       <3>3. CASE
         /\ SelectedDrainItem(node).kind # "Noise"
         /\ SelectedDrainItem(node) \in asyncSentItems
         /\ SelectedDrainItem(node).kind = "CertifiedResponse"
-        BY <1>1, <3>3, Isa
-           DEF DrainFairIngressSelected, SelectedDrainItem,
-               SelectedDrainCandidate, SelectedDrainCommitCandidate,
-               EnqueueCandidate
+        <4>1. CASE CertifiedResponseClaimAuthorized(
+                      SelectedDrainItem(node))
+          <5>1. CASE CandidateScheduled(
+                       SelectedDrainCertifiedCandidate(node))
+            BY <1>1, <3>3, <4>1, <5>1, Isa
+               DEF DrainFairIngressSelected, SelectedDrainItem,
+                   SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+                   EnqueueCandidate, CertifiedResponseClaimAuthorized,
+                   CertifiedResponseAuthorized, vars
+          <5>2. CASE ~CandidateScheduled(
+                       SelectedDrainCertifiedCandidate(node))
+            BY <1>1, <3>3, <4>1, <5>2, Isa
+               DEF DrainFairIngressSelected, SelectedDrainItem,
+                   SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+                   EnqueueCandidate, CertifiedResponseClaimAuthorized,
+                   CertifiedResponseAuthorized, vars
+          <5> QED BY <5>1, <5>2
+        <4>2. CASE ~CertifiedResponseClaimAuthorized(
+                      SelectedDrainItem(node))
+          BY <1>1, <3>3, <4>2, Isa
+             DEF DrainFairIngressSelected, SelectedDrainItem,
+                 SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+                 SelectedDrainCommitCandidate, EnqueueCandidate
+        <4> QED BY <4>1, <4>2
       <3>4. CASE
         /\ SelectedDrainItem(node).kind # "Noise"
         /\ SelectedDrainItem(node) \in asyncSentItems
@@ -3919,12 +4120,14 @@ PROOF
         <4>1. CASE CandidateScheduled(SelectedDrainCandidate(node))
           BY <1>1, <3>5, <4>1, Isa
              DEF DrainFairIngressSelected, SelectedDrainItem,
-                 SelectedDrainCandidate, SelectedDrainCommitCandidate,
+                 SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+                 SelectedDrainCommitCandidate,
                  EnqueueCandidate
         <4>2. CASE ~CandidateScheduled(SelectedDrainCandidate(node))
           BY <1>1, <3>5, <4>2, Isa
              DEF DrainFairIngressSelected, SelectedDrainItem,
-                 SelectedDrainCandidate, SelectedDrainCommitCandidate,
+                 SelectedDrainCandidate, SelectedDrainCertifiedCandidate,
+                 SelectedDrainCommitCandidate,
                  EnqueueCandidate
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, SMT
@@ -3987,119 +4190,147 @@ PROOF
              SelectedDrainCandidate
   <1> QED BY <1>1
 
-THEOREM FreshAuthorizedCertifiedResponseSchedulerFrame ==
-  \A node:
-    /\ DrainFairIngressSelected(node)
-    /\ SelectedDrainItem(node) \in asyncSentItems
-    /\ CertifiedResponseAuthorized(SelectedDrainItem(node))
-    /\ ~CandidateScheduled(
-         CertifiedResponseCandidate(SelectedDrainItem(node)))
-    => /\ asyncLocalReadyCompletions' =
-             [asyncLocalReadyCompletions EXCEPT
-                ![node] = Append(
-                  @, CertifiedResponseCandidate(SelectedDrainItem(node)))]
-       /\ asyncOutstandingWork' =
-             [asyncOutstandingWork EXCEPT
-                ![node] = @ \cup
-                  {CertifiedResponseCandidate(SelectedDrainItem(node))}]
-       /\ UNCHANGED <<asyncIoQueues,
-                       asyncIoReadyCompletions,
-                       asyncNextCompletionSource,
-                       asyncIoControlAvailable,
-                       asyncCommandQueues,
-                       asyncNextCommandClass>>
-PROOF
-  <1>1. ASSUME NEW node,
-                DrainFairIngressSelected(node),
-                SelectedDrainItem(node) \in asyncSentItems,
-                CertifiedResponseAuthorized(SelectedDrainItem(node)),
-                ~CandidateScheduled(
-                  CertifiedResponseCandidate(SelectedDrainItem(node)))
-         PROVE /\ asyncLocalReadyCompletions' =
-                    [asyncLocalReadyCompletions EXCEPT
-                       ![node] = Append(
-                         @, CertifiedResponseCandidate(
-                              SelectedDrainItem(node)))]
-               /\ asyncOutstandingWork' =
-                    [asyncOutstandingWork EXCEPT
-                       ![node] = @ \cup
-                         {CertifiedResponseCandidate(
-                            SelectedDrainItem(node))}]
-               /\ UNCHANGED <<asyncIoQueues,
-                               asyncIoReadyCompletions,
-                               asyncNextCompletionSource,
-                               asyncIoControlAvailable,
-                               asyncCommandQueues,
-                               asyncNextCommandClass>>
-    <2>1. SelectedDrainItem(node).kind = "CertifiedResponse"
-      BY <1>1 DEF CertifiedResponseAuthorized
-    <2>2. SelectedDrainItem(node).kind # "Noise"
-      BY <2>1
-    <2>3. SelectedDrainItem(node).kind
-             \notin {"CertifiedRequest", "CommitCertificateRequest"}
-      BY <2>1
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
-         DEF DrainFairIngressSelected, SelectedDrainItem, vars
-  <1> QED BY <1>1
-
-THEOREM ScheduledAuthorizedCertifiedResponseSchedulerFrame ==
-  \A node:
-    /\ DrainFairIngressSelected(node)
-    /\ SelectedDrainItem(node) \in asyncSentItems
-    /\ CertifiedResponseAuthorized(SelectedDrainItem(node))
-    /\ CandidateScheduled(
-         CertifiedResponseCandidate(SelectedDrainItem(node)))
-    => UNCHANGED <<AsyncIoVars, asyncCommandQueues,
-                   asyncNextCommandClass>>
-PROOF
-  <1>1. ASSUME NEW node,
-                DrainFairIngressSelected(node),
-                SelectedDrainItem(node) \in asyncSentItems,
-                CertifiedResponseAuthorized(SelectedDrainItem(node)),
-                CandidateScheduled(
-                  CertifiedResponseCandidate(SelectedDrainItem(node)))
-         PROVE UNCHANGED <<AsyncIoVars, asyncCommandQueues,
-                            asyncNextCommandClass>>
-    <2>1. SelectedDrainItem(node).kind = "CertifiedResponse"
-      BY <1>1 DEF CertifiedResponseAuthorized
-    <2>2. SelectedDrainItem(node).kind # "Noise"
-      BY <2>1
-    <2>3. SelectedDrainItem(node).kind
-             \notin {"CertifiedRequest", "CommitCertificateRequest"}
-      BY <2>1
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
-         DEF DrainFairIngressSelected, SelectedDrainItem, vars
-  <1> QED BY <1>1
-
 THEOREM AuthorizedCertifiedResponseFrame ==
   \A node:
     /\ DrainFairIngressSelected(node)
-    /\ SelectedDrainItem(node) \in asyncSentItems
-    /\ CertifiedResponseAuthorized(SelectedDrainItem(node))
+    /\ CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
     => /\ asyncActiveRequests' =
             asyncActiveRequests \
               MatchingCertifiedRequests(SelectedDrainItem(node))
+       /\ asyncCertifiedResponseClaim' =
+            CertifiedResponseClaimForRequests(asyncActiveRequests')
        /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                       context, asyncTransport, asyncHeldChunks>>
+                       context,
+                       AsyncCertifiedResponseClaimCoreAuthorityVars,
+                       asyncTransport, asyncHeldChunks>>
 PROOF
   <1>1. ASSUME NEW node,
                 DrainFairIngressSelected(node),
-                SelectedDrainItem(node) \in asyncSentItems,
-                CertifiedResponseAuthorized(SelectedDrainItem(node))
+                CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
          PROVE /\ asyncActiveRequests' =
                     asyncActiveRequests \
                       MatchingCertifiedRequests(SelectedDrainItem(node))
+               /\ asyncCertifiedResponseClaim' =
+                    CertifiedResponseClaimForRequests(
+                      asyncActiveRequests')
                /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
-                               context, asyncTransport, asyncHeldChunks>>
+                               context,
+                               AsyncCertifiedResponseClaimCoreAuthorityVars,
+                               asyncTransport, asyncHeldChunks>>
     <2>1. SelectedDrainItem(node).kind = "CertifiedResponse"
-      BY <1>1 DEF CertifiedResponseAuthorized
+      BY <1>1
+         DEF CertifiedResponseClaimAuthorized,
+             CertifiedResponseAuthorized
     <2>2. SelectedDrainItem(node).kind # "Noise"
       BY <2>1
     <2>3. SelectedDrainItem(node).kind
              \notin {"CertifiedRequest", "CommitCertificateRequest"}
       BY <2>1
     <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
-         DEF DrainFairIngressSelected, SelectedDrainItem, vars
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
+  <1> QED BY <1>1
+
+THEOREM DrainFairIngressSelectedClaimPopShape ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DrainFairIngressSelected(node)
+    => LET item == SelectedDrainItem(node)
+       IN asyncCertifiedResponseClaim' =
+            IF item.kind = "CertifiedResponse"
+                 /\ CertifiedResponseClaimMatches(item)
+            THEN CertifiedResponseClaimForRequests(asyncActiveRequests')
+            ELSE asyncCertifiedResponseClaim
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                DrainFairIngressSelected(node)
+         PROVE LET item == SelectedDrainItem(node)
+               IN asyncCertifiedResponseClaim' =
+                    IF item.kind = "CertifiedResponse"
+                         /\ CertifiedResponseClaimMatches(item)
+                    THEN CertifiedResponseClaimForRequests(
+                           asyncActiveRequests')
+                    ELSE asyncCertifiedResponseClaim
+    <2> DEFINE Item == SelectedDrainItem(node)
+    <2>1. AsyncCertifiedResponseClaimInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. CASE /\ Item.kind = "CertifiedResponse"
+                 /\ CertifiedResponseClaimMatches(Item)
+      <3>1. CertifiedResponseClaimAuthorized(Item)
+        BY <2>1, <2>2,
+           MatchingClaimedCertifiedResponseIsAuthorized
+      <3> QED BY <1>1, <2>2, <3>1, SMTT(60), Isa
+           DEF DrainFairIngressSelected, SelectedDrainItem, Item
+    <2>3. CASE ~(Item.kind = "CertifiedResponse"
+                   /\ CertifiedResponseClaimMatches(Item))
+      <3>1. ~CertifiedResponseClaimAuthorized(Item)
+        BY <2>3 DEF CertifiedResponseClaimAuthorized
+      <3> QED BY <1>1, <2>3, <3>1, SMTT(60), Isa
+           DEF DrainFairIngressSelected, SelectedDrainItem, Item
+    <2> QED BY <2>2, <2>3 DEF Item
+  <1> QED BY <1>1
+
+THEOREM DrainFairIngressSelectedPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ DrainFairIngressSelected(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                DrainFairIngressSelected(node)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2> DEFINE DrainIndex == FirstDrainableIngressIndex(node)
+    <2> DEFINE DrainSource == asyncIngressReady[node][DrainIndex]
+    <2> DEFINE DrainLaneIndex ==
+          SelectedIngressLaneIndex(node, DrainIndex)
+    <2> DEFINE DrainItem ==
+          IngressLane(node, DrainSource)[DrainLaneIndex]
+    <2>1. /\ AsyncIngressTypeInvariant
+           /\ DrainIndex \in DrainableIngressIndices(node)
+      BY <1>1, FirstDrainableIngressIndexIsDrainable
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             DrainIndex
+    <2>2. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
+           /\ DrainSource \in AsyncIngressSources
+           /\ DrainLaneIndex \in
+                1..IngressLaneDepth(node, DrainSource)
+      BY <2>1, FirstDrainableIngressLaneIndexIsDrainable, SMT
+         DEF DrainableIngressIndices, IngressSourceCanDrain,
+             DrainableIngressLaneIndices, SelectedIngressLaneIndex,
+             DrainSource, DrainLaneIndex
+    <2>3. /\ asyncIngressLanes' =
+                  [asyncIngressLanes EXCEPT
+                     ![node][DrainSource] =
+                       SequenceWithoutIndex(@, DrainLaneIndex)]
+           /\ DrainItem = SelectedDrainItem(node)
+      BY <1>1, <2>2, Isa
+         DEF DrainFairIngressSelected, PopSelectedIngress,
+             SelectedDrainItem, SelectedIngressItemAt,
+             DrainIndex, DrainSource, DrainLaneIndex, DrainItem
+    <2>4. /\ asyncCertifiedResponseClaim'
+                  \subseteq asyncCertifiedResponseClaim
+           /\ (DrainItem.kind = "CertifiedResponse"
+                 /\ CertifiedResponseClaimMatches(DrainItem)
+                 => AsyncCertifiedResponseCanonicalWireIdentity(DrainItem)
+                      \notin asyncCertifiedResponseClaim')
+      BY <1>1, <2>3, DrainFairIngressSelectedClaimPopShape,
+         SMTT(60), Isa
+         DEF DrainItem, CertifiedResponseClaimForRequests,
+             MatchingCertifiedRequests, ActiveCertifiedRequestHashesIn,
+             AsyncCertifiedRequestHash,
+             CertifiedResponseClaimMatches,
+             AsyncCertifiedResponseCanonicalWireIdentity
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
+         PopIngressLanePreservesCertifiedResponseClaimIngressOwnership
+         DEF DrainItem
   <1> QED BY <1>1
 
 THEOREM AuthorizedCommitResponseFrame ==
@@ -4114,7 +4345,10 @@ THEOREM AuthorizedCommitResponseFrame ==
        /\ asyncSentItems' =
             asyncSentItems \cup
               {DiscoveredCommitQcItem(SelectedDrainItem(node))}
-       /\ UNCHANGED <<asyncRetainedControl, context,
+       /\ UNCHANGED <<asyncRetainedControl,
+                       asyncCertifiedResponseClaim,
+                       context,
+                       AsyncCertifiedResponseClaimCoreAuthorityVars,
                        asyncTransport, asyncHeldChunks>>
 PROOF
   <1>1. ASSUME NEW node,
@@ -4129,7 +4363,10 @@ PROOF
                /\ asyncSentItems' =
                     asyncSentItems \cup
                       {DiscoveredCommitQcItem(SelectedDrainItem(node))}
-               /\ UNCHANGED <<asyncRetainedControl, context,
+               /\ UNCHANGED <<asyncRetainedControl,
+                               asyncCertifiedResponseClaim,
+                               context,
+                               AsyncCertifiedResponseClaimCoreAuthorityVars,
                                asyncTransport, asyncHeldChunks>>
     <2>1. SelectedDrainItem(node).kind = "CommitCertificateResponse"
       BY <1>1 DEF CommitCertificateResponseAuthorized
@@ -4141,7 +4378,8 @@ PROOF
     <2>4. SelectedDrainItem(node).kind # "CertifiedResponse"
       BY <2>1
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, SMTT(60)
-         DEF DrainFairIngressSelected, SelectedDrainItem, vars
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
   <1> QED BY <1>1
 
 THEOREM OrdinaryScheduledIngressFrame ==
@@ -4151,6 +4389,7 @@ THEOREM OrdinaryScheduledIngressFrame ==
     /\ SelectedDrainItem(node).kind # "Noise"
     /\ SelectedDrainItem(node).kind
          \notin {"CertifiedRequest", "CommitCertificateRequest"}
+    /\ SelectedDrainItem(node).kind # "Chunk"
     /\ SelectedDrainItem(node).kind # "CertifiedResponse"
     /\ SelectedDrainItem(node).kind # "CommitCertificateResponse"
     /\ CandidateScheduled(SelectedDrainCandidate(node))
@@ -4163,6 +4402,7 @@ PROOF
                 SelectedDrainItem(node).kind # "Noise",
                 SelectedDrainItem(node).kind
                   \notin {"CertifiedRequest", "CommitCertificateRequest"},
+                SelectedDrainItem(node).kind # "Chunk",
                 SelectedDrainItem(node).kind # "CertifiedResponse",
                 SelectedDrainItem(node).kind #
                   "CommitCertificateResponse",
@@ -4182,6 +4422,7 @@ THEOREM OrdinaryFreshIngressFrame ==
     /\ SelectedDrainItem(node).kind # "Noise"
     /\ SelectedDrainItem(node).kind
          \notin {"CertifiedRequest", "CommitCertificateRequest"}
+    /\ SelectedDrainItem(node).kind # "Chunk"
     /\ SelectedDrainItem(node).kind # "CertifiedResponse"
     /\ SelectedDrainItem(node).kind # "CommitCertificateResponse"
     /\ ~CandidateScheduled(SelectedDrainCandidate(node))
@@ -4199,6 +4440,7 @@ PROOF
                 SelectedDrainItem(node).kind # "Noise",
                 SelectedDrainItem(node).kind
                   \notin {"CertifiedRequest", "CommitCertificateRequest"},
+                SelectedDrainItem(node).kind # "Chunk",
                 SelectedDrainItem(node).kind # "CertifiedResponse",
                 SelectedDrainItem(node).kind #
                   "CommitCertificateResponse",
@@ -4226,8 +4468,7 @@ THEOREM RejectedIngressSchedulerFrame ==
               THEN CertifiedRequestAuthorized(SelectedDrainItem(node))
               ELSE CommitCertificateRequestAuthorized(
                      SelectedDrainItem(node)))
-    /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
-           /\ CertifiedResponseAuthorized(SelectedDrainItem(node)))
+    /\ ~CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
     /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
            /\ CommitCertificateResponseAuthorized(
                 SelectedDrainItem(node)))
@@ -4235,6 +4476,7 @@ THEOREM RejectedIngressSchedulerFrame ==
            /\ SelectedDrainItem(node).kind # "Noise"
            /\ SelectedDrainItem(node).kind
                 \notin {"CertifiedRequest", "CommitCertificateRequest"}
+           /\ SelectedDrainItem(node).kind # "Chunk"
            /\ SelectedDrainItem(node).kind # "CertifiedResponse"
            /\ SelectedDrainItem(node).kind #
                 "CommitCertificateResponse")
@@ -4253,9 +4495,8 @@ PROOF
                               SelectedDrainItem(node))
                        ELSE CommitCertificateRequestAuthorized(
                               SelectedDrainItem(node))),
-                ~( /\ SelectedDrainItem(node) \in asyncSentItems
-                    /\ CertifiedResponseAuthorized(
-                         SelectedDrainItem(node))),
+                ~CertifiedResponseClaimAuthorized(
+                  SelectedDrainItem(node)),
                 ~( /\ SelectedDrainItem(node) \in asyncSentItems
                     /\ CommitCertificateResponseAuthorized(
                          SelectedDrainItem(node))),
@@ -4264,6 +4505,7 @@ PROOF
                     /\ SelectedDrainItem(node).kind
                          \notin {"CertifiedRequest",
                                  "CommitCertificateRequest"}
+                    /\ SelectedDrainItem(node).kind # "Chunk"
                     /\ SelectedDrainItem(node).kind #
                          "CertifiedResponse"
                     /\ SelectedDrainItem(node).kind #
@@ -4279,30 +4521,152 @@ PROOF
 THEOREM NonResponseIngressTransportFrame ==
   \A node:
     /\ DrainFairIngressSelected(node)
-    /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
-           /\ CertifiedResponseAuthorized(SelectedDrainItem(node)))
+    /\ ~CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
     /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
            /\ CommitCertificateResponseAuthorized(
                 SelectedDrainItem(node)))
-    => UNCHANGED <<context, asyncSentItems, asyncRetainedControl,
-                   asyncActiveRequests, asyncTransport,
-                   asyncHeldChunks>>
+    => UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncSentItems, asyncRetainedControl,
+           asyncActiveRequests, asyncCertifiedResponseClaim,
+           asyncTransport>>
 PROOF
   <1>1. ASSUME NEW node,
                 DrainFairIngressSelected(node),
-                ~( /\ SelectedDrainItem(node) \in asyncSentItems
-                    /\ CertifiedResponseAuthorized(
-                         SelectedDrainItem(node))),
+                ~CertifiedResponseClaimAuthorized(
+                  SelectedDrainItem(node)),
                 ~( /\ SelectedDrainItem(node) \in asyncSentItems
                     /\ CommitCertificateResponseAuthorized(
                          SelectedDrainItem(node)))
-         PROVE UNCHANGED <<context, asyncSentItems,
-                           asyncRetainedControl, asyncActiveRequests,
-                           asyncTransport, asyncHeldChunks>>
+         PROVE UNCHANGED
+                 <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                   asyncSentItems, asyncRetainedControl,
+                   asyncActiveRequests, asyncCertifiedResponseClaim,
+                   asyncTransport>>
     <2> QED BY <1>1, SMTT(60)
          DEF DrainFairIngressSelected, SelectedDrainItem,
              SelectedDrainCandidate, SelectedDrainCommitCandidate,
-             EnqueueCandidate, vars
+             EnqueueCandidate,
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
+  <1> QED BY <1>1
+
+
+THEOREM DirectChunkIngressTransportFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ SelectedDrainItem(node) \in asyncSentItems
+    /\ SelectedDrainItem(node).kind = "Chunk"
+    /\ SelectedDrainItem(node).envelope.chunk \in AsyncChunks
+    => /\ UNCHANGED AsyncTransportHistoryTypeVars
+       /\ UNCHANGED asyncTransport
+       /\ asyncHeldChunks' =
+            asyncHeldChunks \cup
+              {AsyncChunkReceipt(
+                 node, SelectedDrainItem(node).envelope.view,
+                 SelectedDrainItem(node).envelope.subject,
+                 SelectedDrainItem(node).envelope.chunk)}
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                SelectedDrainItem(node) \in asyncSentItems,
+                SelectedDrainItem(node).kind = "Chunk",
+                SelectedDrainItem(node).envelope.chunk \in AsyncChunks
+         PROVE /\ UNCHANGED AsyncTransportHistoryTypeVars
+               /\ UNCHANGED asyncTransport
+               /\ asyncHeldChunks' =
+                    asyncHeldChunks \cup
+                      {AsyncChunkReceipt(
+                         node, SelectedDrainItem(node).envelope.view,
+                         SelectedDrainItem(node).envelope.subject,
+                         SelectedDrainItem(node).envelope.chunk)}
+    <2> QED BY <1>1, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             IngressItemHasAuthenticatedHistory,
+             AsyncTransportHistoryTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars, vars
+  <1> QED BY <1>1
+
+THEOREM DirectChunkIngressPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTransportContentTypeInvariant
+    /\ AsyncItemTyped(SelectedDrainItem(node))
+    /\ DrainFairIngressSelected(node)
+    /\ SelectedDrainItem(node) \in asyncSentItems
+    /\ SelectedDrainItem(node).kind = "Chunk"
+    /\ SelectedDrainItem(node).envelope.chunk \in AsyncChunks
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTransportContentTypeInvariant,
+                AsyncItemTyped(SelectedDrainItem(node)),
+                DrainFairIngressSelected(node),
+                SelectedDrainItem(node) \in asyncSentItems,
+                SelectedDrainItem(node).kind = "Chunk",
+                SelectedDrainItem(node).envelope.chunk \in AsyncChunks
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Receipt ==
+           AsyncChunkReceipt(
+             node, SelectedDrainItem(node).envelope.view,
+             SelectedDrainItem(node).envelope.subject,
+             SelectedDrainItem(node).envelope.chunk)
+    <2>1. /\ AsyncTransportHistoryTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1 DEF AsyncTransportContentTypeInvariant
+    <2>2. AsyncBodyEnvelopeTyped(SelectedDrainItem(node).envelope)
+      BY <1>1, SMT DEF AsyncItemTyped
+    <2>3. /\ SelectedDrainItem(node).envelope.view \in Views
+           /\ SelectedDrainItem(node).envelope.subject \in Subjects
+      BY <2>2 DEF AsyncBodyEnvelopeTyped
+    <2>4. Receipt \in AsyncChunkReceiptSet
+      BY <1>1, <2>3, Isa
+         DEF AsyncChunkReceipt, AsyncChunkReceiptSet, Receipt
+    <2>5. /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED asyncTransport
+           /\ asyncHeldChunks' = asyncHeldChunks \cup {Receipt}
+      BY <1>1, DirectChunkIngressTransportFrame DEF Receipt
+    <2>6. AsyncTransportHistoryTypeInvariant'
+      BY <2>1, <2>5, AsyncTransportHistoryTypeStutter
+    <2>7. AsyncPacketContentTypeInvariant'
+      BY <2>1, <2>5 DEF AsyncPacketContentTypeInvariant
+    <2>8. AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>4, <2>5, Isa
+         DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>6, <2>7, <2>8
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+
+THEOREM NonRecordingIngressTransportFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ ~CertifiedResponseClaimAuthorized(SelectedDrainItem(node))
+    /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
+           /\ CommitCertificateResponseAuthorized(
+                SelectedDrainItem(node)))
+    /\ ~( /\ SelectedDrainItem(node) \in asyncSentItems
+           /\ SelectedDrainItem(node).kind = "Chunk"
+           /\ SelectedDrainItem(node).envelope.chunk \in AsyncChunks)
+    => UNCHANGED AsyncTransportContentTypeVars
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                ~CertifiedResponseClaimAuthorized(
+                  SelectedDrainItem(node)),
+                ~( /\ SelectedDrainItem(node) \in asyncSentItems
+                    /\ CommitCertificateResponseAuthorized(
+                         SelectedDrainItem(node))),
+                ~( /\ SelectedDrainItem(node) \in asyncSentItems
+                    /\ SelectedDrainItem(node).kind = "Chunk"
+                    /\ SelectedDrainItem(node).envelope.chunk
+                         \in AsyncChunks)
+         PROVE UNCHANGED AsyncTransportContentTypeVars
+    <2> QED BY <1>1, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             IngressItemHasAuthenticatedHistory,
+             AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
   <1> QED BY <1>1
 
 
@@ -4450,6 +4814,7 @@ PROOF
                           asyncOutstandingTags, asyncNodeDeadlines,
                           asyncRetransmitDeadlines, asyncSentItems,
                           asyncRetainedControl, asyncActiveRequests,
+                          asyncCertifiedResponseClaim,
                           asyncTransport, asyncIngressLanes,
                           asyncIngressReady, asyncHeldChunks>>
       BY <1>1, Isa
@@ -4519,16 +4884,20 @@ PROOF
               THEN CertifiedRequestAuthorized(DrainItem)
               ELSE CommitCertificateRequestAuthorized(DrainItem)
     <2> DEFINE CertifiedAccepted ==
-           /\ DrainItem \in asyncSentItems
-           /\ CertifiedResponseAuthorized(DrainItem)
+           CertifiedResponseClaimAuthorized(DrainItem)
     <2> DEFINE CommitAccepted ==
            /\ DrainItem \in asyncSentItems
            /\ CommitCertificateResponseAuthorized(DrainItem)
+    <2> DEFINE ChunkAccepted ==
+           /\ DrainItem \in asyncSentItems
+           /\ DrainItem.kind = "Chunk"
+           /\ DrainItem.envelope.chunk \in AsyncChunks
     <2> DEFINE OrdinaryAccepted ==
            /\ DrainItem \in asyncSentItems
            /\ DrainItem.kind # "Noise"
            /\ DrainItem.kind
                 \notin {"CertifiedRequest", "CommitCertificateRequest"}
+           /\ DrainItem.kind # "Chunk"
            /\ DrainItem.kind # "CertifiedResponse"
            /\ DrainItem.kind # "CommitCertificateResponse"
     <2>1. node \in ValidatorIds
@@ -4593,7 +4962,7 @@ PROOF
              AsyncRuntimeScalarTypeInvariant, TypeInvariant
     <2>6. /\ AsyncItemTyped(DrainItem)
            /\ DrainItem.envelope.recipient = node
-           /\ DrainItem.source = DrainSource
+           /\ IngressResourceSource(DrainItem) = DrainSource
       BY <2>1, <2>4, <2>5, SelectedIngressItemIsTyped,
          SelectedIngressItemHasLaneOwnership
          DEF DrainItem, SelectedIngressItemAt, DrainLaneIndex,
@@ -4612,6 +4981,22 @@ PROOF
          TypedCommitCertificateResponseCandidateFacts
          DEF CommitAccepted, CommitCandidate, DiscoveredItem,
              CommitCertificateResponseAuthorized
+    <2>8a. CertifiedAccepted
+              => /\ AsyncCandidateTyped(CertifiedCandidate)
+                 /\ CertifiedCandidate.node = node
+                 /\ CertifiedCandidate.class = "Completion"
+      <3>1. ASSUME CertifiedAccepted
+             PROVE /\ AsyncCandidateTyped(CertifiedCandidate)
+                   /\ CertifiedCandidate.node = node
+                   /\ CertifiedCandidate.class = "Completion"
+        <4>1. DrainItem.kind = "CertifiedResponse"
+          BY <3>1
+             DEF CertifiedAccepted, CertifiedResponseClaimAuthorized,
+                 CertifiedResponseAuthorized
+        <4> QED BY <1>1, <2>1, <2>6, <4>1,
+             TypedCertifiedResponseCandidateFacts
+             DEF CertifiedCandidate
+      <3> QED BY <3>1
     <2>9. AsyncRuntimeScalarTypeInvariant'
       <3>1. /\ UNCHANGED asyncNextCommandClass
              /\ UNCHANGED <<asyncNow, asyncFifoOwed,
@@ -4620,6 +5005,11 @@ PROOF
                 \/ asyncCommandQueues' =
                      [asyncCommandQueues EXCEPT
                         ![Candidate.node] = Append(@, Candidate)]
+                \/ /\ CertifiedAccepted
+                      /\ asyncCommandQueues' =
+                           [asyncCommandQueues EXCEPT
+                              ![CertifiedCandidate.node] =
+                                Append(@, CertifiedCandidate)]
                 \/ /\ CommitAccepted
                       /\ asyncCommandQueues' =
                            [asyncCommandQueues EXCEPT
@@ -4627,8 +5017,10 @@ PROOF
                                 Append(@, CommitCandidate)]
         BY <2>2, DrainFairIngressRuntimeFrame
            DEF SelectedDrainItem, SelectedDrainCandidate,
+               SelectedDrainCertifiedCandidate,
                SelectedDrainCommitCandidate, DrainIndex, DrainItem,
-               Candidate, CommitCandidate, CommitAccepted
+               Candidate, CertifiedCandidate, CommitCandidate,
+               CertifiedAccepted, CommitAccepted
       <3>2. /\ UNCHANGED asyncNextCommandClass
              /\ UNCHANGED <<asyncNow, asyncFifoOwed,
                             asyncTimeoutEmitted>>
@@ -4636,11 +5028,15 @@ PROOF
                 \/ asyncCommandQueues' =
                      [asyncCommandQueues EXCEPT
                         ![node] = Append(@, Candidate)]
+                \/ /\ CertifiedAccepted
+                      /\ asyncCommandQueues' =
+                           [asyncCommandQueues EXCEPT
+                              ![node] = Append(@, CertifiedCandidate)]
                 \/ /\ CommitAccepted
                       /\ asyncCommandQueues' =
                            [asyncCommandQueues EXCEPT
                               ![node] = Append(@, CommitCandidate)]
-        BY <2>7, <2>8, <3>1, Zenon
+        BY <2>7, <2>8, <2>8a, <3>1, Zenon
       <3>3. \/ asyncCommandQueues' = asyncCommandQueues
              \/ \E admitted:
                   /\ AsyncCandidateTyped(admitted)
@@ -4648,7 +5044,7 @@ PROOF
                   /\ asyncCommandQueues' =
                        [asyncCommandQueues EXCEPT
                           ![node] = Append(@, admitted)]
-        BY <2>7, <2>8, <3>2, Zenon
+        BY <2>7, <2>8, <2>8a, <3>2, Zenon
       <3> QED BY <1>1, <2>1, <2>2, <2>5, <3>2, <3>3,
            IngressSelectedPreservesRuntimeScalarType
     <2>10. AsyncCausalTypeInvariant'
@@ -4696,13 +5092,13 @@ PROOF
              DEF Candidate
       <3>2. CASE CertifiedAccepted
         <4>1. DrainItem.kind = "CertifiedResponse"
-          BY <3>2 DEF CertifiedAccepted, CertifiedResponseAuthorized
+          BY <3>2
+             DEF CertifiedAccepted, CertifiedResponseClaimAuthorized,
+                 CertifiedResponseAuthorized
         <4>2. /\ AsyncCandidateTyped(CertifiedCandidate)
                /\ CertifiedCandidate.node = node
                /\ CertifiedCandidate.class = "Completion"
-          BY <1>1, <2>1, <2>6, <4>1,
-             TypedCertifiedResponseCandidateFacts
-             DEF CertifiedCandidate
+          BY <2>8a, <3>2
         <4>3. CASE CandidateScheduled(CertifiedCandidate)
           <5>1. UNCHANGED <<AsyncIoVars, asyncCommandQueues,
                              asyncNextCommandClass>>
@@ -4715,31 +5111,26 @@ PROOF
           <5> QED BY <2>5, <5>1, <5>2,
                SchedulerIoStutterPreservesIoType
         <4>4. CASE ~CandidateScheduled(CertifiedCandidate)
-          <5>1. /\ ~CandidateInFlight(CertifiedCandidate)
-                 /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
+          <5>1. /\ CanEnqueueCertifiedResponse(node)
+                 /\ ~CandidateInFlight(CertifiedCandidate)
             BY <2>4, <3>2, <4>4, Isa
                DEF IngressItemCanDrain, DrainItem,
                    CertifiedAccepted, CertifiedCandidate,
+                   CertifiedResponseClaimAuthorized,
                    CertifiedResponseAuthorized,
                    CandidateScheduled, CandidateInFlight
-          <5>2. /\ asyncLocalReadyCompletions' =
-                      [asyncLocalReadyCompletions EXCEPT
+          <5>2. /\ asyncCommandQueues' =
+                      [asyncCommandQueues EXCEPT
                          ![node] = Append(@, CertifiedCandidate)]
-                 /\ asyncOutstandingWork' =
-                      [asyncOutstandingWork EXCEPT
-                         ![node] = @ \cup {CertifiedCandidate}]
-                 /\ UNCHANGED <<asyncCommandQueues, asyncIoQueues,
-                                 asyncIoReadyCompletions,
-                                 asyncNextCompletionSource,
-                                 asyncIoControlAvailable>>
+                 /\ UNCHANGED <<AsyncIoVars,
+                                 asyncDeferredCompletionQueues>>
             BY <2>2, <3>2, <4>4,
                FreshAuthorizedCertifiedResponseSchedulerFrame
                DEF SelectedDrainItem, DrainIndex, DrainItem,
-                   CertifiedAccepted, CertifiedCandidate
-          <5>3. UNCHANGED asyncDeferredCompletionQueues
-            BY <2>2 DEF AsyncDeferredVars
-          <5> QED BY <1>1, <2>1, <4>2, <5>1, <5>2, <5>3,
-               AdmitFreshLocalCompletionPreservesIoType
+                   CertifiedAccepted, CertifiedCandidate,
+                   AsyncDeferredVars
+          <5> QED BY <1>1, <2>1, <4>2, <5>1, <5>2,
+               EnqueueCandidatePreservesIoType
         <4> QED BY <4>3, <4>4
       <3>3. CASE CommitAccepted
         <4>1. CommitCandidate.class = "Progress"
@@ -4840,20 +5231,86 @@ PROOF
         <4> QED BY <2>5, <4>1, <4>2,
              SchedulerIoStutterPreservesIoType
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
+    <2>13a. AsyncCertifiedResponseClaimInvariant'
+      <3>1. CASE CertifiedAccepted
+        <4>1. /\ asyncSentItems' = asyncSentItems \cup {}
+               /\ asyncActiveRequests' \subseteq asyncActiveRequests
+               /\ asyncCertifiedResponseClaim' =
+                    CertifiedResponseClaimForRequests(
+                      asyncActiveRequests')
+          BY <2>2, <3>1, AuthorizedCertifiedResponseFrame, SMT
+             DEF SelectedDrainItem, DrainIndex, DrainItem,
+                 CertifiedAccepted
+        <4>2. AsyncCertifiedResponseClaimInvariant
+          BY <2>5
+             DEF AsyncTransportContentTypeInvariant,
+                 AsyncTransportHistoryTypeInvariant
+        <4> QED BY <4>1, <4>2,
+             FilterActiveRequestsAndClaimPreservesInvariant
+      <3>2. CASE CommitAccepted
+        <4>1. /\ asyncSentItems' =
+                        asyncSentItems \cup {DiscoveredItem}
+               /\ AsyncCertifiedRequestsIn(asyncActiveRequests') =
+                    AsyncCertifiedRequestsIn(asyncActiveRequests)
+               /\ UNCHANGED
+                    <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+                      asyncCertifiedResponseClaim>>
+          BY <2>2, <3>2, AuthorizedCommitResponseFrame, SMT
+             DEF SelectedDrainItem, DrainIndex, DrainItem,
+                 CommitAccepted, DiscoveredItem,
+                 MatchingCommitCertificateRequests,
+                 AsyncCertifiedRequestsIn
+        <4>2. AsyncCertifiedResponseClaimInvariant
+          BY <2>5
+             DEF AsyncTransportContentTypeInvariant,
+                 AsyncTransportHistoryTypeInvariant
+        <4> QED BY <4>1, <4>2,
+             AppendSentHistoryPreservesCertifiedResponseClaimInvariant
+      <3>3. CASE ~(CertifiedAccepted \/ CommitAccepted)
+        <4>1. UNCHANGED
+                 <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+                   asyncSentItems, asyncActiveRequests,
+                   asyncCertifiedResponseClaim>>
+          BY <2>2, <3>3, NonResponseIngressTransportFrame
+             DEF SelectedDrainItem, DrainIndex, DrainItem,
+                 CertifiedAccepted, CommitAccepted
+        <4>2. AsyncCertifiedResponseClaimInvariant
+          BY <2>5
+             DEF AsyncTransportContentTypeInvariant,
+                 AsyncTransportHistoryTypeInvariant
+        <4> QED BY <4>1, <4>2, Isa
+             DEF AsyncCertifiedResponseClaimInvariant,
+                 AsyncCertifiedResponseClaimCoreAuthorityVars,
+               CertifiedResponseClaimProjectionAuthenticated,
+               CertifiedResponseAuthorized,
+               CertifiedResponseAuthenticatedOccurrence,
+               MatchingCertifiedRequests,
+               FrozenCertifiedRequestRegistration,
+               FrozenCertifiedResponseBinding,
+               AsyncCertifiedResponseCanonicalWireIdentity,
+               ActiveCertifiedRequestHashes,
+                 ActiveCertifiedRequestHashesIn,
+                 CertifiedResponseAuthorityReady,
+                 CertifiedResponseAuthorityClaimed
+      <3> QED BY <3>1, <3>2, <3>3
     <2>14. AsyncTransportContentTypeInvariant'
       <3>1. CASE CertifiedAccepted
         <4>1. /\ asyncSentItems' = asyncSentItems \cup {}
                /\ asyncActiveRequests' =
                     asyncActiveRequests \ MatchingCertifiedRequests(DrainItem)
                /\ asyncRetainedControl' = asyncRetainedControl
-               /\ UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+               /\ AsyncCertifiedResponseClaimInvariant'
+               /\ UNCHANGED
+                    <<context,
+                      AsyncCertifiedResponseClaimCoreAuthorityVars,
+                      asyncTransport, asyncHeldChunks>>
           BY <2>2, <3>1, AuthorizedCertifiedResponseFrame, SMT
              DEF SelectedDrainItem, DrainIndex, DrainItem,
                  CertifiedAccepted
         <4>2. /\ IsFiniteSet({})
                /\ \A item \in {}: AsyncItemTyped(item)
           BY FS_EmptySet
-        <4> QED BY <2>5, <4>1, <4>2,
+        <4> QED BY <2>5, <2>13a, <4>1, <4>2,
              RemoveRequestsAndAddSentPreservesTransportContentType
       <3>2. CASE CommitAccepted
         <4>1. /\ asyncSentItems' =
@@ -4862,24 +5319,33 @@ PROOF
                     asyncActiveRequests \
                       MatchingCommitCertificateRequests(DrainItem)
                /\ asyncRetainedControl' = asyncRetainedControl
-               /\ UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+               /\ AsyncCertifiedResponseClaimInvariant'
+               /\ UNCHANGED
+                    <<context,
+                      AsyncCertifiedResponseClaimCoreAuthorityVars,
+                      asyncTransport, asyncHeldChunks>>
           BY <2>2, <3>2, AuthorizedCommitResponseFrame
              DEF SelectedDrainItem, DrainIndex, DrainItem,
                  CommitAccepted, DiscoveredItem
         <4>2. /\ IsFiniteSet({DiscoveredItem})
                /\ \A item \in {DiscoveredItem}: AsyncItemTyped(item)
           BY <2>8, <3>2, FS_Singleton
-        <4> QED BY <2>5, <4>1, <4>2,
+        <4> QED BY <2>5, <2>13a, <4>1, <4>2,
              RemoveRequestsAndAddSentPreservesTransportContentType
-      <3>3. CASE ~(CertifiedAccepted \/ CommitAccepted)
-        <4>1. UNCHANGED AsyncTransportContentTypeVars
-          BY <2>2, <3>3, NonResponseIngressTransportFrame
+      <3>3. CASE ChunkAccepted
+        <4> QED BY <2>1, <2>2, <2>5, <2>6, <3>3,
+             DirectChunkIngressPreservesTransportContentType
              DEF SelectedDrainItem, DrainIndex, DrainItem,
-                 CertifiedAccepted, CommitAccepted,
-                 AsyncTransportContentTypeVars
+                 ChunkAccepted
+      <3>4. CASE ~(CertifiedAccepted \/ CommitAccepted \/
+                     ChunkAccepted)
+        <4>1. UNCHANGED AsyncTransportContentTypeVars
+          BY <2>2, <3>4, NonRecordingIngressTransportFrame
+             DEF SelectedDrainItem, DrainIndex, DrainItem,
+                 CertifiedAccepted, CommitAccepted, ChunkAccepted
         <4> QED BY <2>5, <4>1,
              AsyncTransportContentTypeStutter
-      <3> QED BY <3>1, <3>2, <3>3
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
     <2>15. /\ RunnerServiceFrame(node)
             /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                            asyncRetransmitDeadlines>>
@@ -4989,7 +5455,9 @@ THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
             command.node, CommandSuccessors(command))
 BY CausalCandidateFromTypedCommand, SMTT(120)
    DEF CommandSuccessors, RetainedBodyRebindCandidate,
-       PersistDecisionFetchSuccessor, PersistDecisionRequests,
+       PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
+       PersistDecisionBody, PersistDecisionValidationHeld,
+       PersistDecisionRequest, PersistDecisionRequests,
        AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
        AsyncQueueTyped, AsyncCausalQueueOwnership,
        AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
@@ -5047,12 +5515,12 @@ PROOF
              TypeInvariant, AsyncCandidateTyped
     <2>6. /\ context \in ContextRecords
            /\ generation[command.node] \in Generations
-           /\ (IF generation[command.node] < MaxGeneration
-               THEN generation[command.node] + 1
-               ELSE generation[command.node]) \in Generations
+           /\ generation[command.node] < MaxGeneration
+           /\ generation[command.node] + 1 \in Generations
            /\ command.evidence \in AsyncEvidenceSet
-      BY <1>1, <2>1, SMT
-         DEF TypeInvariant, AsyncCandidateTyped, Generations
+      BY <1>1, <2>1, <2>3, SMT
+         DEF PersistInstallTC, TypeInvariant, AsyncCandidateTyped,
+             Generations
     <2>7. /\ DOMAIN Successor = AsyncCandidateDomain
            /\ Successor.class \in AsyncCommandClasses
            /\ Successor.kind \in AsyncWorkKinds
@@ -5116,9 +5584,7 @@ PROOF
     <2>3. /\ context' = context
            /\ nodeView'[command.node] = command.view + 1
            /\ generation'[command.node] =
-                IF generation[command.node] < MaxGeneration
-                THEN generation[command.node] + 1
-                ELSE generation[command.node]
+                generation[command.node] + 1
            /\ highestRank'[command.node] =
                 IF TcHighRank(request.tc) > highestRank[command.node]
                 THEN TcHighRank(request.tc)

@@ -1161,15 +1161,17 @@ mod tests {
     }
 
     #[test]
-    fn later_commit_qc_authenticates_the_exact_locked_body_origin() {
+    fn reproposal_commit_qc_authenticates_its_exact_same_round_body() {
         let fixture = Fixture::new();
         let mut request = fixture.signed_request();
         request.certificate.phase = wire::GlobalPhase::Commit;
-        request.certificate.round.view = request
+        request.round.view = request
             .round
             .view
             .checked_add(2)
-            .expect("fixture finality view increment");
+            .expect("fixture reproposal view increment");
+        request.certificate.round = request.round;
+        request.certificate.proposal_round = request.round;
         request.signature = Signature::new(
             fixture.observer.private_key(),
             &request.signature_preimage(),
@@ -1179,19 +1181,34 @@ mod tests {
 
         let authenticated = fixture
             .authenticate_request(request.clone())
-            .expect("later CommitQC authorizes its exact earlier body origin");
+            .expect("reproposal CommitQC authorizes its exact same-round body");
         let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("one request slot");
         tracker
             .register(authenticated)
-            .expect("register historical-origin request");
-        let response = fixture.signed_response(&request, 0);
+            .expect("register exact reproposal request");
+        let reproposal_manifest = wire::PayloadManifest::derive(
+            &fixture.context,
+            request.round,
+            fixture.manifest.subject,
+            u64::try_from(fixture.body.len()).expect("fixture body length"),
+            &fixture.chunks,
+        )
+        .expect("derive exact reproposal manifest");
+        let mut response = fixture.signed_response(&request, 0);
+        response.manifest = reproposal_manifest;
+        response.signature = Signature::new(
+            fixture.validators[0].private_key(),
+            &response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
         let _authenticated = tracker
             .authenticate_response(
                 &fixture.context,
                 response,
                 &Fixture::peer(&fixture.validators[0]),
             )
-            .expect("authenticate exact historical-origin response");
+            .expect("authenticate exact reproposal response");
 
         let mut body_after_finality = request;
         body_after_finality.round.view = body_after_finality

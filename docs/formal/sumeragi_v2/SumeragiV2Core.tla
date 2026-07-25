@@ -151,11 +151,30 @@ Leader(context, roundView) ==
       offset == (context.leaderStart + roundView) % Len(roster)
   IN roster[offset + 1]
 
-Proposal(context, roundView, subject, proposer, justifyRank,
-         justifySubject) ==
+NoPrepareQC == [kind |-> "NoPrepareQC"]
+NoTimeoutCertificate == [kind |-> "NoTimeoutCertificate"]
+
+PrepareQcRank(highestPrepareQc) ==
+  IF highestPrepareQc = NoPrepareQC
+  THEN NoRank
+  ELSE highestPrepareQc.view
+
+PrepareQcSubject(highestPrepareQc) ==
+  IF highestPrepareQc = NoPrepareQC
+  THEN NoSubject
+  ELSE highestPrepareQc.subject
+
+Proposal(context, roundView, subject, proposer, timeoutCertificate,
+         highestPrepareQc) ==
   [context |-> context, height |-> context.height, view |-> roundView,
    subject |-> subject, proposer |-> proposer,
-   justifyRank |-> justifyRank, justifySubject |-> justifySubject]
+   timeoutCertificate |-> timeoutCertificate,
+   highestPrepareQc |-> highestPrepareQc,
+   justifyRank |-> PrepareQcRank(highestPrepareQc),
+   justifySubject |->
+     IF roundView = 0
+     THEN context.parent
+     ELSE PrepareQcSubject(highestPrepareQc)]
 
 Vote(context, roundView, phase, subject, signer) ==
   [context |-> context, height |-> context.height, view |-> roundView,
@@ -165,38 +184,71 @@ QC(context, roundView, phase, subject, signers) ==
   [context |-> context, height |-> context.height, view |-> roundView,
    phase |-> phase, subject |-> subject, signers |-> signers]
 
-TimeoutVote(context, roundView, signer, highRank, highSubject) ==
+TimeoutVote(context, roundView, signer, highestPrepareQc) ==
   [context |-> context, height |-> context.height, view |-> roundView,
-   signer |-> signer, highRank |-> highRank, highSubject |-> highSubject]
+   signer |-> signer, highestPrepareQc |-> highestPrepareQc,
+   highRank |-> PrepareQcRank(highestPrepareQc),
+   highSubject |-> PrepareQcSubject(highestPrepareQc)]
 
-TC(context, roundView, votes) ==
-  [context |-> context, height |-> context.height, view |-> roundView,
-   votes |-> votes]
-
-ProposalRecordSet ==
-  [context: ContextRecords, height: Heights, view: Views,
-   subject: Subjects, proposer: ValidatorIds,
-   justifyRank: Ranks, justifySubject: SubjectOrNone]
 VoteRecordSet ==
   [context: ContextRecords, height: Heights, view: Views,
    phase: Phases, subject: Subjects, signer: ValidatorIds]
 QcRecordSet ==
   [context: ContextRecords, height: Heights, view: Views,
    phase: Phases, subject: Subjects, signers: SUBSET ValidatorIds]
+
+(***************************************************************************
+Stable certificate identity and exact evidence shared by reducer recovery
+owners.
+
+Production `CertificateRef` consists of context, round height/view, phase, and
+subject.  It remains useful for request deduplication, but it is not sufficient
+for recovery ownership: a PrepareQC owner must retain the exact authenticated
+QC value, including its signer evidence.
+***************************************************************************)
+CertificateRefOf(qc) ==
+  [context |-> qc.context,
+   height |-> qc.height,
+   view |-> qc.view,
+   phase |-> qc.phase,
+   subject |-> qc.subject]
+
+SameCertificateRef(left, right) ==
+  CertificateRefOf(left) = CertificateRefOf(right)
+
+SamePrepareRecoveryRef(left, right) ==
+  /\ left \in QcRecordSet
+  /\ right \in QcRecordSet
+  /\ left.phase = "Prepare"
+  /\ right.phase = "Prepare"
+  /\ left = right
+
+PrepareQcOptionSet == {NoPrepareQC} \cup QcRecordSet
 TimeoutVoteRecordSet ==
   [context: ContextRecords, height: Heights, view: Views,
-   signer: ValidatorIds, highRank: Ranks, highSubject: SubjectOrNone]
+   signer: ValidatorIds, highestPrepareQc: PrepareQcOptionSet,
+   highRank: Ranks, highSubject: SubjectOrNone]
 TcRecordSet ==
   [context: ContextRecords, height: Heights, view: Views,
-   votes: SUBSET TimeoutVoteRecordSet]
+   votes: SUBSET TimeoutVoteRecordSet,
+   highestPrepareQc: PrepareQcOptionSet]
+TimeoutCertificateOptionSet == {NoTimeoutCertificate} \cup TcRecordSet
+ProposalRecordSet ==
+  [context: ContextRecords, height: Heights, view: Views,
+   subject: Subjects, proposer: ValidatorIds,
+   timeoutCertificate: TimeoutCertificateOptionSet,
+   highestPrepareQc: PrepareQcOptionSet,
+   justifyRank: Ranks, justifySubject: SubjectOrNone]
 
 TcWellTyped(tc) ==
   /\ tc \in TcRecordSet
-  /\ DOMAIN tc = {"context", "height", "view", "votes"}
+  /\ DOMAIN tc =
+       {"context", "height", "view", "votes", "highestPrepareQc"}
   /\ tc.context \in ContextRecords
   /\ tc.height \in Heights
   /\ tc.view \in Views
   /\ tc.votes \subseteq TimeoutVoteRecordSet
+  /\ tc.highestPrepareQc \in PrepareQcOptionSet
 
 ProposalAt(node, proposal) == [node |-> node, proposal |-> proposal]
 VoteAt(node, vote) == [node |-> node, vote |-> vote]
@@ -286,6 +338,9 @@ VARIABLES
   commitQCs,
   formedTCs,
   installedTCs,
+  lastInstalledTc,
+  lockPrepareQc,
+  highestPrepareQc,
   lockRank,
   lockSubject,
   highestRank,
@@ -315,6 +370,7 @@ vars ==
     seenProposals, receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
+    lastInstalledTc, lockPrepareQc, highestPrepareQc,
     lockRank, lockSubject, highestRank, highestSubject,
     pendingProposal, pendingPrepare, pendingObservePrepare,
     pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,
@@ -426,6 +482,26 @@ QcWireValid(qc) ==
   /\ qc.subject \in Subjects
   /\ DualQuorum(CurrentEpoch, qc.signers)
 
+\* An authenticated future PrepareQC is consumed as a reducer stutter.  It
+\* cannot create local receipt/ownership until a separately authenticated TC
+\* advances the recipient.  CommitQC remains view-unrestricted so decided
+\* heights recover even when the recipient's local view lags.
+QcDeliveryCreatesReceipt(node, qc) ==
+  \/ qc.phase = "Commit"
+  \/ /\ qc.phase = "Prepare"
+     /\ qc.view <= nodeView[node]
+
+PrepareQcOptionWireValid(highestPrepare) ==
+  \/ highestPrepare = NoPrepareQC
+  \/ /\ highestPrepare \in QcRecordSet
+     /\ highestPrepare.phase = "Prepare"
+     /\ QcWireValid(highestPrepare)
+
+ExactPrepareQcMatchesRef(highestPrepare, highRank, highSubject) ==
+  /\ PrepareQcOptionWireValid(highestPrepare)
+  /\ PrepareQcRank(highestPrepare) = highRank
+  /\ PrepareQcSubject(highestPrepare) = highSubject
+
 \* Semantic external validity is derived from honest durable vote provenance;
 \* it is deliberately not an ingress or certificate-formation guard.
 QcValid(qc) ==
@@ -463,7 +539,8 @@ MaximalTimeoutVotes(votes) ==
     \A other \in votes: candidate.highRank >= other.highRank}
 
 EmptyTimeoutHigh ==
-  [highRank |-> NoRank, highSubject |-> NoSubject]
+  [highestPrepareQc |-> NoPrepareQC,
+   highRank |-> NoRank, highSubject |-> NoSubject]
 
 HighestTimeoutVote(votes) ==
   LET maxima == MaximalTimeoutVotes(votes)
@@ -471,9 +548,15 @@ HighestTimeoutVote(votes) ==
      THEN EmptyTimeoutHigh
      ELSE CHOOSE candidate \in maxima: TRUE
 
+TC(tcContext, roundView, votes) ==
+  LET highest == HighestTimeoutVote(votes)
+  IN [context |-> tcContext, height |-> tcContext.height, view |-> roundView,
+      votes |-> votes, highestPrepareQc |-> highest.highestPrepareQc]
+
 TCValid(tc) ==
   /\ tc \in TcRecordSet
-  /\ DOMAIN tc = {"context", "height", "view", "votes"}
+  /\ DOMAIN tc =
+       {"context", "height", "view", "votes", "highestPrepareQc"}
   /\ tc.context = context
   /\ tc.height = height
   /\ tc.view \in Views
@@ -485,14 +568,17 @@ TCValid(tc) ==
        /\ vote.height = height
        /\ vote.view = tc.view
        /\ vote.signer \in CurrentVoters
-       /\ AuthenticatedHighRef(vote.highRank, vote.highSubject)
+       /\ ExactPrepareQcMatchesRef(
+            vote.highestPrepareQc, vote.highRank, vote.highSubject)
        /\ vote.highRank <= tc.view
   /\ TimeoutVotesDisjoint(tc.votes)
   /\ TimeoutHighsConflictFree(tc.votes)
   /\ DualQuorum(CurrentEpoch, TimeoutSignerSet(tc.votes))
+  /\ tc.highestPrepareQc =
+       (HighestTimeoutVote(tc.votes)).highestPrepareQc
 
-TcHighRank(tc) == HighestTimeoutVote(tc.votes).highRank
-TcHighSubject(tc) == HighestTimeoutVote(tc.votes).highSubject
+TcHighRank(tc) == PrepareQcRank(tc.highestPrepareQc)
+TcHighSubject(tc) == PrepareQcSubject(tc.highestPrepareQc)
 
 (***************************************************************************
 A second valid certificate for the timeout round which installed the current
@@ -509,13 +595,7 @@ StrictSameRoundTcUpgrade(node, tc) ==
   /\ TcHighRank(tc) > lockRank[node]
   /\ generation[node] < MaxGeneration
 
-InstalledTcAuthorizesCommitVote(commitVote) ==
-  \E installed \in installedTCs:
-    /\ installed.node = commitVote.signer
-    /\ installed.tc.context = commitVote.context
-    /\ installed.tc.view >= commitVote.view
-    /\ TcHighRank(installed.tc) = commitVote.view
-    /\ TcHighSubject(installed.tc) = commitVote.subject
+InstalledTcAuthorizesCommitVote(commitVote) == FALSE
 
 (***************************************************************************
 An honest timeout ordinarily fences later Commit creation in that view.  The
@@ -534,8 +614,7 @@ TimeoutVoteProtectsCommitSet(timeoutVote, commitSet) ==
      /\ commitVote.context = timeoutVote.context
      /\ commitVote.phase = "Commit"
      /\ commitVote.view <= timeoutVote.view)
-    => \/ TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
-       \/ InstalledTcAuthorizesCommitVote(commitVote)
+    => TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
 
 ResultingInstallLockRank(node, tc) ==
   IF TcHighRank(tc) > lockRank[node]
@@ -546,6 +625,16 @@ ResultingInstallLockSubject(node, tc) ==
   IF TcHighRank(tc) > lockRank[node]
   THEN TcHighSubject(tc)
   ELSE lockSubject[node]
+
+ResultingInstallLockPrepareQc(node, tc) ==
+  IF TcHighRank(tc) > lockRank[node]
+  THEN tc.highestPrepareQc
+  ELSE lockPrepareQc[node]
+
+ResultingInstallHighestPrepareQc(node, tc) ==
+  IF TcHighRank(tc) > highestRank[node]
+  THEN tc.highestPrepareQc
+  ELSE highestPrepareQc[node]
 
 ExactLockedCommitIntents(node, roundView, subject) ==
   {vote \in commitIntents:
@@ -560,8 +649,7 @@ InstalledTcSelectsPrepareFor(node, qc) ==
     /\ installed.node = node
     /\ installed.tc.context = qc.context
     /\ installed.tc.view >= qc.view
-    /\ TcHighRank(installed.tc) = qc.view
-    /\ TcHighSubject(installed.tc) = qc.subject
+    /\ installed.tc.highestPrepareQc = qc
 
 CurrentOpenPrepareForCommit(node, qc) ==
   /\ QcAt(node, qc) \in receivedQCs
@@ -576,6 +664,16 @@ NoHigherPrepareOriginKnown(node, qc) ==
        /\ vote.view > qc.view
   /\ ~(highestRank[node] > qc.view)
 
+NoHigherConflictingPrepareKnown(node, qc) ==
+  /\ ~\E vote \in prepareIntents:
+       /\ vote.signer = node
+       /\ vote.context = qc.context
+       /\ vote.phase = "Prepare"
+       /\ vote.view > qc.view
+       /\ vote.subject # qc.subject
+  /\ ~(highestRank[node] > qc.view
+        /\ highestSubject[node] # qc.subject)
+
 HistoricalLockedPrepareRecoveryProvenance(node, qc) ==
   \/ InstalledTcSelectsPrepareFor(node, qc)
   \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
@@ -585,15 +683,13 @@ HistoricalLockedPrepareSource(node, qc) ==
   /\ qc.context = context
   /\ qc.phase = "Prepare"
   /\ qc.view < nodeView[node]
+  /\ lockPrepareQc[node] = qc
   /\ qc.view = lockRank[node]
   /\ qc.subject = lockSubject[node]
   /\ HistoricalLockedPrepareRecoveryProvenance(node, qc)
   /\ NoDecisionForNode(node)
 
-HistoricalLockedPrepareForCommit(node, qc) ==
-  /\ HistoricalLockedPrepareSource(node, qc)
-  /\ ExactLockedCommitIntents(node, qc.view, qc.subject) = {}
-  /\ NoHigherPrepareOriginKnown(node, qc)
+HistoricalLockedPrepareForCommit(node, qc) == FALSE
 
 \* Compatibility aliases for proof modules whose theorem names predate the
 \* ordinary LockAndCommit -> no-high-TC recovery source.  New statements use
@@ -603,6 +699,11 @@ HistoricalTcLockedPrepareSource(node, qc) ==
 
 HistoricalTcLockedPrepareForCommit(node, qc) ==
   HistoricalLockedPrepareForCommit(node, qc)
+
+\* Current proof modules use the source-neutral name; retain the older
+\* historical spelling only as a compatibility alias.
+LockedPrepareRecoverySource(node, qc) ==
+  HistoricalLockedPrepareSource(node, qc)
 
 (***************************************************************************
 The certified-body wire protocol accepts either the local durable Commit
@@ -616,10 +717,9 @@ higher-origin signing fence: Rust still fetches and validates that locked
 body, then returns IrrelevantView instead of creating a late Commit when any
 higher Prepare origin exists.
 
-The current TC abstraction carries only the authenticated high rank/subject,
-not the full selected QC bytes.  Exact signer-set identity therefore remains
-a separate production-refinement debt; recovery candidates retain one exact
-matching QcRecord as their evidence inside this abstraction.
+The timeout certificate, durable lock, and recovery candidates retain the
+same complete PrepareQC value.  Rank and subject remain scheduling/safety
+projections only; they never reconstruct or substitute certificate identity.
 ***************************************************************************)
 
 DecisionCertifiedBodyRecoveryAuthority(node, qc) ==
@@ -647,25 +747,35 @@ ActiveLockedCommitSignRequestsAfterInstall(node, tc) ==
 
 ProposalJustified(node, proposal) ==
   \/ /\ proposal.view = 0
+     /\ proposal.timeoutCertificate = NoTimeoutCertificate
+     /\ proposal.highestPrepareQc = NoPrepareQC
      /\ proposal.justifyRank = NoRank
      /\ proposal.justifySubject = context.parent
   \/ /\ proposal.view > 0
-     /\ \E installed \in installedTCs:
-          /\ installed.node = node
-          /\ installed.tc.context = context
-          /\ installed.tc.view + 1 = proposal.view
-          /\ TcHighRank(installed.tc) = NoRank
-          /\ TcHighSubject(installed.tc) = NoSubject
-          /\ proposal.justifyRank = NoRank
-          /\ proposal.justifySubject = NoSubject
+     /\ lastInstalledTc[node] # NoTimeoutCertificate
+     /\ [node |-> node, tc |-> lastInstalledTc[node]] \in installedTCs
+     /\ lastInstalledTc[node].context = context
+     /\ lastInstalledTc[node].view + 1 = proposal.view
+     /\ TCValid(lastInstalledTc[node])
+     /\ proposal.timeoutCertificate = lastInstalledTc[node]
+     /\ proposal.highestPrepareQc =
+          lastInstalledTc[node].highestPrepareQc
+     /\ proposal.justifyRank =
+          PrepareQcRank(proposal.highestPrepareQc)
+     /\ proposal.justifySubject =
+          PrepareQcSubject(proposal.highestPrepareQc)
+     /\ proposal.justifyRank < proposal.view
 
 SafeToPrepare(node, proposal) ==
   \/ lockRank[node] = NoRank
-  \/ /\ proposal.view = lockRank[node]
-     /\ proposal.subject = lockSubject[node]
+  \/ proposal.subject = lockSubject[node]
+  \/ /\ proposal.highestPrepareQc # NoPrepareQC
+     /\ proposal.highestPrepareQc.view > lockRank[node]
+     /\ proposal.highestPrepareQc.subject = proposal.subject
 
 \* Wire/local-state checks do not decide external validity from a subject hash.
 ProposalWireValidFor(node, proposal) ==
+  /\ proposal \in ProposalRecordSet
   /\ proposal.context = context
   /\ proposal.height = height
   /\ proposal.view = nodeView[node]
@@ -699,13 +809,14 @@ pools without allowing an unlocked current-view Commit to create a third pool.
 ***************************************************************************)
 
 LockedPrepareRound(node, roundView, subject) ==
+  /\ lockPrepareQc[node] # NoPrepareQC
+  /\ lockPrepareQc[node].context = context
+  /\ lockPrepareQc[node].phase = "Prepare"
+  /\ lockPrepareQc[node].view = roundView
+  /\ lockPrepareQc[node].subject = subject
   /\ lockRank[node] = roundView
   /\ lockSubject[node] = subject
-  /\ \E qc \in prepareQCs:
-       /\ qc.context = context
-       /\ qc.view = roundView
-       /\ qc.phase = "Prepare"
-       /\ qc.subject = subject
+  /\ lockPrepareQc[node] \in prepareQCs
 
 VoteRoundAdmissible(node, vote) ==
   \/ /\ vote.phase = "Prepare"
@@ -730,12 +841,15 @@ VoteReceiptSurvivesLockCommit(received, node, roundView, subject) ==
      /\ received.vote.view = roundView
      /\ received.vote.subject = subject
 
-TimeoutVotesAt(node, roundView) ==
+TimeoutVotesIn(receipts, node, roundView) ==
   {received.vote:
-    received \in {entry \in receivedTimeoutVotes:
+    received \in {entry \in receipts:
       /\ entry.node = node
       /\ entry.vote.context = context
       /\ entry.vote.view = roundView}}
+
+TimeoutVotesAt(node, roundView) ==
+  TimeoutVotesIn(receivedTimeoutVotes, node, roundView)
 
 (***************************************************************************
 The production reducer's timeout pool is keyed by round and signer.  The
@@ -752,6 +866,48 @@ TimeoutVoteSlotOccupied(node, vote) ==
   \E received \in receivedTimeoutVotes:
     SameTimeoutVoteSlot(received, TimeoutVoteAt(node, vote))
 
+TimeoutReceiptAdmitted(node, vote) ==
+  /\ NoDecisionForNode(node)
+  /\ vote.view = nodeView[node]
+  /\ ~TimeoutVoteSlotOccupied(node, vote)
+
+TimeoutReceiptsAfter(node, vote) ==
+  IF TimeoutReceiptAdmitted(node, vote)
+  THEN receivedTimeoutVotes \cup {TimeoutVoteAt(node, vote)}
+  ELSE receivedTimeoutVotes
+
+TimeoutCertificateAfterReceipt(node, vote) ==
+  TC(context, vote.view,
+     TimeoutVotesIn(TimeoutReceiptsAfter(node, vote), node, vote.view))
+
+TimeoutInstallRequestAfterReceipt(node, vote) ==
+  InstallTcWal(node, TimeoutCertificateAfterReceipt(node, vote), TRUE)
+
+TimeoutReceiptFormsTC(node, vote) ==
+  /\ TimeoutReceiptAdmitted(node, vote)
+  /\ vote.view + 1 \in Views
+  /\ TCValid(TimeoutCertificateAfterReceipt(node, vote))
+
+TimeoutDeliveryGuard(envelope) ==
+  /\ envelope \in TimeoutEnvelopeSet
+  /\ envelope \in timeoutNetwork
+  /\ envelope.recipient \in up
+  /\ NodeIdle(envelope.recipient)
+  /\ envelope.vote.context = context
+  /\ envelope.vote.height = height
+  /\ envelope.vote.signer \in CurrentVoters
+  /\ ExactPrepareQcMatchesRef(
+       envelope.vote.highestPrepareQc,
+       envelope.vote.highRank, envelope.vote.highSubject)
+  /\ envelope.vote.highRank <= envelope.vote.view
+
+TimeoutReceiptSurvivesInstall(received, node, tc) ==
+  \/ received.node # node
+  \/ /\ StrictSameRoundTcUpgrade(node, tc)
+     /\ received.vote.context = context
+     /\ received.vote.height = height
+     /\ received.vote.view = nodeView[node]
+
 ReceivedTimeoutVoteSlotsUnique ==
   \A left, right \in receivedTimeoutVotes:
     SameTimeoutVoteSlot(left, right) => left = right
@@ -765,8 +921,9 @@ ReceivedTimeoutVotePoolInvariant ==
        /\ received.vote.context = context
        /\ received.vote.height = height
        /\ received.vote.signer \in CurrentVoters
-       /\ AuthenticatedHighRef(received.vote.highRank,
-                               received.vote.highSubject)
+       /\ ExactPrepareQcMatchesRef(
+            received.vote.highestPrepareQc,
+            received.vote.highRank, received.vote.highSubject)
        /\ received.vote.highRank <= received.vote.view
 
 ModelConfiguration ==
@@ -881,6 +1038,10 @@ InitAt(initialContext) ==
        THEN {} ELSE {BootstrapParentCommitQC(initialContext)}
   /\ formedTCs = {}
   /\ installedTCs = {}
+  /\ lastInstalledTc =
+       [node \in ValidatorIds |-> NoTimeoutCertificate]
+  /\ lockPrepareQc = [node \in ValidatorIds |-> NoPrepareQC]
+  /\ highestPrepareQc = [node \in ValidatorIds |-> NoPrepareQC]
   /\ lockRank = [node \in ValidatorIds |-> NoRank]
   /\ lockSubject = [node \in ValidatorIds |-> NoSubject]
   /\ highestRank = [node \in ValidatorIds |-> NoRank]
@@ -919,7 +1080,7 @@ SetGST ==
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal,
                  pendingPrepare, pendingObservePrepare, pendingLockCommit,
                  pendingTimeout, pendingInstallTC, pendingDecision,
@@ -969,7 +1130,7 @@ AssembleLocalBody(node, subject) ==
                     receivedVotes, receivedQCs, receivedTimeoutVotes,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -980,17 +1141,17 @@ AssembleLocalBody(node, subject) ==
 LocalProposalJustification(node) ==
   LET roundView == nodeView[node]
   IN IF roundView = 0
-     THEN [rank |-> NoRank, subject |-> context.parent]
-     ELSE LET tc == CHOOSE installed \in installedTCs:
-                      /\ installed.node = node
-                      /\ installed.tc.context = context
-                      /\ installed.tc.view + 1 = roundView
-          IN [rank |-> TcHighRank(tc.tc), subject |-> TcHighSubject(tc.tc)]
+     THEN [timeoutCertificate |-> NoTimeoutCertificate,
+           highestPrepareQc |-> NoPrepareQC]
+     ELSE LET tc == lastInstalledTc[node]
+          IN [timeoutCertificate |-> tc,
+              highestPrepareQc |-> tc.highestPrepareQc]
 
 LocalProposalFor(node, subject) ==
   LET justification == LocalProposalJustification(node)
   IN Proposal(context, nodeView[node], subject, node,
-              justification.rank, justification.subject)
+              justification.timeoutCertificate,
+              justification.highestPrepareQc)
 
 \* A local leader may choose fresh work only when its justification has no
 \* Prepare high certificate.  Once the installed TC selects a high subject,
@@ -1028,7 +1189,7 @@ BeginLocalProposal(node, subject) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingPrepare,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1047,7 +1208,7 @@ PersistProposal(request) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingPrepare,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
                     pendingInstallTC, pendingDecision, signVotes, signTimeouts,
@@ -1066,7 +1227,7 @@ CompleteProposalSignature(request) ==
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal, pendingPrepare,
                  pendingObservePrepare, pendingLockCommit, pendingTimeout,
                  pendingInstallTC, pendingDecision, signVotes, signTimeouts,
@@ -1074,22 +1235,22 @@ CompleteProposalSignature(request) ==
                  decisions, applied>>
 
 ByzantineBroadcastProposal(signer, roundView, subject,
-                           justifyRank, justifySubject) ==
+                           timeoutCertificate, highestPrepare) ==
   LET proposal == Proposal(context, roundView, subject, signer,
-                           justifyRank, justifySubject)
+                           timeoutCertificate, highestPrepare)
   IN /\ signer \in Byzantine(CurrentEpoch) \cap up
      /\ signer = Leader(context, roundView)
      /\ roundView \in Views
      /\ subject \in Subjects
-     /\ justifyRank \in Ranks
-     /\ justifySubject \in SubjectOrNone
+     /\ timeoutCertificate \in TimeoutCertificateOptionSet
+     /\ highestPrepare \in PrepareQcOptionSet
      /\ proposalNetwork' = proposalNetwork \cup BroadcastProposals(proposal)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1108,7 +1269,7 @@ DeliverProposal(envelope) ==
                     invalidBodies, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1130,7 +1291,7 @@ FetchBody(node, proposal) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1154,7 +1315,7 @@ RebindRetainedBody(node, proposal) ==
                     receivedVotes, receivedQCs, receivedTimeoutVotes,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1173,7 +1334,7 @@ StoreBody(node, roundView, subject) ==
                     receivedVotes, receivedQCs, receivedTimeoutVotes,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1197,7 +1358,7 @@ ValidateBody(node, proposal) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1232,7 +1393,7 @@ ValidateDecidedBody(node, qc) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1264,7 +1425,7 @@ ValidateLockedBody(node, qc) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1286,7 +1447,7 @@ RejectBody(node, proposal) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1323,7 +1484,7 @@ BeginPrepare(node, proposal) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1342,7 +1503,7 @@ PersistPrepare(request) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1363,7 +1524,7 @@ CompleteVoteSignature(request) ==
                  invalidBodies, seenProposals, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal, pendingPrepare,
                  pendingObservePrepare, pendingLockCommit, pendingTimeout,
                  pendingInstallTC, pendingDecision, signProposals,
@@ -1382,7 +1543,7 @@ ByzantineBroadcastVote(signer, roundView, phase, subject) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1407,7 +1568,7 @@ DeliverVote(envelope) ==
                     invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1431,7 +1592,7 @@ FormPrepareQC(node, roundView, subject) ==
                     invalidBodies, seenProposals, receivedVotes,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1461,7 +1622,7 @@ ImportAuthenticatedCommitCertificate(envelope) ==
                  seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal,
                  pendingPrepare, pendingObservePrepare, pendingLockCommit,
                  pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1473,19 +1634,22 @@ DeliverQC(envelope) ==
   IN /\ envelope \in qcNetwork
      /\ envelope.recipient \in up
      /\ QcWireValid(envelope.qc)
-     /\ qcNetwork' = qcNetwork \ {envelope}
-     /\ receivedQCs' = receivedQCs \cup {received}
+     /\ receivedQCs' =
+          IF QcDeliveryCreatesReceipt(envelope.recipient, envelope.qc)
+          THEN receivedQCs \cup {received}
+          ELSE receivedQCs
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
                     signProposals, signVotes, signTimeouts, proposalNetwork,
-                    voteNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
+                    voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
+                    decisions, applied>>
 
 BeginObservePrepare(node, qc) ==
   LET request == ObservePrepareWal(node, qc)
@@ -1501,7 +1665,7 @@ BeginObservePrepare(node, qc) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingLockCommit, pendingTimeout,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1510,6 +1674,8 @@ BeginObservePrepare(node, qc) ==
 
 PersistObservePrepare(request) ==
   /\ request \in pendingObservePrepare
+  /\ highestPrepareQc' =
+       [highestPrepareQc EXCEPT ![request.node] = request.qc]
   /\ highestRank' = [highestRank EXCEPT ![request.node] = request.qc.view]
   /\ highestSubject' =
        [highestSubject EXCEPT ![request.node] = request.qc.subject]
@@ -1519,7 +1685,8 @@ PersistObservePrepare(request) ==
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc,
+                 lockPrepareQc, lockRank, lockSubject,
                  pendingProposal, pendingPrepare, pendingLockCommit,
                  pendingTimeout, pendingInstallTC, pendingDecision,
                  signProposals, signVotes, signTimeouts, proposalNetwork,
@@ -1532,8 +1699,7 @@ BeginLockCommit(node, qc) ==
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ qc.context = context
      /\ qc.phase = "Prepare"
-     /\ \/ CurrentOpenPrepareForCommit(node, qc)
-        \/ HistoricalLockedPrepareForCommit(node, qc)
+     /\ CurrentOpenPrepareForCommit(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
                         generation[node], qc.subject)
@@ -1547,7 +1713,7 @@ BeginLockCommit(node, qc) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingTimeout,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1565,6 +1731,8 @@ PersistLockCommit(request) ==
      /\ retained \in RetainedLockedBodyRecordSet
      /\ commitIntents' = commitIntents \cup {request.vote}
      /\ retainedLockedBodies' = retainedLockedBodies \cup {retained}
+     /\ lockPrepareQc' =
+          [lockPrepareQc EXCEPT ![request.node] = request.qc]
      /\ lockRank' = [lockRank EXCEPT ![request.node] = request.qc.view]
      /\ lockSubject' =
           [lockSubject EXCEPT ![request.node] = request.qc.subject]
@@ -1575,6 +1743,10 @@ PersistLockCommit(request) ==
           [highestSubject EXCEPT ![request.node] =
              IF request.qc.view > highestRank[request.node]
              THEN request.qc.subject ELSE @]
+     /\ highestPrepareQc' =
+          [highestPrepareQc EXCEPT ![request.node] =
+             IF request.qc.view > highestRank[request.node]
+             THEN request.qc ELSE @]
      /\ pendingLockCommit' = pendingLockCommit \ {request}
      /\ signVotes' = signVotes \cup {signRequest}
      /\ receivedVotes' =
@@ -1587,7 +1759,8 @@ PersistLockCommit(request) ==
                     invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, pendingProposal, pendingPrepare,
+                    formedTCs, installedTCs, lastInstalledTc,
+                    pendingProposal, pendingPrepare,
                     pendingObservePrepare, pendingTimeout, pendingInstallTC,
                     pendingDecision, signProposals, signTimeouts,
                     proposalNetwork, voteNetwork, qcNetwork, timeoutNetwork,
@@ -1612,7 +1785,7 @@ FormCommitQC(node, roundView, subject) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, signProposals, signVotes,
@@ -1635,7 +1808,7 @@ BeginDecision(node, qc) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, signProposals, signVotes,
@@ -1656,7 +1829,7 @@ PersistDecision(request) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, signProposals, signVotes,
@@ -1664,27 +1837,29 @@ PersistDecision(request) ==
                  tcNetwork, applied>>
 
 LocalTimeoutVoteFor(node) ==
-  TimeoutVote(context, nodeView[node], node,
-              highestRank[node], highestSubject[node])
+  TimeoutVote(context, nodeView[node], node, highestPrepareQc[node])
 
 TimeoutRequestFor(node) == TimeoutWal(node, LocalTimeoutVoteFor(node))
 
-BeginTimeout(node) ==
+BeginTimeoutReady(node) ==
   LET roundView == nodeView[node]
-      vote == LocalTimeoutVoteFor(node)
       request == TimeoutRequestFor(node)
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ NodeIdle(node)
      /\ NoDecisionForNode(node)
      /\ ~NodeTimedOut(node, roundView)
      /\ request \in TimeoutWalSet
+
+BeginTimeout(node) ==
+  LET request == TimeoutRequestFor(node)
+  IN /\ BeginTimeoutReady(node)
      /\ pendingTimeout' = pendingTimeout \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingInstallTC, pendingDecision, signProposals,
@@ -1703,45 +1878,78 @@ PersistTimeout(request) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingInstallTC, pendingDecision, signProposals,
                     signVotes, proposalNetwork, voteNetwork, qcNetwork,
                     timeoutNetwork, tcNetwork, decisions, applied>>
 
-CompleteTimeoutSignature(request) ==
-  /\ request \in signTimeouts
-  /\ request.vote.signer = request.node
-  /\ request.vote \in timeoutIntents
-  /\ signTimeouts' = signTimeouts \ {request}
-  /\ timeoutNetwork' =
-       timeoutNetwork \cup BroadcastTimeouts(request.vote)
-  /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                 up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
-                 invalidBodies, seenProposals, receivedVotes, receivedQCs,
-                 receivedTimeoutVotes, receivedTCs, proposalIntents,
-                 prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
-                 highestRank, highestSubject, pendingProposal, pendingPrepare,
-                 pendingObservePrepare, pendingLockCommit, pendingTimeout,
-                 pendingInstallTC, pendingDecision, signProposals, signVotes,
-                 proposalNetwork, voteNetwork, qcNetwork, tcNetwork,
-                 decisions, applied>>
+LocalTimeoutCompletionGuard(request) ==
+  LET node == request.node
+      vote == request.vote
+  IN /\ request \in signTimeouts
+     /\ node \in Honest \cap up \cap CurrentVoters
+     /\ node \notin PendingNodes
+     /\ NoDecisionForNode(node)
+     /\ vote = LocalTimeoutVoteFor(node)
+     /\ vote.context = context
+     /\ vote.height = height
+     /\ vote.view = nodeView[node]
+     /\ vote.signer = node
+     /\ vote.highestPrepareQc = highestPrepareQc[node]
+     /\ vote.highRank = highestRank[node]
+     /\ vote.highSubject = highestSubject[node]
+     /\ vote \in timeoutIntents
+     /\ ExactPrepareQcMatchesRef(
+          vote.highestPrepareQc, vote.highRank, vote.highSubject)
+     /\ vote.highRank <= vote.view
 
-ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject) ==
-  LET vote == TimeoutVote(context, roundView, signer, highRank, highSubject)
+CompleteTimeoutSignature(request) ==
+  LET node == request.node
+      vote == request.vote
+      nextReceipts == TimeoutReceiptsAfter(node, vote)
+      tc == TimeoutCertificateAfterReceipt(node, vote)
+      installRequest == TimeoutInstallRequestAfterReceipt(node, vote)
+      formsTC == TimeoutReceiptFormsTC(node, vote)
+  IN /\ LocalTimeoutCompletionGuard(request)
+     /\ signTimeouts' = signTimeouts \ {request}
+     /\ timeoutNetwork' = timeoutNetwork \cup BroadcastTimeouts(vote)
+     /\ receivedTimeoutVotes' = nextReceipts
+     /\ formedTCs' =
+          IF formsTC
+          THEN formedTCs \cup {tc}
+          ELSE formedTCs
+     /\ pendingInstallTC' =
+          IF formsTC
+          THEN pendingInstallTC \cup {installRequest}
+          ELSE pendingInstallTC
+     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, validatedBodies, invalidBodies,
+                    seenProposals, receivedVotes, receivedQCs, receivedTCs,
+                    proposalIntents, prepareIntents, commitIntents,
+                    timeoutIntents, prepareQCs, commitQCs, installedTCs,
+                    lastInstalledTc, lockPrepareQc, highestPrepareQc,
+                    lockRank, lockSubject, highestRank, highestSubject,
+                    pendingProposal, pendingPrepare, pendingObservePrepare,
+                    pendingLockCommit, pendingTimeout, pendingDecision,
+                    signProposals, signVotes, proposalNetwork, voteNetwork,
+                    qcNetwork, tcNetwork, decisions, applied>>
+
+ByzantineBroadcastTimeout(signer, roundView, highestPrepare) ==
+  LET vote == TimeoutVote(context, roundView, signer, highestPrepare)
   IN /\ signer \in Byzantine(CurrentEpoch) \cap up
      /\ roundView \in Views
-     /\ AuthenticatedHighRef(highRank, highSubject)
-     /\ highRank <= roundView
+     /\ PrepareQcOptionWireValid(highestPrepare)
+     /\ PrepareQcRank(highestPrepare) <= roundView
      /\ timeoutNetwork' = timeoutNetwork \cup BroadcastTimeouts(vote)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1753,58 +1961,41 @@ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject) ==
 \* exclude records with a non-canonical DOMAIN.  The remaining guards perform
 \* current-context, roster, authenticated-high-reference, and rank admission.
 DeliverTimeout(envelope) ==
-  LET received == TimeoutVoteAt(envelope.recipient, envelope.vote)
-  IN /\ envelope \in TimeoutEnvelopeSet
-     /\ envelope \in timeoutNetwork
-     /\ envelope.recipient \in up
-     /\ envelope.vote.context = context
-     /\ envelope.vote.height = height
-     /\ envelope.vote.signer \in CurrentVoters
-     /\ AuthenticatedHighRef(envelope.vote.highRank,
-                             envelope.vote.highSubject)
-     /\ envelope.vote.highRank <= envelope.vote.view
+  LET node == envelope.recipient
+      vote == envelope.vote
+      nextReceipts == TimeoutReceiptsAfter(node, vote)
+      tc == TimeoutCertificateAfterReceipt(node, vote)
+      installRequest == TimeoutInstallRequestAfterReceipt(node, vote)
+      formsTC == TimeoutReceiptFormsTC(node, vote)
+  IN /\ TimeoutDeliveryGuard(envelope)
      /\ timeoutNetwork' = timeoutNetwork \ {envelope}
-     /\ receivedTimeoutVotes' =
-          IF ~NoDecisionForNode(envelope.recipient)
-             \/ TimeoutVoteSlotOccupied(envelope.recipient, envelope.vote)
-          THEN receivedTimeoutVotes
-          ELSE receivedTimeoutVotes \cup {received}
+     /\ receivedTimeoutVotes' = nextReceipts
+     /\ formedTCs' =
+          IF formsTC
+          THEN formedTCs \cup {tc}
+          ELSE formedTCs
+     /\ pendingInstallTC' =
+          IF formsTC
+          THEN pendingInstallTC \cup {installRequest}
+          ELSE pendingInstallTC
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
-                    receivedTCs, proposalIntents, prepareIntents,
-                    commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, validatedBodies, invalidBodies,
+                    seenProposals, receivedVotes, receivedQCs, receivedTCs,
+                    proposalIntents, prepareIntents, commitIntents,
+                    timeoutIntents, prepareQCs, commitQCs, installedTCs,
+                    lastInstalledTc, lockPrepareQc, highestPrepareQc,
+                    lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
-                    pendingTimeout, pendingInstallTC, pendingDecision,
+                    pendingTimeout, pendingDecision,
                     signProposals, signVotes, signTimeouts, proposalNetwork,
                     voteNetwork, qcNetwork, tcNetwork, decisions, applied>>
 
-FormTC(node, roundView) ==
-  LET votes == TimeoutVotesAt(node, roundView)
-      tc == TC(context, roundView, votes)
-      request == InstallTcWal(node, tc, TRUE)
-  IN /\ node \in up
-     /\ NodeIdle(node)
-     /\ NoDecisionForNode(node)
-     /\ roundView + 1 \in Views
-     /\ TCValid(tc)
-     /\ \/ roundView >= nodeView[node]
-        \/ StrictSameRoundTcUpgrade(node, tc)
-     /\ formedTCs' = formedTCs \cup {tc}
-     /\ pendingInstallTC' = pendingInstallTC \cup {request}
-     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
-                    receivedTimeoutVotes, receivedTCs, proposalIntents,
-                    prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, installedTCs, lockRank, lockSubject,
-                    highestRank, highestSubject, pendingProposal,
-                    pendingPrepare, pendingObservePrepare, pendingLockCommit,
-                    pendingTimeout, pendingDecision, signProposals, signVotes,
-                    signTimeouts, proposalNetwork, voteNetwork, qcNetwork,
-                    timeoutNetwork, tcNetwork, decisions, applied>>
+\* Proof-layer compatibility tombstone for the retired standalone TC reducer
+\* action.  Receipt turns form a TC atomically in CompleteTimeoutSignature or
+\* DeliverTimeout; this predicate is always disabled and is not part of Next.
+FormTC(node, roundView) == FALSE
 
 DeliverTC(envelope) ==
   LET received == TcAt(envelope.recipient, envelope.tc)
@@ -1821,7 +2012,7 @@ DeliverTC(envelope) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
-                    formedTCs, installedTCs, lockRank, lockSubject,
+                    formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1842,7 +2033,7 @@ BeginInstallTC(node, tc) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingDecision, signProposals, signVotes,
@@ -1866,6 +2057,10 @@ PersistInstallTC(request) ==
              IF sameRoundUpgrade THEN @ ELSE tc.view + 1]
      /\ generation' =
           [generation EXCEPT ![node] = IF @ < MaxGeneration THEN @ + 1 ELSE @]
+     /\ lastInstalledTc' = [lastInstalledTc EXCEPT ![node] = tc]
+     /\ highestPrepareQc' =
+          [highestPrepareQc EXCEPT ![node] =
+             IF advancesHigh THEN tc.highestPrepareQc ELSE @]
      /\ highestRank' =
           [highestRank EXCEPT ![node] = IF advancesHigh THEN selectedRank ELSE @]
      /\ highestSubject' =
@@ -1876,10 +2071,20 @@ PersistInstallTC(request) ==
      /\ lockSubject' =
           [lockSubject EXCEPT ![node] =
              IF advancesLock THEN selectedSubject ELSE @]
+     /\ lockPrepareQc' =
+          [lockPrepareQc EXCEPT ![node] =
+             IF advancesLock THEN tc.highestPrepareQc ELSE @]
+     /\ prepareQCs' =
+          IF tc.highestPrepareQc = NoPrepareQC
+          THEN prepareQCs
+          ELSE prepareQCs \cup {tc.highestPrepareQc}
      /\ installedTCs' = installedTCs \cup {installed}
      /\ pendingInstallTC' = pendingInstallTC \ {request}
      /\ receivedVotes' =
           {received \in receivedVotes: received.node # node}
+     /\ receivedTimeoutVotes' =
+          {received \in receivedTimeoutVotes:
+            TimeoutReceiptSurvivesInstall(received, node, tc)}
      /\ signVotes' =
           signVotes
             \cup ActiveLockedCommitSignRequestsAfterInstall(node, tc)
@@ -1890,19 +2095,25 @@ PersistInstallTC(request) ==
      /\ UNCHANGED <<height, context, contextHistory, up, gst,
                     availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedQCs,
-                    receivedTimeoutVotes, receivedTCs, proposalIntents,
-                    prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                    receivedTCs, proposalIntents,
+                    prepareIntents, commitIntents, timeoutIntents,
                     commitQCs, formedTCs, pendingProposal, pendingPrepare,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
                     pendingDecision, signProposals, signTimeouts,
                     proposalNetwork, voteNetwork, qcNetwork, timeoutNetwork,
                     decisions, applied>>
 
-FetchCertifiedBody(node, qc) ==
-  LET body == BodyRecord(node, context, qc.view, qc.subject)
-  IN /\ CertifiedBodyRecoveryAuthority(node, qc)
-     /\ ~BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+InstallCertifiedBodyEffectReady(node, roundView, subject) ==
+  LET body == BodyRecord(node, context, roundView, subject)
+  IN /\ node \in ValidatorIds
+     /\ roundView \in Views
+     /\ subject \in Subjects
+     /\ ~BodyHeldBy(durableBodies, node, context, roundView, subject)
      /\ body \in BodyRecordSet
+
+InstallCertifiedBodyEffect(node, roundView, subject) ==
+  LET body == BodyRecord(node, context, roundView, subject)
+  IN /\ InstallCertifiedBodyEffectReady(node, roundView, subject)
      /\ availableBodies' = availableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, durableBodies, retainedLockedBodies,
@@ -1910,13 +2121,23 @@ FetchCertifiedBody(node, qc) ==
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
                     signProposals, signVotes, signTimeouts, proposalNetwork,
                     voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
                     decisions, applied>>
+
+FetchCertifiedBody(node, qc) ==
+  /\ CertifiedBodyRecoveryAuthority(node, qc)
+  /\ InstallCertifiedBodyEffect(node, qc.view, qc.subject)
+
+\* A serialized response command carries a frozen authenticated capability.
+\* Mutable request/lock authority was checked when ingress created that token;
+\* reducer acceptance only installs the exact materialized body identity.
+AcceptCertifiedResponseCapability(node, roundView, subject) ==
+  InstallCertifiedBodyEffect(node, roundView, subject)
 
 ApplyDecision(node, qc) ==
   LET application == [node |-> node, qc |-> qc]
@@ -1935,7 +2156,7 @@ ApplyDecision(node, qc) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -1978,7 +2199,7 @@ Crash(node) ==
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation, gst,
                  durableBodies, proposalIntents, prepareIntents, commitIntents,
                  timeoutIntents, prepareQCs, commitQCs, formedTCs,
-                 installedTCs, lockRank, lockSubject, highestRank,
+                 installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject, highestRank,
                  highestSubject, proposalNetwork, voteNetwork, qcNetwork,
                  timeoutNetwork, tcNetwork, decisions, applied>>
 
@@ -1992,7 +2213,7 @@ Restart(node) ==
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal,
                  pendingPrepare, pendingObservePrepare, pendingLockCommit,
                  pendingTimeout, pendingInstallTC, pendingDecision,
@@ -2015,7 +2236,7 @@ ResumeProposal(node, proposal) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -2051,7 +2272,7 @@ ResumeVote(node, vote) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -2076,7 +2297,7 @@ ResumeTimeout(node, vote) ==
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                     highestRank, highestSubject, pendingProposal,
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
@@ -2092,7 +2313,7 @@ DropProposal(envelope) ==
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
-                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 commitQCs, formedTCs, installedTCs, lastInstalledTc, lockPrepareQc, highestPrepareQc, lockRank, lockSubject,
                  highestRank, highestSubject, pendingProposal, pendingPrepare,
                  pendingObservePrepare, pendingLockCommit, pendingTimeout,
                  pendingInstallTC, pendingDecision, signProposals, signVotes,
@@ -2108,10 +2329,11 @@ Next ==
   \/ \E request \in pendingProposal: PersistProposal(request)
   \/ \E request \in signProposals: CompleteProposalSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       subject \in Subjects, justifyRank \in Ranks,
-       justifySubject \in SubjectOrNone:
+       subject \in Subjects,
+       timeoutCertificate \in TimeoutCertificateOptionSet,
+       highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastProposal(signer, roundView, subject,
-                                  justifyRank, justifySubject)
+                                  timeoutCertificate, highestPrepare)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)
@@ -2150,11 +2372,10 @@ Next ==
   \/ \E node \in ValidatorIds: BeginTimeout(node)
   \/ \E request \in pendingTimeout: PersistTimeout(request)
   \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
-  \/ \E signer \in ValidatorIds, roundView \in Views, highRank \in Ranks,
-       highSubject \in SubjectOrNone:
-       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
-  \/ \E node \in ValidatorIds, roundView \in Views: FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
        BeginInstallTC(node, tc)
@@ -2162,6 +2383,9 @@ Next ==
   \/ \E node \in ValidatorIds,
        qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views,
+       subject \in Subjects:
+       AcceptCertifiedResponseCapability(node, roundView, subject)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
   \/ \E node \in ValidatorIds: Crash(node) \/ Restart(node)
@@ -2204,10 +2428,26 @@ TypeInvariant ==
   /\ \A entry \in installedTCs:
        /\ entry.node \in ValidatorIds
        /\ TcWellTyped(entry.tc)
+  /\ lastInstalledTc
+       \in [ValidatorIds -> TimeoutCertificateOptionSet]
+  /\ lockPrepareQc \in [ValidatorIds -> PrepareQcOptionSet]
+  /\ highestPrepareQc \in [ValidatorIds -> PrepareQcOptionSet]
   /\ lockRank \in [ValidatorIds -> Ranks]
   /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
   /\ highestRank \in [ValidatorIds -> Ranks]
   /\ highestSubject \in [ValidatorIds -> SubjectOrNone]
+  /\ \A node \in ValidatorIds:
+       /\ PrepareQcRank(lockPrepareQc[node]) = lockRank[node]
+       /\ PrepareQcSubject(lockPrepareQc[node]) = lockSubject[node]
+       /\ PrepareQcRank(highestPrepareQc[node]) = highestRank[node]
+       /\ PrepareQcSubject(highestPrepareQc[node]) = highestSubject[node]
+       /\ (lockPrepareQc[node] # NoPrepareQC
+             => lockPrepareQc[node] \in prepareQCs)
+       /\ (highestPrepareQc[node] # NoPrepareQC
+             => highestPrepareQc[node] \in prepareQCs)
+       /\ (lastInstalledTc[node] # NoTimeoutCertificate
+             => [node |-> node, tc |-> lastInstalledTc[node]]
+                  \in installedTCs)
   /\ pendingProposal \subseteq ProposalWalSet
   /\ pendingPrepare \subseteq PrepareWalSet
   /\ pendingObservePrepare \subseteq ObservePrepareWalSet
@@ -2252,7 +2492,8 @@ HonestTimeoutUniqueness ==
   \A left, right \in timeoutIntents:
     (left.signer \in Honest /\ right.signer = left.signer
      /\ right.context = left.context /\ right.view = left.view)
-      => /\ right.highRank = left.highRank
+      => /\ right.highestPrepareQc = left.highestPrepareQc
+         /\ right.highRank = left.highRank
          /\ right.highSubject = left.highSubject
 
 LockBelowHighest ==

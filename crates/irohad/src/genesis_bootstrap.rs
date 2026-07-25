@@ -29,8 +29,8 @@ use iroha_logger::prelude::*;
 use iroha_p2p::{
     Post, Priority, UpdatePeers, UpdateTopology,
     network::{
-        NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyRoute,
-        RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE,
+        NetworkActorAdmissionError, NetworkActorAdmissionTicket, NetworkReplyAdmissionOutcome,
+        NetworkReplyRoute, RELIABLE_PROGRESS_GENESIS_FETCH_PRODUCERS_PER_SOURCE,
         RELIABLE_PROGRESS_GENESIS_REPLY_LISTENER_PRODUCERS, SubscriberFilter,
         genesis_reply_waiters_per_source,
         message::{SubscriberRoute, Topic},
@@ -81,7 +81,7 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         msg: Post<NetworkMessage>,
         reply_route: &Self::ReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>;
     /// Extract the authenticated reply route carried by one inbound message.
     fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute>;
     /// Derive the stable authenticated-source owner of an opaque reply route.
@@ -125,7 +125,8 @@ impl GenesisNetwork for IrohaNetwork {
         msg: Post<NetworkMessage>,
         reply_route: &NetworkReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
+    {
         iroha_p2p::network::NetworkBaseHandle::post_reply_recoverable(
             self,
             msg,
@@ -527,8 +528,16 @@ fn post_or_retain_genesis_reply<N: GenesisNetwork>(
         reply_route,
         encoded_bytes,
     } = response;
+    let semantic_target = message.peer_id.clone();
     match network.post_reply_recoverable(message, &reply_route, ticket) {
-        Ok(()) => true,
+        Ok(NetworkReplyAdmissionOutcome::Admitted) => true,
+        Ok(NetworkReplyAdmissionOutcome::ReplyWriterUnavailable) => {
+            iroha_logger::debug!(
+                peer = %semantic_target,
+                "genesis reply writer drained before admission; requester retransmission will rematerialize the response on a newly admitted route"
+            );
+            true
+        }
         Err(NetworkActorAdmissionError::Backpressured {
             message, ticket, ..
         }) => {
@@ -544,7 +553,7 @@ fn post_or_retain_genesis_reply<N: GenesisNetwork>(
             ) {
                 iroha_logger::debug!(
                     peer = %dropped.message.peer_id,
-                    "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the reconstruction witness"
+                    "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the response-rematerialization witness"
                 );
             }
             true
@@ -938,7 +947,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                 }
                 _ = retry.tick() => {
                     // Keep the same registered request id live until its deadline. A dropped
-                    // actor admission or response therefore remains reconstructible from this
+                    // actor admission or response can therefore be rematerialized from this
                     // caller-owned request instead of consuming an attempt irreversibly.
                     if !fanout.service(&self.network) {
                         break;
@@ -1515,6 +1524,7 @@ mod tests {
         posted: Arc<Mutex<Vec<Post<NetworkMessage>>>>,
         backpressure_remaining: Arc<std::sync::atomic::AtomicUsize>,
         blocked_reply_peers: Arc<Mutex<HashSet<PeerId>>>,
+        unavailable_reply_peers: Arc<Mutex<HashSet<PeerId>>>,
         subscriptions: Arc<std::sync::atomic::AtomicUsize>,
     }
 
@@ -1525,6 +1535,7 @@ mod tests {
                 posted: Arc::new(Mutex::new(Vec::new())),
                 backpressure_remaining: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 blocked_reply_peers: Arc::new(Mutex::new(HashSet::new())),
+                unavailable_reply_peers: Arc::new(Mutex::new(HashSet::new())),
                 subscriptions: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
@@ -1557,6 +1568,13 @@ mod tests {
                 .lock()
                 .expect("blocked reply peers")
                 .remove(peer);
+        }
+
+        fn make_reply_writer_unavailable(&self, peer: PeerId) {
+            self.unavailable_reply_peers
+                .lock()
+                .expect("unavailable reply peers")
+                .insert(peer);
         }
     }
 
@@ -1593,7 +1611,17 @@ mod tests {
             msg: Post<NetworkMessage>,
             reply_route: &Self::ReplyRoute,
             ticket: Option<NetworkActorAdmissionTicket>,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
+        {
+            if self
+                .unavailable_reply_peers
+                .lock()
+                .expect("unavailable reply peers")
+                .contains(reply_route)
+            {
+                drop((msg, ticket));
+                return Ok(NetworkReplyAdmissionOutcome::ReplyWriterUnavailable);
+            }
             if self
                 .blocked_reply_peers
                 .lock()
@@ -1607,6 +1635,7 @@ mod tests {
                 });
             }
             self.post_recoverable(msg, ticket)
+                .map(|()| NetworkReplyAdmissionOutcome::Admitted)
         }
 
         fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute> {
@@ -1682,6 +1711,29 @@ mod tests {
             reply_route: peer,
             encoded_bytes,
         }
+    }
+
+    #[test]
+    fn unavailable_reply_writer_uses_requester_retransmission_without_parking_old_route() {
+        let network = MockNetwork::default();
+        let peer = sample_peer().id().clone();
+        network.make_reply_writer_unavailable(peer.clone());
+        let mut pending =
+            PendingGenesisReplies::new(NonZeroUsize::new(8).expect("non-zero queue"), 1024);
+
+        assert!(post_or_retain_genesis_reply(
+            &network,
+            &mut pending,
+            pending_reply(peer, 1),
+        ));
+        assert!(
+            pending.is_empty(),
+            "an obsolete reply route must not be parked forever"
+        );
+        assert!(
+            network.posted.lock().expect("posted").is_empty(),
+            "no-ownership outcome must not be reported as actor admission"
+        );
     }
 
     #[test]

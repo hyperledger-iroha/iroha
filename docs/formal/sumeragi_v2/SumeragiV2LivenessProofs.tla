@@ -5,11 +5,13 @@ EXTENDS SumeragiV2AsyncNetwork, SumeragiV2Proofs
 One-height liveness vocabulary and well-founded service measures.
 
 This module contains no second consensus relation and no favourable network
-step.  Every temporal property below is stated over the unbounded
-`AsyncSpecAt(initialContext)`.  The asynchronous proof module records the exact
-release obligations over the concrete FIFO, fair-ingress, IO-worker,
-retransmission, and absolute-timeout actions; the proof ledger records their
-current mechanization status.
+step.  Safety and recovery properties remain statements over the unbounded
+`AsyncSpecAt(initialContext)`.  Progress claims which can traverse a checked
+generation increment use `AsyncLiveSpecAt(initialContext)`, whose explicit
+finite-resource budget rules out a pending install at `MaxGeneration`.
+The asynchronous proof module records the exact release obligations over the
+concrete FIFO, fair-ingress, IO-worker, retransmission, and absolute-timeout
+actions; the proof ledger records their current mechanization status.
 ***************************************************************************)
 
 ResponsiveNodesDecide ==
@@ -63,25 +65,27 @@ ApplicationLivenessProperty(specification) ==
 Explicit progress obligations.
 
 These predicates expose the proof seams that were previously described only
-in prose.  Deadlock freedom names the concrete post-GST actions that can move
-an undecided execution.  Starvation freedom is stronger: every admitted
-protocol progress/completion candidate must leave scheduler ownership, and the
-lexicographic service rank must first decrease unless service completes it.
-Neither property treats repeated view changes as height progress.
+in prose.  Scheduler deadlock freedom asks only that a concrete post-GST action
+can move an undecided execution.  The separate height-productivity frontier
+requires evidence growth or a well-founded debt/rank descent and therefore
+does not count a bare clock, phase handoff, or view change.  Starvation freedom
+is stronger still: every admitted protocol progress/completion candidate must
+leave scheduler ownership, and the lexicographic service rank must first
+decrease unless service completes it.
 ***************************************************************************)
 
 PostGstSchedulerActionEnabled ==
   \/ ENABLED AsyncTick
   \/ \E node \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstRunNode(node)
-  \/ \E node \in AsyncCurrentResponsiveVoters:
+  \/ \E node \in AsyncResponsiveAppliedArchiveServers:
        ENABLED PostGstRunHistoricalServer(node)
   \/ \E node \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstCommitCertificateDiscovery(node)
-  \/ \E node \in AsyncCurrentResponsiveVoters:
+  \/ \E node \in AsyncArchiveIoServiceNodes:
        ENABLED PostGstServiceIoWorker(node)
-  \/ \E recipient \in AsyncCurrentResponsiveVoters,
-       source \in AsyncCurrentResponsiveVoters:
+  \/ \E recipient \in AsyncArchiveIoServiceNodes,
+       source \in AsyncIngressSources:
        ENABLED PostGstAdmitHiddenPacket(recipient, source)
 
 SetGains(before, after) == after \ before # {}
@@ -122,6 +126,7 @@ PostGstDeadlineDebtDecreases ==
             < DeadlineDistance(asyncNodeDeadlines[node], asyncNow)
        \/ DeadlineDistance(asyncRetransmitDeadlines'[node], asyncNow')
             < DeadlineDistance(asyncRetransmitDeadlines[node], asyncNow)
+  \/ \E node \in AsyncTimedServiceNodes:
        \/ DeadlineDistance(asyncNodeServiceDeadlines'[node], asyncNow')
             < DeadlineDistance(asyncNodeServiceDeadlines[node], asyncNow)
        \/ DeadlineDistance(asyncIoServiceDeadlines'[node], asyncNow')
@@ -129,6 +134,53 @@ PostGstDeadlineDebtDecreases ==
   \/ \E packet \in asyncTransport \cap asyncTransport':
        DeadlineDistance(packet.deadline, asyncNow')
          < DeadlineDistance(packet.deadline, asyncNow)
+
+(***************************************************************************
+Zero-distance scheduler blockers need a separate local handoff measure.
+A due node turn may create the first due I/O owner because that worker's
+absolute service deadline was already zero while its queue was empty.  Giving
+the node blocker weight two and the I/O blocker weight one makes that exact
+node-to-worker transfer descend.  This is a local scheduler certificate, not a
+global height rank: a later Tick may make a future deadline due again.
+
+Packets are deliberately excluded from the weighted sum.  Admission consumes
+one concrete packet occurrence, so its progress witness is the explicit owner
+exit below; `PostGstDeadlineDebtDecreases` covers only packets which remain in
+transport while their positive distance is consumed.
+***************************************************************************)
+PostGstServiceNodes ==
+  AsyncTimedServiceNodes
+
+PostGstNodeServiceBlockers ==
+  {node \in PostGstServiceNodes:
+     asyncNodeServiceDeadlines[node] <= asyncNow}
+
+PostGstIoServiceBlockers ==
+  {node \in PostGstServiceNodes:
+     /\ AsyncIoQueueDepth(node) > 0
+     /\ asyncIoServiceDeadlines[node] <= asyncNow}
+
+PostGstNodeIoBlockerDebt ==
+  2 * Cardinality(PostGstNodeServiceBlockers)
+    + Cardinality(PostGstIoServiceBlockers)
+
+PostGstNodeIoBlockerDebtDecreases ==
+  PostGstNodeIoBlockerDebt' < PostGstNodeIoBlockerDebt
+
+PostGstOverduePacketOwnershipExits ==
+  \E packet \in OverdueResponsivePackets:
+    packet \notin asyncTransport'
+
+(***************************************************************************
+Local and Ingress runner turns are genuine bounded scheduler descent even when
+they only advance the serialized phase.  RuntimeReachRank resets after the
+single Runtime turn, so this arm is used only for its already-proved strict
+Local/Ingress descent within one runner cycle; a raw phase change is never
+accepted independently of that decrease.
+***************************************************************************)
+PostGstRuntimeReachDecreases ==
+  \E node \in PostGstServiceNodes:
+    RuntimeReachRank(node)' < RuntimeReachRank(node)
 
 NormalProposalPrepareNoItemKinds == {"AssembleBody", "BeginPrepare"}
 
@@ -288,7 +340,7 @@ AsyncServeJobSet ==
      nonce \in 0..AsyncIoAuxCapacity}
 
 ResponsiveProtectedServeJobOwned(node, job) ==
-  /\ node \in AsyncCurrentResponsiveVoters
+  /\ node \in AsyncArchiveIoServiceNodes
   /\ job \in AsyncServeJobSet
   /\ job \in SequenceSet(asyncIoQueues[node])
 
@@ -414,7 +466,117 @@ ServiceRankLess(left, right) ==
   \/ /\ left[1] = right[1]
         /\ left[2] < right[2]
 
+(***************************************************************************
+The productive-step rank witnesses range over the finite live carriers.
+The ownership guards already require a candidate to be scheduled and a Serve
+job to occur in a concrete I/O queue, so ranging over the Cartesian candidate
+and job universes adds no behavior.  The equivalence theorems below pin that
+this first search-domain reduction is semantic only.
+
+The `Live*` predicates are the executable reachable-state normal form for the
+remaining canonical protection guards.  They inspect only an occurrence which
+is already stored in a live queue/set.  In particular they never enumerate
+`AsyncCandidateSet` or `AsyncServeJobSet`.  The asynchronous proof module pins
+that every such occurrence is typed and that the live and canonical owners,
+including their primed exit tests, are equivalent under the reachable type
+invariant.  The canonical predicates remain the state-independent statement
+of which historical constructor families receive the temporal promise.
+***************************************************************************)
+ActiveScheduledCandidates ==
+  QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
+    \cup TrackedWorkCandidates
+
+ActiveIoJobs ==
+  UNION {SequenceSet(asyncIoQueues[node]): node \in ValidatorIds}
+
+(***************************************************************************
+TLC-safe algebraic normalization of the canonical Normal families.
+
+For AssembleBody, equality with the frozen constructor pins all identity
+fields.  Ordinary assembly has `NoAsyncItem` evidence; a persisted-TC
+successor instead has a positive successor view and a generation in the image
+of `NextCandidateGeneration`.  A typed BeginPrepare record always has a
+canonical Cartesian parent witness because that family copies every other
+identity field.  Network delivery reconstructs its unique frozen candidate
+from the occurrence-carried item and consumer snapshot.
+***************************************************************************)
+LiveNormalProposalPrepareCandidate(candidate) ==
+  /\ candidate.class = "Normal"
+  /\ \/ /\ candidate = FrozenNormalAssemblyCandidate(
+                         candidate.consumerContext, candidate.node,
+                         candidate.view, candidate.consumerGeneration,
+                         candidate.subject, candidate.evidence)
+          /\ \/ candidate.evidence = NoAsyncItem
+             \/ \E priorView \in Views,
+                   priorGeneration \in Generations:
+                  /\ candidate.view = priorView + 1
+                  /\ candidate.consumerGeneration =
+                       NextCandidateGeneration(priorGeneration)
+     \/ /\ candidate.kind = "BeginPrepare"
+           /\ candidate.item = NoAsyncItem
+     \/ /\ candidate.item.kind \in NormalProposalPrepareNetworkKinds
+           /\ candidate = FrozenNormalDeliveryCandidate(
+                            candidate.item,
+                            candidate.consumerContext,
+                            candidate.consumerView,
+                            candidate.consumerGeneration)
+
+LiveProtectedServiceCandidate(candidate) ==
+  \/ candidate.class = "Completion"
+  \/ /\ candidate.class = "Progress"
+        /\ candidate.kind # "RejectProgress"
+  \/ LiveNormalProposalPrepareCandidate(candidate)
+
+LiveResponsiveProtectedCandidateOwned(candidate) ==
+  /\ candidate \in ActiveScheduledCandidates
+  /\ candidate.node \in AsyncCurrentResponsiveVoters
+  /\ ~NodeHasApplication(candidate.node)
+  /\ LiveProtectedServiceCandidate(candidate)
+
+LiveResponsiveProtectedServeJobOwned(node, job) ==
+  /\ node \in AsyncArchiveIoServiceNodes
+  /\ job \in SequenceSet(asyncIoQueues[node])
+  /\ job.class = "Serve"
+
+LiveProtectedServiceRankDecreaseStep ==
+  \E candidate \in ActiveScheduledCandidates:
+    LET rank == CandidateServiceRank(candidate)
+    IN /\ LiveResponsiveProtectedCandidateOwned(candidate)
+       /\ rank[1] \in 2..6
+       /\ rank[2] \in Nat
+       /\ \/ ~LiveResponsiveProtectedCandidateOwned(candidate)'
+          \/ ServiceRankLess(CandidateServiceRank(candidate)', rank)
+
+LiveProtectedServeRankDecreaseStep ==
+  \E node \in AsyncArchiveIoServiceNodes,
+     job \in ActiveIoJobs:
+    LET rank == ServeJobRank(node, job)
+    IN /\ LiveResponsiveProtectedServeJobOwned(node, job)
+       /\ rank[1] = 5
+       /\ rank[2] \in Nat
+       /\ \/ ~LiveResponsiveProtectedServeJobOwned(node, job)'
+          \/ ServiceRankLess(ServeJobRank(node, job)', rank)
+
 ProtectedServiceRankDecreaseStep ==
+  \E candidate \in ActiveScheduledCandidates:
+    LET rank == CandidateServiceRank(candidate)
+    IN /\ ResponsiveProtectedCandidateOwned(candidate)
+       /\ rank[1] \in 2..6
+       /\ rank[2] \in Nat
+       /\ \/ ~ResponsiveProtectedCandidateOwned(candidate)'
+          \/ ServiceRankLess(CandidateServiceRank(candidate)', rank)
+
+ProtectedServeRankDecreaseStep ==
+  \E node \in AsyncArchiveIoServiceNodes,
+     job \in ActiveIoJobs:
+    LET rank == ServeJobRank(node, job)
+    IN /\ ResponsiveProtectedServeJobOwned(node, job)
+       /\ rank[1] = 5
+       /\ rank[2] \in Nat
+       /\ \/ ~ResponsiveProtectedServeJobOwned(node, job)'
+          \/ ServiceRankLess(ServeJobRank(node, job)', rank)
+
+UniverseProtectedServiceRankDecreaseStep ==
   \E candidate \in AsyncCandidateSet,
      stage \in 2..6, position \in Nat:
     /\ ResponsiveProtectedCandidateOwned(candidate)
@@ -423,13 +585,71 @@ ProtectedServiceRankDecreaseStep ==
        \/ ServiceRankLess(CandidateServiceRank(candidate)',
             <<stage, position>>)
 
-ProtectedServeRankDecreaseStep ==
-  \E node \in AsyncCurrentResponsiveVoters,
+UniverseProtectedServeRankDecreaseStep ==
+  \E node \in AsyncArchiveIoServiceNodes,
      job \in AsyncServeJobSet, position \in Nat:
     /\ ResponsiveProtectedServeJobOwned(node, job)
     /\ ServeJobRank(node, job) = <<5, position>>
     /\ \/ ~ResponsiveProtectedServeJobOwned(node, job)'
        \/ ServiceRankLess(ServeJobRank(node, job)', <<5, position>>)
+
+THEOREM ActiveScheduledRankStepIsUniverseEquivalent ==
+  ProtectedServiceRankDecreaseStep
+    <=> UniverseProtectedServiceRankDecreaseStep
+BY Isa
+   DEF ProtectedServiceRankDecreaseStep,
+       UniverseProtectedServiceRankDecreaseStep,
+       ActiveScheduledCandidates, ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned, CandidateScheduled
+
+THEOREM ActiveServeRankStepIsUniverseEquivalent ==
+  ProtectedServeRankDecreaseStep
+    <=> UniverseProtectedServeRankDecreaseStep
+BY Isa
+   DEF ProtectedServeRankDecreaseStep,
+       UniverseProtectedServeRankDecreaseStep,
+       ActiveIoJobs, ResponsiveProtectedServeJobOwned
+
+(***************************************************************************
+Executable fixed-action surface for immediate height productivity.
+
+Only actions which occur in the post-GST weak-fairness inventory appear here.
+This prevents an existential `ENABLED AsyncNext` query from selecting a fault,
+an unfair auxiliary action, or an unrelated Core branch.  Each named action
+already carries its exact runner/non-runner outer frame.  The live rank guards
+range only over stored scheduler occurrences; the async proof module proves
+them equivalent to the canonical protected-owner guards under the reachable
+type invariant.
+***************************************************************************)
+PostGstProductiveSchedulerStep ==
+  \/ AsyncTick
+  \/ \E node \in AsyncCurrentResponsiveVoters:
+       \/ PostGstRunNode(node)
+       \/ PostGstCommitCertificateDiscovery(node)
+  \/ \E node \in AsyncResponsiveAppliedArchiveServers:
+       PostGstRunHistoricalServer(node)
+  \/ \E node \in AsyncArchiveIoServiceNodes:
+       PostGstServiceIoWorker(node)
+  \/ \E node \in Responsive:
+       \/ PostGstOpenHistoricalRecovery(node)
+       \/ PostGstRunHistoricalRecoveryNode(node)
+       \/ PostGstHistoricalCommitCertificateDiscovery(node)
+       \/ PostGstServiceHistoricalRecoveryIoWorker(node)
+  \/ \E recipient \in AsyncArchiveIoServiceNodes,
+       source \in AsyncIngressSources:
+       PostGstAdmitHiddenPacket(recipient, source)
+  \/ \E recipient \in ValidatorIds,
+       source \in AsyncIngressSources:
+       PostGstAdmitHistoricalRecoveryPacket(recipient, source)
+
+PostGstProductiveEffect ==
+  \/ HeightProtocolEvidenceGrows
+  \/ PostGstDeadlineDebtDecreases
+  \/ PostGstNodeIoBlockerDebtDecreases
+  \/ PostGstOverduePacketOwnershipExits
+  \/ PostGstRuntimeReachDecreases
+  \/ LiveProtectedServiceRankDecreaseStep
+  \/ LiveProtectedServeRankDecreaseStep
 
 PostGstProductiveStepWith(localWorkDecreaseStep) ==
   /\ gst
@@ -440,22 +660,28 @@ PostGstProductiveStepWith(localWorkDecreaseStep) ==
      \/ ProtectedServeRankDecreaseStep
      \/ localWorkDecreaseStep
 
-PostGstProductiveStep == PostGstProductiveStepWith(FALSE)
-
-PostGstProductiveActionEnabledWith(localWorkDecreaseStep) ==
-  ENABLED PostGstProductiveStepWith(localWorkDecreaseStep)
+PostGstProductiveStep ==
+  /\ gst
+  /\ PostGstProductiveSchedulerStep
+  /\ PostGstProductiveEffect
 
 PostGstProductiveActionEnabled == ENABLED PostGstProductiveStep
 
 DeadlockFreedomWithLocalWorkProperty(specification,
-                                     localWorkDecreaseStep) ==
+                                     productiveActionEnabled) ==
   specification
     => [](gst /\ ~ResponsiveNodesDecide
-           => PostGstProductiveActionEnabledWith(
-                localWorkDecreaseStep))
+           => productiveActionEnabled)
 
 DeadlockFreedomProperty(specification) ==
-  DeadlockFreedomWithLocalWorkProperty(specification, FALSE)
+  DeadlockFreedomWithLocalWorkProperty(
+    specification, PostGstSchedulerActionEnabled)
+
+HeightProductivityFrontierProperty(specification) ==
+  specification
+    => (gst /\ ~ResponsiveNodesDecide)
+         ~> (PostGstProductiveActionEnabled
+               \/ ResponsiveNodesDecide)
 
 ProtectedServiceRankProgressProperty(specification) ==
   specification
@@ -467,6 +693,16 @@ ProtectedServiceRankProgressProperty(specification) ==
            ~> (~ResponsiveProtectedCandidateOwned(candidate)
                 \/ ServiceRankLess(CandidateServiceRank(candidate),
                      <<stage, position>>))
+
+ProtectedStage3RankProgressProperty(specification) ==
+  specification
+    => \A candidate \in AsyncCandidateSet, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedCandidateOwned(candidate)
+           /\ CandidateServiceRank(candidate) = <<3, position>>)
+           ~> (~ResponsiveProtectedCandidateOwned(candidate)
+                \/ ServiceRankLess(CandidateServiceRank(candidate),
+                     <<3, position>>))
 
 ProtectedStage4RankProgressProperty(specification) ==
   specification
@@ -488,9 +724,19 @@ ProtectedStage5RankProgressProperty(specification) ==
                 \/ ServiceRankLess(CandidateServiceRank(candidate),
                      <<5, position>>))
 
+ProtectedStage6RankProgressProperty(specification) ==
+  specification
+    => \A candidate \in AsyncCandidateSet, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedCandidateOwned(candidate)
+           /\ CandidateServiceRank(candidate) = <<6, position>>)
+           ~> (~ResponsiveProtectedCandidateOwned(candidate)
+                \/ ServiceRankLess(CandidateServiceRank(candidate),
+                     <<6, position>>))
+
 ProtectedServeRankProgressProperty(specification) ==
   specification
-    => \A node \in AsyncCurrentResponsiveVoters,
+    => \A node \in Responsive,
           job \in AsyncServeJobSet, position \in Nat:
          (gst
            /\ ResponsiveProtectedServeJobOwned(node, job)
@@ -511,7 +757,7 @@ ProtectedServiceRanksProgressProperty(specification) ==
 
 ProtectedServeStarvationProperty(specification) ==
   specification
-    => \A node \in AsyncCurrentResponsiveVoters,
+    => \A node \in Responsive,
           job \in AsyncServeJobSet:
          (gst /\ ResponsiveProtectedServeJobOwned(node, job))
            ~> ~ResponsiveProtectedServeJobOwned(node, job)
@@ -590,28 +836,113 @@ ExactLockedCommitTimeoutRecoveryWitness(node, qc) ==
        /\ timeoutVote.height = qc.height
        /\ timeoutVote.view = nodeView[node]
 
+(***************************************************************************
+PrepareQCs with different signer-set encodings can certify the same semantic
+lock.  LockAndCommit persistence is keyed by the canonical
+node/context/view/subject request identity, so one pending WAL owner services
+every such encoding; exact QcRecord equality would invent duplicate local
+work and lose the owner when a later equivalent certificate is formed.
+***************************************************************************)
+HistoricalLockedCommitWalMatches(node, qc, request) ==
+  /\ request.node = node
+  /\ request.qc.context = qc.context
+  /\ request.qc.phase = "Prepare"
+  /\ request.qc.view = qc.view
+  /\ request.qc.subject = qc.subject
+
+(***************************************************************************
+The historical BeginLock corridor has two exact evidence representations.
+Restart/replay and direct locked-body validation retain a concrete Prepare
+QcRecord and compare its stable recovery reference.  Certified-body recovery
+instead carries the complete authenticated CertifiedResponse through
+FetchCertifiedBody, StoreBody, and ValidateBody into BeginLockCommit.
+
+The response hash binds the exact signed request and PrepareQC.  Physical
+request routing is only a liveness mechanism: an authenticated archive which
+learns the same signed request through reconnect or relay need not belong to
+the original route set.  Archive signature ownership and the cited frozen-QC
+signer remain separate roles.  The outer response source is only a transport
+relay and is deliberately absent from the recovery predicate.
+***************************************************************************)
+HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence) ==
+  /\ evidence \in AsyncNetworkItems
+  /\ evidence.kind = "CertifiedResponse"
+  /\ evidence.envelope.recipient = node
+  /\ evidence.envelope.height = qc.context.height
+  /\ evidence.envelope.view = qc.view
+  /\ evidence.envelope.subject = qc.subject
+  /\ evidence.envelope.requestHash =
+       AsyncCertifiedRequestHashOf(node, qc, 0)
+  /\ evidence.envelope.signatureOwner =
+       evidence.envelope.archiveServer
+  /\ evidence.envelope.citedResponder \in qc.signers
+  /\ CertifiedResponseAuthenticatedOccurrence(evidence)
+
+HistoricalBeginLockRecoveryEvidence(node, qc, evidence) ==
+  \/ /\ evidence \in QcRecordSet
+     /\ SamePrepareRecoveryRef(evidence, qc)
+  \/ HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence)
+
+HistoricalBeginLockRecoveryCandidate(node, qc, candidate) ==
+  /\ candidate \in AsyncCandidateSet
+  /\ candidate.node = node
+  /\ candidate.height = qc.context.height
+  /\ candidate.view = qc.view
+  /\ candidate.subject = qc.subject
+  /\ candidate.kind = "BeginLockCommit"
+  /\ HistoricalBeginLockRecoveryEvidence(node, qc, candidate.evidence)
+  /\ CandidateScheduled(candidate)
+
+THEOREM HistoricalCertifiedResponseRecoveryEvidenceBindsExactIdentities ==
+  \A node, qc, evidence:
+    HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence)
+      => /\ evidence \in AsyncNetworkItems
+         /\ evidence.kind = "CertifiedResponse"
+         /\ evidence.envelope.recipient = node
+         /\ evidence.envelope.height = qc.context.height
+         /\ evidence.envelope.view = qc.view
+         /\ evidence.envelope.subject = qc.subject
+         /\ evidence.envelope.requestHash =
+              AsyncCertifiedRequestHashOf(node, qc, 0)
+         /\ evidence.envelope.signatureOwner =
+              evidence.envelope.archiveServer
+         /\ evidence.envelope.citedResponder \in qc.signers
+         /\ CertifiedResponseAuthenticatedOccurrence(evidence)
+BY DEF HistoricalCertifiedResponseRecoveryEvidence
+
+THEOREM SameReferenceQcProvidesHistoricalBeginLockRecoveryEvidence ==
+  \A node, qc, evidence:
+    /\ evidence \in QcRecordSet
+    /\ SamePrepareRecoveryRef(evidence, qc)
+    => HistoricalBeginLockRecoveryEvidence(node, qc, evidence)
+BY DEF HistoricalBeginLockRecoveryEvidence
+
+THEOREM AuthenticatedResponseProvidesHistoricalBeginLockRecoveryEvidence ==
+  \A node, qc, evidence:
+    HistoricalCertifiedResponseRecoveryEvidence(node, qc, evidence)
+      => HistoricalBeginLockRecoveryEvidence(node, qc, evidence)
+BY DEF HistoricalBeginLockRecoveryEvidence
+
 HistoricalLockedCommitRecoveryWitness(node, qc) ==
   \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
   \/ \E request \in pendingLockCommit:
-       /\ request.node = node
-       /\ request.qc = qc
+       HistoricalLockedCommitWalMatches(node, qc, request)
   \/ \E candidate \in AsyncCandidateSet:
-       /\ candidate.node = node
-       /\ candidate.height = qc.context.height
-       /\ candidate.view = qc.view
-       /\ candidate.subject = qc.subject
-       /\ candidate.kind = "BeginLockCommit"
-       /\ CandidateScheduled(candidate)
+       HistoricalBeginLockRecoveryCandidate(node, qc, candidate)
   \/ ExactLockedCommitTimeoutRecoveryWitness(node, qc)
 
 (***************************************************************************
-Once the exact TC-promoted historical lock has a current-generation durable
+Once the TC-promoted historical lock has a current-generation durable
 validation witness, the serialized reducer must already own either its exact
-Commit intent, the WAL request that will create it, or the validation
-successor that begins that request.  If the current finality view closed while
-validation was in flight, its exact durable local timeout owns the retry until
-the next certified view transition.  The historical guard also forbids
-retroactively signing below any higher local Prepare origin or known PrepareQC.
+Commit intent, a WAL request for the same stable Prepare reference, or a
+BeginLock successor carrying either a same-reference QcRecord or the exact
+authenticated CertifiedResponse which survived the body pipeline.  If the
+current finality view closed while validation was in flight, its exact durable
+local timeout owns the retry until the next certified view transition.
+Response matching uses the exact signed-request hash, and the whole outer
+response remains the candidate evidence without making its relay source
+authoritative.  The historical guard also forbids retroactively signing below
+any higher local Prepare origin or known PrepareQC.
 ***************************************************************************)
 HistoricalLockedCommitRecoveryProgress ==
   \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
@@ -623,10 +954,10 @@ HistoricalLockedCommitRecoveryProgress ==
 
 (***************************************************************************
 Only an exact completion owner for the current reducer consumer epoch counts
-as Decision-pipeline progress.  In particular, PersistDecision's immediate
-FetchBody successor is a real recovery frontier, while a scheduled occurrence
-left behind by a view or generation change is not: the runtime will discard
-that stale occurrence instead of executing it.
+as Decision-pipeline progress.  PersistDecision classifies the exact local
+body state and emits Fetch, Store, Validate, or Apply accordingly, while a
+scheduled occurrence left behind by a view or generation change does not
+count: the runtime will discard that stale occurrence instead of executing it.
 ***************************************************************************)
 DecisionPipelineCandidate(node, qc, candidate) ==
   /\ candidate.class = "Completion"
@@ -709,9 +1040,8 @@ VoteDeliveryEpochAction ==
                    received.node # request.node
             /\ ActiveLockedCommitSignRequestsAfterInstall(
                  request.node, request.tc) \subseteq signVotes'
-            /\ (generation[request.node] < MaxGeneration
-                  => generation'[request.node] =
-                       generation[request.node] + 1)
+            /\ generation'[request.node] =
+                 generation[request.node] + 1
   /\ \A request \in LockCommitWalSet:
        PersistLockCommit(request)
          => /\ \A received \in receivedVotes':
@@ -727,8 +1057,13 @@ VoteDeliveryEpochAction ==
 GenerationScopedVoteDeliveryProperty(specification) ==
   specification => [][VoteDeliveryEpochAction]_AsyncAllVars
 
+THEOREM AsyncLiveSpecProjectsAsyncSpec ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext) => AsyncSpecAt(initialContext)
+BY DEF AsyncLiveSpecAt
+
 OneHeightDecisionLiveness(initialContext) ==
-  AsyncSpecAt(initialContext)
+  AsyncLiveSpecAt(initialContext)
     => PostGstEventuallyAsyncDecisionAt(initialContext)
 
 OneHeightApplicationLiveness(initialContext) ==
@@ -736,7 +1071,7 @@ OneHeightApplicationLiveness(initialContext) ==
     => ResponsiveDecisionEventuallyAppliedAt(initialContext)
 
 OneHeightCompletionLiveness(initialContext) ==
-  AsyncSpecAt(initialContext)
+  AsyncLiveSpecAt(initialContext)
     => (gst ~> AsyncAllResponsiveAppliedAt(initialContext))
 
 CanonicalSuccessorContext(initialContext, subject) ==

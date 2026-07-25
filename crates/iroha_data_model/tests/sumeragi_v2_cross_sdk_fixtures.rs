@@ -237,15 +237,16 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         signature: vec![0x81; 48],
     };
     assert_eq!(commit_request.validate(&context), Ok(()));
-    let mut delayed_commit = prepare.clone();
-    delayed_commit.round = round(&context, 9);
-    delayed_commit.phase = GlobalPhase::Commit;
-    assert_eq!(delayed_commit.validate(&context), Ok(()));
-    assert_eq!(delayed_commit.proposal_round.view, 1);
-    assert_eq!(delayed_commit.round.view, 9);
+    let mut reproposal_commit = prepare.clone();
+    reproposal_commit.round = round(&context, 9);
+    reproposal_commit.proposal_round = reproposal_commit.round;
+    reproposal_commit.phase = GlobalPhase::Commit;
+    assert_eq!(reproposal_commit.validate(&context), Ok(()));
+    assert_eq!(reproposal_commit.proposal_round.view, 9);
+    assert_eq!(reproposal_commit.round.view, 9);
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: delayed_commit.clone(),
+        certificate: reproposal_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -258,20 +259,20 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
     );
     insert_message(
-        "commit_vote_later_view",
+        "commit_vote_reproposal",
         ConsensusMessageV2Payload::Vote(Vote {
-            round: delayed_commit.round,
-            proposal_round: delayed_commit.proposal_round,
+            round: reproposal_commit.round,
+            proposal_round: reproposal_commit.proposal_round,
             phase: GlobalPhase::Commit,
-            subject: delayed_commit.subject,
-            execution_commitment: delayed_commit.execution_commitment,
+            subject: reproposal_commit.subject,
+            execution_commitment: reproposal_commit.execution_commitment,
             signer: 0,
             signature: vec![0x7A],
         }),
     );
     insert_message(
-        "commit_quorum_certificate_later_view",
-        ConsensusMessageV2Payload::QuorumCertificate(delayed_commit),
+        "commit_quorum_certificate_reproposal",
+        ConsensusMessageV2Payload::QuorumCertificate(reproposal_commit),
     );
     insert_message(
         "commit_certificate_response",
@@ -319,7 +320,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             }],
             commit_quorums: vec![SumeragiV2VoteQuorumStatus {
                 round: round(&context, 3),
-                proposal_round: prepare.proposal_round,
+                proposal_round: round(&context, 3),
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 1,
@@ -338,7 +339,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
             outbound_intents: vec![SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
                 round: round(&context, 3),
-                proposal_round: Some(prepare.proposal_round),
+                proposal_round: Some(round(&context, 3)),
                 subject: Some(prepare.subject),
                 execution_commitment: Some(prepare.execution_commitment),
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -489,6 +490,22 @@ fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation() {
             response.validate(&context).is_err(),
             "{name} passed validation"
         );
+    }
+
+    for name in [
+        "commit_vote_split_round",
+        "commit_quorum_certificate_split_round",
+    ] {
+        let message = decode("negative_message", name)
+            .expect("split-round evidence is structurally decodable");
+        let rejected = match message.payload {
+            ConsensusMessageV2Payload::Vote(vote) => vote.validate(&context).is_err(),
+            ConsensusMessageV2Payload::QuorumCertificate(certificate) => {
+                certificate.validate(&context).is_err()
+            }
+            _ => panic!("{name} used the wrong payload"),
+        };
+        assert!(rejected, "{name} passed same-round validation");
     }
 
     let canonical_request =

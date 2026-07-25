@@ -2207,12 +2207,24 @@ impl ExactTargetRoute {
     }
 }
 
+#[derive(Debug)]
+struct PendingExactReplyFlush {
+    flush_ack: NetworkReplyFlushAck,
+    /// Sidecar chunks retain their process-local lane admission receipt beside
+    /// the exact writer occurrence. Ordinary reliable replies leave this
+    /// empty, but both kinds keep the same target cursor until writer flush.
+    sidecar_admission: Option<CertifiedMergeSidecarChunkAdmission>,
+}
+
 #[derive(Debug, Default)]
 struct PendingExactTarget {
     route: ExactTargetRoute,
     message_index: usize,
     current: Option<Post<NetworkMessage>>,
     ticket: Option<NetworkActorAdmissionTicket>,
+    /// Exact actor-owned reply occurrence awaiting its peer writer's complete
+    /// write and flush. The semantic cursor cannot advance while this exists.
+    pending_flush: Option<PendingExactReplyFlush>,
     /// The authenticated source is temporarily unavailable.
     ///
     /// Immutable payload, the non-regressing cursor, stable fanout age, FIFO
@@ -2951,7 +2963,7 @@ impl PendingExactFanout {
         ExactTargetRoute,
     )> {
         let target = self.targets.get_mut(target_index)?;
-        if target.parked {
+        if target.parked || target.pending_flush.is_some() {
             return None;
         }
         if let Some(post) = target.current.take() {
@@ -3006,10 +3018,11 @@ impl PendingExactFanout {
     /// retired source occurrence and preserve every live sibling.
     fn retain_active_unowned_reply_targets(&mut self) -> Result<usize, String> {
         if self.fifo_id.is_some()
-            || self
-                .targets
-                .iter()
-                .any(|target| target.current.is_some() || target.ticket.is_some())
+            || self.targets.iter().any(|target| {
+                target.current.is_some()
+                    || target.ticket.is_some()
+                    || target.pending_flush.is_some()
+            })
         {
             return Err(
                 "Sumeragi v2 cannot prune reply routes after exact-output ownership".to_owned(),
@@ -3087,6 +3100,15 @@ impl PendingExactFanout {
             .is_some_and(|target| target.parked)
         {
             return Err("Sumeragi v2 admitted a parked reply source".to_owned());
+        }
+        if self
+            .targets
+            .get(target_index)
+            .is_some_and(|target| target.pending_flush.is_some())
+        {
+            return Err(
+                "Sumeragi v2 advanced a reply cursor before consuming its flush witness".to_owned(),
+            );
         }
         let prior_source = self.current_target_source(target_index)?;
         if self
@@ -3176,6 +3198,9 @@ impl PendingExactFanout {
             .expect("selected exact-output target must remain present");
         if target.parked {
             return Err("Sumeragi v2 returned output to a parked reply source".to_owned());
+        }
+        if target.pending_flush.is_some() {
+            return Err("Sumeragi v2 returned output over a pending writer flush".to_owned());
         }
         let expected_hash = self
             .message_hashes
@@ -3542,18 +3567,18 @@ impl PendingExactFanout {
                 let ExactTargetRoute::Reply(prior_route) = &self.targets[prior_index].route else {
                     unreachable!("located reply target must retain its route kind");
                 };
-                // The bounded route merge above already rejected stale,
-                // foreign, retargeted, and equal-ordinal/different-tenure
-                // capabilities. Classify the exact admitted occurrence using
-                // immutable identity only so a post-snapshot disconnect cannot
-                // remove it from this plan.
-                let update = if candidate_route.same_delivery(prior_route) {
-                    NetworkReplyRouteSourceUpdate::Exact
-                } else if candidate_route.same_tenure(prior_route) {
-                    NetworkReplyRouteSourceUpdate::LaterDelivery
-                } else {
-                    NetworkReplyRouteSourceUpdate::Reconnected
-                };
+                // The bounded route merge above already linearized liveness.
+                // Reuse its immutable joint tenure/delivery monotonic
+                // freshness classifier so a delayed delivery from a
+                // superseded connection cannot be reclassified as a reconnect
+                // solely because its actor-global delivery ordinal is larger.
+                let update = candidate_route
+                    .source_update_from_snapshot(prior_route)
+                    .map_err(|error| {
+                        format!(
+                            "Sumeragi v2 post-merge reply route lost monotonic freshness: {error}"
+                        )
+                    })?;
                 if !used_prior.insert(prior_index) {
                     return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
                 }
@@ -3825,6 +3850,7 @@ impl PendingExactFanout {
                         message_index: candidate_target.message_index,
                         current: None,
                         ticket: None,
+                        pending_flush: None,
                         parked: candidate_target.parked,
                     });
                     self.peers.push(candidate.peers[candidate_index].clone());
@@ -3911,10 +3937,9 @@ impl PendingExactFanout {
     }
 
     fn has_dispatchable_target(&self) -> bool {
-        self.targets
-            .iter()
-            .enumerate()
-            .any(|(index, target)| !target.parked && !self.target_is_complete(index))
+        self.targets.iter().enumerate().any(|(index, target)| {
+            !target.parked && target.pending_flush.is_none() && !self.target_is_complete(index)
+        })
     }
 }
 
@@ -3940,22 +3965,18 @@ enum ExactOutputDriveOutcome {
 
 enum ExactOutputAttemptOutcome {
     Admitted,
+    ReplyFlush(NetworkReplyFlushAck),
     SidecarFlush(NetworkReplyFlushAck),
+    #[cfg(test)]
+    TestReplyFlushed,
+    Unavailable,
     Retired,
-}
-
-#[derive(Debug)]
-struct PendingCertifiedMergeSidecarChunkFlush {
-    admission: CertifiedMergeSidecarChunkAdmission,
-    flush_ack: NetworkReplyFlushAck,
 }
 
 /// Bounded per-target FIFO owner for semantic network output awaiting actor admission.
 #[derive(Debug)]
 struct PendingExactOutput {
     fanouts: VecDeque<PendingExactFanout>,
-    /// Sidecar chunks admitted by the actor and awaiting exact writer flush.
-    flushing_sidecar_chunks: VecDeque<PendingCertifiedMergeSidecarChunkFlush>,
     /// Writer-flushed sidecar cursor receipts not yet applied by lane work.
     admitted_sidecar_chunks: VecDeque<CertifiedMergeSidecarChunkAdmission>,
     /// Separate byte-free control-queue bound for sidecar admission receipts.
@@ -4010,7 +4031,6 @@ impl PendingExactOutput {
             .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
         Ok(Self {
             fanouts: VecDeque::new(),
-            flushing_sidecar_chunks: VecDeque::new(),
             admitted_sidecar_chunks: VecDeque::new(),
             sidecar_admission_capacity: ownership_unit_capacity,
             next_fanout_index: 0,
@@ -4029,104 +4049,264 @@ impl PendingExactOutput {
     }
 
     fn is_pending(&self) -> bool {
+        self.fanouts.iter().any(|fanout| {
+            fanout.has_dispatchable_target()
+                || fanout
+                    .targets
+                    .iter()
+                    .any(|target| target.pending_flush.is_some())
+        }) || !self.admitted_sidecar_chunks.is_empty()
+    }
+
+    fn pending_sidecar_flushes(&self) -> usize {
         self.fanouts
             .iter()
-            .any(PendingExactFanout::has_dispatchable_target)
-            || !self.flushing_sidecar_chunks.is_empty()
-            || !self.admitted_sidecar_chunks.is_empty()
+            .flat_map(|fanout| &fanout.targets)
+            .filter(|target| {
+                target
+                    .pending_flush
+                    .as_ref()
+                    .is_some_and(|pending| pending.sidecar_admission.is_some())
+            })
+            .count()
     }
 
     fn sidecar_control_units(&self) -> usize {
-        self.flushing_sidecar_chunks
-            .len()
+        self.pending_sidecar_flushes()
             .saturating_add(self.admitted_sidecar_chunks.len())
     }
 
-    fn poll_sidecar_flushes(&mut self) -> Result<(), MergeSidecarError> {
-        if self.flushing_sidecar_chunks.iter().any(|completion| {
-            !completion
-                .admission
-                .matches_ack_identity(completion.flush_ack.identity())
-        }) {
-            return Err(MergeSidecarError::FlushIdentityMismatch(
-                "queued admission and writer acknowledgement identify different actor output",
-            ));
+    fn restore_pending_flush(
+        &mut self,
+        fanout_index: usize,
+        target_index: usize,
+        pending_flush: PendingExactReplyFlush,
+    ) -> Result<(), String> {
+        let target = self
+            .fanouts
+            .get_mut(fanout_index)
+            .and_then(|fanout| fanout.targets.get_mut(target_index))
+            .ok_or_else(|| {
+                "Sumeragi v2 reply flush target disappeared during validation".to_owned()
+            })?;
+        if target.pending_flush.replace(pending_flush).is_some() {
+            return Err("Sumeragi v2 reply target acquired two writer flushes".to_owned());
         }
-        let pending = self.flushing_sidecar_chunks.len();
-        for _ in 0..pending {
-            let flushing_before = u64::try_from(self.flushing_sidecar_chunks.len())
-                .expect("bounded sidecar flush count is representable as u64");
-            let admitted_before = u64::try_from(self.admitted_sidecar_chunks.len())
-                .expect("bounded sidecar admission count is representable as u64");
-            let mut completion = self
-                .flushing_sidecar_chunks
-                .pop_front()
-                .expect("bounded sidecar flush count remains stable while polling");
-            let status = completion.flush_ack.poll();
-            let terminal = !matches!(status, NetworkReplyFlushAckStatus::Pending);
-            let flushing_after = if terminal {
-                flushing_before
-                    .checked_sub(1)
-                    .ok_or(MergeSidecarError::FlushIdentityMismatch(
+        Ok(())
+    }
+
+    fn poll_reply_flushes(&mut self) -> Result<(), String> {
+        loop {
+            let mut terminal = None;
+            'scan: for (fanout_index, fanout) in self.fanouts.iter_mut().enumerate() {
+                for (target_index, target) in fanout.targets.iter_mut().enumerate() {
+                    let Some(pending_flush) = target.pending_flush.as_mut() else {
+                        continue;
+                    };
+                    let status = pending_flush.flush_ack.poll();
+                    if !matches!(status, NetworkReplyFlushAckStatus::Pending) {
+                        terminal = Some((fanout_index, target_index, status));
+                        break 'scan;
+                    }
+                }
+            }
+            let Some((fanout_index, target_index, status)) = terminal else {
+                return Ok(());
+            };
+
+            let (canonical_post, attempted_source, current_route, was_parked) = {
+                let fanout = self
+                    .fanouts
+                    .get(fanout_index)
+                    .ok_or_else(|| "Sumeragi v2 flushing reply fanout disappeared".to_owned())?;
+                let target = fanout
+                    .targets
+                    .get(target_index)
+                    .ok_or_else(|| "Sumeragi v2 flushing reply target disappeared".to_owned())?;
+                let ExactTargetRoute::Reply(route) = &target.route else {
+                    return Err("Sumeragi v2 topology target retained a reply flush".to_owned());
+                };
+                let data = fanout
+                    .messages
+                    .get(target.message_index)
+                    .ok_or_else(|| {
+                        "Sumeragi v2 reply flush advanced beyond its immutable payload".to_owned()
+                    })?
+                    .clone();
+                let peer_id = fanout
+                    .peers
+                    .get(target_index)
+                    .ok_or_else(|| "Sumeragi v2 reply flush lost its target".to_owned())?
+                    .clone();
+                let class = exact_output_class(&data)?;
+                (
+                    Post {
+                        data,
+                        peer_id: peer_id.clone(),
+                        priority: Priority::High,
+                    },
+                    target.route.source(&peer_id, class),
+                    route.clone(),
+                    target.parked,
+                )
+            };
+            let sidecar_flushing_before = self.pending_sidecar_flushes();
+            let mut pending_flush = self
+                .fanouts
+                .get_mut(fanout_index)
+                .and_then(|fanout| fanout.targets.get_mut(target_index))
+                .and_then(|target| target.pending_flush.take())
+                .ok_or_else(|| "Sumeragi v2 terminal reply flush lost ownership".to_owned())?;
+            if !pending_flush
+                .flush_ack
+                .identity()
+                .is_bound_to_canonical_reply(&canonical_post)
+                || pending_flush.flush_ack.identity().source_key() != current_route.source_key()
+            {
+                self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
+                return Err(
+                    "Sumeragi v2 terminal reply flush changed payload or source identity"
+                        .to_owned(),
+                );
+            }
+
+            if let Some(admission) = pending_flush.sidecar_admission.as_mut() {
+                if !admission.matches_ack_identity(pending_flush.flush_ack.identity()) {
+                    self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
+                    return Err(
+                        MergeSidecarError::FlushIdentityMismatch(
+                            "queued admission and writer acknowledgement identify different actor output",
+                        )
+                        .to_string(),
+                    );
+                }
+                let flushing_before = u64::try_from(sidecar_flushing_before)
+                    .expect("bounded sidecar flush count is representable as u64");
+                let flushing_after = flushing_before.checked_sub(1).ok_or_else(|| {
+                    MergeSidecarError::FlushIdentityMismatch(
                         "sidecar flushing-owner count underflowed",
-                    ))?
-            } else {
-                flushing_before
-            };
-            let admitted_after = if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
-                admitted_before
-                    .checked_add(1)
-                    .ok_or(MergeSidecarError::FlushIdentityMismatch(
-                        "sidecar admitted-owner count overflowed",
-                    ))?
-            } else {
-                admitted_before
-            };
-            let flush_trace = match reliable_flush_trace_projection(
-                &completion.admission,
-                status,
-                flushing_before,
-                flushing_after,
-                admitted_before,
-                admitted_after,
-                self.sidecar_admission_capacity,
-            ) {
-                Ok(flush_trace) => flush_trace,
-                Err(error) => {
-                    self.flushing_sidecar_chunks.push_front(completion);
-                    return Err(error);
+                    )
+                    .to_string()
+                })?;
+                let admitted_before = u64::try_from(self.admitted_sidecar_chunks.len())
+                    .expect("bounded sidecar admission count is representable as u64");
+                let admitted_after = if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
+                    admitted_before.checked_add(1).ok_or_else(|| {
+                        MergeSidecarError::FlushIdentityMismatch(
+                            "sidecar admitted-owner count overflowed",
+                        )
+                        .to_string()
+                    })?
+                } else {
+                    admitted_before
+                };
+                let flush_trace = match reliable_flush_trace_projection(
+                    admission,
+                    status,
+                    flushing_before,
+                    flushing_after,
+                    admitted_before,
+                    admitted_after,
+                    self.sidecar_admission_capacity,
+                ) {
+                    Ok(flush_trace) => flush_trace,
+                    Err(error) => {
+                        let error = error.to_string();
+                        self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
+                        return Err(error);
+                    }
+                };
+                if !production_reliable_flush_trace_refines_outbound_ownership_kernel(flush_trace) {
+                    self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
+                    return Err(MergeSidecarError::FlushIdentityMismatch(
+                        "sidecar flush transition failed its exact ownership kernel",
+                    )
+                    .to_string());
                 }
-            };
-            if !production_reliable_flush_trace_refines_outbound_ownership_kernel(flush_trace) {
-                self.flushing_sidecar_chunks.push_front(completion);
-                return Err(MergeSidecarError::FlushIdentityMismatch(
-                    "sidecar flush transition failed its exact ownership kernel",
-                ));
-            }
-            if matches!(status, NetworkReplyFlushAckStatus::Flushed) {
-                if let Err(error) = completion
-                    .admission
-                    .bind_confirmed_worker_trace(flush_trace)
+                if matches!(status, NetworkReplyFlushAckStatus::Flushed)
+                    && let Err(error) = admission.bind_confirmed_worker_trace(flush_trace)
                 {
-                    self.flushing_sidecar_chunks.push_front(completion);
+                    let error = error.to_string();
+                    self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
                     return Err(error);
                 }
             }
+
             match status {
                 NetworkReplyFlushAckStatus::Pending => {
-                    self.flushing_sidecar_chunks.push_back(completion);
+                    unreachable!("terminal scan excludes pending")
                 }
                 NetworkReplyFlushAckStatus::Flushed => {
-                    self.admitted_sidecar_chunks.push_back(completion.admission);
+                    if pending_flush.sidecar_admission.is_none()
+                        && !pending_flush.flush_ack.identity().claim_writer_flush_once()
+                    {
+                        self.restore_pending_flush(fanout_index, target_index, pending_flush)?;
+                        return Err(
+                            "Sumeragi v2 reply writer flush was consumed more than once".to_owned()
+                        );
+                    }
+                    if was_parked {
+                        self.fanouts
+                            .get_mut(fanout_index)
+                            .and_then(|fanout| fanout.targets.get_mut(target_index))
+                            .expect("flushing parked target must remain present")
+                            .parked = false;
+                    }
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("flushed reply fanout must remain present")
+                        .mark_admitted(target_index)?;
+                    if was_parked {
+                        let fanout = self
+                            .fanouts
+                            .get_mut(fanout_index)
+                            .expect("flushed parked fanout must remain present");
+                        let target_complete = fanout.target_is_complete(target_index);
+                        let target = fanout
+                            .targets
+                            .get_mut(target_index)
+                            .expect("flushed parked target must remain present");
+                        let writable = matches!(&target.route, ExactTargetRoute::Topology)
+                            || matches!(&target.route,
+                                ExactTargetRoute::Reply(route) if route.is_reply_writable());
+                        if !target_complete && !writable {
+                            target.parked = true;
+                        }
+                    }
+                    self.advance_after_attempt(
+                        fanout_index,
+                        target_index,
+                        Some(&attempted_source),
+                    )?;
+                    if let Some(admission) = pending_flush.sidecar_admission.take() {
+                        self.admitted_sidecar_chunks.push_back(admission);
+                    }
                 }
                 NetworkReplyFlushAckStatus::Closed => {
-                    // The sidecar transport still owns this unacknowledged
-                    // source cursor and will re-emit it on a live route.
+                    let route_state = self
+                        .fanouts
+                        .get(fanout_index)
+                        .and_then(|fanout| fanout.targets.get(target_index))
+                        .and_then(|target| match &target.route {
+                            ExactTargetRoute::Reply(route) => {
+                                Some((route.is_active(), route.is_reply_writable(), target.parked))
+                            }
+                            ExactTargetRoute::Topology => None,
+                        })
+                        .ok_or_else(|| {
+                            "Sumeragi v2 closed reply flush lost its route".to_owned()
+                        })?;
+                    if !route_state.2 {
+                        if !route_state.0 {
+                            self.retire_inactive_reply_target(fanout_index, target_index)?;
+                        } else if !route_state.1 {
+                            self.park_unwritable_reply_target(fanout_index, target_index)?;
+                        }
+                    }
                 }
             }
+            debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
         }
-        debug_assert!(self.sidecar_control_units() <= self.sidecar_admission_capacity);
-        Ok(())
     }
 
     fn rebase_source_fifo(&mut self) -> Result<(), String> {
@@ -4605,17 +4785,12 @@ impl PendingExactOutput {
         }
     }
 
-    /// Coalesce a reply redelivery into exact sidecar writer ownership which
-    /// already crossed actor admission.
+    /// Coalesce a reply redelivery after a sidecar writer flush was observed.
     ///
-    /// `flushing_sidecar_chunks` and `admitted_sidecar_chunks` sit after the
-    /// fanout cursor, so ordinary fanout coalescing cannot see them. A pending
-    /// writer consumes only a redelivery on its exact connection
-    /// tenure. A reconnect is omitted from this transfer but reported as
-    /// source-retained, so the runner keeps its exact effect until the old
-    /// writer closes or flushes. Alternate sources in the same effect still
-    /// enter the worker independently. A successful flush is terminal for the
-    /// source across connection tenures.
+    /// Pending writer ownership remains on the ordinary fanout target, so its
+    /// unchanged cursor participates in the normal exact/reconnect merge. Only
+    /// a flushed admission receipt sits beyond the fanout and needs this
+    /// terminal-source projection.
     fn complete_sidecar_targets_with_retained_flush_ownership(
         &self,
         fanout: &mut PendingExactFanout,
@@ -4634,7 +4809,6 @@ impl PendingExactOutput {
         let completed_message_cursor = u64::try_from(completed_cursor)
             .map_err(|_| "Sumeragi v2 sidecar replay cursor exceeded u64".to_owned())?;
         let mut completed_routes = Vec::new();
-        let mut source_retained = false;
         let mut projected_completion = false;
         for target in &mut fanout.targets {
             if target.message_index == completed_cursor {
@@ -4648,34 +4822,12 @@ impl PendingExactOutput {
             let ExactTargetRoute::Reply(route) = &target.route else {
                 continue;
             };
-            let pending_exact_attempt = self
-                .flushing_sidecar_chunks
-                .iter()
-                .map(|completion| &completion.admission)
-                .any(|admission| {
-                    admission.matches_materialized_chunk(message)
-                        && admission.is_bound_to_attempt(route)
-                });
-            let pending_source_attempt = self
-                .flushing_sidecar_chunks
-                .iter()
-                .map(|completion| &completion.admission)
-                .any(|admission| {
-                    admission.matches_materialized_chunk(message)
-                        && admission.is_bound_to_source(route)
-                });
             let source_terminal = self.admitted_sidecar_chunks.iter().any(|admission| {
                 admission.matches_materialized_chunk(message) && admission.is_bound_to_source(route)
             });
-            if pending_exact_attempt || source_terminal {
+            if source_terminal {
                 target.message_index = completed_cursor;
                 completed_routes.push(route.clone());
-                projected_completion = true;
-            } else if pending_source_attempt {
-                // This completion is local to the attempted transfer. The
-                // original lane effect remains the reconnect's exact owner.
-                target.message_index = completed_cursor;
-                source_retained = true;
                 projected_completion = true;
             }
         }
@@ -4694,7 +4846,7 @@ impl PendingExactOutput {
         if projected_completion {
             fanout.rebuild_current_source_targets()?;
         }
-        Ok(source_retained)
+        Ok(false)
     }
 
     fn enqueue_validated(
@@ -4869,7 +5021,8 @@ impl PendingExactOutput {
                 if target.parked
                     && (!matches!(
                         &target.route,
-                        ExactTargetRoute::Reply(route) if !route.is_active()
+                        ExactTargetRoute::Reply(route)
+                            if !route.is_active() || !route.is_reply_writable()
                     ) || target.current.is_some()
                         || target.ticket.is_some()
                         || fanout.target_is_complete(target_index))
@@ -4897,6 +5050,46 @@ impl PendingExactOutput {
                         return Err(
                             "Sumeragi v2 returned output changed before finality handoff"
                                 .to_owned(),
+                        );
+                    }
+                }
+                if let Some(pending_flush) = &target.pending_flush {
+                    if target.current.is_some() || target.ticket.is_some() {
+                        return Err(
+                            "Sumeragi v2 writer flush shared tenure-bound actor ownership"
+                                .to_owned(),
+                        );
+                    }
+                    let data = fanout.messages.get(target.message_index).ok_or_else(|| {
+                        "Sumeragi v2 writer flush advanced beyond its immutable payload".to_owned()
+                    })?;
+                    let peer_id = fanout.peers.get(target_index).ok_or_else(|| {
+                        "Sumeragi v2 writer flush lost its semantic target".to_owned()
+                    })?;
+                    let canonical_post = Post {
+                        data: data.clone(),
+                        peer_id: peer_id.clone(),
+                        priority: Priority::High,
+                    };
+                    let ExactTargetRoute::Reply(route) = &target.route else {
+                        return Err(
+                            "Sumeragi v2 topology target retained a reply writer flush".to_owned()
+                        );
+                    };
+                    if !pending_flush
+                        .flush_ack
+                        .identity()
+                        .is_bound_to_canonical_reply(&canonical_post)
+                        || pending_flush.flush_ack.identity().source_key() != route.source_key()
+                        || pending_flush
+                            .sidecar_admission
+                            .as_ref()
+                            .is_some_and(|admission| {
+                                !admission.matches_ack_identity(pending_flush.flush_ack.identity())
+                            })
+                    {
+                        return Err(
+                            "Sumeragi v2 writer flush changed before finality handoff".to_owned()
                         );
                     }
                 }
@@ -4937,22 +5130,18 @@ impl PendingExactOutput {
                 "Sumeragi v2 outbound ownership totals changed before finality handoff".to_owned(),
             );
         }
-        let sidecar_completions = self
-            .flushing_sidecar_chunks
-            .len()
-            .checked_add(self.admitted_sidecar_chunks.len())
-            .ok_or_else(|| "Sumeragi v2 sidecar completion count overflowed".to_owned())?;
+        // Pending sidecar writer occurrences remain in their target's suffix
+        // and were counted above. Only flushed receipts live beyond a fanout.
+        let sidecar_completions = self.admitted_sidecar_chunks.len();
         remaining_posts = remaining_posts
             .checked_add(sidecar_completions)
             .ok_or_else(|| "Sumeragi v2 applied-height output count overflowed".to_owned())?;
         self.fanouts.clear();
-        // The per-height lane transport and worker are dropped together. A
-        // pending/closed completion has no writer-flush witness, while a
-        // flushed-but-unapplied receipt has no durable local cursor update.
-        // Both are safely superseded by the typed Kura reconstruction claim;
+        // The per-height lane transport and worker are dropped together.
+        // Pending target acknowledgements and flushed-but-unapplied receipts
+        // are atomically superseded by the typed Kura reconstruction claim;
         // retaining either here would let an unresponsive requester block the
         // decided height's successor activation.
-        self.flushing_sidecar_chunks.clear();
         self.admitted_sidecar_chunks.clear();
         self.next_fanout_index = 0;
         self.next_fanout_fifo_id = 0;
@@ -5009,7 +5198,9 @@ impl PendingExactOutput {
                 if fanout.target_is_complete(target_index) {
                     continue;
                 }
-                if fanout.targets[target_index].parked {
+                if fanout.targets[target_index].parked
+                    || fanout.targets[target_index].pending_flush.is_some()
+                {
                     continue;
                 }
                 let source = fanout.current_target_source(target_index)?;
@@ -5129,6 +5320,65 @@ impl PendingExactOutput {
         } else {
             self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
         }
+        Ok(())
+    }
+
+    fn park_unwritable_reply_target(
+        &mut self,
+        fanout_index: usize,
+        target_index: usize,
+    ) -> Result<(), String> {
+        {
+            let fanout = self
+                .fanouts
+                .get(fanout_index)
+                .ok_or_else(|| "Sumeragi v2 draining fanout disappeared".to_owned())?;
+            let target = fanout
+                .targets
+                .get(target_index)
+                .ok_or_else(|| "Sumeragi v2 draining reply target disappeared".to_owned())?;
+            match &target.route {
+                // Reply writability is monotone within one tenure. The final
+                // receiver may retire after the actor reports Unavailable or
+                // closes a flush acknowledgement, so an inactive route is a
+                // valid later observation of the same draining occurrence.
+                ExactTargetRoute::Reply(route) if !route.is_reply_writable() => {}
+                ExactTargetRoute::Reply(_) => {
+                    return Err("Sumeragi v2 attempted to park a writable reply route".to_owned());
+                }
+                ExactTargetRoute::Topology => {
+                    return Err("Sumeragi v2 attempted to park a topology target".to_owned());
+                }
+            }
+            if target.parked || target.pending_flush.is_some() {
+                return Err(
+                    "Sumeragi v2 attempted to park an owned or already parked reply target"
+                        .to_owned(),
+                );
+            }
+            if fanout.target_is_complete(target_index) || fanout.fifo_id.is_none() {
+                return Err("Sumeragi v2 draining reply target lost cursor ownership".to_owned());
+            }
+            let _ = fanout.outstanding_sources()?;
+            let _ = fanout.outstanding_reservation_counts()?;
+        }
+
+        let fanout = self
+            .fanouts
+            .get_mut(fanout_index)
+            .expect("preflighted draining fanout must remain present");
+        let target = fanout
+            .targets
+            .get_mut(target_index)
+            .expect("preflighted draining target must remain present");
+        target.current = None;
+        target.ticket = None;
+        target.parked = true;
+        // Preserve route history, immutable payload, message cursor, FIFO age,
+        // and reservation ownership. A newer same-source tenure updates this
+        // exact target and retries its current item.
+        fanout.advance_target_cursor(target_index);
+        self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
         Ok(())
     }
 
@@ -5305,6 +5555,10 @@ impl PendingExactOutput {
             }
             let attempted_peer = post.peer_id.clone();
             let attempted_source = route.source(&attempted_peer, exact_output_class(&post.data)?);
+            let reply_attempt = match &route {
+                ExactTargetRoute::Reply(reply_route) => Some((post.clone(), reply_route.clone())),
+                ExactTargetRoute::Topology => None,
+            };
             let sidecar_reply = match (&post.data, &route) {
                 (
                     NetworkMessage::CertifiedMergeSidecar(message),
@@ -5334,9 +5588,9 @@ impl PendingExactOutput {
                 .expect("bounded exact-output attempt count cannot overflow");
             match attempt(post, ticket, &route) {
                 Ok(ExactOutputAttemptOutcome::Admitted) => {
-                    if sidecar_reply.is_some() {
+                    if reply_attempt.is_some() {
                         return Err(
-                            "Sumeragi v2 admitted a sidecar response without its exact writer-flush witness"
+                            "Sumeragi v2 admitted a reply without its exact writer-flush witness"
                                 .to_owned(),
                         );
                     }
@@ -5349,6 +5603,49 @@ impl PendingExactOutput {
                         target_index,
                         Some(&attempted_source),
                     )?;
+                }
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(flush_ack)) => {
+                    if sidecar_reply.is_some() {
+                        return Err(
+                            "Sumeragi v2 attached an ordinary flush witness to sidecar output"
+                                .to_owned(),
+                        );
+                    }
+                    let (canonical_post, reply_route) = reply_attempt.ok_or_else(|| {
+                        "Sumeragi v2 attached a reply flush witness to topology output".to_owned()
+                    })?;
+                    if !flush_ack
+                        .identity()
+                        .is_bound_to_canonical_reply(&canonical_post)
+                        || !flush_ack.identity().is_bound_to_delivery(&reply_route)
+                    {
+                        return Err(
+                            "Sumeragi v2 ordinary reply flush changed route or payload identity"
+                                .to_owned(),
+                        );
+                    }
+                    let fanout = self
+                        .fanouts
+                        .get_mut(fanout_index)
+                        .expect("flushing exact fanout must remain present");
+                    let target = fanout
+                        .targets
+                        .get_mut(target_index)
+                        .expect("flushing exact target must remain present");
+                    if target
+                        .pending_flush
+                        .replace(PendingExactReplyFlush {
+                            flush_ack,
+                            sidecar_admission: None,
+                        })
+                        .is_some()
+                    {
+                        return Err(
+                            "Sumeragi v2 reply target acquired two writer flushes".to_owned()
+                        );
+                    }
+                    fanout.advance_target_cursor(target_index);
+                    self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
                 }
                 Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack)) => {
                     let (canonical_post, reply_route, message_cursor_before, message_cursor_after) =
@@ -5364,35 +5661,62 @@ impl PendingExactOutput {
                         flush_ack.identity(),
                     )
                     .map_err(|error| error.to_string())?;
-                    self.fanouts
-                        .get_mut(fanout_index)
-                        .expect("admitted exact fanout must remain present")
-                        .mark_admitted(target_index)?;
-                    let actual_message_cursor_after = self
+                    let fanout = self
                         .fanouts
-                        .get(fanout_index)
-                        .and_then(|fanout| fanout.targets.get(target_index))
-                        .ok_or_else(|| {
-                            "Sumeragi v2 admitted sidecar output target disappeared".to_owned()
-                        })?
-                        .message_index;
-                    if actual_message_cursor_after != message_cursor_after {
+                        .get_mut(fanout_index)
+                        .expect("flushing exact fanout must remain present");
+                    let target = fanout
+                        .targets
+                        .get_mut(target_index)
+                        .expect("flushing exact target must remain present");
+                    if target
+                        .pending_flush
+                        .replace(PendingExactReplyFlush {
+                            flush_ack,
+                            sidecar_admission: Some(admission),
+                        })
+                        .is_some()
+                    {
                         return Err(
-                            "Sumeragi v2 sidecar output message cursor changed during admission"
+                            "Sumeragi v2 sidecar target acquired two writer flushes".to_owned()
+                        );
+                    }
+                    if target.message_index != message_cursor_before {
+                        return Err(
+                            "Sumeragi v2 sidecar cursor advanced before writer flush".to_owned()
+                        );
+                    }
+                    fanout.advance_target_cursor(target_index);
+                    self.next_fanout_index = (fanout_index + 1) % self.fanouts.len();
+                }
+                #[cfg(test)]
+                Ok(ExactOutputAttemptOutcome::TestReplyFlushed) => {
+                    if reply_attempt.is_none() {
+                        return Err(
+                            "Sumeragi v2 test attached a synthetic reply flush to topology output"
                                 .to_owned(),
                         );
                     }
-                    self.flushing_sidecar_chunks.push_back(
-                        PendingCertifiedMergeSidecarChunkFlush {
-                            admission,
-                            flush_ack,
-                        },
-                    );
+                    self.fanouts
+                        .get_mut(fanout_index)
+                        .expect("synthetically flushed exact fanout must remain present")
+                        .mark_admitted(target_index)?;
                     self.advance_after_attempt(
                         fanout_index,
                         target_index,
                         Some(&attempted_source),
                     )?;
+                }
+                Ok(ExactOutputAttemptOutcome::Unavailable) => {
+                    if !matches!(&route, ExactTargetRoute::Reply(reply_route)
+                        if !reply_route.is_reply_writable())
+                    {
+                        return Err(
+                            "Sumeragi v2 network actor reported an unavailable writable route"
+                                .to_owned(),
+                        );
+                    }
+                    self.park_unwritable_reply_target(fanout_index, target_index)?;
                 }
                 Ok(ExactOutputAttemptOutcome::Retired) => {
                     if !matches!(&route, ExactTargetRoute::Reply(reply_route) if !reply_route.is_active())
@@ -5471,7 +5795,10 @@ impl PendingExactOutput {
         ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>,
     {
         self.drive_with_budget_ack(attempt_budget, |post, ticket, route| {
-            attempt(post, ticket, route).map(|()| ExactOutputAttemptOutcome::Admitted)
+            attempt(post, ticket, route).map(|()| match route {
+                ExactTargetRoute::Topology => ExactOutputAttemptOutcome::Admitted,
+                ExactTargetRoute::Reply(_) => ExactOutputAttemptOutcome::TestReplyFlushed,
+            })
         })
     }
 
@@ -7550,10 +7877,7 @@ impl ProductionV2Services {
             &frozen_semantic_targets,
         )?;
         let mut pending = self.lock_pending_exact_output()?;
-        if !pending.fanouts.is_empty()
-            || !pending.flushing_sidecar_chunks.is_empty()
-            || !pending.admitted_sidecar_chunks.is_empty()
-        {
+        if !pending.fanouts.is_empty() || !pending.admitted_sidecar_chunks.is_empty() {
             return Err("cannot replace a non-empty Sumeragi v2 exact-output corridor".to_owned());
         }
         *pending = replacement;
@@ -7610,9 +7934,9 @@ impl ProductionV2Services {
                     Some(flush_ack) if requires_sidecar_flush => {
                         Ok(ExactOutputAttemptOutcome::SidecarFlush(flush_ack))
                     }
-                    Some(flush_ack) => {
-                        drop(flush_ack);
-                        Ok(ExactOutputAttemptOutcome::Admitted)
+                    Some(flush_ack) => Ok(ExactOutputAttemptOutcome::ReplyFlush(flush_ack)),
+                    None if reply_route.is_active() && !reply_route.is_reply_writable() => {
+                        Ok(ExactOutputAttemptOutcome::Unavailable)
                     }
                     None => Ok(ExactOutputAttemptOutcome::Retired),
                 }
@@ -7621,9 +7945,7 @@ impl ProductionV2Services {
     }
 
     fn drive_pending_exact_output(&self, pending: &mut PendingExactOutput) -> Result<bool, String> {
-        pending
-            .poll_sidecar_flushes()
-            .map_err(|error| error.to_string())?;
+        pending.poll_reply_flushes()?;
         let outcome = {
             #[cfg(test)]
             {
@@ -7631,8 +7953,13 @@ impl ProductionV2Services {
                     let mut hook = hook.lock().map_err(|_| {
                         "Sumeragi v2 exact-output admission hook was poisoned".to_owned()
                     })?;
-                    pending.drive_bounded_with_ack(|post, ticket, _route| {
+                    pending.drive_bounded_with_ack(|post, ticket, route| {
                         hook(post, ticket).map(|outcome| match outcome {
+                            ExactOutputTestAdmission::Admitted
+                                if matches!(route, ExactTargetRoute::Reply(_)) =>
+                            {
+                                ExactOutputAttemptOutcome::TestReplyFlushed
+                            }
                             ExactOutputTestAdmission::Admitted => {
                                 ExactOutputAttemptOutcome::Admitted
                             }
@@ -7655,15 +7982,13 @@ impl ProductionV2Services {
                 })?
             }
         };
-        pending
-            .poll_sidecar_flushes()
-            .map_err(|error| error.to_string())?;
+        pending.poll_reply_flushes()?;
         match outcome {
             ExactOutputDriveOutcome::Drained => {}
             ExactOutputDriveOutcome::ReceiptBackpressured => {
                 iroha_logger::debug!(
                     pending_receipts = pending.sidecar_control_units(),
-                    pending_flushes = pending.flushing_sidecar_chunks.len(),
+                    pending_flushes = pending.pending_sidecar_flushes(),
                     receipt_capacity = pending.sidecar_admission_capacity,
                     "retained exact Sumeragi v2 output behind sidecar receipt backpressure"
                 );
@@ -7846,9 +8171,7 @@ impl ProductionV2Services {
         limit: usize,
     ) -> Result<Vec<CertifiedMergeSidecarChunkAdmission>, String> {
         let mut pending = self.lock_pending_exact_output()?;
-        pending
-            .poll_sidecar_flushes()
-            .map_err(|error| error.to_string())?;
+        pending.poll_reply_flushes()?;
         let count = limit.min(pending.admitted_sidecar_chunks.len());
         Ok(pending.admitted_sidecar_chunks.drain(..count).collect())
     }
@@ -10536,6 +10859,453 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"worker rejects delayed superseded tenure");
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let old_route = routes.mint_via(peer.clone(), hub.clone());
+        let current_route = routes.mint_via(peer.clone(), hub);
+        let delayed_old_route = routes
+            .redeliver(&old_route)
+            .expect("old tenure delivers after the replacement was observed");
+        assert_eq!(
+            delayed_old_route.source_update_from(&current_route),
+            Err(NetworkReplyRouteError::Stale)
+        );
+
+        let fanout = |route: &NetworkReplyRoute| {
+            PendingExactFanout::new_with_reply_routes(
+                vec![message.clone()],
+                peer.clone(),
+                NetworkReplyRoutes::try_from_route(route.clone()).expect("one live route"),
+            )
+            .expect("one ordinary reply fanout")
+        };
+        let mut pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one reply source attempt fits");
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(fanout(&current_route)),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let ownership_before = pending.reservation_owner_counts.clone();
+        let source_fifo_before = pending.source_fifo_owners.clone();
+
+        let error = pending
+            .enqueue_owned_reply_transfer(fanout(&delayed_old_route))
+            .expect_err("superseded tenure cannot rebind the worker target");
+        assert!(error.contains("stale capability"));
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 0);
+        assert!(target.current.is_none());
+        assert!(matches!(
+            &target.route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&current_route)
+        ));
+        assert_eq!(pending.reservation_owner_counts, ownership_before);
+        assert_eq!(pending.source_fifo_owners, source_fifo_before);
+    }
+
+    #[test]
+    fn ordinary_reply_closed_flush_retains_current_item_while_sibling_source_progresses() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"ordinary reply close and reconnect");
+        let payload_hash = HashOf::new(&message);
+        let response_class = exact_output_class(&message).expect("classify ordinary reply");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let route_a = routes.mint_via(peer.clone(), hub_a.clone());
+        let route_b = routes.mint_via(peer.clone(), hub_b);
+        let source_a = ExactTargetRoute::Reply(route_a.clone()).source(&peer, response_class);
+        let source_b = ExactTargetRoute::Reply(route_b.clone()).source(&peer, response_class);
+        let mut reply_routes =
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
+        reply_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
+            )
+            .expect("retain both authenticated sources");
+
+        let mut pending =
+            PendingExactOutput::new(2, 1, 2, &[]).expect("two ordinary reply attempts fit");
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(
+                PendingExactFanout::new_with_reply_routes(
+                    vec![message.clone()],
+                    peer.clone(),
+                    reply_routes,
+                )
+                .expect("two-source ordinary reply fanout"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("ordinary reply fanout owns stable FIFO age");
+        let source_a_index = pending.fanouts[0]
+            .targets
+            .iter()
+            .position(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
+            })
+            .expect("fanout retains source A");
+        let mut source_a_control = None;
+        let mut source_b_control = None;
+        assert_eq!(
+            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route| {
+                assert!(ticket.is_none());
+                assert_eq!(HashOf::new(&post.data), payload_hash);
+                let ExactTargetRoute::Reply(route) = route else {
+                    panic!("ordinary reply must retain its authenticated route")
+                };
+                let (mut control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
+                if route.same_source(&route_a) {
+                    source_a_control = Some(control);
+                } else {
+                    assert!(route.same_source(&route_b));
+                    assert!(control.flush());
+                    source_b_control = Some(control);
+                }
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            }),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        assert!(source_a_control.is_some());
+        assert!(source_b_control.is_some());
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(
+            pending.fanouts[0]
+                .targets
+                .iter()
+                .filter(|target| target.pending_flush.is_some())
+                .count(),
+            2
+        );
+
+        pending
+            .poll_reply_flushes()
+            .expect("source B writer flush advances independently");
+        let target_a = &pending.fanouts[0].targets[source_a_index];
+        assert_eq!(target_a.message_index, 0);
+        assert!(target_a.pending_flush.is_some());
+        assert_eq!(HashOf::new(&pending.fanouts[0].messages[0]), payload_hash);
+        assert!(pending.source_fifo_owners.contains_key(&source_a));
+        assert!(!pending.source_fifo_owners.contains_key(&source_b));
+        assert_eq!(pending.ownership_units, 1);
+
+        assert!(
+            source_a_control
+                .as_mut()
+                .expect("source A retains its sole writer controller")
+                .close()
+        );
+        pending
+            .poll_reply_flushes()
+            .expect("closed source A acknowledgement retains the exact current item");
+        let target_a = &pending.fanouts[0].targets[source_a_index];
+        assert_eq!(target_a.message_index, 0);
+        assert!(target_a.current.is_none());
+        assert!(target_a.pending_flush.is_none());
+        assert!(!target_a.parked);
+        assert_eq!(HashOf::new(&pending.fanouts[0].messages[0]), payload_hash);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
+        assert_eq!(pending.ownership_units, 1);
+
+        assert!(routes.retire(&route_a));
+        let reconnected_a = routes.mint_via(peer.clone(), hub_a);
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(
+                PendingExactFanout::new_with_reply_routes(
+                    vec![message],
+                    peer,
+                    NetworkReplyRoutes::try_from_route(reconnected_a.clone())
+                        .expect("reconnected source A route set"),
+                )
+                .expect("same-source reconnect candidate"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let target_a = &pending.fanouts[0].targets[source_a_index];
+        assert_eq!(target_a.message_index, 0);
+        assert!(target_a.pending_flush.is_none());
+        assert!(matches!(
+            &target_a.route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
+        ));
+
+        let mut retry_control = None;
+        assert_eq!(
+            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route| {
+                assert!(ticket.is_none());
+                assert_eq!(HashOf::new(&post.data), payload_hash);
+                let ExactTargetRoute::Reply(route) = route else {
+                    panic!("reconnected reply changed route kind")
+                };
+                assert!(route.same_delivery(&reconnected_a));
+                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
+                retry_control = Some(control);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            }),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        assert!(
+            retry_control
+                .as_mut()
+                .expect("replacement writer owns the retried item")
+                .flush()
+        );
+        pending
+            .poll_reply_flushes()
+            .expect("replacement writer completes the retained item");
+        assert!(pending.fanouts.is_empty());
+        assert_eq!(pending.ownership_units, 0);
+        assert!(pending.source_fifo_owners.is_empty());
+    }
+
+    #[test]
+    fn closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"closed draining reply");
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let mut pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one draining reply attempt fits");
+        pending
+            .enqueue(
+                PendingExactFanout::new_with_routes(
+                    vec![message.clone()],
+                    vec![peer],
+                    vec![ExactTargetRoute::Reply(route.clone())],
+                )
+                .expect("one draining reply fanout"),
+            )
+            .expect("retain the draining reply");
+
+        let mut control = None;
+        pending
+            .drive_with_budget_ack(usize::MAX, |post, ticket, attempted| {
+                assert!(ticket.is_none());
+                let ExactTargetRoute::Reply(attempted) = attempted else {
+                    panic!("draining response changed route kind")
+                };
+                let (writer, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
+                control = Some(writer);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            })
+            .expect("queue the exact writer flush");
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
+        assert!(control.as_mut().expect("writer controller").close());
+        pending
+            .poll_reply_flushes()
+            .expect("closed draining flush is a recoverable route transition");
+
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 0);
+        assert!(target.current.is_none());
+        assert!(target.pending_flush.is_none());
+        assert!(target.parked);
+        assert_eq!(pending.fanouts[0].messages.len(), 1);
+        assert_eq!(
+            norito::to_bytes(&pending.fanouts[0].messages[0])
+                .expect("encode retained draining reply"),
+            norito::to_bytes(&message).expect("encode expected draining reply"),
+            "parking an unwritable delivery-active route must retain the exact payload"
+        );
+        assert!(!pending.source_fifo_owners.is_empty());
+    }
+
+    #[test]
+    fn closed_flush_racing_final_receiver_retirement_is_nonfatal() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"closed reply retirement race");
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let mut pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one retirement-race reply attempt fits");
+        pending
+            .enqueue(
+                PendingExactFanout::new_with_routes(
+                    vec![message],
+                    vec![peer],
+                    vec![ExactTargetRoute::Reply(route.clone())],
+                )
+                .expect("one retirement-race reply fanout"),
+            )
+            .expect("retain the retirement-race reply");
+
+        let mut control = None;
+        pending
+            .drive_with_budget_ack(usize::MAX, |post, _ticket, attempted| {
+                let ExactTargetRoute::Reply(attempted) = attempted else {
+                    panic!("retirement-race response changed route kind")
+                };
+                let (writer, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, attempted);
+                control = Some(writer);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            })
+            .expect("queue the retirement-race writer flush");
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
+        assert!(control.as_mut().expect("writer controller").close());
+        assert!(routes.retire(&route));
+        pending
+            .poll_reply_flushes()
+            .expect("final receiver retirement after Closed must not fail stop output");
+
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 0);
+        assert!(target.current.is_none());
+        assert!(target.pending_flush.is_none());
+        assert!(target.parked);
+        assert!(!pending.source_fifo_owners.is_empty());
+    }
+
+    #[test]
+    fn unavailable_admission_racing_retirement_is_nonfatal() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let message = merge_share_message(b"unavailable reply retirement race");
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let mut pending =
+            PendingExactOutput::new(1, 1, 1, &[]).expect("one unavailable-race reply attempt fits");
+        pending
+            .enqueue(
+                PendingExactFanout::new_with_routes(
+                    vec![message],
+                    vec![peer],
+                    vec![ExactTargetRoute::Reply(route.clone())],
+                )
+                .expect("one unavailable-race reply fanout"),
+            )
+            .expect("retain the unavailable-race reply");
+
+        assert_eq!(
+            pending.drive_with_budget_ack(usize::MAX, |_post, _ticket, attempted| {
+                let ExactTargetRoute::Reply(attempted) = attempted else {
+                    panic!("unavailable-race response changed route kind")
+                };
+                assert!(attempted.same_delivery(&route));
+                assert!(routes.mark_reply_unwritable_while_delivery_active(&route));
+                assert!(routes.retire(&route));
+                Ok(ExactOutputAttemptOutcome::Unavailable)
+            }),
+            Ok(ExactOutputDriveOutcome::Drained)
+        );
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 0);
+        assert!(target.current.is_none());
+        assert!(target.parked);
+        assert!(!pending.source_fifo_owners.is_empty());
+    }
+
+    #[test]
+    fn ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once() {
+        let (service, _) = fixture();
+        let peer = service.context.roster[1].validator.clone();
+        let messages = vec![
+            merge_share_message(b"ordinary late flush first"),
+            merge_share_message(b"ordinary late flush second"),
+        ];
+        let first_hash = HashOf::new(&messages[0]);
+        let hub = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 1);
+        let old_route = routes.mint_via(peer.clone(), hub.clone());
+        let mut pending =
+            PendingExactOutput::new(1, 2, 1, &[]).expect("one two-message reply attempt fits");
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(
+                PendingExactFanout::new_with_reply_routes(
+                    messages.clone(),
+                    peer.clone(),
+                    NetworkReplyRoutes::try_from_route(old_route.clone())
+                        .expect("old source route set"),
+                )
+                .expect("two-message ordinary reply fanout"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+
+        let mut old_control = None;
+        let mut cloned_completion_identity = None;
+        assert_eq!(
+            pending.drive_with_budget_ack(1, |post, ticket, route| {
+                assert!(ticket.is_none());
+                assert_eq!(HashOf::new(&post.data), first_hash);
+                let ExactTargetRoute::Reply(route) = route else {
+                    panic!("ordinary reply changed route kind")
+                };
+                assert!(route.same_delivery(&old_route));
+                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
+                cloned_completion_identity = Some(ack.identity().clone());
+                old_control = Some(control);
+                Ok(ExactOutputAttemptOutcome::ReplyFlush(ack))
+            }),
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
+        );
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
+        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
+
+        assert!(routes.retire(&old_route));
+        let replacement_route = routes.mint_via(peer.clone(), hub);
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(
+                PendingExactFanout::new_with_reply_routes(
+                    messages,
+                    peer,
+                    NetworkReplyRoutes::try_from_route(replacement_route.clone())
+                        .expect("replacement source route set"),
+                )
+                .expect("replacement route retry candidate"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 0);
+        assert!(target.pending_flush.is_some());
+        assert!(matches!(
+            &target.route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&replacement_route)
+        ));
+
+        assert!(
+            old_control
+                .as_mut()
+                .expect("old writer retains its sole completion controller")
+                .flush()
+        );
+        pending
+            .poll_reply_flushes()
+            .expect("late old flush retains canonical source authority");
+        let target = &pending.fanouts[0].targets[0];
+        assert_eq!(target.message_index, 1);
+        assert!(target.pending_flush.is_none());
+        assert_eq!(pending.ownership_units, 1);
+        assert!(
+            !cloned_completion_identity
+                .as_ref()
+                .expect("retain clone-shared completion identity")
+                .claim_writer_flush_once(),
+            "a clone of the consumed writer occurrence cannot advance another cursor"
+        );
+
+        pending
+            .poll_reply_flushes()
+            .expect("polling after terminal ownership consumption is idempotent");
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 1);
+        assert_eq!(pending.ownership_units, 1);
+    }
+
+    #[test]
     fn closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
@@ -10625,13 +11395,13 @@ pub(super) mod tests {
             Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 17 })
         );
         assert!(source_a_flush_ack.is_none());
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
         assert!(pending.admitted_sidecar_chunks.is_empty());
         assert!(source_a_flush_control.close());
         pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("closed exact writer identity remains well formed");
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
         assert!(
             pending.admitted_sidecar_chunks.is_empty(),
             "a closed writer without Flushed must not advance the sidecar cursor"
@@ -10642,7 +11412,7 @@ pub(super) mod tests {
             .position(|target| {
                 matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
             })
-            .expect("source A target remains as completed history");
+            .expect("source A target retains the current item");
         let b_index = pending.fanouts[0]
             .targets
             .iter()
@@ -10650,19 +11420,25 @@ pub(super) mod tests {
                 matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
             })
             .expect("source B target remains backpressured");
-        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
+        assert!(pending.fanouts[0].targets[a_index].current.is_none());
+        assert!(pending.fanouts[0].targets[a_index].pending_flush.is_none());
+        assert!(!pending.fanouts[0].target_is_complete(a_index));
         assert_eq!(pending.fanouts[0].targets[b_index].message_index, 0);
         assert!(pending.fanouts[0].targets[b_index].current.is_some());
-        assert_eq!(pending.ownership_units, 1);
-        assert_eq!(pending.shared_ownership_units, 1);
-        assert!(!pending.source_fifo_owners.contains_key(&source_a));
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 2);
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_a),
+            Some(&BTreeSet::from([fifo_id]))
+        );
         assert_eq!(
             pending.source_fifo_owners.get(&source_b),
             Some(&BTreeSet::from([fifo_id]))
         );
 
         let exact_duplicate = NetworkReplyRoutes::try_from_route(route_a.clone())
-            .expect("exact completed-source duplicate");
+            .expect("exact pending-source duplicate");
         assert_eq!(
             pending
                 .enqueue(
@@ -10672,19 +11448,19 @@ pub(super) mod tests {
                         exact_duplicate,
                         rollover_claim.clone(),
                     )
-                    .expect("valid exact completed-source claim")
-                    .expect("exact completed-source retry"),
+                    .expect("valid exact pending-source claim")
+                    .expect("exact pending-source retry"),
                 )
-                .expect("exact duplicate coalesces without replay"),
+                .expect("exact duplicate coalesces without resetting the cursor"),
             ExactFanoutOwnership::Owned
         );
-        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
 
         let later_a = routes
             .redeliver(&route_a)
-            .expect("later delivery on completed source tenure");
+            .expect("later delivery on the same source tenure");
         let later_delivery = NetworkReplyRoutes::try_from_route(later_a.clone())
-            .expect("later completed-source delivery");
+            .expect("later pending-source delivery");
         assert_eq!(
             pending
                 .enqueue(
@@ -10694,14 +11470,18 @@ pub(super) mod tests {
                         later_delivery,
                         rollover_claim.clone(),
                     )
-                    .expect("valid later completed-source claim")
-                    .expect("later completed-source retry"),
+                    .expect("valid later pending-source claim")
+                    .expect("later pending-source retry"),
                 )
-                .expect("later delivery updates without replay"),
+                .expect("later delivery updates without resetting the cursor"),
             ExactFanoutOwnership::Owned
         );
-        assert!(pending.fanouts[0].target_is_complete(a_index));
-        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
+        assert!(matches!(
+            &pending.fanouts[0].targets[a_index].route,
+            ExactTargetRoute::Reply(route) if route.same_delivery(&later_a)
+        ));
+        assert_eq!(pending.ownership_units, 2);
 
         assert!(routes.retire(&later_a));
         let reconnected_a = routes.mint_via(peer.clone(), hub_a.clone());
@@ -10719,7 +11499,7 @@ pub(super) mod tests {
                     .expect("valid same-source reconnect claim")
                     .expect("same-source reconnect fanout"),
                 )
-                .expect("closed source reconnect restores the current item"),
+                .expect("closed source reconnect preserves the current item"),
             ExactFanoutOwnership::Owned
         );
         let fanout = &pending.fanouts[0];
@@ -11016,8 +11796,9 @@ pub(super) mod tests {
             }),
             Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 7 })
         );
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
-        assert!(pending.fanouts[0].target_is_complete(a_index));
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
+        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
+        assert!(!pending.fanouts[0].target_is_complete(a_index));
         assert!(
             flush_control
                 .as_mut()
@@ -11025,9 +11806,9 @@ pub(super) mod tests {
                 .flush()
         );
         pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("reconnected writer publishes the exact cursor receipt");
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
     }
 
@@ -11054,8 +11835,8 @@ pub(super) mod tests {
             .expect("one exact sidecar response")
         };
 
-        let mut pending =
-            PendingExactOutput::new(2, 1, 2, &[]).expect("two independent response attempts fit");
+        let mut pending = PendingExactOutput::new(3, 1, 2, &[])
+            .expect("one response attempt and two capacity blockers fit");
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(fanout(&first_route))
@@ -11074,10 +11855,13 @@ pub(super) mod tests {
                 flush_control = Some(control);
                 Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
             }),
-            Ok(ExactOutputDriveOutcome::Drained)
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
         );
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.fanouts[0].targets[0].message_index, 0);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
 
         for label in [
             b"pending flush capacity blocker a".as_slice(),
@@ -11096,7 +11880,7 @@ pub(super) mod tests {
                 ExactFanoutOwnership::Owned
             );
         }
-        assert_eq!(pending.shared_ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 3);
 
         let pending_later = routes
             .redeliver(&first_route)
@@ -11127,8 +11911,9 @@ pub(super) mod tests {
             }),
             Ok(ExactOutputDriveOutcome::Drained)
         );
-        assert!(pending.fanouts.is_empty());
-        assert_eq!(pending.shared_ownership_units, 0);
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
+        assert_eq!(pending.shared_ownership_units, 1);
 
         assert!(
             flush_control
@@ -11137,9 +11922,11 @@ pub(super) mod tests {
                 .flush()
         );
         pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("exact writer flush publishes one unapplied receipt");
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
+        assert!(pending.fanouts.is_empty());
+        assert_eq!(pending.shared_ownership_units, 0);
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
 
         let unapplied_later = routes
@@ -11187,13 +11974,13 @@ pub(super) mod tests {
             matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&alternate))
         }));
         assert!(pending.fanouts[0].targets.iter().all(|target| {
-            !matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected))
+            !matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&reconnected))
         }));
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
     }
 
     #[test]
-    fn mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings() {
+    fn mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
@@ -11237,10 +12024,12 @@ pub(super) mod tests {
                 flush_control = Some(control);
                 Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
             }),
-            Ok(ExactOutputDriveOutcome::Drained)
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
         );
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
-        assert!(pending.fanouts.is_empty());
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
+        assert_eq!(pending.fanouts.len(), 1);
 
         assert_eq!(
             pending
@@ -11261,7 +12050,7 @@ pub(super) mod tests {
                 &NetworkReplyRoutes::try_from_route(route_b.clone())
                     .expect("new source B route set"),
             )
-            .expect("candidate carries terminal A and independent B");
+            .expect("candidate carries pending A and independent B");
         let mixed = fanout(mixed_routes);
         assert!(
             pending
@@ -11280,7 +12069,7 @@ pub(super) mod tests {
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(fanout(mixed_routes))
-                .expect("merge terminal A without losing live B or C"),
+                .expect("merge pending A without losing live B or C"),
             ExactFanoutOwnership::Owned
         );
 
@@ -11304,15 +12093,16 @@ pub(super) mod tests {
                 })
                 .expect("retained fanout contains the expected source")
         };
-        let terminal_a = target_for(&later_a);
-        assert_eq!(terminal_a.message_index, 1);
-        assert!(terminal_a.current.is_none());
-        assert!(terminal_a.ticket.is_none());
+        let pending_a = target_for(&later_a);
+        assert_eq!(pending_a.message_index, 0);
+        assert!(pending_a.current.is_none());
+        assert!(pending_a.ticket.is_none());
+        assert!(pending_a.pending_flush.is_some());
         assert_eq!(target_for(&route_b).message_index, 0);
         assert_eq!(target_for(&route_c).message_index, 0);
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(retained.current_source_targets.len(), 2);
+        assert_eq!(pending.ownership_units, 3);
+        assert_eq!(pending.shared_ownership_units, 3);
+        assert_eq!(retained.current_source_targets.len(), 3);
 
         assert_eq!(
             pending.drive_with_budget_ack(usize::MAX, |post, ticket, route| {
@@ -11329,7 +12119,7 @@ pub(super) mod tests {
             }),
             Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 9 })
         );
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
         assert!(flush_control.is_some());
     }
 
@@ -11342,7 +12132,18 @@ pub(super) mod tests {
             unreachable!("sidecar fixture returns one response chunk")
         };
         let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester);
+        let route = routes.mint(requester.clone());
+        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+        ));
+        let fanout = || {
+            PendingExactFanout::new_with_reply_routes(
+                vec![message.clone()],
+                requester.clone(),
+                NetworkReplyRoutes::try_from_route(route.clone()).expect("one reply route"),
+            )
+            .expect("one routed sidecar response")
+        };
         let (_admission_control, _admission_ack, admission) =
             certified_sidecar_flush_fixture(&chunk, &route);
         let (mut substituted_control, substituted_ack, _substituted_admission) =
@@ -11351,18 +12152,16 @@ pub(super) mod tests {
 
         let mut pending =
             PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
-        pending
-            .flushing_sidecar_chunks
-            .push_back(PendingCertifiedMergeSidecarChunkFlush {
-                admission,
-                flush_ack: substituted_ack,
-            });
-
-        assert!(matches!(
-            pending.poll_sidecar_flushes(),
-            Err(MergeSidecarError::FlushIdentityMismatch(_))
-        ));
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
+        pending.fanouts[0].targets[0].pending_flush = Some(PendingExactReplyFlush {
+            sidecar_admission: Some(admission),
+            flush_ack: substituted_ack,
+        });
+        let error = pending
+            .poll_reply_flushes()
+            .expect_err("substituted writer occurrence must fail closed");
+        assert!(error.contains("different actor output"));
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
         assert!(pending.admitted_sidecar_chunks.is_empty());
 
         let (mut exact_control, exact_ack, exact_admission) =
@@ -11370,16 +12169,19 @@ pub(super) mod tests {
         assert!(exact_control.flush());
         let mut exact_pending =
             PendingExactOutput::new(1, 1, 1, &[]).expect("one exact sidecar flush witness fits");
+        assert_eq!(
+            exact_pending.enqueue(fanout()),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        exact_pending.fanouts[0].targets[0].pending_flush = Some(PendingExactReplyFlush {
+            sidecar_admission: Some(exact_admission),
+            flush_ack: exact_ack,
+        });
         exact_pending
-            .flushing_sidecar_chunks
-            .push_back(PendingCertifiedMergeSidecarChunkFlush {
-                admission: exact_admission,
-                flush_ack: exact_ack,
-            });
-        exact_pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("the exact actor output satisfies the shared flush kernel");
-        assert!(exact_pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(exact_pending.pending_sidecar_flushes(), 0);
+        assert!(exact_pending.fanouts.is_empty());
         assert_eq!(exact_pending.admitted_sidecar_chunks.len(), 1);
     }
 
@@ -12996,10 +13798,12 @@ pub(super) mod tests {
                 first_flush_control = Some(control);
                 Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
             }),
-            Ok(ExactOutputDriveOutcome::Drained)
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
         );
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
         assert!(pending.admitted_sidecar_chunks.is_empty());
         assert!(
             first_flush_control
@@ -13008,9 +13812,10 @@ pub(super) mod tests {
                 .flush()
         );
         pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("first exact writer flush publishes its receipt");
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
 
         assert_eq!(pending.enqueue(fanout()), Ok(ExactFanoutOwnership::Owned));
@@ -13038,10 +13843,12 @@ pub(super) mod tests {
                 second_flush_control = Some(control);
                 Ok(ExactOutputAttemptOutcome::SidecarFlush(ack))
             }),
-            Ok(ExactOutputDriveOutcome::Drained)
+            Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                closest_backpressure_rank: None,
+            })
         );
-        assert_eq!(pending.ownership_units, 0);
-        assert_eq!(pending.flushing_sidecar_chunks.len(), 1);
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.pending_sidecar_flushes(), 1);
         assert!(pending.admitted_sidecar_chunks.is_empty());
         assert!(
             second_flush_control
@@ -13050,9 +13857,10 @@ pub(super) mod tests {
                 .flush()
         );
         pending
-            .poll_sidecar_flushes()
+            .poll_reply_flushes()
             .expect("second exact writer flush publishes its receipt");
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.ownership_units, 0);
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
         assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
     }
 
@@ -13214,37 +14022,77 @@ pub(super) mod tests {
         let (service, keys) = fixture();
         let (_, artifact) = durable_finality_fixture(&service, &keys);
         let requester = service.context.roster[1].validator.clone();
-        let (_, chunk) = certified_sidecar_outputs(&service.local_peer, &requester);
-        let CertifiedMergeSidecarMessage::Chunk(chunk) = chunk else {
+        let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &requester);
+        let CertifiedMergeSidecarMessage::Chunk(chunk) = chunk_message else {
             unreachable!("sidecar fixture returns one response chunk")
         };
-        let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
-        let route = routes.mint(requester);
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 3);
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let route_c = routes.mint_via(requester.clone(), hub_c);
+        let mut reply_routes =
+            NetworkReplyRoutes::try_from_route(route_a.clone()).expect("source A route set");
+        for route in [&route_b, &route_c] {
+            reply_routes
+                .merge(
+                    &NetworkReplyRoutes::try_from_route(route.clone())
+                        .expect("independent sidecar source route set"),
+                )
+                .expect("retain every authenticated sidecar source");
+        }
+        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::Chunk(chunk.clone()),
+        ));
+        let rollover_claim = ExactOutputRolloverClaim::CertifiedSidecarChunk {
+            scope: service.exact_output_scope(),
+            target: requester.clone(),
+            transfer: CertifiedSidecarTransferIdentity::from_chunk(&chunk),
+            chunk_index: chunk.chunk_index,
+            chunk_count: chunk.chunk_count,
+            response_hash: HashOf::new(&chunk),
+        };
+        let fanout = PendingExactFanout::claimed_with_reply_routes(
+            vec![message],
+            requester,
+            reply_routes,
+            rollover_claim,
+        )
+        .expect("valid sidecar reconstruction claim")
+        .expect("three-source sidecar fanout");
         let mut pending =
-            PendingExactOutput::new(4, 1, 1, &[]).expect("four bounded sidecar completion states");
+            PendingExactOutput::new(4, 1, 3, &[]).expect("four bounded sidecar completion states");
+        assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
 
         let (_pending_control, pending_ack, pending_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
+            certified_sidecar_flush_fixture(&chunk, &route_a);
         let (mut flushed_control, flushed_ack, flushed_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
+            certified_sidecar_flush_fixture(&chunk, &route_b);
         assert!(flushed_control.flush());
         let (mut closed_control, closed_ack, closed_admission) =
-            certified_sidecar_flush_fixture(&chunk, &route);
+            certified_sidecar_flush_fixture(&chunk, &route_c);
         assert!(closed_control.close());
-        for (admission, flush_ack) in [
-            (pending_admission, pending_ack),
-            (flushed_admission, flushed_ack),
-            (closed_admission, closed_ack),
+        for (route, sidecar_admission, flush_ack) in [
+            (&route_a, pending_admission, pending_ack),
+            (&route_b, flushed_admission, flushed_ack),
+            (&route_c, closed_admission, closed_ack),
         ] {
-            pending
-                .flushing_sidecar_chunks
-                .push_back(PendingCertifiedMergeSidecarChunkFlush {
-                    admission,
-                    flush_ack,
-                });
+            let target = pending.fanouts[0]
+                .targets
+                .iter_mut()
+                .find(|target| {
+                    matches!(&target.route, ExactTargetRoute::Reply(candidate) if candidate.same_source(route))
+                })
+                .expect("sidecar source retains its exact target");
+            target.pending_flush = Some(PendingExactReplyFlush {
+                flush_ack,
+                sidecar_admission: Some(sidecar_admission),
+            });
         }
         let (_admitted_control, _admitted_ack, admitted) =
-            certified_sidecar_flush_fixture(&chunk, &route);
+            certified_sidecar_flush_fixture(&chunk, &route_a);
         pending.admitted_sidecar_chunks.push_back(admitted);
         assert_eq!(pending.sidecar_control_units(), 4);
 
@@ -13255,7 +14103,7 @@ pub(super) mod tests {
             4
         );
         assert!(!pending.is_pending());
-        assert!(pending.flushing_sidecar_chunks.is_empty());
+        assert_eq!(pending.pending_sidecar_flushes(), 0);
         assert!(pending.admitted_sidecar_chunks.is_empty());
     }
 

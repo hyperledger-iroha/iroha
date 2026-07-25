@@ -242,7 +242,8 @@ PROOF
       <3>1. UNCHANGED <<asyncDeferredProgressQueues,
                         asyncCausalQueues>>
         BY <1>1, <2>3, Isa
-           DEF DeferredDrainStep, LeaveCausalQueues, vars
+           DEF DeferredDrainStep, DeferredWorkServiceable,
+               LeaveCausalQueues, vars
       <3>2. DeferredProgressCommitHistoryInvariant'
         BY <1>1, <2>1, <3>1,
            UnchangedDeferredProgressQueuesPreserveCommitHistory
@@ -282,7 +283,8 @@ PROOF
         <4>1. UNCHANGED <<asyncDeferredProgressQueues,
                           asyncCausalQueues>>
           BY <1>1, <2>4, <3>3, Isa
-             DEF DeferredDrainStep, Command, LeaveCausalQueues, vars
+             DEF DeferredDrainStep, DeferredWorkServiceable,
+                 Command, LeaveCausalQueues, vars
         <4>2. DeferredProgressCommitHistoryInvariant'
           BY <1>1, <2>1, <4>1,
              UnchangedDeferredProgressQueuesPreserveCommitHistory
@@ -715,6 +717,7 @@ THEOREM RestartReplayClassesAreNonProgress ==
       command.class \in {"Completion", "Normal"}
 BY Isa
    DEF RestartReplay, RestartDecisionReplay,
+       RestartLockedBodyReplay,
        RestartSignatureReplay, RestartTimeoutOrProposalReplay,
        RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
        RestartLockedCommitReplay, RestartTimeoutReplay,
@@ -729,7 +732,7 @@ BY RestartReplayClassesAreNonProgress, SMT
    DEF ProgressCommitSourcesIn, ProgressCommitSource
 
 THEOREM RunHistoricalServerPreservesProgressCommitSlotInvariant ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncResponsiveAppliedArchiveServers:
     /\ AsyncTypeInvariant
     /\ TypeInvariant'
     /\ LockWithinNodeViewInvariant
@@ -785,7 +788,7 @@ PROOF
       BY <1>1, <2>2, HistoricalRecoveryTargetsAreValidators,
          RunNodeWorkPreservesProgressCommitSlotInvariant
          DEF RunHistoricalRecoveryNode
-    <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                   RunHistoricalServer(node)
       BY <1>1, <2>3,
          RunHistoricalServerPreservesProgressCommitSlotInvariant
@@ -1348,6 +1351,5 @@ PROOF
       BY DEF Inductive, ProgressCommitSlotInvariant
     <2> QED BY <2>3, <2>4, PTL
   <1> QED BY <1>1
-
 
 =============================================================================

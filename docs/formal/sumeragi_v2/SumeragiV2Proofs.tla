@@ -430,8 +430,8 @@ LockStableNext ==
   \/ \E request \in pendingTimeout: PersistTimeout(request)
   \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       highRank \in Ranks, highSubject \in SubjectOrNone:
-       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
   \/ \E node \in ValidatorIds, roundView \in Views: FormTC(node, roundView)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
@@ -440,6 +440,9 @@ LockStableNext ==
   \/ \E node \in ValidatorIds,
        qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views,
+       subject \in Subjects:
+       AcceptCertifiedResponseCapability(node, roundView, subject)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
   \/ \E node \in ValidatorIds: Crash(node) \/ Restart(node)
@@ -474,7 +477,8 @@ BY IsaM("blast")
        BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
-       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
 
 (***************************************************************************
@@ -501,7 +505,8 @@ BY IsaM("blast")
        FormCommitQC, BeginDecision, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
-       FetchCertifiedBody, Crash, Restart, ResumeProposal, ResumeVote,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, Crash, Restart, ResumeProposal, ResumeVote,
        ResumeTimeout, DropProposal
 
 THEOREM AdvanceContextEndsCurrentLockOrder ==

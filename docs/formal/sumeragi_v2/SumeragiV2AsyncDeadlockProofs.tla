@@ -1495,12 +1495,14 @@ entire dependency cone passes the pinned strict TLAPS release invocation.
 THEOREM DeadlockFreedomObligation ==
   \A initialContext:
     DeadlockFreedomWithLocalWorkProperty(AsyncSpecAt(initialContext),
-      AsyncTerminatingLocalWorkDecreaseStep)
+      ENABLED PostGstProductiveStepWith(
+        AsyncTerminatingLocalWorkDecreaseStep))
 PROOF
   <1>1. ASSUME NEW initialContext
          PROVE DeadlockFreedomWithLocalWorkProperty(
                  AsyncSpecAt(initialContext),
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                 ENABLED PostGstProductiveStepWith(
+                   AsyncTerminatingLocalWorkDecreaseStep))
     <2>1. AsyncSpecAt(initialContext)
              => []AsyncStrongTypeInvariant
       BY AsyncSpecAlwaysStrongTypeInvariant
@@ -1521,11 +1523,10 @@ PROOF
              Safety, TypeInvariant, AsyncFrozenContextAt
     <2>6. AsyncSpecAt(initialContext)
              => [](gst /\ ~ResponsiveNodesDecide
-                    => PostGstProductiveActionEnabledWith(
+                    => ENABLED PostGstProductiveStepWith(
                          AsyncTerminatingLocalWorkDecreaseStep))
       BY <2>1, <2>2, <2>3, <2>5,
          PostGstUndecidedEnablesConcreteProductiveStepAt, PTL
-         DEF PostGstProductiveActionEnabledWith
     <2> QED BY <2>6
          DEF DeadlockFreedomWithLocalWorkProperty
   <1> QED BY <1>1

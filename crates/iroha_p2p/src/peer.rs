@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex, Weak,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
@@ -42,7 +42,7 @@ use snow::{Builder, params::NoiseParams};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     time::Duration,
 };
 
@@ -2797,10 +2797,10 @@ mod shared_byte_budget_tests {
             .expect("first identity acquires its only high-lane credit");
         let duplicate = budgets
             .source_credits(&first_peer, 1)
-            .expect("duplicate generation reuses the existing owner");
+            .expect("duplicate connection reuses the existing owner");
         assert!(
             duplicate.try_acquire_high_for_test().is_none(),
-            "a duplicate generation must observe the already-consumed credit"
+            "a duplicate connection must observe the already-consumed credit"
         );
         assert!(
             budgets.source_credits(&second_peer, 1).is_none(),
@@ -3402,7 +3402,7 @@ pub mod handles {
         ///
         /// Merely dropping the handle still lets the peer actor drain already-admitted
         /// frames.  Network lifecycle transitions call [`Self::request_termination`]
-        /// when that generation has been superseded or must be disconnected, so a
+        /// when that connection has been replaced or must be disconnected, so a
         /// blocked socket cannot retain its byte-budget leases indefinitely.
         pub(super) termination_sender: watch::Sender<bool>,
         /// Process-wide owner shared by every connected high/safety topic channel.
@@ -4191,6 +4191,7 @@ mod run {
     #[cfg(feature = "quic")]
     use bytes::Bytes;
     use futures::future::poll_fn;
+    use iroha_data_model::peer::Peer;
     use iroha_logger::prelude::*;
     use norito::codec::Decode;
     use tokio::time::Instant;
@@ -4480,14 +4481,26 @@ mod run {
             }
         }
 
-        async fn shutdown(mut self) {
+        async fn shutdown(mut self) -> Result<(), Vec<tokio::task::JoinError>> {
             // The peer task closes every producer before entering this method.
             // Each worker therefore drains a finite, byte- and source-credit-
-            // bounded generation queue into the network actor before exiting.
+            // bounded connection queue into the network actor before exiting.
             // Aborting here would discard authenticated reliable progress that
             // was already admitted from the old transport tenure.
+            let mut failures = Vec::new();
             for worker in self.0.drain(..) {
-                let _ = worker.await;
+                if let Err(error) = worker.await {
+                    iroha_logger::error!(
+                        ?error,
+                        "Inbound peer dispatch worker did not terminate cleanly"
+                    );
+                    failures.push(error);
+                }
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(failures)
             }
         }
     }
@@ -4495,6 +4508,136 @@ mod run {
     impl Drop for InboundDispatchWorkers {
         fn drop(&mut self) {
             self.abort();
+        }
+    }
+
+    /// Cancellation-safe owner for one peer task's authenticated delivery seam.
+    ///
+    /// Peer I/O tasks are independently abortable. Once the actor has accepted
+    /// a connection, aborting or unwinding that task must still drain the
+    /// finite reliable dispatch queues, close their producer fence, and publish
+    /// exactly one termination notice for that connection. Cleanup runs in a
+    /// detached task so cancellation of the peer I/O future cannot cancel the
+    /// ownership handoff itself.
+    struct PeerTaskTerminationGuard<T: Pload> {
+        service_message_sender: Option<mpsc::Sender<ServiceMessage<T>>>,
+        conn_id: ConnectionId,
+        peer: Option<Peer>,
+        delivery_drain: Option<Arc<InboundDeliveryDrain>>,
+        dispatch_producers: Vec<mpsc::UnboundedSender<PendingInbound<T>>>,
+        dispatch_workers: Option<InboundDispatchWorkers>,
+        armed: bool,
+    }
+
+    impl<T: Pload> PeerTaskTerminationGuard<T> {
+        fn new(
+            service_message_sender: mpsc::Sender<ServiceMessage<T>>,
+            conn_id: ConnectionId,
+        ) -> Self {
+            Self {
+                service_message_sender: Some(service_message_sender),
+                conn_id,
+                peer: None,
+                delivery_drain: None,
+                dispatch_producers: Vec::new(),
+                dispatch_workers: None,
+                armed: true,
+            }
+        }
+
+        fn set_peer(&mut self, peer: Peer) {
+            self.peer = Some(peer);
+        }
+
+        fn set_delivery_drain(&mut self, delivery_drain: Arc<InboundDeliveryDrain>) {
+            debug_assert!(self.delivery_drain.is_none());
+            self.delivery_drain = Some(delivery_drain);
+        }
+
+        fn set_dispatch_workers(
+            &mut self,
+            dispatch_producers: Vec<mpsc::UnboundedSender<PendingInbound<T>>>,
+            dispatch_workers: InboundDispatchWorkers,
+        ) {
+            debug_assert!(self.dispatch_workers.is_none());
+            self.dispatch_producers = dispatch_producers;
+            self.dispatch_workers = Some(dispatch_workers);
+        }
+
+        fn spawn_cleanup(&mut self) -> tokio::task::JoinHandle<()> {
+            debug_assert!(self.armed, "peer termination cleanup is spawned once");
+            let service_message_sender = self
+                .service_message_sender
+                .take()
+                .expect("armed peer termination guard owns its service sender");
+            let conn_id = self.conn_id;
+            let peer = self.peer.take();
+            let delivery_drain = self.delivery_drain.take();
+            let dispatch_producers = core::mem::take(&mut self.dispatch_producers);
+            let dispatch_workers = self.dispatch_workers.take();
+            self.armed = false;
+
+            tokio::spawn(async move {
+                // The peer task's local producer handles are dropped when its
+                // future exits. Drop the cleanup-owned clones before joining so
+                // each worker observes a closed, finite queue and can transfer
+                // every already-admitted item to the actor.
+                drop(dispatch_producers);
+                if let Some(dispatch_workers) = dispatch_workers
+                    && let Err(failures) = dispatch_workers.shutdown().await
+                {
+                    iroha_logger::error!(
+                        conn_id,
+                        failures = failures.len(),
+                        "Peer dispatch teardown failed closed after worker failure"
+                    );
+                }
+                if let Some(delivery_drain) = delivery_drain {
+                    // This producer fence is deliberately published only after
+                    // every surviving worker has joined. Receiver-held guards
+                    // remain independently charged until their terminal drop.
+                    delivery_drain.close_producer();
+                }
+
+                iroha_logger::debug!(conn_id, "Peer is terminated.");
+                if !notify_peer_terminated(
+                    &service_message_sender,
+                    Terminated { peer, conn_id },
+                    PEER_TERMINATION_NOTIFY_TIMEOUT,
+                )
+                .await
+                {
+                    iroha_logger::warn!(
+                        conn_id,
+                        timeout = ?PEER_TERMINATION_NOTIFY_TIMEOUT,
+                        "Network service queue did not accept peer termination notification before the bounded deadline"
+                    );
+                }
+            })
+        }
+
+        async fn finish(mut self) {
+            let cleanup = self.spawn_cleanup();
+            if let Err(error) = cleanup.await {
+                // The cleanup future contains no fallible application work. A
+                // JoinError here is therefore an invariant failure, and must be
+                // visible instead of silently converting into a leaked tenure.
+                iroha_logger::error!(
+                    conn_id = self.conn_id,
+                    ?error,
+                    "Peer termination cleanup task did not terminate cleanly"
+                );
+            }
+        }
+    }
+
+    impl<T: Pload> Drop for PeerTaskTerminationGuard<T> {
+        fn drop(&mut self) {
+            if self.armed {
+                // `run` is always polled inside Tokio. Detaching here is what
+                // makes an isolated peer-task abort/unwind cancellation-safe.
+                drop(self.spawn_cleanup());
+            }
         }
     }
 
@@ -5093,7 +5236,7 @@ mod run {
                     Ok(Err(_)) => false,
                     Err(_) => {
                         // The peer task must finish in bounded time, but dropping
-                        // this exact generation notice would leave conservative
+                        // this exact connection notice would leave conservative
                         // connection-cap accounting charged forever.  Retrying in
                         // a detached task preserves eventual delivery whenever the
                         // responsive network actor reopens capacity; channel
@@ -5127,7 +5270,8 @@ mod run {
         }: RunPeerArgs<T, P>,
     ) {
         let conn_id = peer.connection_id();
-        let mut peer_id = None;
+        let mut termination_guard =
+            PeerTaskTerminationGuard::new(service_message_sender.clone(), conn_id);
 
         iroha_logger::trace!("Peer created");
 
@@ -5180,7 +5324,8 @@ mod run {
                 scion_supported,
                 trust_gossip,
             } = ready_peer;
-            let peer_id = peer_id.insert(new_peer_id);
+            termination_guard.set_peer(new_peer_id.clone());
+            let peer_id = new_peer_id;
 
             let disambiguator = cryptographer.disambiguator;
 
@@ -5218,6 +5363,8 @@ mod run {
             };
             let (termination_sender, mut termination_receiver) = watch::channel(false);
             let (peer_message_sender, peer_message_receiver) = oneshot::channel();
+            let delivery_drain = Arc::new(InboundDeliveryDrain::new());
+            termination_guard.set_delivery_drain(Arc::clone(&delivery_drain));
             let ready_peer_handle = handles::PeerHandle {
                 senders: handles::TopicSenders {
                     hi_consensus_safety: hi_consensus_safety_tx,
@@ -5243,6 +5390,7 @@ mod run {
                     peer: peer_id.clone(),
                     ready_peer_handle,
                     peer_message_sender,
+                    delivery_drain: Arc::clone(&delivery_drain),
                     disambiguator,
                     relay_role,
                     scion_supported,
@@ -5291,6 +5439,14 @@ mod run {
                     InboundDispatchLane::Low,
                 )),
             ]);
+            termination_guard.set_dispatch_workers(
+                vec![
+                    inbound_safety_tx.clone(),
+                    inbound_high_tx.clone(),
+                    inbound_low_tx.clone(),
+                ],
+                inbound_dispatch_workers,
+            );
 
             let mut message_reader = MessageReader::new_with_source_budget(
                 read,
@@ -6432,7 +6588,7 @@ mod run {
                     tokio::task::yield_now().await;
                 }
             }
-            // Release this generation's source and outbound progress reserves
+            // Release this connection's source and outbound progress reserves
             // before waiting for auxiliary worker teardown.  A replacement
             // connection shares the same per-peer reserve and must not depend on
             // an obsolete remote draining its socket.
@@ -6450,38 +6606,19 @@ mod run {
             drop(lo_peer_gossip_rx);
             drop(lo_health_rx);
             drop(lo_other_rx);
-            // Close this generation's dispatch producers before joining their
+            // Close this connection's dispatch producers before joining their
             // workers. Queued authenticated reliable progress must reach the
             // network actor rather than disappear when a replacement connection
-            // supersedes this generation.
+            // replaces this connection.
             drop(inbound_safety_tx);
             drop(inbound_high_tx);
             drop(inbound_low_tx);
-            // Do not report this connection terminated until every admitted
-            // dispatch item has crossed into the network actor or that actor has
-            // closed its destination channel. The queues are bounded by retained
-            // bytes and per-source credits, so responsive downstream service
-            // drains this finite ownership set.
-            inbound_dispatch_workers.shutdown().await;
         }.await;
-
-        iroha_logger::debug!("Peer is terminated.");
-        if !notify_peer_terminated(
-            &service_message_sender,
-            Terminated {
-                peer: peer_id,
-                conn_id,
-            },
-            PEER_TERMINATION_NOTIFY_TIMEOUT,
-        )
-        .await
-        {
-            iroha_logger::warn!(
-                conn_id,
-                timeout = ?PEER_TERMINATION_NOTIFY_TIMEOUT,
-                "Network service queue did not accept peer termination notification before the bounded deadline"
-            );
-        }
+        // Natural exit uses the same detached cleanup path as cancellation.
+        // Awaiting it here preserves ordinary shutdown ordering, while a later
+        // abort of this peer future merely drops the JoinHandle and leaves the
+        // exact cleanup task running.
+        termination_guard.finish().await;
     }
 
     // Traits to unify bounded/unbounded try_recv across feature flags at module scope
@@ -8879,6 +9016,7 @@ mod run {
                 dispatch_budgets: InboundDispatchByteBudgets::default(),
                 source_credits: AuthenticatedSourceCredits::new(1),
                 topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                delivery_drain: Arc::new(InboundDeliveryDrain::new()),
             };
             let peer = Peer::new(
                 "127.0.0.1:17455".parse().expect("peer address"),
@@ -8918,7 +9056,7 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn dispatch_worker_shutdown_drains_reliable_old_generation_to_actor() {
+        async fn dispatch_worker_shutdown_drains_reliable_replaced_connection_to_actor() {
             let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
             let source_lease = source_budget.try_reserve(1, false).expect("source lease");
             let peer = Peer::new(
@@ -8960,6 +9098,7 @@ mod run {
                 dispatch_budgets,
                 source_credits,
                 topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                delivery_drain: Arc::new(InboundDeliveryDrain::new()),
             };
             let (pending_tx, pending_rx) = mpsc::unbounded_channel();
             pending_tx
@@ -8999,18 +9138,19 @@ mod run {
             drop(blocker);
             let delivered = tokio::time::timeout(Duration::from_secs(1), safety_rx.recv())
                 .await
-                .expect("released actor capacity must advance the old generation")
-                .expect("old-generation reliable item reaches the actor");
+                .expect("released actor capacity must advance the replaced connection")
+                .expect("replaced-connection reliable item reaches the actor");
             assert_eq!(delivered.payload, RoutedMsg::ConsensusSafety(7));
             assert_eq!(delivered.connection_id(), Some(41));
             assert!(
                 delivered.try_clone_retained().is_none(),
-                "one exact source owner must cross the generation boundary"
+                "one exact source owner must cross the connection replacement boundary"
             );
             tokio::time::timeout(Duration::from_secs(1), shutdown)
                 .await
-                .expect("finite closed generation queue must drain")
-                .expect("dispatch worker shutdown must not panic");
+                .expect("finite closed connection queue must drain")
+                .expect("dispatch worker shutdown task must not panic")
+                .expect("dispatch workers must terminate cleanly");
             assert_eq!(
                 source_credit_probe.available_safety_for_test(),
                 0,
@@ -9022,8 +9162,206 @@ mod run {
             assert_eq!(high_budget.retained_total(), 0);
             assert!(
                 safety_rx.recv().await.is_none(),
-                "the closed old generation must deliver the exact item only once"
+                "the closed replaced connection must deliver the exact item only once"
             );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn peer_task_abort_drains_queued_worker_then_notifies_exact_connection_once() {
+            let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
+            let source_lease = source_budget.try_reserve(1, false).expect("source lease");
+            let peer = Peer::new(
+                "127.0.0.1:17461".parse().expect("peer address"),
+                KeyPair::random().public_key().clone(),
+            );
+            let conn_id = 61;
+            let pending = PendingInbound {
+                message: PeerMessage::from_inbound_frame(
+                    peer.clone(),
+                    RoutedMsg::ConsensusSafety(7),
+                    1,
+                    conn_id,
+                    InboundFrameRetention::new(source_lease, 0),
+                ),
+                topic: Topic::ConsensusSafety,
+                priority: Priority::Low,
+            };
+
+            let dispatch_budgets =
+                InboundDispatchByteBudgets::new(1, 1, 0).expect("dispatch owner geometry");
+            let high_budget = Arc::clone(&dispatch_budgets.high);
+            let (safety, mut safety_rx) = mpsc::channel(1);
+            let (high, _high_rx) = mpsc::channel(1);
+            let (low, _low_rx) = mpsc::channel(1);
+            safety
+                .send(PeerMessage::new(
+                    peer.clone(),
+                    RoutedMsg::ConsensusSafety(0),
+                    0,
+                ))
+                .await
+                .expect("fill the network-actor lane");
+            let source_credits = AuthenticatedSourceCredits::new(1);
+            let source_credit_probe = source_credits.clone();
+            let delivery_drain = Arc::new(InboundDeliveryDrain::new());
+            let senders = PeerMessageSenders {
+                safety,
+                high,
+                low,
+                dispatch_budgets,
+                source_credits,
+                topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                delivery_drain: Arc::clone(&delivery_drain),
+            };
+            let (pending_tx, pending_rx) = mpsc::unbounded_channel();
+            let workers = InboundDispatchWorkers(vec![tokio::spawn(run_inbound_dispatch_lane(
+                pending_rx,
+                senders,
+                InboundDispatchLane::Safety,
+            ))]);
+            let (service_tx, mut service_rx) = mpsc::channel::<ServiceMessage<RoutedMsg>>(2);
+            let task_peer = peer.clone();
+            let task_drain = Arc::clone(&delivery_drain);
+            let peer_task = tokio::spawn(async move {
+                let mut guard = PeerTaskTerminationGuard::new(service_tx, conn_id);
+                guard.set_peer(task_peer);
+                guard.set_delivery_drain(task_drain);
+                guard.set_dispatch_workers(vec![pending_tx.clone()], workers);
+                pending_tx
+                    .send(pending)
+                    .expect("queue authenticated reliable delivery");
+                std::future::pending::<()>().await;
+            });
+
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if high_budget.retained_total() == 1
+                        && source_credit_probe.available_safety_for_test() == 0
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("worker must reach the blocked actor send");
+            assert_eq!(source_budget.retained_total(), 0);
+            assert!(!delivery_drain.is_complete());
+
+            peer_task.abort();
+            let cancellation = peer_task
+                .await
+                .expect_err("isolated peer task must observe the requested abort");
+            assert!(cancellation.is_cancelled());
+            tokio::task::yield_now().await;
+            assert!(
+                service_rx.try_recv().is_err(),
+                "termination cannot overtake a queued reliable delivery"
+            );
+            assert!(
+                !delivery_drain.is_complete(),
+                "producer fence stays open while the queued worker is blocked"
+            );
+
+            let blocker = safety_rx.recv().await.expect("remove actor-lane blocker");
+            assert_eq!(blocker.payload, RoutedMsg::ConsensusSafety(0));
+            drop(blocker);
+            let delivered = tokio::time::timeout(Duration::from_secs(1), safety_rx.recv())
+                .await
+                .expect("released actor capacity must drain the aborted peer task")
+                .expect("queued reliable item reaches the actor");
+            assert_eq!(delivered.payload, RoutedMsg::ConsensusSafety(7));
+            assert_eq!(delivered.connection_id(), Some(conn_id));
+
+            let terminated = tokio::time::timeout(Duration::from_secs(1), service_rx.recv())
+                .await
+                .expect("cleanup must notify the actor")
+                .expect("service channel remains open");
+            match terminated {
+                ServiceMessage::Terminated(Terminated {
+                    peer: Some(terminated_peer),
+                    conn_id: terminated_conn_id,
+                }) => {
+                    assert_eq!(terminated_peer, peer);
+                    assert_eq!(terminated_conn_id, conn_id);
+                }
+                _ => panic!("cleanup must publish the exact connection termination"),
+            }
+            assert!(
+                !delivery_drain.is_complete(),
+                "the actor-held delivery guard remains charged after producer close"
+            );
+            drop(delivered);
+            tokio::time::timeout(Duration::from_secs(1), delivery_drain.wait_complete())
+                .await
+                .expect("terminal receiver drop must complete the delivery fence");
+            assert!(
+                !matches!(
+                    tokio::time::timeout(Duration::from_millis(25), service_rx.recv()).await,
+                    Ok(Some(_))
+                ),
+                "one aborted peer task publishes exactly one termination notice"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn peer_task_panic_closes_delivery_producer_and_notifies_exact_connection_once() {
+            let peer = Peer::new(
+                "127.0.0.1:17462".parse().expect("peer address"),
+                KeyPair::random().public_key().clone(),
+            );
+            let conn_id = 62;
+            let delivery_drain = Arc::new(InboundDeliveryDrain::new());
+            let task_peer = peer.clone();
+            let task_drain = Arc::clone(&delivery_drain);
+            let (service_tx, mut service_rx) = mpsc::channel::<ServiceMessage<Dummy>>(2);
+            let peer_task = tokio::spawn(async move {
+                let mut guard = PeerTaskTerminationGuard::new(service_tx, conn_id);
+                guard.set_peer(task_peer);
+                guard.set_delivery_drain(task_drain);
+                panic!("synthetic isolated peer-task panic");
+            });
+
+            let panic = peer_task
+                .await
+                .expect_err("synthetic peer task must unwind");
+            assert!(panic.is_panic());
+            let terminated = tokio::time::timeout(Duration::from_secs(1), service_rx.recv())
+                .await
+                .expect("unwind cleanup must notify the actor")
+                .expect("service channel remains open");
+            match terminated {
+                ServiceMessage::Terminated(Terminated {
+                    peer: Some(terminated_peer),
+                    conn_id: terminated_conn_id,
+                }) => {
+                    assert_eq!(terminated_peer, peer);
+                    assert_eq!(terminated_conn_id, conn_id);
+                }
+                _ => panic!("unwind cleanup must publish the exact connection termination"),
+            }
+            assert!(delivery_drain.is_complete());
+            assert!(
+                !matches!(
+                    tokio::time::timeout(Duration::from_millis(25), service_rx.recv()).await,
+                    Ok(Some(_))
+                ),
+                "one unwinding peer task publishes exactly one termination notice"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn dispatch_worker_join_error_is_returned_after_fail_closed_teardown() {
+            let workers = InboundDispatchWorkers(vec![tokio::spawn(async {
+                panic!("synthetic dispatch worker panic");
+            })]);
+
+            let failures = workers
+                .shutdown()
+                .await
+                .expect_err("worker panic must not be silently ignored");
+            assert_eq!(failures.len(), 1);
+            assert!(failures[0].is_panic());
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -9060,6 +9398,7 @@ mod run {
                 dispatch_budgets,
                 source_credits: AuthenticatedSourceCredits::new(1),
                 topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                delivery_drain: Arc::new(InboundDeliveryDrain::new()),
             };
             let (pending_tx, pending_rx) = mpsc::unbounded_channel();
             pending_tx
@@ -9122,6 +9461,7 @@ mod run {
                 dispatch_budgets,
                 source_credits: AuthenticatedSourceCredits::new(1),
                 topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                delivery_drain: Arc::new(InboundDeliveryDrain::new()),
             };
             let (pending_tx, pending_rx) = mpsc::unbounded_channel();
             pending_tx
@@ -10155,16 +10495,16 @@ mod run {
             );
             let predecessor_handle = handles
                 .pop()
-                .expect("the predecessor handle is the final test generation");
+                .expect("the predecessor handle is the final test connection");
             let predecessor_receivers = receivers
                 .pop()
-                .expect("the predecessor receivers are the final test generation");
+                .expect("the predecessor receivers are the final test connection");
             let teardown = tokio::spawn(predecessor_receivers.drop_on_explicit_termination());
             predecessor_handle.request_termination();
             drop(predecessor_handle);
             teardown
                 .await
-                .expect("explicit generation teardown must complete");
+                .expect("explicit connection teardown must complete");
             replacement
                 .post(high_other)
                 .expect("replacement may proceed after explicit predecessor teardown releases R");
@@ -12229,7 +12569,7 @@ mod run {
                         ..
                     })))
                 ),
-                "the bounded return must leave an eventual exact-generation delivery retry"
+                "the bounded return must leave an eventual exact-connection delivery retry"
             );
         }
 
@@ -16883,6 +17223,100 @@ pub mod message {
 
     use super::*;
 
+    /// Connection-local count of reliable deliveries which crossed a peer
+    /// dispatch worker but have not yet left their final local consumer.
+    ///
+    /// The peer task closes the producer only after every dispatch worker has
+    /// drained.  A network actor may therefore retire the connection's reply
+    /// tenure only after both `producer_closed` and `in_flight == 0` hold.
+    #[derive(Debug)]
+    pub(crate) struct InboundDeliveryDrain {
+        in_flight: AtomicUsize,
+        producer_closed: AtomicBool,
+        changed: Notify,
+    }
+
+    impl InboundDeliveryDrain {
+        pub(crate) fn new() -> Self {
+            Self {
+                in_flight: AtomicUsize::new(0),
+                producer_closed: AtomicBool::new(false),
+                changed: Notify::new(),
+            }
+        }
+
+        #[cfg(any(test, feature = "test-fixtures"))]
+        pub(crate) fn completed_for_test() -> Arc<Self> {
+            let drain = Arc::new(Self::new());
+            drain.close_producer();
+            drain
+        }
+
+        fn register(self: &Arc<Self>) -> Option<InboundDeliveryDrainGuard> {
+            if self.producer_closed.load(Ordering::Acquire) {
+                return None;
+            }
+            let mut current = self.in_flight.load(Ordering::Acquire);
+            loop {
+                let next = current.checked_add(1)?;
+                match self.in_flight.compare_exchange_weak(
+                    current,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(observed) => current = observed,
+                }
+            }
+            if self.producer_closed.load(Ordering::Acquire) {
+                let prior = self.in_flight.fetch_sub(1, Ordering::AcqRel);
+                debug_assert!(prior > 0);
+                if prior == 1 {
+                    self.changed.notify_waiters();
+                }
+                return None;
+            }
+            Some(InboundDeliveryDrainGuard {
+                owner: Arc::clone(self),
+            })
+        }
+
+        pub(crate) fn close_producer(&self) {
+            self.producer_closed.store(true, Ordering::Release);
+            self.changed.notify_waiters();
+        }
+
+        pub(crate) fn is_complete(&self) -> bool {
+            self.producer_closed.load(Ordering::Acquire)
+                && self.in_flight.load(Ordering::Acquire) == 0
+        }
+
+        pub(crate) async fn wait_complete(&self) {
+            loop {
+                let changed = self.changed.notified();
+                if self.is_complete() {
+                    return;
+                }
+                changed.await;
+            }
+        }
+    }
+
+    struct InboundDeliveryDrainGuard {
+        owner: Arc<InboundDeliveryDrain>,
+    }
+
+    impl Drop for InboundDeliveryDrainGuard {
+        fn drop(&mut self) {
+            let prior = self.owner.in_flight.fetch_sub(1, Ordering::AcqRel);
+            debug_assert!(prior > 0, "delivery-drain ownership cannot underflow");
+            if prior == 1 {
+                self.owner.changed.notify_waiters();
+            }
+        }
+    }
+
     /// Connection and Handshake was successful
     pub struct Connected<T: Pload> {
         /// Peer
@@ -16893,6 +17327,8 @@ pub mod message {
         pub ready_peer_handle: handles::PeerHandle<T>,
         /// Channel to send peer messages channel
         pub peer_message_sender: oneshot::Sender<PeerMessageSenders<T>>,
+        /// Connection-local receiver-completion fence.
+        pub(crate) delivery_drain: Arc<InboundDeliveryDrain>,
         /// Disambiguator of connection (equal for both peers)
         pub disambiguator: u64,
         /// Relay role advertised during handshake.
@@ -16919,6 +17355,8 @@ pub mod message {
         pub(crate) source_credits: AuthenticatedSourceCredits,
         /// Plaintext frame caps enforced before actor-queue admission.
         pub(crate) topic_frame_caps: crate::network::TopicFrameCaps,
+        /// Exact receiver-completion owner for this connection tenure.
+        pub(crate) delivery_drain: Arc<InboundDeliveryDrain>,
     }
 
     /// Fair count ownership for one authenticated transport source.
@@ -17035,6 +17473,7 @@ pub mod message {
                 .transfer_to_dispatch_budget(&self.dispatch_budgets, high, safety, wait)
                 .await
             {
+                message.attach_delivery_drain(&self.delivery_drain);
                 InboundDispatchAdmission::Admitted
             } else {
                 InboundDispatchAdmission::ByteBudgetFull
@@ -17085,6 +17524,7 @@ pub mod message {
         reply_route: Option<crate::network::NetworkReplyRoute>,
         retention: Option<PeerMessageRetention>,
         source_credit: Option<AuthenticatedSourceCreditGuard>,
+        delivery_drain: Option<InboundDeliveryDrainGuard>,
     }
 
     /// Opaque ownership guard for the retained bytes behind a [`PeerMessage`].
@@ -17097,6 +17537,7 @@ pub mod message {
         _retention: Option<PeerMessageRetention>,
         authenticated_via: PeerId,
         _source_credit: Option<AuthenticatedSourceCreditGuard>,
+        _delivery_drain: Option<InboundDeliveryDrainGuard>,
     }
 
     impl<T: Pload> PeerMessage<T> {
@@ -17113,6 +17554,7 @@ pub mod message {
                 reply_route: None,
                 retention: None,
                 source_credit: None,
+                delivery_drain: None,
             }
         }
 
@@ -17133,6 +17575,7 @@ pub mod message {
                 reply_route: None,
                 retention: None,
                 source_credit: None,
+                delivery_drain: None,
             }
         }
 
@@ -17161,6 +17604,7 @@ pub mod message {
                     safety: false,
                 })),
                 source_credit: None,
+                delivery_drain: None,
             }
         }
 
@@ -17251,6 +17695,7 @@ pub mod message {
                 reply_route,
                 retention,
                 source_credit,
+                delivery_drain,
             } = self;
             (
                 peer,
@@ -17262,6 +17707,7 @@ pub mod message {
                     _retention: retention,
                     authenticated_via,
                     _source_credit: source_credit,
+                    _delivery_drain: delivery_drain,
                 },
             )
         }
@@ -17283,6 +17729,7 @@ pub mod message {
                 reply_route: None,
                 retention: Some(PeerMessageRetention::Source(frame)),
                 source_credit: None,
+                delivery_drain: None,
             }
         }
 
@@ -17310,6 +17757,17 @@ pub mod message {
             }
             self.source_credit = Some(credit);
             true
+        }
+
+        fn attach_delivery_drain(&mut self, owner: &Arc<InboundDeliveryDrain>) {
+            if self.delivery_drain.is_some() {
+                return;
+            }
+            self.delivery_drain = Some(
+                owner
+                    .register()
+                    .expect("dispatch worker cannot enqueue after closing its delivery drain"),
+            );
         }
 
         pub(crate) async fn transfer_to_dispatch_budget(
@@ -17376,6 +17834,7 @@ pub mod message {
                 reply_route: self.reply_route.clone(),
                 retention,
                 source_credit: None,
+                delivery_drain: None,
             })
         }
 
@@ -17393,6 +17852,7 @@ pub mod message {
                 reply_route: self.reply_route,
                 retention: self.retention,
                 source_credit: self.source_credit,
+                delivery_drain: self.delivery_drain,
             }
         }
     }
@@ -17418,6 +17878,9 @@ pub mod message {
         Connected(Connected<T>),
         /// Peer faced error or `Terminate` message, send to indicate that it is terminated
         Terminated(Terminated),
+        /// Every reliable local delivery from a terminated connection has
+        /// left its final receiver, so its reply tenure may now retire.
+        ReplyRouteDeliveryDrained(ConnectionId),
         /// Ask the network actor if an inbound connection should be accepted,
         /// applying caps and per‑IP throttle identically to TCP accepts.
         /// If accepted, the network actor should insert the `conn_id` into

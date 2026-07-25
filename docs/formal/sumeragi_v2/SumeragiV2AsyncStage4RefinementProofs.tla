@@ -332,17 +332,11 @@ PROOF
         BY DEF ReadyTagCount
       <3>7. ReadyTagCount(node)' \in Nat
         BY <3>5, <3>6
-      <3>8. asyncDeferredDrainOwed'
-                  \in [ValidatorIds -> BOOLEAN]
-        BY <2>1
-           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-               AsyncDeferredTypeInvariant,
-               AsyncDeferredTopologyTypeInvariant
-      <3>10. CASE asyncDeferredDrainOwed'[node]
-        BY <3>7, <3>10, SMT DEF ReadyTagDrainDebt
-      <3>11. CASE ~asyncDeferredDrainOwed'[node]
-        BY <3>7, <3>11, SMT DEF ReadyTagDrainDebt
-      <3> QED BY <3>10, <3>11
+      <3>8. CASE DeferredWorkServiceable(node)'
+        BY <3>7, <3>8, SMT DEF ReadyTagDrainDebt
+      <3>9. CASE ~DeferredWorkServiceable(node)'
+        BY <3>7, <3>9, SMT DEF ReadyTagDrainDebt
+      <3> QED BY <3>8, <3>9
     <2>7. RuntimeReachRank(node)' \in Nat
       BY <1>1, <2>1, SerializedRuntimeReturnsToLocalWithBudget,
          Isa
@@ -1385,7 +1379,7 @@ THEOREM Stage4CapacityOtherRunnerPreservesOrProgresses ==
     /\ \/ \E node \in AsyncCurrentResponsiveVoters:
               /\ node # candidate.node
               /\ RunNode(node)
-       \/ \E node \in AsyncCurrentResponsiveVoters:
+       \/ \E node \in AsyncResponsiveAppliedArchiveServers:
               RunHistoricalServer(node)
        \/ \E node \in asyncHistoricalRecoveryTargets:
               /\ node # candidate.node
@@ -1474,7 +1468,7 @@ THEOREM Stage4CapacityIoPreservesOrProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ \/ \E node \in AsyncCurrentResponsiveVoters:
+    /\ \/ \E node \in AsyncArchiveIoServiceNodes:
               ServiceIoWorker(node)
        \/ \E node \in asyncHistoricalRecoveryTargets:
               ServiceHistoricalRecoveryIoWorker(node)
@@ -1593,7 +1587,7 @@ PROOF
           BY <1>1, <3>1, <4>2,
              Stage4CapacityOtherRunnerPreservesOrProgresses
         <4> QED BY <4>1, <4>2
-      <3>2. CASE \E node \in AsyncCurrentResponsiveVoters:
+      <3>2. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                     RunHistoricalServer(node)
         BY <1>1, <3>2,
            Stage4CapacityOtherRunnerPreservesOrProgresses
@@ -1623,7 +1617,7 @@ PROOF
                           DirectHistoricalCommitCertificateDiscoveryStep(
                             historicalNode)
         BY <1>1, <3>6, Stage4CapacityDiscoveryPreservesOrProgresses
-      <3>7. CASE \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+      <3>7. CASE \/ \E ioNode \in AsyncArchiveIoServiceNodes:
                           ServiceIoWorker(ioNode)
                    \/ \E historicalIoNode \in asyncHistoricalRecoveryTargets:
                           ServiceHistoricalRecoveryIoWorker(historicalIoNode)
@@ -1831,7 +1825,7 @@ THEOREM Stage4ActionableOtherRunnerStep ==
     /\ \/ \E node \in AsyncCurrentResponsiveVoters:
               /\ node # candidate.node
               /\ RunNode(node)
-       \/ \E node \in AsyncCurrentResponsiveVoters:
+       \/ \E node \in AsyncResponsiveAppliedArchiveServers:
               RunHistoricalServer(node)
        \/ \E node \in asyncHistoricalRecoveryTargets:
               /\ node # candidate.node
@@ -1893,7 +1887,7 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
 THEOREM Stage4ActionableIoStep ==
   \A candidate, position:
     /\ ProtectedStage4Actionable(candidate, position)
-    /\ \/ \E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node)
+    /\ \/ \E node \in AsyncArchiveIoServiceNodes: ServiceIoWorker(node)
        \/ \E node \in asyncHistoricalRecoveryTargets:
               ServiceHistoricalRecoveryIoWorker(node)
        \/ \E node \in AsyncCurrentResponsiveVoters:
@@ -1982,7 +1976,8 @@ PROOF
       <3>2. CASE \/ \E runnerNode \in AsyncCurrentResponsiveVoters:
                           /\ runnerNode # candidate.node
                           /\ RunNode(runnerNode)
-                   \/ \E historicalNode \in AsyncCurrentResponsiveVoters:
+                   \/ \E historicalNode
+                          \in AsyncResponsiveAppliedArchiveServers:
                           RunHistoricalServer(historicalNode)
                    \/ \E recoveryNode \in asyncHistoricalRecoveryTargets:
                           /\ recoveryNode # candidate.node
@@ -2008,7 +2003,7 @@ PROOF
                           DirectHistoricalCommitCertificateDiscoveryStep(
                             historicalDiscoveryNode)
         BY <1>1, <3>6, Stage4ActionableDiscoveryPrefix
-      <3>7. CASE \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+      <3>7. CASE \/ \E ioNode \in AsyncArchiveIoServiceNodes:
                           ServiceIoWorker(ioNode)
                    \/ \E historicalIoNode \in asyncHistoricalRecoveryTargets:
                           ServiceHistoricalRecoveryIoWorker(historicalIoNode)
@@ -2271,11 +2266,112 @@ THEOREM ExactCandidateConstructorIsInCarrier ==
          \in AsyncCandidateSet
 BY SMTT(60) DEF AsyncCandidateSet, AsyncCandidateWithIdentity
 
+THEOREM TypedEvidenceIsInCarrier ==
+  \A evidence:
+    AsyncEvidenceTyped(evidence) => evidence \in AsyncEvidenceSet
+BY TypedItemIsInNetworkCarrier, Isa
+   DEF AsyncEvidenceTyped, AsyncEvidenceSet,
+       AsyncTcRecordTyped, TcRecordSet
+
 THEOREM TypedCandidateIsInCarrier ==
   \A candidate:
     AsyncCandidateTyped(candidate) => candidate \in AsyncCandidateSet
-BY SMTT(60)
+BY TypedItemIsInNetworkCarrier, TypedEvidenceIsInCarrier, SMTT(60)
    DEF AsyncCandidateTyped, AsyncCandidateSet, AsyncCandidateDomain
+
+(***************************************************************************
+Executable live-owner normalization.
+
+These are semantic equivalences, not alternate ownership rules.  The live
+predicates avoid constructing the Cartesian candidate/job carriers while the
+canonical predicates retain the immutable historical-constructor statement.
+Both current and successor-state typing are required for the action-level
+equivalences because rank exit is tested in the primed state.
+***************************************************************************)
+
+THEOREM ActiveScheduledCandidatesAreTyped ==
+  AsyncTypeInvariant
+    => \A candidate \in ActiveScheduledCandidates:
+         AsyncCandidateTyped(candidate)
+BY Isa
+   DEF ActiveScheduledCandidates, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant, AsyncIoTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoWorkContentTypeInvariant,
+       AsyncDeferredTypeInvariant, AsyncDeferredContentTypeInvariant,
+       AsyncQueueTyped, AsyncCompletionSequenceTyped
+
+THEOREM TypedLiveNormalProposalPrepareIsCanonical ==
+  \A candidate:
+    AsyncCandidateTyped(candidate)
+      => (LiveNormalProposalPrepareCandidate(candidate)
+            <=> NormalProposalPrepareCandidate(candidate))
+BY TypedItemIsInNetworkCarrier, TypedCandidateIsInCarrier, Isa
+   DEF LiveNormalProposalPrepareCandidate,
+       NormalProposalPrepareCandidate,
+       NormalProposalPrepareNoItemCandidate,
+       NormalProposalPrepareNetworkCandidate,
+       FrozenNormalAssemblyCandidate, FrozenInstallProposalSuccessor,
+       FrozenNormalBeginPrepareCandidate, FrozenNormalDeliveryCandidate,
+       NextCandidateGeneration, NormalProposalPrepareNoItemKinds,
+       NormalProposalPrepareNetworkKinds, NormalBeginPrepareParentKinds,
+       AsyncCandidateTyped, AsyncCandidateSet, AsyncCandidateDomain,
+       AsyncCandidateWithIdentity, AsyncEvidenceTyped, AsyncItemTyped,
+       Views, Generations, Heights
+
+THEOREM TypedLiveProtectedServiceIsCanonical ==
+  \A candidate:
+    AsyncCandidateTyped(candidate)
+      => (LiveProtectedServiceCandidate(candidate)
+            <=> ProtectedServiceCandidate(candidate))
+BY TypedCandidateIsInCarrier,
+   TypedLiveNormalProposalPrepareIsCanonical, Isa
+   DEF LiveProtectedServiceCandidate, ProtectedServiceCandidate
+
+THEOREM LiveResponsiveProtectedOwnerIsCanonical ==
+  AsyncTypeInvariant
+    => \A candidate \in ActiveScheduledCandidates:
+         (LiveResponsiveProtectedCandidateOwned(candidate)
+           <=> ResponsiveProtectedCandidateOwned(candidate))
+BY ActiveScheduledCandidatesAreTyped,
+   TypedLiveProtectedServiceIsCanonical, Isa
+   DEF AsyncTypeInvariant, LiveResponsiveProtectedCandidateOwned,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateScheduled, ActiveScheduledCandidates
+
+THEOREM LiveResponsiveServeOwnerIsCanonical ==
+  AsyncTypeInvariant
+    => \A node \in ValidatorIds:
+         \A job \in SequenceSet(asyncIoQueues[node]):
+           (LiveResponsiveProtectedServeJobOwned(node, job)
+             <=> ResponsiveProtectedServeJobOwned(node, job))
+BY TypedCandidateIsInCarrier, Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoQueueContentTypeInvariant, AsyncIoSequenceTyped,
+       AsyncIoJobTyped, AsyncServeJobSet, AsyncIoJob,
+       LiveResponsiveProtectedServeJobOwned,
+       ResponsiveProtectedServeJobOwned
+
+THEOREM LiveProtectedRankStepIsCanonical ==
+  /\ AsyncTypeInvariant
+  /\ AsyncTypeInvariant'
+  => (LiveProtectedServiceRankDecreaseStep
+        <=> ProtectedServiceRankDecreaseStep)
+BY LiveResponsiveProtectedOwnerIsCanonical, Isa
+   DEF LiveProtectedServiceRankDecreaseStep,
+       ProtectedServiceRankDecreaseStep
+
+THEOREM LiveProtectedServeRankStepIsCanonical ==
+  /\ AsyncTypeInvariant
+  /\ AsyncTypeInvariant'
+  => (LiveProtectedServeRankDecreaseStep
+        <=> ProtectedServeRankDecreaseStep)
+BY LiveResponsiveServeOwnerIsCanonical, Isa
+   DEF LiveProtectedServeRankDecreaseStep,
+       ProtectedServeRankDecreaseStep, ActiveIoJobs
 
 THEOREM CanonicalCandidateConstructorIsInCarrier ==
   TypeInvariant =>
@@ -2677,8 +2773,11 @@ THEOREM PostGstProductiveStepHasConcreteWitness ==
        /\ AsyncNext
        /\ \/ HeightProtocolEvidenceGrows
           \/ PostGstDeadlineDebtDecreases
-          \/ ProtectedServiceRankDecreaseStep
-          \/ ProtectedServeRankDecreaseStep
+          \/ PostGstNodeIoBlockerDebtDecreases
+          \/ PostGstOverduePacketOwnershipExits
+          \/ PostGstRuntimeReachDecreases
+          \/ LiveProtectedServiceRankDecreaseStep
+          \/ LiveProtectedServeRankDecreaseStep
 BY DEF PostGstProductiveStep
 
 OneHeightFrameAt(initialContext) ==
@@ -2736,30 +2835,33 @@ PROOF
 
 THEOREM OneHeightCompletionFromProgressProperties ==
   \A initialContext:
-    /\ AsyncSpecAt(initialContext)
-    /\ RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+    /\ AsyncLiveSpecAt(initialContext)
+    /\ RotatingLeaderProgressProperty(
+         AsyncLiveSpecAt(initialContext))
     /\ ApplicationLivenessProperty(AsyncSpecAt(initialContext))
     => OneHeightCompletionLiveness(initialContext)
 PROOF
   <1>1. ASSUME NEW initialContext,
-                /\ AsyncSpecAt(initialContext)
+                /\ AsyncLiveSpecAt(initialContext)
                 /\ RotatingLeaderProgressProperty(
-                     AsyncSpecAt(initialContext))
+                     AsyncLiveSpecAt(initialContext))
                 /\ ApplicationLivenessProperty(
                      AsyncSpecAt(initialContext))
          PROVE OneHeightCompletionLiveness(initialContext)
+    <2>0. AsyncSpecAt(initialContext)
+      BY <1>1, AsyncLiveSpecProjectsAsyncSpec
     <2>1. AsyncSpecAt(initialContext) => <>gst
       BY AsyncGstEventually
     <2>2. AsyncSpecAt(initialContext) => [](gst => []gst)
       BY AsyncSpecKeepsGstOnceSet
     <2>3. []OneHeightFrameAt(initialContext)
-      BY <1>1, AsyncSpecAlwaysKeepsOneHeightFrame
+      BY <2>0, AsyncSpecAlwaysKeepsOneHeightFrame
     <2>4. (gst /\ ~ResponsiveNodesDecide)
              ~> ResponsiveNodesDecide
       BY <1>1, <2>2, PTL DEF RotatingLeaderProgressProperty
     <2>5. (gst /\ ResponsiveNodesDecide)
              ~> ResponsiveNodesApply
-      BY <1>1 DEF ApplicationLivenessProperty
+      BY <1>1, <2>0 DEF ApplicationLivenessProperty
     <2>6. gst ~> (gst /\ ResponsiveNodesDecide)
       BY <1>1, <2>2, <2>4, PTL
     <2>7. gst ~> ResponsiveNodesApply
@@ -2819,75 +2921,97 @@ PROOF
 
 (***************************************************************************
 The abstract witness may constrain a model while production uses a different
-owner identity, reset boundary, or completion ordering.  This independent
-proofless sentinel therefore requires a cross-tool Rust/Verus-to-TLA trace
-mapping for every durable intent, Decision recovery, scheduler owner, and
-application-completion carrier.  It additionally requires the unified V2 and
-lane-local fair-ingress path to keep semantic origin distinct from the
-authenticated resource-owning hop while preserving the modeled admission
-class, and reliable delivery to retain the exact source, target/cursor, bytes,
-and occurrence through actor, encode, frame, batch, write, and flush stages
-until the matching flush acknowledgement.  Source-fidelity and mutation tests
-constrain the seam but cannot prove these seven external propositions.
+owner identity, reset boundary, or completion ordering.  The model-side
+projection below therefore records the exact already-proved facts to which the
+six production traces must connect: the strong invariant, disjoint scheduler
+ownership, generation-scoped delivery, post-Decision timeout exclusion,
+durable-Decision recovery, and stable application receipts.  It deliberately
+does not assume the still-open temporal `ProgressWitnessObligation`.
+
+The production half additionally requires the unified V2 and lane-local
+fair-ingress path to keep semantic origin distinct from the authenticated
+resource-owning hop while preserving the modeled admission class, and reliable
+delivery to retain the exact source, target/cursor, bytes, and occurrence
+through actor, encode, frame, batch, write, and flush stages until the matching
+flush acknowledgement.  Source-fidelity and mutation tests constrain these
+six external propositions but cannot prove them.
 ***************************************************************************)
-THEOREM ProgressWitnessObligation ==
-  \A initialContext:
-    AsyncProgressWitnessAndHistoricalRecoveryProperty(AsyncSpecAt(initialContext))
+ProgressWitnessAbstractOwnerProjection ==
+  /\ \A initialContext:
+       AsyncSpecAt(initialContext) => []StrongInductiveInvariant
+  /\ \A initialContext:
+       AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
+  /\ \A initialContext:
+       GenerationScopedVoteDeliveryProperty(AsyncSpecAt(initialContext))
+  /\ \A initialContext:
+       PostDecisionTimeoutExclusionProperty(AsyncSpecAt(initialContext))
+  /\ \A initialContext:
+       DecisionRecoveryAcrossRestartProperty(AsyncSpecAt(initialContext))
+  /\ \A initialContext, node:
+       AsyncSpecAt(initialContext)
+         => [](NodeHasApplication(node)
+                => []NodeHasApplication(node))
+
+THEOREM ProgressWitnessAbstractOwnerProjectionObligation ==
+  ProgressWitnessAbstractOwnerProjection
 PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE AsyncProgressWitnessAndHistoricalRecoveryProperty(
-                 AsyncSpecAt(initialContext))
-    <2>1. AsyncSpecAt(initialContext)
-             => []AsyncDurableCommitProgressWitness
-      BY DurableCommitProgressWitnessObligation
-    <2>2. AsyncSpecAt(initialContext)
-             => []HistoricalLockedCommitRecoveryProgress
-      BY HistoricalLockedCommitRecoveryProgressObligation
-    <2>3. AsyncSpecAt(initialContext)
-             => []DecisionFrontierUniquenessInvariant
-      BY DecisionFrontierUniquenessInvariantFromAsyncSpec
-    <2>4. DecisionFrontierUniquenessInvariant
-             => DecisionsUniqueByNodeContext
-      BY DEF DecisionFrontierUniquenessInvariant
-    <2>5. AsyncSpecAt(initialContext)
-             => []AsyncDurableDecisionProgressWitness
-      BY RecoveryAwareDecisionProgressWitnessObligation
-    <2>6. AsyncSpecAt(initialContext)
-             => []ProtectedDeferredProgressInvariant
-      BY ProtectedDeferredProgressInvariantObligation
-    <2>7. AsyncSpecAt(initialContext)
-             => []AsyncProgressWitnessInvariant
-      BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, PTL
-         DEF AsyncProgressWitnessInvariant
-    <2>8. AsyncProgressWitnessProperty(AsyncSpecAt(initialContext))
-      BY <2>7 DEF AsyncProgressWitnessProperty
-    <2>9. HistoricalLockedBodyRecoveryProperty(
+  <1>1. \A initialContext:
+           AsyncSpecAt(initialContext) => []StrongInductiveInvariant
+    BY StrongInductiveInvariantFromAsyncSpec
+  <1>2. \A initialContext:
+           AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
+    BY AsyncSpecAlwaysProgressOwnershipInvariant
+  <1>3. \A initialContext:
+           GenerationScopedVoteDeliveryProperty(
              AsyncSpecAt(initialContext))
-      BY AsyncSpecAlwaysHistoricalLockedBodyRecoveryStage
-         DEF HistoricalLockedBodyRecoveryProperty
-    <2> QED BY <2>8, <2>9
-         DEF AsyncProgressWitnessAndHistoricalRecoveryProperty
-  <1> QED BY <1>1
+    BY GenerationScopedVoteDeliveryObligation
+  <1>4. \A initialContext:
+           PostDecisionTimeoutExclusionProperty(
+             AsyncSpecAt(initialContext))
+    BY PostDecisionTimeoutExclusionObligation
+  <1>5. \A initialContext:
+           DecisionRecoveryAcrossRestartProperty(
+             AsyncSpecAt(initialContext))
+    BY DecisionRecoveryAcrossRestartObligation
+  <1>6. \A initialContext, node:
+           AsyncSpecAt(initialContext)
+             => [](NodeHasApplication(node)
+                    => []NodeHasApplication(node))
+    <2>1. ASSUME NEW initialContext, NEW node
+           PROVE AsyncSpecAt(initialContext)
+                   => [](NodeHasApplication(node)
+                          => []NodeHasApplication(node))
+      <3>1. AsyncSpecAt(initialContext)
+               => [][AsyncNext]_AsyncAllVars
+        BY DEF AsyncSpecAt
+      <3>2. NodeHasApplication(node)
+               /\ [AsyncNext]_AsyncAllVars
+              => NodeHasApplication(node)'
+        BY AsyncBracketStepPreservesNodeApplication
+      <3> QED BY <3>1, <3>2, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, <1>5, <1>6
+       DEF ProgressWitnessAbstractOwnerProjection
 
 ProgressWitnessProductionRefinementObligation ==
   /\ ProductionProgressWitnessTraceRefinement
-  /\ ProgressWitnessObligation
+  /\ ProgressWitnessAbstractOwnerProjection
 
 THEOREM ProgressWitnessCrossToolRefinement ==
   ProductionProgressWitnessTraceRefinement
     => ProgressWitnessProductionRefinementObligation
 PROOF
-  BY ProgressWitnessObligation
+  BY ProgressWitnessAbstractOwnerProjectionObligation
      DEF ProgressWitnessProductionRefinementObligation
 
 (***************************************************************************
 Historical locked-body recovery remains two deliberately separate debts without
 creating extra ledger entries.  The model-level certified request, response,
 Store, Validate, and post-validation Commit pipeline is a conjunct of
-`ProgressWitnessObligation` above.  The production relation follows only from
-both reviewed cross-tool seams: effective-lock ownership and the complete
-progress-witness trace.  The bridge below makes that dependency deductive; it
-does not promote either source seam.
+`ProgressWitnessObligation` in `SumeragiV2AsyncTemporalClosureProofs`.  The
+production relation follows only from both reviewed cross-tool seams:
+effective-lock ownership and the complete progress-witness trace.  The bridge
+below makes that dependency deductive; it does not promote either source seam.
 ***************************************************************************)
 
 (***************************************************************************

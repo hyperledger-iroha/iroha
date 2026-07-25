@@ -6833,7 +6833,7 @@ impl KagemushaTopUpFinalityCompactQcV2 {
             || certificate.round.height != context.height
             || certificate.proposal_round.context_id != context.context_id
             || certificate.proposal_round.height != context.height
-            || certificate.proposal_round.view > certificate.round.view
+            || certificate.proposal_round != certificate.round
             || certificate.phase != GlobalPhase::Commit
             || certificate.aggregate_signature.len() != 96
             || certificate.execution_commitment.validate().is_err()

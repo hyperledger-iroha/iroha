@@ -91,6 +91,13 @@ PendingVoteWritesAuthorized ==
        /\ PrepareCarriesHigherSafeQc(request.vote)
   /\ \A request \in pendingLockCommit:
        /\ request.node \in Honest
+       \* Local WAL payloads retain the complete constructor identity.  The
+       \* broad vote carrier also admits malformed wire records whose
+       \* redundant `height` can disagree with `context.height`; those must
+       \* never become durable LockCommit intents.
+       /\ request.vote =
+            Vote(context, request.qc.view, "Commit",
+                 request.qc.subject, request.node)
        /\ request.vote.phase = "Commit"
        /\ request.vote.signer = request.node
        /\ request.vote.context = context
@@ -154,6 +161,11 @@ QcTransportBacked ==
        envelope.qc \in prepareQCs \cup commitQCs
   /\ \A received \in receivedQCs:
        received.qc \in prepareQCs \cup commitQCs
+
+ReceivedPrepareQcViewAdmissible ==
+  \A received \in receivedQCs:
+    received.qc.phase = "Prepare"
+      => received.qc.view <= nodeView[received.node]
 
 HonestTimeoutTransportBacked ==
   /\ \A envelope \in timeoutNetwork:
@@ -254,19 +266,22 @@ every action-preservation branch without strengthening the invariant.
 
 HighestAndLockAreCertified ==
   \A node \in ValidatorIds:
-    /\ (highestRank[node] = NoRank
-          => highestSubject[node] = NoSubject)
-    /\ (highestRank[node] # NoRank
-          => \E qc \in prepareQCs:
-               /\ qc.context = context
-               /\ qc.view = highestRank[node]
-               /\ qc.subject = highestSubject[node])
-    /\ (lockRank[node] = NoRank => lockSubject[node] = NoSubject)
-    /\ (lockRank[node] # NoRank
-          => \E qc \in prepareQCs:
-               /\ qc.context = context
-               /\ qc.view = lockRank[node]
-               /\ qc.subject = lockSubject[node])
+    /\ PrepareQcRank(highestPrepareQc[node]) = highestRank[node]
+    /\ PrepareQcSubject(highestPrepareQc[node]) = highestSubject[node]
+    /\ PrepareQcRank(lockPrepareQc[node]) = lockRank[node]
+    /\ PrepareQcSubject(lockPrepareQc[node]) = lockSubject[node]
+    /\ (highestPrepareQc[node] = NoPrepareQC
+          <=> highestRank[node] = NoRank)
+    /\ (highestPrepareQc[node] # NoPrepareQC
+          => /\ highestPrepareQc[node] \in prepareQCs
+             /\ highestPrepareQc[node].context = context
+             /\ highestPrepareQc[node].phase = "Prepare")
+    /\ (lockPrepareQc[node] = NoPrepareQC
+          <=> lockRank[node] = NoRank)
+    /\ (lockPrepareQc[node] # NoPrepareQC
+          => /\ lockPrepareQc[node] \in prepareQCs
+             /\ lockPrepareQc[node].context = context
+             /\ lockPrepareQc[node].phase = "Prepare")
 
 (***************************************************************************
 Every non-empty durable lock has one of the two reducer origins which can
@@ -286,8 +301,7 @@ DurableLockRecoveryProvenanceInvariant ==
     \/ \E installed \in installedTCs:
          /\ installed.node = node
          /\ installed.tc.context = context
-         /\ TcHighRank(installed.tc) = lockRank[node]
-         /\ TcHighSubject(installed.tc) = lockSubject[node]
+         /\ installed.tc.highestPrepareQc = lockPrepareQc[node]
 
 ReducerProvenanceInvariant ==
   /\ HonestVoteUnique(prepareIntents)
@@ -298,6 +312,7 @@ ReducerProvenanceInvariant ==
   /\ PendingCertificateWritesAuthorized
   /\ HonestVoteTransportBacked
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ HonestTimeoutTransportBacked
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
@@ -315,6 +330,7 @@ ReducerProvenanceWithoutVoteTransport ==
   /\ PendingVoteWritesAuthorized
   /\ PendingCertificateWritesAuthorized
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ HonestTimeoutTransportBacked
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
@@ -333,6 +349,7 @@ ReducerProvenanceWithoutTimeoutTransport ==
   /\ PendingCertificateWritesAuthorized
   /\ HonestVoteTransportBacked
   /\ QcTransportBacked
+  /\ ReceivedPrepareQcViewAdmissible
   /\ TcTransportBacked
   /\ CertificatesBackedByIntents
   /\ HonestDurableIntentsSound
@@ -363,6 +380,7 @@ ProofRelevantVars ==
     receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
+    lastInstalledTc, lockPrepareQc, highestPrepareQc,
     lockRank, lockSubject, highestRank, highestSubject,
     pendingProposal, pendingPrepare, pendingObservePrepare,
     pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,

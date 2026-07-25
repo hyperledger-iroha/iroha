@@ -182,7 +182,7 @@ BY AsyncProgressOwnershipStutter, Isa
 
 THEOREM TransportOnlyFaultPreservesProgressOwnership ==
   \A packet, source, recipient, nonce, kind, qc, signer, roundView,
-     subject, justifyRank, justifySubject, phase, highRank, highSubject:
+     subject, timeoutCertificate, highestPrepare, phase:
     /\ AsyncProgressOwnershipInvariant
     /\ \/ PreGstLosePacket(packet)
        \/ InjectByzantineNoise(source, recipient, nonce)
@@ -190,10 +190,10 @@ THEOREM TransportOnlyFaultPreservesProgressOwnership ==
        \/ InjectAuthenticatedJunk(kind, source, recipient, nonce)
        \/ InjectByzantineCertifiedRequest(source, recipient, qc, nonce)
        \/ AsyncByzantineProposal(
-            signer, roundView, subject, justifyRank, justifySubject)
+            signer, roundView, subject,
+            timeoutCertificate, highestPrepare)
        \/ AsyncByzantineVote(signer, roundView, phase, subject)
-       \/ AsyncByzantineTimeout(
-            signer, roundView, highRank, highSubject)
+       \/ AsyncByzantineTimeout(signer, roundView, highestPrepare)
     => AsyncProgressOwnershipInvariant'
 BY AsyncProgressOwnershipStutter, Isa
    DEF PreGstLosePacket, InjectByzantineNoise,
@@ -267,7 +267,8 @@ PROOF
     <2>9. BusyCompletionWitnessInvariant'
       <3>1. ASSUME NEW other \in ValidatorIds
              PROVE ~NodeIdle(other)'
-                     => BusyCompletionCandidates(other)' # {}
+                     => \/ BusyCompletionCandidates(other)' # {}
+                        \/ InstallGenerationExhausted(other)'
         <4>1. CASE other = node
           <5>1. NodeIdle(other)'
             BY <2>6, <4>1
@@ -276,19 +277,28 @@ PROOF
           <5>1. other \in ValidatorIds \ {node}
             BY <3>1, <4>2
           <5>2. ASSUME ~NodeIdle(other)'
-                 PROVE BusyCompletionCandidates(other)' # {}
+                 PROVE \/ BusyCompletionCandidates(other)' # {}
+                       \/ InstallGenerationExhausted(other)'
             <6>1. ~NodeIdle(other)
               BY <2>7, <5>1, <5>2
-            <6>2. BusyCompletionCandidates(other) # {}
+            <6>2. \/ BusyCompletionCandidates(other) # {}
+                   \/ InstallGenerationExhausted(other)
               BY <1>1, <6>1
                  DEF AsyncProgressOwnershipInvariant,
                      BusyCompletionWitnessInvariant
-            <6>3. PICK candidate \in
-                         BusyCompletionCandidates(other): TRUE
-              BY <6>2
-            <6>4. candidate \in BusyCompletionCandidates(other)'
-              BY <2>8, <5>1, <6>3
-            <6> QED BY <6>4
+            <6>3. CASE BusyCompletionCandidates(other) # {}
+              <7>1. PICK candidate \in
+                           BusyCompletionCandidates(other): TRUE
+                BY <6>3
+              <7>2. candidate \in BusyCompletionCandidates(other)'
+                BY <2>8, <5>1, <7>1
+              <7> QED BY <7>2
+            <6>4. CASE InstallGenerationExhausted(other)
+              <7>1. InstallGenerationExhausted(other)'
+                BY <1>1, <5>1, <6>4, Isa
+                   DEF Crash, InstallGenerationExhausted
+              <7> QED BY <7>1
+            <6> QED BY <6>2, <6>3, <6>4
           <5> QED BY <5>2
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1 DEF BusyCompletionWitnessInvariant
@@ -367,24 +377,38 @@ PROOF
     <2>5. BusyCompletionWitnessInvariant'
       <3>1. ASSUME NEW other \in ValidatorIds
              PROVE ~NodeIdle(other)'
-                     => BusyCompletionCandidates(other)' # {}
+                     => \/ BusyCompletionCandidates(other)' # {}
+                        \/ InstallGenerationExhausted(other)'
         <4>1. CASE other = Node
           BY <2>3, <4>1
         <4>2. CASE other # Node
           <5>1. other \in ValidatorIds \ {Node}
             BY <3>1, <4>2
           <5>2. ASSUME ~NodeIdle(other)'
-                 PROVE BusyCompletionCandidates(other)' # {}
+                 PROVE \/ BusyCompletionCandidates(other)' # {}
+                       \/ InstallGenerationExhausted(other)'
             <6>1. ~NodeIdle(other)
               BY <2>4, <5>1, <5>2
-            <6>2. BusyCompletionCandidates(other) # {}
+            <6>2. \/ BusyCompletionCandidates(other) # {}
+                   \/ InstallGenerationExhausted(other)
               BY <1>1, <6>1
                  DEF AsyncProgressOwnershipInvariant,
                      BusyCompletionWitnessInvariant
-            <6>3. PICK candidate \in
-                         BusyCompletionCandidates(other): TRUE
-              BY <6>2
-            <6> QED BY <2>4, <5>1, <6>3
+            <6>3. CASE BusyCompletionCandidates(other) # {}
+              <7>1. PICK candidate \in
+                           BusyCompletionCandidates(other): TRUE
+                BY <6>3
+              <7> QED BY <2>4, <5>1, <7>1
+            <6>4. CASE InstallGenerationExhausted(other)
+              <7>1. /\ generation'[other] = generation[other]
+                     /\ pendingInstallTC' = pendingInstallTC
+                BY <1>1, <2>1, <5>1,
+                   FunctionalUpdateAwayFromKey, Isa
+                   DEF AsyncProgressOwnershipCoreVars, Node
+              <7>2. InstallGenerationExhausted(other)'
+                BY <6>4, <7>1 DEF InstallGenerationExhausted
+              <7> QED BY <7>2
+            <6> QED BY <6>2, <6>3, <6>4
           <5> QED BY <5>2
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1 DEF BusyCompletionWitnessInvariant
@@ -980,12 +1004,6 @@ PROOF
          DEF BusyCompletionCandidates, CandidateConsumerCurrent
   <1> QED BY <1>1
 
-THEOREM SerializedBusyOwnerNodeSet ==
-  RequestNodeSet(SerializedBusyOwners) = PendingNodes \cup SigningNodes
-BY Isa
-   DEF SerializedBusyOwners, PendingNodes, SigningNodes,
-       AllPendingRequests, RequestNodeSet
-
 THEOREM AddSerializedBusyOwnerPreservesOwnership ==
   \A node, request:
     /\ request.node = node
@@ -1311,7 +1329,7 @@ PROOF
     <2>2. /\ AsyncQueueTyped(Replay)
            /\ AsyncCausalQueueOwnership(Node, Replay)
            /\ SequenceHasUniqueValues(Replay)
-           /\ Len(Replay) <= 1
+           /\ Len(Replay) <= 2
       BY <2>1, RestartReplayIsTypedOwnedAndUnique DEF Replay
     <2>3. ResetNodeSchedulerForRestart(Node, Replay)
       BY <1>1 DEF PreGstResponsiveReplay, Node, Replay
@@ -1358,7 +1376,8 @@ PROOF
       <3>6. BusyCompletionWitnessInvariant'
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE ~NodeIdle(other)'
-                       => BusyCompletionCandidates(other)' # {}
+                       => \/ BusyCompletionCandidates(other)' # {}
+                          \/ InstallGenerationExhausted(other)'
           <5>1. CASE other = Node
             <6>1. NodeIdle(other)'
               BY <3>4, <5>1
@@ -1367,19 +1386,32 @@ PROOF
             <6>1. other \in ValidatorIds \ {Node}
               BY <4>1, <5>2
             <6>2. ASSUME ~NodeIdle(other)'
-                   PROVE BusyCompletionCandidates(other)' # {}
+                   PROVE \/ BusyCompletionCandidates(other)' # {}
+                         \/ InstallGenerationExhausted(other)'
               <7>1. ~NodeIdle(other)
                 BY <3>2, <6>2
-              <7>2. BusyCompletionCandidates(other) # {}
+              <7>2. \/ BusyCompletionCandidates(other) # {}
+                     \/ InstallGenerationExhausted(other)
                 BY <1>1, <7>1
                    DEF AsyncProgressOwnershipInvariant,
                        BusyCompletionWitnessInvariant
-              <7>3. PICK candidate \in
-                           BusyCompletionCandidates(other): TRUE
-                BY <7>2
-              <7>4. candidate \in BusyCompletionCandidates(other)'
-                BY <3>5, <6>1, <7>3
-              <7> QED BY <7>4
+              <7>3. CASE BusyCompletionCandidates(other) # {}
+                <8>1. PICK candidate \in
+                             BusyCompletionCandidates(other): TRUE
+                  BY <7>3
+                <8>2. candidate \in BusyCompletionCandidates(other)'
+                  BY <3>5, <6>1, <8>1
+                <8> QED BY <8>2
+              <7>4. CASE InstallGenerationExhausted(other)
+                <8>1. /\ generation' = generation
+                       /\ pendingInstallTC' = pendingInstallTC
+                  BY <3>1, Isa
+                     DEF AsyncProgressOwnershipCoreVars,
+                         AsyncBusyConsumerVars
+                <8>2. InstallGenerationExhausted(other)'
+                  BY <7>4, <8>1 DEF InstallGenerationExhausted
+                <8> QED BY <8>2
+              <7> QED BY <7>2, <7>3, <7>4
             <6> QED BY <6>2
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>1 DEF BusyCompletionWitnessInvariant
@@ -1396,8 +1428,9 @@ PROOF
       <3>3. /\ ~NodeHasApplication(Node)
              /\ RestartDecisions(Node) = {}
         BY <3>1, Isa DEF Signatures, RestartSignatureReplay
-      <3>4. Replay = <<Head(Signatures)>>
-        BY <2>7, <3>3 DEF Replay, RestartReplay, Signatures
+      <3>4. Head(Signatures) \in SequenceSet(Replay)
+        BY <2>7, <3>3, RangeConcatenation, Isa
+           DEF Replay, RestartReplay, Signatures, SequenceSet
       <3>5. RecoveryCoreReplay(Node, Head(Signatures))
         BY <1>1, <2>7
            DEF PreGstResponsiveReplay, Node, Signatures
@@ -1412,16 +1445,21 @@ PROOF
         BY <2>1, <2>3, FunctionalReplaceUpdateAtKey
            DEF AsyncSchedulerTypeInvariant,
                AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant
-      <3>8. SequenceSet(Replay) = {Head(Signatures)}
-        BY <3>4, SingletonSequenceFacts, RangeEquality
-           DEF SequenceSet
+      <3>8. Head(Signatures)
+               \in SequenceSet(asyncCausalQueues'[Node])
+        BY <3>4, <3>7
       <3>9. Head(Signatures) \in ActiveBusyCompletionCarrier'
-        BY <3>7, <3>8, Isa
+        BY <3>8
            DEF ActiveBusyCompletionCarrier, CausalCandidates
       <3>10. Head(Signatures) \in BusyCompletionCandidates(Node)'
         BY <3>2, <3>5, <3>9,
            RecoveryCoreReplayCandidateIsBusyWhenCarried
            DEF Signatures
+      <3>10a. /\ generation' = generation
+               /\ pendingInstallTC' = pendingInstallTC
+        BY <3>5, Isa
+           DEF RecoveryCoreReplay, ResumeProposal, ResumeVote,
+               ResumeTimeout
       <3>11. \A other \in ValidatorIds \ {Node}:
                 BusyCompletionCandidates(other)
                   \subseteq BusyCompletionCandidates(other)'
@@ -1441,26 +1479,35 @@ PROOF
       <3>12. BusyCompletionWitnessInvariant'
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE ~NodeIdle(other)'
-                       => BusyCompletionCandidates(other)' # {}
+                       => \/ BusyCompletionCandidates(other)' # {}
+                          \/ InstallGenerationExhausted(other)'
           <5>1. CASE other = Node
             BY <3>10, <5>1
           <5>2. CASE other # Node
             <6>1. other \in ValidatorIds \ {Node}
               BY <4>1, <5>2
             <6>2. ASSUME ~NodeIdle(other)'
-                   PROVE BusyCompletionCandidates(other)' # {}
+                   PROVE \/ BusyCompletionCandidates(other)' # {}
+                         \/ InstallGenerationExhausted(other)'
               <7>1. ~NodeIdle(other)
                 BY <3>6, <6>1, <6>2
-              <7>2. BusyCompletionCandidates(other) # {}
+              <7>2. \/ BusyCompletionCandidates(other) # {}
+                     \/ InstallGenerationExhausted(other)
                 BY <1>1, <7>1
                    DEF AsyncProgressOwnershipInvariant,
                        BusyCompletionWitnessInvariant
-              <7>3. PICK candidate \in
-                           BusyCompletionCandidates(other): TRUE
-                BY <7>2
-              <7>4. candidate \in BusyCompletionCandidates(other)'
-                BY <3>11, <6>1, <7>3
-              <7> QED BY <7>4
+              <7>3. CASE BusyCompletionCandidates(other) # {}
+                <8>1. PICK candidate \in
+                             BusyCompletionCandidates(other): TRUE
+                  BY <7>3
+                <8>2. candidate \in BusyCompletionCandidates(other)'
+                  BY <3>11, <6>1, <8>1
+                <8> QED BY <8>2
+              <7>4. CASE InstallGenerationExhausted(other)
+                <8>1. InstallGenerationExhausted(other)'
+                  BY <3>10a, <7>4 DEF InstallGenerationExhausted
+                <8> QED BY <8>1
+              <7> QED BY <7>2, <7>3, <7>4
             <6> QED BY <6>2
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>1 DEF BusyCompletionWitnessInvariant
@@ -1565,6 +1612,11 @@ PROOF
         BY <2>11, Isa
       <3> QED BY <2>5, <2>12, <3>1,
            RecoveryCoreReplayCandidateIsBusyWhenCarried
+    <2>13a. /\ generation' = generation
+              /\ pendingInstallTC' = pendingInstallTC
+      BY <2>5, Isa
+         DEF RecoveryCoreReplay, ResumeProposal, ResumeVote,
+             ResumeTimeout
     <2>14. \A other \in ValidatorIds \ {Node}:
               BusyCompletionCandidates(other)
                 \subseteq BusyCompletionCandidates(other)'
@@ -1579,26 +1631,35 @@ PROOF
     <2>15. BusyCompletionWitnessInvariant'
       <3>1. ASSUME NEW other \in ValidatorIds
              PROVE ~NodeIdle(other)'
-                     => BusyCompletionCandidates(other)' # {}
+                     => \/ BusyCompletionCandidates(other)' # {}
+                        \/ InstallGenerationExhausted(other)'
         <4>1. CASE other = Node
           BY <2>13, <4>1
         <4>2. CASE other # Node
           <5>1. other \in ValidatorIds \ {Node}
             BY <3>1, <4>2
           <5>2. ASSUME ~NodeIdle(other)'
-                 PROVE BusyCompletionCandidates(other)' # {}
+                 PROVE \/ BusyCompletionCandidates(other)' # {}
+                       \/ InstallGenerationExhausted(other)'
             <6>1. ~NodeIdle(other)
               BY <2>9, <5>1, <5>2
-            <6>2. BusyCompletionCandidates(other) # {}
+            <6>2. \/ BusyCompletionCandidates(other) # {}
+                   \/ InstallGenerationExhausted(other)
               BY <1>1, <6>1
                  DEF AsyncProgressOwnershipInvariant,
                      BusyCompletionWitnessInvariant
-            <6>3. PICK candidate \in
-                         BusyCompletionCandidates(other): TRUE
-              BY <6>2
-            <6>4. candidate \in BusyCompletionCandidates(other)'
-              BY <2>14, <5>1, <6>3
-            <6> QED BY <6>4
+            <6>3. CASE BusyCompletionCandidates(other) # {}
+              <7>1. PICK candidate \in
+                           BusyCompletionCandidates(other): TRUE
+                BY <6>3
+              <7>2. candidate \in BusyCompletionCandidates(other)'
+                BY <2>14, <5>1, <7>1
+              <7> QED BY <7>2
+            <6>4. CASE InstallGenerationExhausted(other)
+              <7>1. InstallGenerationExhausted(other)'
+                BY <2>13a, <6>4 DEF InstallGenerationExhausted
+              <7> QED BY <7>1
+            <6> QED BY <6>2, <6>3, <6>4
           <5> QED BY <5>2
         <4> QED BY <4>1, <4>2
       <3> QED BY <3>1 DEF BusyCompletionWitnessInvariant
@@ -1725,21 +1786,35 @@ PROOF
       <3>14. BusyCompletionWitnessInvariant'
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE ~NodeIdle(other)'
-                       => BusyCompletionCandidates(other)' # {}
+                       => \/ BusyCompletionCandidates(other)' # {}
+                          \/ InstallGenerationExhausted(other)'
           <5>1. ASSUME ~NodeIdle(other)'
-                 PROVE BusyCompletionCandidates(other)' # {}
+                 PROVE \/ BusyCompletionCandidates(other)' # {}
+                       \/ InstallGenerationExhausted(other)'
             <6>1. ~NodeIdle(other)
               BY <3>11, <5>1
-            <6>2. BusyCompletionCandidates(other) # {}
+            <6>2. \/ BusyCompletionCandidates(other) # {}
+                   \/ InstallGenerationExhausted(other)
               BY <1>1, <6>1
                  DEF AsyncProgressOwnershipInvariant,
                      BusyCompletionWitnessInvariant
-            <6>3. PICK candidate \in
-                         BusyCompletionCandidates(other): TRUE
-              BY <6>2
-            <6>4. candidate \in BusyCompletionCandidates(other)'
-              BY <3>13, <4>1, <6>3
-            <6> QED BY <6>4
+            <6>3. CASE BusyCompletionCandidates(other) # {}
+              <7>1. PICK candidate \in
+                           BusyCompletionCandidates(other): TRUE
+                BY <6>3
+              <7>2. candidate \in BusyCompletionCandidates(other)'
+                BY <3>13, <4>1, <7>1
+              <7> QED BY <7>2
+            <6>4. CASE InstallGenerationExhausted(other)
+              <7>1. /\ generation' = generation
+                     /\ pendingInstallTC' = pendingInstallTC
+                BY <3>5, Isa
+                   DEF AsyncProgressOwnershipCoreVars,
+                       AsyncBusyConsumerVars
+              <7>2. InstallGenerationExhausted(other)'
+                BY <6>4, <7>1 DEF InstallGenerationExhausted
+              <7> QED BY <7>2
+            <6> QED BY <6>2, <6>3, <6>4
           <5> QED BY <5>1
         <4> QED BY <4>1 DEF BusyCompletionWitnessInvariant
       <3> QED BY <3>7, <3>10, <3>12, <3>14
@@ -1789,21 +1864,35 @@ PROOF
     <2>4. BusyCompletionWitnessInvariant'
       <3>1. ASSUME NEW node \in ValidatorIds
              PROVE ~NodeIdle(node)' =>
-                     BusyCompletionCandidates(node)' # {}
+                     \/ BusyCompletionCandidates(node)' # {}
+                        \/ InstallGenerationExhausted(node)'
         <4>1. ASSUME ~NodeIdle(node)'
-               PROVE BusyCompletionCandidates(node)' # {}
+               PROVE \/ BusyCompletionCandidates(node)' # {}
+                     \/ InstallGenerationExhausted(node)'
           <5>1. ~NodeIdle(node)
             BY <2>1, <4>1
-          <5>2. BusyCompletionCandidates(node) # {}
+          <5>2. \/ BusyCompletionCandidates(node) # {}
+                 \/ InstallGenerationExhausted(node)
             BY <1>1, <5>1
                DEF AsyncProgressOwnershipInvariant,
                    BusyCompletionWitnessInvariant
-          <5>3. PICK candidate \in
-                       BusyCompletionCandidates(node): TRUE
-            BY <5>2
-          <5>4. candidate \in BusyCompletionCandidates(node)'
-            BY <2>3, <3>1, <5>3
-          <5> QED BY <5>4
+          <5>3. CASE BusyCompletionCandidates(node) # {}
+            <6>1. PICK candidate \in
+                         BusyCompletionCandidates(node): TRUE
+              BY <5>3
+            <6>2. candidate \in BusyCompletionCandidates(node)'
+              BY <2>3, <3>1, <6>1
+            <6> QED BY <6>2
+          <5>4. CASE InstallGenerationExhausted(node)
+            <6>1. /\ generation' = generation
+                   /\ pendingInstallTC' = pendingInstallTC
+              BY <1>1, Isa
+                 DEF AsyncProgressOwnershipCoreVars,
+                     AsyncBusyConsumerVars
+            <6>2. InstallGenerationExhausted(node)'
+              BY <5>4, <6>1 DEF InstallGenerationExhausted
+            <6> QED BY <6>2
+          <5> QED BY <5>2, <5>3, <5>4
         <4> QED BY <4>1
       <3> QED BY <3>1 DEF BusyCompletionWitnessInvariant
     <2> QED BY <2>2, <2>4
@@ -2013,13 +2102,13 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM HistoricalRunnerPreservesProgressOwnership ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncResponsiveAppliedArchiveServers:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ RunHistoricalServer(node)
     => AsyncProgressOwnershipInvariant'
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncResponsiveAppliedArchiveServers,
                 AsyncStrongTypeInvariant,
                 AsyncProgressOwnershipInvariant,
                 RunHistoricalServer(node)
@@ -2027,8 +2116,8 @@ PROOF
     <2>1. TypeInvariant
       BY <1>1
          DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
-    <2>2. AsyncCurrentResponsiveVoters \subseteq ValidatorIds
-      BY <2>1, AsyncCurrentResponsiveVotersAreValidators
+    <2>2. AsyncResponsiveAppliedArchiveServers \subseteq ValidatorIds
+      BY <2>1, AsyncResponsiveAppliedArchiveServersAreValidators
     <2>3. node \in ValidatorIds
       BY <1>1, <2>2
     <2>4. CASE HistoricalDrainableIngressIndices(node) = {}
@@ -2299,23 +2388,23 @@ THEOREM UnionOfSequenceSetsAfterAppendAtKey ==
     /\ key \in keys
     /\ DOMAIN mapping = keys
     /\ mapping[key] \in Seq(Range(mapping[key]))
-    => UNION
-         {SequenceSet(
-            [mapping EXCEPT ![key] = Append(@, value)][other]):
-            other \in keys}
-         = UNION {SequenceSet(mapping[other]): other \in keys}
+    => (UNION
+          {SequenceSet(
+             [mapping EXCEPT ![key] = Append(@, value)][other]):
+             other \in keys})
+         = (UNION {SequenceSet(mapping[other]): other \in keys})
              \cup {value}
 PROOF
   <1>1. ASSUME NEW keys, NEW mapping, NEW key, NEW value,
                 key \in keys,
                 DOMAIN mapping = keys,
                 mapping[key] \in Seq(Range(mapping[key]))
-         PROVE UNION
-                 {SequenceSet(
-                    [mapping EXCEPT ![key] = Append(@, value)][other]):
-                    other \in keys}
-                 = UNION
-                     {SequenceSet(mapping[other]): other \in keys}
+         PROVE (UNION
+                  {SequenceSet(
+                     [mapping EXCEPT ![key] = Append(@, value)][other]):
+                     other \in keys})
+                 = (UNION
+                      {SequenceSet(mapping[other]): other \in keys})
                      \cup {value}
     <2>1. SequenceSet(Append(mapping[key], value)) =
              SequenceSet(mapping[key]) \cup {value}
@@ -4041,8 +4130,7 @@ PROOF
               THEN CertifiedRequestAuthorized(DrainItem)
               ELSE CommitCertificateRequestAuthorized(DrainItem)
     <2> DEFINE CertifiedAccepted ==
-           /\ DrainItem \in asyncSentItems
-           /\ CertifiedResponseAuthorized(DrainItem)
+           CertifiedResponseClaimAuthorized(DrainItem)
     <2> DEFINE CommitAccepted ==
            /\ DrainItem \in asyncSentItems
            /\ CommitCertificateResponseAuthorized(DrainItem)
@@ -4056,6 +4144,7 @@ PROOF
            /\ DrainItem.kind # "Noise"
            /\ DrainItem.kind
                 \notin {"CertifiedRequest", "CommitCertificateRequest"}
+           /\ DrainItem.kind # "Chunk"
            /\ DrainItem.kind # "CertifiedResponse"
            /\ DrainItem.kind # "CommitCertificateResponse"
     <2>1. /\ AsyncRuntimeScalarTypeInvariant
@@ -4096,7 +4185,7 @@ PROOF
                SelectedIngressLaneIndex
     <2>5. /\ AsyncItemTyped(DrainItem)
            /\ DrainItem.envelope.recipient = node
-           /\ DrainItem.source = DrainSource
+           /\ IngressResourceSource(DrainItem) = DrainSource
       BY <1>1, <2>1, <2>4, SelectedIngressItemIsTyped,
          SelectedIngressItemHasLaneOwnership
          DEF DrainItem, SelectedIngressItemAt, DrainLaneIndex,
@@ -4181,8 +4270,9 @@ PROOF
         <4>1. AsyncTypeInvariant
           BY <1>1 DEF AsyncStrongTypeInvariant
         <4>2. DrainItem.kind = "CertifiedResponse"
-          BY <2>9 DEF CertifiedAccepted,
-             CertifiedResponseAuthorized
+          BY <2>9
+             DEF CertifiedAccepted, CertifiedResponseClaimAuthorized,
+                 CertifiedResponseAuthorized
         <4>3. /\ AsyncCandidateTyped(
                         CertifiedResponseCandidate(DrainItem))
                /\ CertifiedResponseCandidate(DrainItem).node = node
@@ -4207,39 +4297,33 @@ PROOF
       <3>3. CASE ~CandidateScheduled(CertifiedCandidate)
         <4>0. ~CandidateScheduled(CertifiedCandidate)
           OBVIOUS
-        <4>1. /\ asyncLocalReadyCompletions' =
-                    [asyncLocalReadyCompletions EXCEPT
+        <4>1. /\ asyncCommandQueues' =
+                    [asyncCommandQueues EXCEPT
                        ![node] = Append(@, CertifiedCandidate)]
-               /\ asyncOutstandingWork' =
-                    [asyncOutstandingWork EXCEPT
-                       ![node] = @ \cup {CertifiedCandidate}]
-               /\ UNCHANGED
-                    <<asyncIoQueues, asyncIoReadyCompletions,
-                      asyncCommandQueues>>
+               /\ UNCHANGED AsyncIoVars
           BY <2>2, <2>9, <4>0,
              FreshAuthorizedCertifiedResponseSchedulerFrame
              DEF SelectedDrainItem, DrainIndex, DrainItem,
                  CertifiedAccepted, CertifiedCandidate
         <4>2. /\ AsyncLogicalCandidateOwnershipInvariant'
-               /\ TrackedWorkCandidates' =
-                    TrackedWorkCandidates \cup {CertifiedCandidate}
+               /\ QueuedCandidates' =
+                    QueuedCandidates \cup {CertifiedCandidate}
                /\ ActiveBusyCompletionCarrier \subseteq
                     ActiveBusyCompletionCarrier'
           <5>1. AsyncLogicalCandidateOwnershipInvariant
             BY <1>1 DEF AsyncProgressOwnershipInvariant
           <5>2. UNCHANGED
-                   <<asyncCommandQueues,
+                   <<asyncOutstandingWork,
                      asyncDeferredCompletionQueues,
                      asyncDeferredProgressQueues,
                      asyncDeferredNormalQueues, asyncCausalQueues>>
-            BY <2>7, <4>1
+            BY <2>7, <4>1 DEF AsyncIoVars
           <5> QED BY <1>1, <2>1, <3>1, <4>0, <4>1,
              <5>1, <5>2,
-             FreshTrackedAddPreservesLogicalOwnership
+             FreshCommandAppendPreservesLogicalOwnership
         <4>3. AsyncOutstandingCarrierInvariant'
-          BY <1>1, <3>1, <4>0, <4>1,
-             FreshLocalReadyTrackedAddPreservesOutstandingCarrier
-             DEF AsyncProgressOwnershipInvariant
+          BY <1>1, <4>1, AsyncOutstandingCarrierStutter
+             DEF AsyncProgressOwnershipInvariant, AsyncIoVars
         <4>4. /\ SerializedBusyOwnershipInvariant'
                /\ BusyCompletionWitnessInvariant'
           BY <1>1, <2>7, <4>2,
@@ -4579,6 +4663,337 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
+(***************************************************************************
+Generic Busy-completion dispatch bridge.
+
+Membership supplies an active, current, Completion-class scheduler candidate;
+the serialized Busy kernel supplies the exact Core action guard for the
+matching pending/signature owner.  This leaf is intentionally independent of
+`AsyncProgressOwnershipInvariant`, so FIFO preservation cannot assume the
+very Busy-witness property it is proving.  Each finite dispatch arm expands
+ENABLED independently, keeping the scheduler-carrier and publication facts
+separate from the final ten-way owner match.
+***************************************************************************)
+THEOREM TypedItemIsInNetworkCarrier ==
+  \A item:
+    AsyncItemTyped(item) => item \in AsyncNetworkItems
+BY Isa
+   DEF AsyncItemTyped, AsyncNetworkItems, AsyncNetworkItem,
+       AsyncCertifiedRequestItems, AsyncCommitCertificateRequestItems,
+       AsyncBodyEnvelopeTyped,
+       AsyncCommitCertificateRequestEnvelopeTyped,
+       AsyncReplyRequestItemTyped,
+       AsyncCertifiedResponseEnvelopeTyped,
+       AsyncCommitCertificateResponseEnvelopeTyped,
+       AsyncCertifiedResponseEnvelope,
+       AsyncCommitCertificateResponseEnvelope,
+       AsyncTcEnvelopeTyped, AsyncTcRecordTyped,
+       AsyncBodyEnvelopeSet, AsyncCommitCertificateRequestEnvelopeSet,
+       TcEnvelopeSet, TcRecordSet
+
+THEOREM RetainableControlBatchIsPublishable ==
+  \A items, voters:
+    RetainableControlBatch(items, voters)
+      => items \subseteq
+           {item \in AsyncNetworkItems:
+              item.kind \in AsyncControlKinds}
+BY TypedItemIsInNetworkCarrier, Isa
+   DEF RetainableControlBatch
+
+THEOREM ActiveBusyCompletionCarrierIsTyped ==
+  \A candidate:
+    /\ AsyncSchedulerTypeInvariant
+    /\ candidate \in ActiveBusyCompletionCarrier
+    => AsyncCandidateTyped(candidate)
+BY Isa
+   DEF ActiveBusyCompletionCarrier,
+       QueuedCandidates, CausalCandidates, TrackedWorkCandidates,
+       SequenceSet,
+       AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant,
+       AsyncQueueTyped
+
+THEOREM PersistProposalBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistProposal"
+    /\ request \in pendingProposal
+    /\ request.proposal \notin proposalIntents
+    /\ CommandMatches(command, request.node, request.proposal.view,
+                      request.proposal.subject)
+    => ENABLED ExecuteRegularCommand(command)
+BY ExpandENABLED, Isa
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistProposal, AsyncAuxVars
+
+THEOREM PersistPrepareBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistPrepare"
+    /\ request \in pendingPrepare
+    /\ request.vote \notin prepareIntents
+    /\ CommandMatches(command, request.node, request.vote.view,
+                      request.vote.subject)
+    => ENABLED ExecuteRegularCommand(command)
+BY ExpandENABLED, Isa
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistPrepare, AsyncAuxVars
+
+THEOREM PersistObservePrepareBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistObservePrepare"
+    /\ request \in pendingObservePrepare
+    /\ CommandMatches(command, request.node, request.qc.view,
+                      request.qc.subject)
+    => ENABLED ExecuteRegularCommand(command)
+BY ExpandENABLED, Isa
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistObservePrepare, AsyncAuxVars
+
+THEOREM PersistLockCommitBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistLockCommit"
+    /\ request \in pendingLockCommit
+    /\ request.vote \notin commitIntents
+    /\ BodyHeldBy(durableBodies, request.node, request.qc.context,
+                  request.qc.view, request.qc.subject)
+    /\ RetainedLockedBodyRecord(
+         request.node, request.qc.context, request.qc.subject)
+         \in RetainedLockedBodyRecordSet
+    /\ CommandMatches(command, request.node, request.qc.view,
+                      request.qc.subject)
+    => ENABLED ExecuteRegularCommand(command)
+BY ExpandENABLED, Isa
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistLockCommit, AsyncAuxVars
+
+THEOREM PersistTimeoutBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistTimeout"
+    /\ request \in pendingTimeout
+    /\ request.vote \notin timeoutIntents
+    /\ CommandMatches(command, request.node, request.vote.view,
+                      request.vote.highSubject)
+    => ENABLED ExecuteRegularCommand(command)
+BY ExpandENABLED, Isa
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistTimeout, AsyncAuxVars
+
+THEOREM PersistInstallBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistInstallTC"
+    /\ request \in pendingInstallTC
+    /\ command.node = request.node
+    /\ command.view = request.tc.view
+    /\ request.tc.view >= nodeView[request.node]
+    /\ generation[request.node] < MaxGeneration
+    => ENABLED ExecutePersistInstall(command)
+BY ExpandENABLED, Isa
+   DEF ExecutePersistInstall, PersistInstallTC,
+       PersistInstalledControlAfterInstall
+
+THEOREM PersistDecisionBusyArmEnabled ==
+  \A command, request:
+    /\ command.kind = "PersistDecision"
+    /\ request \in pendingDecision
+    /\ CommandMatches(command, request.node, request.qc.view,
+                      request.qc.subject)
+    => ENABLED ExecutePersistDecision(command)
+BY ExpandENABLED, Isa
+   DEF ExecutePersistDecision, PersistDecision,
+       PersistDecisionControl
+
+THEOREM SignProposalBusyArmEnabled ==
+  \A command, request:
+    /\ AsyncTypeInvariant
+    /\ command.kind = "SignProposal"
+    /\ request \in signProposals
+    /\ request.proposal.proposer = request.node
+    /\ request.proposal \in proposalIntents
+    /\ CommandMatches(command, request.node, request.proposal.view,
+                      request.proposal.subject)
+    => ENABLED ExecuteSignProposal(command)
+PROOF
+  <1>1. ASSUME NEW command, NEW request,
+                AsyncTypeInvariant,
+                command.kind = "SignProposal",
+                request \in signProposals,
+                request.proposal.proposer = request.node,
+                request.proposal \in proposalIntents,
+                CommandMatches(command, request.node,
+                               request.proposal.view,
+                               request.proposal.subject)
+         PROVE ENABLED ExecuteSignProposal(command)
+    <2>1. request \in ProposalSignSet
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant
+    <2>2. RetainableControlBatch(
+             ProposalOutbox(request), CurrentVoters)
+      BY <1>1, <2>1, ProposalOutboxIsRetainable
+    <2>3. ProposalOutbox(request) \subseteq
+             {item \in AsyncNetworkItems:
+                item.kind \in AsyncControlKinds}
+      BY <2>2, RetainableControlBatchIsPublishable
+    <2> QED BY <1>1, <2>3, ExpandENABLED, Isa
+         DEF ExecuteSignProposal, CompleteProposalSignature,
+             PublishControlAndEphemeralItems
+  <1> QED BY <1>1
+
+THEOREM SignVoteBusyArmEnabled ==
+  \A command, request:
+    /\ AsyncTypeInvariant
+    /\ command.kind = "SignVote"
+    /\ request \in signVotes
+    /\ request.vote.signer = request.node
+    /\ (request.vote \in prepareIntents
+          \/ request.vote \in commitIntents)
+    /\ VoteRoundAdmissible(request.node, request.vote)
+    /\ CommandMatches(command, request.node, request.vote.view,
+                      request.vote.subject)
+    => ENABLED ExecuteSignVote(command)
+PROOF
+  <1>1. ASSUME NEW command, NEW request,
+                AsyncTypeInvariant,
+                command.kind = "SignVote",
+                request \in signVotes,
+                request.vote.signer = request.node,
+                request.vote \in prepareIntents
+                  \/ request.vote \in commitIntents,
+                VoteRoundAdmissible(request.node, request.vote),
+                CommandMatches(command, request.node,
+                               request.vote.view,
+                               request.vote.subject)
+         PROVE ENABLED ExecuteSignVote(command)
+    <2>1. request \in VoteSignSet
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant
+    <2>2. RetainableControlBatch(
+             VoteOutbox(request), CurrentVoters)
+      BY <1>1, <2>1, VoteOutboxIsRetainable
+    <2>3. VoteOutbox(request) \subseteq
+             {item \in AsyncNetworkItems:
+                item.kind \in AsyncControlKinds}
+      BY <2>2, RetainableControlBatchIsPublishable
+    <2> QED BY <1>1, <2>3, ExpandENABLED, Isa
+         DEF ExecuteSignVote, CompleteVoteSignature,
+             PublishControlItems
+  <1> QED BY <1>1
+
+THEOREM SignTimeoutBusyArmEnabled ==
+  \A command, request:
+    /\ AsyncTypeInvariant
+    /\ command.kind = "SignTimeout"
+    /\ request \in signTimeouts
+    /\ request.vote.signer = request.node
+    /\ request.vote \in timeoutIntents
+    /\ CommandMatches(command, request.node, request.vote.view,
+                      request.vote.highSubject)
+    => ENABLED ExecuteSignTimeout(command)
+PROOF
+  <1>1. ASSUME NEW command, NEW request,
+                AsyncTypeInvariant,
+                command.kind = "SignTimeout",
+                request \in signTimeouts,
+                request.vote.signer = request.node,
+                request.vote \in timeoutIntents,
+                CommandMatches(command, request.node,
+                               request.vote.view,
+                               request.vote.highSubject)
+         PROVE ENABLED ExecuteSignTimeout(command)
+    <2>1. request \in TimeoutSignSet
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant
+    <2>2. RetainableControlBatch(
+             TimeoutOutbox(request), CurrentVoters)
+      BY <1>1, <2>1, TimeoutOutboxIsRetainable
+    <2>3. TimeoutOutbox(request) \subseteq
+             {item \in AsyncNetworkItems:
+                item.kind \in AsyncControlKinds}
+      BY <2>2, RetainableControlBatchIsPublishable
+    <2> QED BY <1>1, <2>3, ExpandENABLED, Isa
+         DEF ExecuteSignTimeout, CompleteTimeoutSignature,
+             PublishControlItems
+  <1> QED BY <1>1
+
+THEOREM EnabledBusyArmImpliesCommandExecutionEnabled ==
+  \A command:
+    (\/ ENABLED ExecuteRegularCommand(command)
+     \/ ENABLED ExecutePersistInstall(command)
+     \/ ENABLED ExecutePersistDecision(command)
+     \/ ENABLED ExecuteSignProposal(command)
+     \/ ENABLED ExecuteSignVote(command)
+     \/ ENABLED ExecuteSignTimeout(command))
+      => CommandExecutionEnabled(command)
+BY Isa DEF CommandExecutionEnabled
+
+THEOREM InstallGenerationBudgetExcludesExhaustion ==
+  \A node \in ValidatorIds:
+    AsyncInstallGenerationBudget
+      => ~InstallGenerationExhausted(node)
+BY Isa
+   DEF AsyncInstallGenerationBudget, InstallGenerationExhausted,
+       TypeInvariant, Generations
+
+THEOREM BusyCompletionCandidateExecutionIsEnabled ==
+  \A node \in ValidatorIds:
+    \A candidate:
+      /\ AsyncTypeInvariant
+      /\ AsyncBusyReadinessInvariant
+      /\ candidate \in BusyCompletionCandidates(node)
+      => \/ CommandExecutionEnabled(candidate)
+         \/ InstallGenerationExhausted(node)
+BY PersistProposalBusyArmEnabled,
+   PersistPrepareBusyArmEnabled,
+   PersistObservePrepareBusyArmEnabled,
+   PersistLockCommitBusyArmEnabled,
+   PersistTimeoutBusyArmEnabled,
+   PersistInstallBusyArmEnabled,
+   PersistDecisionBusyArmEnabled,
+   SignProposalBusyArmEnabled,
+   SignVoteBusyArmEnabled,
+   SignTimeoutBusyArmEnabled,
+   EnabledBusyArmImpliesCommandExecutionEnabled,
+   Isa
+   DEF BusyCompletionCandidates, InstallGenerationExhausted,
+       CommandMatches, TypeInvariant, Generations
+
+THEOREM BusyCompletionCandidateIsDispatchable ==
+  \A node \in ValidatorIds:
+    \A candidate:
+      /\ AsyncStrongTypeInvariant
+      /\ candidate \in BusyCompletionCandidates(node)
+      => \/ CommandDispatchable(candidate)
+         \/ InstallGenerationExhausted(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW candidate,
+                AsyncStrongTypeInvariant,
+                candidate \in BusyCompletionCandidates(node)
+         PROVE \/ CommandDispatchable(candidate)
+               \/ InstallGenerationExhausted(node)
+    <2>1. AsyncTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>2. AsyncSchedulerTypeInvariant
+      BY <2>1 DEF AsyncTypeInvariant
+    <2>3. AsyncBusyReadinessInvariant
+      BY <1>1
+         DEF AsyncStrongTypeInvariant,
+             AsyncSerializedBusyKernelInvariant
+    <2>4. AsyncCandidateTyped(candidate)
+      BY <1>1, <2>2, ActiveBusyCompletionCarrierIsTyped
+         DEF BusyCompletionCandidates
+    <2>5. /\ CandidateConsumerCurrent(candidate)
+           /\ candidate.class = "Completion"
+      BY <1>1 DEF BusyCompletionCandidates
+    <2>6. \/ CommandExecutionEnabled(candidate)
+           \/ InstallGenerationExhausted(node)
+      BY <1>1, <2>1, <2>3,
+         BusyCompletionCandidateExecutionIsEnabled
+    <2>7. CASE CommandExecutionEnabled(candidate)
+      BY <2>4, <2>5, <2>7 DEF CommandDispatchable
+    <2>8. CASE InstallGenerationExhausted(node)
+      BY <2>8
+    <2> QED BY <2>6, <2>7, <2>8
+  <1> QED BY <1>1
+
 THEOREM FifoRuntimePreservesProgressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncStrongTypeInvariant
@@ -4586,7 +5001,8 @@ THEOREM FifoRuntimePreservesProgressOwnership ==
     /\ UNCHANGED AsyncIoVars
     /\ FifoRuntimeStep(node)
     => AsyncProgressOwnershipInvariant'
-BY AsyncStrongTypeProjectsAsyncType,
+BY BusyCompletionCandidateIsDispatchable,
+   AsyncStrongTypeProjectsAsyncType,
    RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
    SequenceWithoutIndexFacts, TypedOwnedSequenceWithoutIndexFacts,
    ExecutedFreshCommandSuccessorsTypedAndOwned,
@@ -4779,11 +5195,12 @@ PROOF
                       source, recipient, qc, nonce)
       BY <1>1, <2>5, TransportOnlyFaultPreservesProgressOwnership
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                    subject \in Subjects, justifyRank \in Ranks,
-                    justifySubject \in SubjectOrNone:
+                    subject \in Subjects,
+                    timeoutCertificate \in TimeoutCertificateOptionSet,
+                    highestPrepare \in PrepareQcOptionSet:
                     AsyncByzantineProposal(
                       signer, roundView, subject,
-                      justifyRank, justifySubject)
+                      timeoutCertificate, highestPrepare)
       BY <1>1, <2>6, TransportOnlyFaultPreservesProgressOwnership
     <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
                     phase \in Phases, subject \in Subjects:
@@ -4791,9 +5208,9 @@ PROOF
                       signer, roundView, phase, subject)
       BY <1>1, <2>7, TransportOnlyFaultPreservesProgressOwnership
     <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
-                    highRank \in Ranks, highSubject \in SubjectOrNone:
+                    highestPrepare \in PrepareQcOptionSet:
                     AsyncByzantineTimeout(
-                      signer, roundView, highRank, highSubject)
+                      signer, roundView, highestPrepare)
       BY <1>1, <2>8, TransportOnlyFaultPreservesProgressOwnership
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4,
                 <2>5, <2>6, <2>7, <2>8 DEF AsyncFaultStep
@@ -4837,9 +5254,9 @@ PROOF
       BY <1>1, <2>5, HistoricalRecoveryTargetsAreValidators,
          DirectCommitDiscoveryPreservesProgressOwnership
          DEF DirectHistoricalCommitCertificateDiscoveryStep
-    <2>6. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>6. CASE \E node \in AsyncArchiveIoServiceNodes:
                   ServiceIoWorker(node)
-      BY <1>1, <2>6, AsyncCurrentResponsiveVotersAreValidators,
+      BY <1>1, <2>6, AsyncArchiveIoServiceNodesAreValidators,
          ServiceIoWorkerPreservesProgressOwnership
          DEF ServiceIoWorker
     <2>7. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -4891,7 +5308,7 @@ PROOF
              HistoricalRecoveryTargetsAreValidators,
              RunNodeWorkPreservesProgressOwnership
              DEF RunHistoricalRecoveryNode
-        <4>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+        <4>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                       RunHistoricalServer(node)
           BY <1>1, <2>1, <3>1, <4>3,
              HistoricalRunnerPreservesProgressOwnership

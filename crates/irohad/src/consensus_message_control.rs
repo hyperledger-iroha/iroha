@@ -46,7 +46,7 @@ pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_D
 
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 3;
+const FORMAT_VERSION: u64 = 4;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -154,6 +154,7 @@ struct MessageMeta {
     subject: Option<BlockSubject>,
     execution_commitment: Option<ExecutionCommitment>,
     signer: Option<ValidatorIndex>,
+    cited_responder: Option<ValidatorIndex>,
     certificate_signers: Vec<ValidatorIndex>,
     envelope_digest: Hash,
 }
@@ -1072,6 +1073,13 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
         ),
         ("certificate_signers", Value::Array(certificate_signers)),
         (
+            "cited_responder",
+            descriptor
+                .meta
+                .cited_responder
+                .map_or(Value::Null, |responder| Value::from(u64::from(responder))),
+        ),
+        (
             "envelope_digest",
             Value::from(descriptor.meta.envelope_digest.to_string()),
         ),
@@ -1232,7 +1240,7 @@ fn message_meta(
                 Some(value.manifest.round),
                 Some(value.manifest.subject),
                 None,
-                Some(value.responder),
+                None,
                 Vec::new(),
             ),
             ConsensusMessageV2Payload::CommitCertificateRequest(value) => {
@@ -1246,6 +1254,7 @@ fn message_meta(
                     subject: None,
                     execution_commitment: None,
                     signer: None,
+                    cited_responder: None,
                     certificate_signers: Vec::new(),
                     envelope_digest,
                 };
@@ -1261,6 +1270,10 @@ fn message_meta(
                 value.certificate.signers.clone(),
             ),
         };
+    let cited_responder = match &message.payload {
+        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.cited_responder),
+        _ => None,
+    };
     let meta = MessageMeta {
         sender,
         authenticated_via: authenticated_via.clone(),
@@ -1271,6 +1284,7 @@ fn message_meta(
         subject,
         execution_commitment,
         signer,
+        cited_responder,
         certificate_signers,
         envelope_digest,
     };
@@ -1306,7 +1320,11 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     let has_subject_and_execution = meta.subject.is_some() && meta.execution_commitment.is_some();
     let has_no_subject_or_execution = meta.subject.is_none() && meta.execution_commitment.is_none();
     let has_single_signer = meta.signer.is_some();
+    let has_cited_responder = meta.cited_responder.is_some();
     let has_certificate_signers = !meta.certificate_signers.is_empty();
+    if (meta.kind == MessageKind::CertifiedBodyResponse) != has_cited_responder {
+        return Err(ControlError::InvalidMessageDescriptor);
+    }
     let has_round = meta.height.is_some() && meta.view.is_some();
     let valid = match meta.kind {
         MessageKind::Proposal => {
@@ -1355,7 +1373,7 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
             has_round
                 && meta.subject.is_some()
                 && meta.execution_commitment.is_none()
-                && has_single_signer
+                && !has_single_signer
                 && !has_certificate_signers
         }
         MessageKind::CommitCertificateRequest => {
@@ -1686,15 +1704,31 @@ mod tests {
     fn valid_meta(kind: MessageKind) -> MessageMeta {
         let sender = peer(42);
         let subject = subject(7);
-        let (height, view, subject, execution_commitment, signer, certificate_signers) = match kind
-        {
-            MessageKind::Proposal => (Some(9), Some(2), Some(subject), None, Some(0), Vec::new()),
+        let (
+            height,
+            view,
+            subject,
+            execution_commitment,
+            signer,
+            cited_responder,
+            certificate_signers,
+        ) = match kind {
+            MessageKind::Proposal => (
+                Some(9),
+                Some(2),
+                Some(subject),
+                None,
+                Some(0),
+                None,
+                Vec::new(),
+            ),
             MessageKind::PrepareVote | MessageKind::CommitVote => (
                 Some(9),
                 Some(2),
                 Some(subject),
                 Some(execution_commitment(7)),
                 Some(0),
+                None,
                 Vec::new(),
             ),
             MessageKind::PrepareCertificate
@@ -1706,18 +1740,35 @@ mod tests {
                 Some(subject),
                 Some(execution_commitment(7)),
                 None,
+                None,
                 vec![0, 1, 2],
             ),
-            MessageKind::TimeoutVote => (Some(9), Some(2), None, None, Some(0), Vec::new()),
-            MessageKind::TimeoutCertificate => (Some(9), Some(2), None, None, None, vec![0, 1, 2]),
-            MessageKind::PayloadManifest => {
-                (Some(9), Some(2), Some(subject), None, None, Vec::new())
+            MessageKind::TimeoutVote => (Some(9), Some(2), None, None, Some(0), None, Vec::new()),
+            MessageKind::TimeoutCertificate => {
+                (Some(9), Some(2), None, None, None, None, vec![0, 1, 2])
             }
-            MessageKind::PayloadChunk => (None, None, None, None, Some(0), Vec::new()),
-            MessageKind::CertifiedBodyResponse => {
-                (Some(9), Some(2), Some(subject), None, Some(0), Vec::new())
+            MessageKind::PayloadManifest => (
+                Some(9),
+                Some(2),
+                Some(subject),
+                None,
+                None,
+                None,
+                Vec::new(),
+            ),
+            MessageKind::PayloadChunk => (None, None, None, None, Some(0), None, Vec::new()),
+            MessageKind::CertifiedBodyResponse => (
+                Some(9),
+                Some(2),
+                Some(subject),
+                None,
+                None,
+                Some(0),
+                Vec::new(),
+            ),
+            MessageKind::CommitCertificateRequest => {
+                (Some(9), None, None, None, None, None, Vec::new())
             }
-            MessageKind::CommitCertificateRequest => (Some(9), None, None, None, None, Vec::new()),
         };
         MessageMeta {
             sender: sender.clone(),
@@ -1729,6 +1780,7 @@ mod tests {
             subject,
             execution_commitment,
             signer,
+            cited_responder,
             certificate_signers,
             envelope_digest: Hash::new([kind as u8, 0x5A]),
         }
@@ -1787,6 +1839,7 @@ mod tests {
             subject: None,
             execution_commitment: None,
             signer: Some(0),
+            cited_responder: None,
             certificate_signers: Vec::new(),
             envelope_digest: Hash::new(b"exact-envelope"),
         };
@@ -1841,12 +1894,17 @@ mod tests {
             let meta = valid_meta(kind);
             validate_message_meta(&meta)
                 .unwrap_or_else(|error| panic!("valid {kind:?} descriptor failed: {error}"));
-            descriptor_value(&HeldDescriptor {
+            let descriptor = descriptor_value(&HeldDescriptor {
                 sequence: 1,
                 meta,
                 size_bytes: 1,
             })
             .unwrap_or_else(|error| panic!("valid {kind:?} descriptor did not encode: {error}"));
+            if kind == MessageKind::CertifiedBodyResponse {
+                let descriptor = descriptor.as_object().expect("descriptor object");
+                assert_eq!(descriptor.get("signer"), Some(&Value::Null));
+                assert_eq!(descriptor.get("cited_responder"), Some(&Value::from(0_u64)));
+            }
         }
     }
 
@@ -1886,6 +1944,18 @@ mod tests {
         let mut missing_vote_signer = valid_meta(MessageKind::PrepareVote);
         missing_vote_signer.signer = None;
         cases.push(missing_vote_signer);
+
+        let mut missing_cited_responder = valid_meta(MessageKind::CertifiedBodyResponse);
+        missing_cited_responder.cited_responder = None;
+        cases.push(missing_cited_responder);
+
+        let mut false_response_signer = valid_meta(MessageKind::CertifiedBodyResponse);
+        false_response_signer.signer = Some(0);
+        cases.push(false_response_signer);
+
+        let mut spurious_cited_responder = valid_meta(MessageKind::PrepareVote);
+        spurious_cited_responder.cited_responder = Some(0);
+        cases.push(spurious_cited_responder);
 
         for meta in cases {
             assert!(matches!(

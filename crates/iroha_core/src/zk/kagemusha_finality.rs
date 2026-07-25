@@ -1224,8 +1224,8 @@ mod tests {
                     &fixture.manifest,
                     fixture.manifest_digest,
                 )
-                .expect_err("a tampered proposal origin must fail aggregate verification"),
-            KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature
+                .expect_err("a non-same-round proposal origin must fail structural validation"),
+            KagemushaTopUpFinalityVerifyError::InvalidStructure
         );
     }
 

@@ -12,12 +12,12 @@ TC-owned acquisition, ordinary proposal acquisition, capacity accounting,
 cryptographic collision resistance, and the complete AsyncNext induction are
 owned by separate proof obligations.
 
-The production TLA+ wire item does not expose the Rust request signature or
-request hash as fields.  `DecisionRawSignedRequest` therefore retains every
-modeled signed preimage field plus a symbolic signature, and
-`DecisionRawRequestHash` is a collision-free structural surrogate for
-`HashOf<CertifiedBodyRequest>`.  This is intentionally distinct from the
-14-field `ExactAsyncCandidateIdentity`, whose consumer generation is volatile.
+The base wire occurrence carries requester, the full frozen QC, and a finite
+symbolic signature nonce.  Its physical archive recipient remains outside the
+exact signed-request projection.  `DecisionRawRequestHash` aliases that shared
+collision-free structural surrogate for `HashOf<CertifiedBodyRequest>`.  It is
+intentionally distinct from the 14-field `ExactAsyncCandidateIdentity`, whose
+consumer generation is volatile.
 ***************************************************************************)
 
 DecisionCommitAuthority(node, qc) ==
@@ -27,21 +27,16 @@ DecisionCommitAuthority(node, qc) ==
   /\ [node |-> node, qc |-> qc] \in decisions
 
 DecisionRawRequestPreimage(node, qc) ==
-  [round |-> [height |-> qc.context.height, view |-> qc.view],
-   subject |-> qc.subject,
-   certificate |-> qc,
-   requester |-> node]
+  AsyncCertifiedRequestPreimage(node, qc)
 
 DecisionRawRequestSignature(node, qc) ==
-  [signer |-> node,
-   preimage |-> DecisionRawRequestPreimage(node, qc)]
+  AsyncCertifiedRequestSignature(node, qc, 0)
 
 DecisionRawSignedRequest(node, qc) ==
-  [preimage |-> DecisionRawRequestPreimage(node, qc),
-   signature |-> DecisionRawRequestSignature(node, qc)]
+  AsyncCertifiedSignedRequest(node, qc, 0)
 
 DecisionRawRequestHash(node, qc) ==
-  [exactSignedRequest |-> DecisionRawSignedRequest(node, qc)]
+  AsyncCertifiedRequestHashOf(node, qc, 0)
 
 DecisionRequestOccurrences(node, qc) ==
   CertifiedRequestOutbox(node, qc)
@@ -60,13 +55,15 @@ does not participate in the single outstanding logical registration.
 ***************************************************************************)
 
 CertifiedRequestLogicalIdentity(request) ==
-  [round |-> [height |-> request.envelope.height,
+  [round |-> [context |-> request.envelope.certificate.context,
+              height |-> request.envelope.height,
               view |-> request.envelope.view],
    subject |-> request.envelope.subject,
    requester |-> request.source]
 
 DecisionLogicalRequestIdentity(node, qc) ==
-  [round |-> [height |-> qc.context.height, view |-> qc.view],
+  [round |-> [context |-> qc.context,
+              height |-> qc.context.height, view |-> qc.view],
    subject |-> qc.subject,
    requester |-> node]
 
@@ -116,20 +113,59 @@ THEOREM DecisionOutboxHasOneLogicalRegistration ==
   \A node, qc:
     DecisionCommitAuthority(node, qc)
       => \A request \in DecisionRequestOccurrences(node, qc):
-           CertifiedRequestLogicalIdentity(request)
-             = DecisionLogicalRequestIdentity(node, qc)
+           /\ CertifiedRequestLogicalIdentity(request)
+                = DecisionLogicalRequestIdentity(node, qc)
+           /\ request.envelope.certificate = qc
+           /\ AsyncCertifiedRequestHash(request)
+                = DecisionRawRequestHash(node, qc)
 BY SMT
    DEF DecisionCommitAuthority,
        DecisionRequestOccurrences, CertifiedRequestOutbox,
        CertifiedRequestLogicalIdentity, DecisionLogicalRequestIdentity,
-       AsyncNetworkItem, AsyncBodyEnvelope
+       DecisionRawRequestHash, AsyncCertifiedRequestHash,
+       AsyncCertifiedRequestHashOf, AsyncCertifiedSignedRequest,
+       AsyncCertifiedRequestSignature, AsyncCertifiedRequestPreimage,
+       AsyncNetworkItem, AsyncCertifiedRequestEnvelope
 
 THEOREM DecisionRawHashIsTransportFanoutIndependent ==
   \A node, qc:
     \A left, right \in DecisionRequestOccurrences(node, qc):
-      DecisionRawRequestHash(node, qc)
-        = DecisionRawRequestHash(node, qc)
-OBVIOUS
+      /\ AsyncCertifiedRequestHash(left)
+           = DecisionRawRequestHash(node, qc)
+      /\ AsyncCertifiedRequestHash(right)
+           = DecisionRawRequestHash(node, qc)
+      /\ AsyncCertifiedRequestHash(left)
+           = AsyncCertifiedRequestHash(right)
+BY SMT
+   DEF DecisionRequestOccurrences, CertifiedRequestOutbox,
+       DecisionRawRequestHash, AsyncCertifiedRequestHash,
+       AsyncCertifiedRequestHashOf, AsyncCertifiedSignedRequest,
+       AsyncCertifiedRequestSignature, AsyncCertifiedRequestPreimage,
+       AsyncNetworkItem, AsyncCertifiedRequestEnvelope
+
+THEOREM DecisionOutboxLogicalIndexIsConsistent ==
+  \A node, qc:
+    DecisionCommitAuthority(node, qc)
+      => AsyncCertifiedRequestLogicalIndexConsistent(
+           DecisionRequestOccurrences(node, qc))
+BY DecisionOutboxHasOneLogicalRegistration,
+   DecisionRawHashIsTransportFanoutIndependent, SMT
+   DEF AsyncCertifiedRequestLogicalIndexConsistent,
+       AsyncCertifiedRequestsIn,
+       AsyncCertifiedRequestAliasesCompatible
+
+THEOREM DecisionOutboxReplySemanticIsRouteFree ==
+  \A node, qc:
+    \A left, right \in DecisionRequestOccurrences(node, qc):
+      AsyncReplySemanticIdentity(left.kind, left.envelope)
+        = AsyncReplySemanticIdentity(right.kind, right.envelope)
+BY DecisionRawHashIsTransportFanoutIndependent, SMT
+   DEF DecisionRequestOccurrences, CertifiedRequestOutbox,
+       AsyncReplySemanticIdentity, DecisionRawRequestHash,
+       AsyncCertifiedRequestHash, AsyncCertifiedRequestHashOf,
+       AsyncCertifiedSignedRequest, AsyncCertifiedRequestSignature,
+       AsyncCertifiedRequestPreimage, AsyncNetworkItem,
+       AsyncCertifiedRequestEnvelope
 
 THEOREM DecisionRegisteredOccurrenceHasExactSource ==
   \A node, qc:
@@ -137,7 +173,8 @@ THEOREM DecisionRegisteredOccurrenceHasExactSource ==
       request.source = node
 BY SMT
    DEF DecisionRegisteredOccurrences, DecisionRequestOccurrences,
-       CertifiedRequestOutbox, AsyncNetworkItem, AsyncBodyEnvelope
+       CertifiedRequestOutbox, AsyncNetworkItem,
+       AsyncCertifiedRequestEnvelope
 
 THEOREM DecisionRequestCandidateIdentityHasExactProductionShape ==
   \A request, consumerView, consumerGeneration:
@@ -224,7 +261,8 @@ BY SMT
    DEF PreGstResponsiveCrash, Crash, AsyncSchedulerVars,
        DecisionRegisteredOccurrences, DecisionRequestOccurrences,
        DecisionRawHashRegistered, DecisionCommitAuthority,
-       CertifiedRequestOutbox, AsyncNetworkItem, AsyncBodyEnvelope
+       CertifiedRequestOutbox, CertifiedArchiveRoutes,
+       AsyncNetworkItem, AsyncCertifiedRequestEnvelope
 
 THEOREM AuthenticatedRestartPreservesRawRegistration ==
   PreGstResponsiveRestart
@@ -237,7 +275,8 @@ BY SMT
    DEF PreGstResponsiveRestart, Restart, AsyncSchedulerVars,
        DecisionRegisteredOccurrences, DecisionRequestOccurrences,
        DecisionRawHashRegistered, DecisionCommitAuthority,
-       CertifiedRequestOutbox, AsyncNetworkItem, AsyncBodyEnvelope
+       CertifiedRequestOutbox, CertifiedArchiveRoutes,
+       AsyncNetworkItem, AsyncCertifiedRequestEnvelope
 
 THEOREM AuthenticatedRestartRetagsSourceConsumerGeneration ==
   \A request:
@@ -262,7 +301,8 @@ BY SMT
    DEF PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
        DecisionRegisteredOccurrences, DecisionRequestOccurrences,
        DecisionRawHashRegistered, DecisionCommitAuthority,
-       CertifiedRequestOutbox, AsyncNetworkItem, AsyncBodyEnvelope
+       CertifiedRequestOutbox, CertifiedArchiveRoutes,
+       AsyncNetworkItem, AsyncCertifiedRequestEnvelope
 
 (***************************************************************************
 The replay reset does not synthesize or retain an old-generation request
@@ -311,6 +351,30 @@ DecisionCertifiedPublish(node, qc) ==
   /\ UNCHANGED <<context, decisions>>
   /\ PublishCertifiedRequests(DecisionRequestOccurrences(node, qc))
 
+THEOREM DecisionCertifiedPublishUsesCompatibleLogicalIndex ==
+  \A node, qc:
+    DecisionCertifiedPublish(node, qc)
+      => /\ AsyncCertifiedRequestLogicalIndexConsistent(
+               DecisionRequestOccurrences(node, qc))
+         /\ AsyncCertifiedRequestSetsCompatible(
+              asyncActiveRequests,
+              DecisionRequestOccurrences(node, qc))
+BY SMT
+   DEF DecisionCertifiedPublish, PublishCertifiedRequests
+
+THEOREM DecisionCertifiedPublishPreservesLogicalIndex ==
+  \A node, qc:
+    /\ AsyncActiveRequestLogicalIndexConsistencyInvariant
+    /\ DecisionCertifiedPublish(node, qc)
+    => AsyncActiveRequestLogicalIndexConsistencyInvariant'
+BY SMT
+   DEF DecisionCertifiedPublish, PublishCertifiedRequests,
+       AsyncActiveRequestLogicalIndexConsistencyInvariant,
+       AsyncCertifiedRequestLogicalIndexConsistent,
+       AsyncCertifiedRequestSetsCompatible,
+       AsyncCertifiedRequestsIn,
+       AsyncCertifiedRequestAliasesCompatible
+
 THEOREM DecisionCertifiedPublishRetainsCommitAuthority ==
   \A node, qc:
     DecisionCertifiedPublish(node, qc)
@@ -331,7 +395,8 @@ THEOREM DecisionOccurrencesStableWhenContextIsFramed ==
            = DecisionRequestOccurrences(node, qc)
 BY SMT
    DEF DecisionRequestOccurrences, CertifiedRequestOutbox,
-       AsyncNetworkItem, AsyncBodyEnvelope
+       CertifiedArchiveRoutes, AsyncNetworkItem,
+       AsyncCertifiedRequestEnvelope
 
 THEOREM DecisionCertifiedPublishAddsRegistrationOccurrences ==
   \A node, qc:
@@ -370,4 +435,3 @@ recovery authority; the concrete executor/runner trace mapping remains in
 ***************************************************************************)
 
 =============================================================================
-

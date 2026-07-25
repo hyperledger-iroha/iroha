@@ -48,12 +48,21 @@ AsyncTransportClockTypeVars ==
   <<asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines>>
 
+\* The claimed response is an opaque preauthenticated capability.  No mutable
+\* Core variable is part of its post-admission provenance frame.
+AsyncCertifiedResponseClaimCoreAuthorityVars == <<>>
+
+AsyncCertifiedResponseClaimAuthorityVars ==
+  <<asyncSentItems, asyncActiveRequests,
+    asyncCertifiedResponseClaim>>
+
 AsyncTransportContentTypeVars ==
-  <<context, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+  <<context, AsyncCertifiedResponseClaimAuthorityVars, asyncRetainedControl,
     asyncTransport, asyncHeldChunks>>
 
 AsyncTransportHistoryTypeVars ==
-  <<context, asyncSentItems, asyncRetainedControl, asyncActiveRequests>>
+  <<context, AsyncCertifiedResponseClaimAuthorityVars,
+    asyncRetainedControl>>
 
 AsyncIngressTopologyTypeVars == <<asyncIngressLanes, asyncIngressReady>>
 
@@ -149,7 +158,10 @@ BY Isa
    DEF AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
        AsyncPacketContentTypeInvariant, AsyncHeldChunksTypeInvariant,
-       AsyncTransportContentTypeVars, CurrentVoters, CurrentEpoch
+       AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars,
+       AsyncCertifiedResponseClaimCoreAuthorityVars,
+       CurrentVoters, CurrentEpoch
 
 THEOREM AsyncTransportHistoryTypeStutter ==
   AsyncTransportHistoryTypeInvariant
@@ -157,7 +169,10 @@ THEOREM AsyncTransportHistoryTypeStutter ==
     => AsyncTransportHistoryTypeInvariant'
 BY Isa
    DEF AsyncTransportHistoryTypeInvariant,
-       AsyncTransportHistoryTypeVars, CurrentVoters, CurrentEpoch
+       AsyncTransportHistoryTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars,
+       AsyncCertifiedResponseClaimCoreAuthorityVars,
+       CurrentVoters, CurrentEpoch
 
 THEOREM AsyncHeldChunksTypeStutter ==
   AsyncHeldChunksTypeInvariant /\ UNCHANGED asyncHeldChunks
@@ -210,7 +225,9 @@ BY AsyncRuntimeScalarTypeStutter, AsyncCausalTypeStutter,
        AsyncRuntimeScalarTypeVars, AsyncIoTopologyTypeVars,
        AsyncIoContentTypeVars, AsyncIoCapacityTypeVars,
        AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
-       AsyncTransportContentTypeVars, AsyncIngressTopologyTypeVars,
+       AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars,
+       AsyncIngressTopologyTypeVars,
        AsyncSchedulerVars
 
 THEOREM AsyncAllVarsStutterPreservesSchedulerType ==
@@ -281,6 +298,7 @@ PROOF
              AsyncIoContentTypeVars, AsyncIoCapacityTypeVars,
              AsyncDeferredTopologyTypeVars,
              AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncIngressTopologyTypeVars, vars
     <2>10. /\ AsyncCausalTypeInvariant'
            /\ AsyncIoTopologyTypeInvariant'
@@ -339,6 +357,7 @@ PROOF
            /\ UNCHANGED asyncHeldChunks
       BY <1>1, Isa
          DEF PreGstLosePacket, AsyncTransportHistoryTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncSchedulerVars, vars
     <2>8. /\ AsyncTransportHistoryTypeInvariant'
            /\ AsyncHeldChunksTypeInvariant'
@@ -472,6 +491,54 @@ PROOF
          DEF ModelConfiguration, QuorumConfiguration, VotingRoster
     <2> QED BY <2>9, Isa
          DEF AsyncCurrentResponsiveVoters, CurrentVoters
+  <1> QED BY <1>1
+
+THEOREM ResponsiveAreValidators ==
+  TypeInvariant => Responsive \subseteq ValidatorIds
+BY SMT
+   DEF TypeInvariant, ModelConfiguration, QuorumConfiguration
+
+THEOREM AsyncResponsiveAppliedArchiveServersAreValidators ==
+  AsyncResponsiveAppliedArchiveServers \subseteq ValidatorIds
+BY Isa
+   DEF AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers, AsyncArchiveServerIds
+
+THEOREM AsyncResponsiveAppliedArchiveServersAreResponsive ==
+  AsyncResponsiveAppliedArchiveServers \subseteq Responsive
+BY Isa
+   DEF AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers
+
+THEOREM AsyncArchiveIoServiceNodesAreValidators ==
+  TypeInvariant => AsyncArchiveIoServiceNodes \subseteq ValidatorIds
+BY AsyncCurrentResponsiveVotersAreValidators,
+   AsyncResponsiveAppliedArchiveServersAreValidators,
+   Isa
+   DEF AsyncArchiveIoServiceNodes
+
+THEOREM AsyncArchiveIoServiceNodesAreResponsive ==
+  AsyncArchiveIoServiceNodes \subseteq Responsive
+BY AsyncResponsiveAppliedArchiveServersAreResponsive, Isa
+   DEF AsyncArchiveIoServiceNodes, AsyncCurrentResponsiveVoters
+
+THEOREM AsyncTimedServiceNodesAreValidators ==
+  AsyncTypeInvariant => AsyncTimedServiceNodes \subseteq ValidatorIds
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant
+         PROVE AsyncTimedServiceNodes \subseteq ValidatorIds
+    <2>1. /\ TypeInvariant
+           /\ AsyncArchiveIoServiceNodes \subseteq ValidatorIds
+           /\ asyncHistoricalRecoveryTargets
+                \subseteq Responsive \cap up
+      BY <1>1, AsyncArchiveIoServiceNodesAreValidators
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncHistoricalRecoveryTypeInvariant
+    <2>2. Responsive \subseteq ValidatorIds
+      BY <2>1, ResponsiveAreValidators
+    <2> QED BY <2>1, <2>2, Isa DEF AsyncTimedServiceNodes
   <1> QED BY <1>1
 
 THEOREM AppendSequenceFacts ==
@@ -988,27 +1055,36 @@ AsyncIoReadyAfterService(queue, ioReadyQueue) ==
   THEN Append(ioReadyQueue, Head(queue).candidate)
   ELSE ioReadyQueue
 
-AsyncIoResponseItemsAfterService(queue) ==
+AsyncIoResponseItemsAfterService(node, queue) ==
   LET job == Head(queue)
   IN IF job.class # "Serve"
      THEN {}
-     ELSE IF CertifiedServeCanRespond(job.candidate.item)
-          THEN {CertifiedResponseItem(job.candidate.item)}
+     ELSE IF CertifiedServeCanRespond(node, job.candidate.item)
+          THEN {CertifiedResponseItem(
+                  AsyncUntrustedSource, node, job.candidate.item)}
           ELSE IF CommitCertificateServeCanRespond(job.candidate.item)
                THEN CommitCertificateResponseItems(job.candidate.item)
                ELSE {}
 
 THEOREM CertifiedResponseItemIsTyped ==
-  \A request:
+  \A via, archiveServer, request:
     /\ AsyncConfiguration
+    /\ via \in AsyncIngressSources
+    /\ archiveServer \in AsyncArchiveServerIds
     /\ AsyncItemTyped(request)
     /\ request.kind = "CertifiedRequest"
-    => AsyncItemTyped(CertifiedResponseItem(request))
+    => AsyncItemTyped(
+         CertifiedResponseItem(via, archiveServer, request))
 BY SMTT(30)
    DEF AsyncConfiguration, AsyncItemTyped, CertifiedResponseItem,
-       AsyncNetworkItem, AsyncBodyEnvelope, AsyncBodyEnvelopeTyped,
-       AsyncNetworkKinds, AsyncIngressSources, ValidatorIds,
-       AsyncHeartbeatSubject, NoAsyncChunk
+       AsyncNetworkItem, AsyncCertifiedResponseEnvelope,
+       AsyncCertifiedResponseEnvelopeTyped, AsyncReplyRequestItemTyped,
+       AsyncBodyEnvelopeTyped, AsyncNetworkKinds, AsyncIngressSources,
+       AsyncArchiveServerIds, ValidatorIds,
+       AsyncHeartbeatSubject, NoAsyncChunk,
+       AsyncCertifiedCitedResponder, AsyncCertifiedRequestHash,
+       AsyncCertifiedRequestHashes, AsyncCertifiedRequestItems,
+       AsyncCertifiedRequestEnvelope
 
 THEOREM CommitCertificateResponseItemIsTyped ==
   \A request, qc:
@@ -1016,72 +1092,176 @@ THEOREM CommitCertificateResponseItemIsTyped ==
     /\ request.kind = "CommitCertificateRequest"
     /\ qc \in QcRecordSet
     => AsyncItemTyped(CommitCertificateResponseItem(request, qc))
+BY SMTT(60)
+   DEF AsyncItemTyped, CommitCertificateResponseItem,
+       AsyncNetworkItem, AsyncCommitCertificateResponseEnvelope,
+       AsyncCommitCertificateResponseEnvelopeTyped,
+       AsyncReplyRequestItemTyped, AsyncBodyEnvelopeTyped,
+       AsyncNetworkKinds, AsyncIngressSources, ValidatorIds
+
+THEOREM RuntimeCurrentEpochIsTyped ==
+  TypeInvariant => CurrentEpoch \in Epochs
 PROOF
-  <1>1. ASSUME NEW request, NEW qc,
-                AsyncItemTyped(request),
-                request.kind = "CommitCertificateRequest",
-                qc \in QcRecordSet
-         PROVE AsyncItemTyped(CommitCertificateResponseItem(request, qc))
-    <2>1. /\ request.source \in ValidatorIds
-           /\ request.envelope.recipient \in ValidatorIds
-      BY <1>1, SMT DEF AsyncItemTyped
-    <2>2. QcEnvelope(request.source, qc) \in QcEnvelopeSet
-      BY <1>1, <2>1, Isa DEF QcEnvelope, QcEnvelopeSet
-    <2>3. /\ DOMAIN CommitCertificateResponseItem(request, qc) =
-                  {"kind", "source", "envelope"}
-           /\ CommitCertificateResponseItem(request, qc).kind =
-                  "CommitCertificateResponse"
-           /\ CommitCertificateResponseItem(request, qc).source =
-                  request.envelope.recipient
-           /\ CommitCertificateResponseItem(request, qc).envelope =
-                  QcEnvelope(request.source, qc)
-      BY DEF CommitCertificateResponseItem, AsyncNetworkItem
-    <2>4. CommitCertificateResponseItem(request, qc).kind
-             \in AsyncNetworkKinds
-      BY <2>3, SMT DEF AsyncNetworkKinds
-    <2>5. CommitCertificateResponseItem(request, qc).source
-             \in ValidatorIds
-      BY <2>1, <2>3
-    <2>6. CommitCertificateResponseItem(request, qc).envelope.recipient
-             \in ValidatorIds
-      BY <2>1, <2>3, SMT DEF QcEnvelope
-    <2>7. /\ CommitCertificateResponseItem(request, qc).source
-                    \in AsyncIngressSources
-           /\ (CommitCertificateResponseItem(request, qc).kind # "Noise"
-                 => CommitCertificateResponseItem(request, qc).source
-                      \in ValidatorIds)
-      BY <2>5, Isa DEF AsyncIngressSources
-    <2>8. (CASE CommitCertificateResponseItem(request, qc).kind =
-                    "Proposal" ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in ProposalEnvelopeSet
-           [] CommitCertificateResponseItem(request, qc).kind
-                    \in {"PrepareVote", "CommitVote"} ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in VoteEnvelopeSet
-           [] CommitCertificateResponseItem(request, qc).kind
-                    \in {"PrepareQC", "CommitQC"} ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in QcEnvelopeSet
-           [] CommitCertificateResponseItem(request, qc).kind =
-                    "TimeoutVote" ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in TimeoutEnvelopeSet
-           [] CommitCertificateResponseItem(request, qc).kind =
-                    "TimeoutCertificate" ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in TcEnvelopeSet
-           [] CommitCertificateResponseItem(request, qc).kind =
-                    "CommitCertificateResponse" ->
-                  CommitCertificateResponseItem(request, qc).envelope
-                    \in QcEnvelopeSet
-           [] OTHER ->
-                  AsyncBodyEnvelopeTyped(
-                    CommitCertificateResponseItem(request, qc).envelope))
-      BY <2>2, <2>3, SMT
-    <2> QED BY <2>3, <2>4, <2>6, <2>7, <2>8
-         DEF AsyncItemTyped
+  <1>1. ASSUME TypeInvariant
+         PROVE CurrentEpoch \in Epochs
+    <2>1. /\ ModelConfiguration
+           /\ context \in ContextRecords
+      BY <1>1 DEF TypeInvariant
+    <2>2. PICK blockHeight \in Heights:
+             \E lineage \in LineagesAt(blockHeight):
+               context = ContextRecord(blockHeight, lineage)
+      BY <2>1, Isa DEF ContextRecords
+    <2>3. PICK lineage \in LineagesAt(blockHeight):
+             context = ContextRecord(blockHeight, lineage)
+      BY <2>2
+    <2>4. /\ context.epoch = ExpectedEpoch(blockHeight)
+           /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
+      BY <2>1, <2>3 DEF ContextRecord, ModelConfiguration
+    <2>5. /\ blockHeight \in Nat
+           /\ blockHeight <= MaxHeight
+           /\ MaxHeight \in Nat
+           /\ EpochLength \in Nat \ {0}
+           /\ MaxEpoch \in Nat
+      BY <2>1, <2>2, SMT
+         DEF Heights, ModelConfiguration, QuorumConfiguration
+    <2>6. ExpectedEpoch(blockHeight) \in 0..MaxEpoch
+      BY <2>4, <2>5, BoundedNaturalQuotient DEF ExpectedEpoch
+    <2> QED BY <2>4, <2>6 DEF CurrentEpoch, Epochs
   <1> QED BY <1>1
+
+THEOREM RuntimeCurrentVotersAreFiniteValidators ==
+  TypeInvariant
+    => /\ IsFiniteSet(CurrentVoters)
+       /\ CurrentVoters \subseteq ValidatorIds
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE /\ IsFiniteSet(CurrentVoters)
+               /\ CurrentVoters \subseteq ValidatorIds
+    <2>1. /\ QuorumConfiguration
+           /\ CurrentEpoch \in Epochs
+      BY <1>1, RuntimeCurrentEpochIsTyped
+         DEF TypeInvariant, ModelConfiguration
+    <2> QED BY <2>1 DEF QuorumConfiguration, CurrentVoters,
+                             VotingRoster
+  <1> QED BY <1>1
+
+THEOREM HistoricalResponseItemsSeparateRotatedHopFromExactRequest ==
+  \A request, qc, archiveServer:
+    /\ TypeInvariant
+    /\ AsyncItemTyped(request)
+    /\ request.kind = "CertifiedRequest"
+    /\ qc \in QcRecordSet
+    /\ archiveServer \in AsyncArchiveServerIds
+    => LET bodyResponse ==
+             CertifiedResponseItem(
+               AsyncUntrustedSource, archiveServer, request)
+           certificateResponse ==
+             CommitCertificateResponseItem(request, qc)
+       IN /\ bodyResponse.source = AsyncUntrustedSource
+          /\ certificateResponse.source = AsyncUntrustedSource
+          /\ AsyncUntrustedSource \in AsyncIngressSources
+          /\ AsyncUntrustedSource \notin CurrentVoters
+          /\ bodyResponse.envelope.requestHash =
+               AsyncCertifiedRequestHash(request)
+          /\ bodyResponse.envelope.archiveServer = archiveServer
+          /\ bodyResponse.envelope.signatureOwner = archiveServer
+          /\ certificateResponse.envelope.request = request
+PROOF
+  <1>1. ASSUME NEW request, NEW qc, NEW archiveServer,
+                TypeInvariant,
+                AsyncItemTyped(request),
+                request.kind = "CertifiedRequest",
+                qc \in QcRecordSet,
+                archiveServer \in AsyncArchiveServerIds
+         PROVE LET bodyResponse ==
+                       CertifiedResponseItem(
+                         AsyncUntrustedSource, archiveServer, request)
+                   certificateResponse ==
+                     CommitCertificateResponseItem(request, qc)
+               IN /\ bodyResponse.source = AsyncUntrustedSource
+                  /\ certificateResponse.source = AsyncUntrustedSource
+                  /\ AsyncUntrustedSource \in AsyncIngressSources
+                  /\ AsyncUntrustedSource \notin CurrentVoters
+                  /\ bodyResponse.envelope.requestHash =
+                       AsyncCertifiedRequestHash(request)
+                  /\ bodyResponse.envelope.archiveServer = archiveServer
+                  /\ bodyResponse.envelope.signatureOwner = archiveServer
+                  /\ certificateResponse.envelope.request = request
+    <2>1. CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+    <2>2. AsyncUntrustedSource \notin ValidatorIds
+      BY SMT DEF AsyncUntrustedSource, ValidatorIds
+    <2> QED BY <2>1, <2>2, SMT
+         DEF CertifiedResponseItem, CommitCertificateResponseItem,
+             AsyncCertifiedResponseEnvelope,
+             AsyncCommitCertificateResponseEnvelope, AsyncNetworkItem,
+             AsyncIngressSources, AsyncArchiveServerIds,
+             AsyncCertifiedRequestHash
+  <1> QED BY <1>1
+
+THEOREM CertifiedResponseAuthenticationProjectionIsViaIndependent ==
+  \A leftVia, rightVia, archiveServer, request:
+    AsyncCertifiedResponseAuthProjection(
+      CertifiedResponseItem(leftVia, archiveServer, request))
+      =
+    AsyncCertifiedResponseAuthProjection(
+      CertifiedResponseItem(rightVia, archiveServer, request))
+BY DEF AsyncCertifiedResponseAuthProjection, CertifiedResponseItem,
+       AsyncCertifiedResponseEnvelope, AsyncNetworkItem
+
+THEOREM SentCertifiedResponseAuthenticatesEveryRelayOccurrence ==
+  \A sentVia, relayVia, archiveServer, request:
+    CertifiedResponseItem(sentVia, archiveServer, request)
+      \in asyncSentItems
+      => CertifiedResponseAuthenticatedOccurrence(
+           CertifiedResponseItem(relayVia, archiveServer, request))
+BY SMT
+   DEF CertifiedResponseAuthenticatedOccurrence,
+       AsyncCertifiedResponseAuthProjection, CertifiedResponseItem,
+       AsyncCertifiedResponseEnvelope, AsyncNetworkItem
+
+THEOREM ExactOutstandingCommitCertificateResponseIsAuthorized ==
+  \A request, qc:
+    /\ request \in asyncActiveRequests
+    /\ CommitCertificateRequestAuthorized(request)
+    /\ qc \in commitQCs
+    /\ qc.context = context
+    /\ qc.phase = "Commit"
+    => CommitCertificateResponseAuthorized(
+         CommitCertificateResponseItem(request, qc))
+BY SMT
+   DEF CommitCertificateResponseAuthorized,
+       MatchingCommitCertificateRequests,
+       CommitCertificateResponseItem,
+       AsyncCommitCertificateResponseEnvelope, AsyncNetworkItem,
+       AsyncIngressSources, AsyncUntrustedSource
+
+THEOREM ExactOutstandingCertifiedBodyResponseIsAuthorized ==
+  \A via, archiveServer, request:
+    /\ request \in asyncActiveRequests
+    /\ FrozenCertifiedRequestRegistration(request)
+    /\ archiveServer \in AsyncArchiveServerIds
+    /\ AsyncCertifiedCitedResponder(request)
+         \in request.envelope.certificate.signers
+    /\ CertifiedResponseAuthenticatedOccurrence(
+         CertifiedResponseItem(via, archiveServer, request))
+    => CertifiedResponseAuthorized(
+         CertifiedResponseItem(via, archiveServer, request))
+BY SMT
+   DEF CertifiedResponseAuthorized, MatchingCertifiedRequests,
+       CertifiedResponseItem, AsyncCertifiedResponseEnvelope,
+       AsyncNetworkItem, CertifiedResponseAuthenticatedOccurrence,
+       AsyncCertifiedResponseAuthProjection, AsyncCertifiedRequestHash,
+       FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding
+
+THEOREM CommitCertificateResponseRejectsWrongContextOrPhase ==
+  \A item:
+    /\ item.kind = "CommitCertificateResponse"
+    /\ \/ item.envelope.qc.context # context
+       \/ item.envelope.qc.phase # "Commit"
+    => ~CommitCertificateResponseAuthorized(item)
+BY DEF CommitCertificateResponseAuthorized
 
 THEOREM StrongInvariantTypesAppliedCertificates ==
   StrongInductiveInvariant
@@ -1091,32 +1271,34 @@ BY SMT
        DecisionAgreement, AppliedRequiresDecision
 
 THEOREM ServiceResponseItemsAreFiniteAndTyped ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncArchiveIoServiceNodes:
     /\ AsyncTypeInvariant
     /\ StrongInductiveInvariant
     /\ AsyncIoQueueDepth(node) > 0
     => /\ IsFiniteSet(
-             AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
+             AsyncIoResponseItemsAfterService(
+               node, asyncIoQueues[node]))
        /\ \A item \in
-              AsyncIoResponseItemsAfterService(asyncIoQueues[node]):
+              AsyncIoResponseItemsAfterService(
+                node, asyncIoQueues[node]):
             AsyncItemTyped(item)
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncArchiveIoServiceNodes,
                 AsyncTypeInvariant,
                 StrongInductiveInvariant,
                 AsyncIoQueueDepth(node) > 0
          PROVE /\ IsFiniteSet(
                       AsyncIoResponseItemsAfterService(
-                        asyncIoQueues[node]))
+                        node, asyncIoQueues[node]))
                /\ \A item \in
                       AsyncIoResponseItemsAfterService(
-                        asyncIoQueues[node]):
+                        node, asyncIoQueues[node]):
                     AsyncItemTyped(item)
     <2>1. /\ AsyncConfiguration
            /\ node \in ValidatorIds
            /\ AsyncIoSequenceTyped(asyncIoQueues[node])
            /\ AsyncIoJobTyped(Head(asyncIoQueues[node]))
-      BY <1>1, AsyncCurrentResponsiveVotersAreValidators,
+      BY <1>1, AsyncArchiveIoServiceNodesAreValidators,
          TypedIoTailFacts
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant,
@@ -1139,19 +1321,23 @@ PROOF
          DEF AsyncIoResponseItemsAfterService
     <2>5. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
                   /\ CertifiedServeCanRespond(
-                       Head(asyncIoQueues[node]).candidate.item)
-      <3>1. AsyncItemTyped(CertifiedResponseItem(
+                       node, Head(asyncIoQueues[node]).candidate.item)
+      <3>1. AsyncItemTyped(
+               CertifiedResponseItem(
+                 AsyncUntrustedSource, node,
                  Head(asyncIoQueues[node]).candidate.item))
         BY <2>1, <2>2, <2>5, CertifiedResponseItemIsTyped
            DEF CertifiedServeCanRespond
-      <3>2. AsyncIoResponseItemsAfterService(asyncIoQueues[node]) =
+      <3>2. AsyncIoResponseItemsAfterService(
+               node, asyncIoQueues[node]) =
                {CertifiedResponseItem(
+                  AsyncUntrustedSource, node,
                   Head(asyncIoQueues[node]).candidate.item)}
         BY <2>5 DEF AsyncIoResponseItemsAfterService
       <3> QED BY <3>1, <3>2, FS_Singleton
     <2>6. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
                   /\ ~CertifiedServeCanRespond(
-                       Head(asyncIoQueues[node]).candidate.item)
+                       node, Head(asyncIoQueues[node]).candidate.item)
                   /\ CommitCertificateServeCanRespond(
                        Head(asyncIoQueues[node]).candidate.item)
       <3>1. LET request == Head(asyncIoQueues[node]).candidate.item
@@ -1170,7 +1356,8 @@ PROOF
                   request,
                   CommitCertificateServiceApplication(request).qc))
         BY <3>1, <3>2, CommitCertificateResponseItemIsTyped
-      <3>4. AsyncIoResponseItemsAfterService(asyncIoQueues[node]) =
+      <3>4. AsyncIoResponseItemsAfterService(
+               node, asyncIoQueues[node]) =
                CommitCertificateResponseItems(
                  Head(asyncIoQueues[node]).candidate.item)
         BY <2>6 DEF AsyncIoResponseItemsAfterService
@@ -1183,7 +1370,7 @@ PROOF
       <3> QED BY <3>3, <3>4, <3>5, FS_Singleton
     <2>7. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
                   /\ ~CertifiedServeCanRespond(
-                       Head(asyncIoQueues[node]).candidate.item)
+                       node, Head(asyncIoQueues[node]).candidate.item)
                   /\ ~CommitCertificateServeCanRespond(
                        Head(asyncIoQueues[node]).candidate.item)
       BY <2>7, FS_EmptySet
@@ -1217,6 +1404,28 @@ AsyncActiveRequestsType(active, sent) ==
        /\ AsyncItemTyped(item)
        /\ item.kind \in {"CertifiedRequest",
                           "CommitCertificateRequest"}
+  /\ AsyncCertifiedRequestLogicalIndexConsistent(active)
+
+THEOREM CertifiedRequestLogicalIndexConsistencyIsDownwardClosed ==
+  \A existing, remaining:
+    /\ remaining \subseteq existing
+    /\ AsyncCertifiedRequestLogicalIndexConsistent(existing)
+    => AsyncCertifiedRequestLogicalIndexConsistent(remaining)
+BY SMT
+   DEF AsyncCertifiedRequestLogicalIndexConsistent,
+       AsyncCertifiedRequestsIn
+
+THEOREM CompatibleCertifiedRequestUnionIsLogicallyConsistent ==
+  \A existing, incoming:
+    /\ AsyncCertifiedRequestLogicalIndexConsistent(existing)
+    /\ AsyncCertifiedRequestLogicalIndexConsistent(incoming)
+    /\ AsyncCertifiedRequestSetsCompatible(existing, incoming)
+    => AsyncCertifiedRequestLogicalIndexConsistent(
+         existing \cup incoming)
+BY SMT
+   DEF AsyncCertifiedRequestLogicalIndexConsistent,
+       AsyncCertifiedRequestSetsCompatible,
+       AsyncCertifiedRequestsIn
 
 THEOREM AsyncTransportHistoryTypeDecomposition ==
   AsyncTransportHistoryTypeInvariant
@@ -1225,18 +1434,180 @@ THEOREM AsyncTransportHistoryTypeDecomposition ==
              asyncRetainedControl, CurrentVoters)
         /\ AsyncActiveRequestsType(
              asyncActiveRequests, asyncSentItems)
+        /\ AsyncCertifiedResponseClaimInvariant
 BY DEF AsyncTransportHistoryTypeInvariant, AsyncSentItemsType,
        AsyncRetainedControlType, AsyncActiveRequestsType
+
+THEOREM AppendSentHistoryPreservesCertifiedResponseClaimInvariant ==
+  \A items:
+    /\ AsyncCertifiedResponseClaimInvariant
+    /\ asyncSentItems' = asyncSentItems \cup items
+    /\ AsyncCertifiedRequestsIn(asyncActiveRequests') =
+         AsyncCertifiedRequestsIn(asyncActiveRequests)
+    /\ UNCHANGED
+         <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncCertifiedResponseClaim>>
+    => AsyncCertifiedResponseClaimInvariant'
+BY SMTT(30), Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       AsyncCertifiedResponseClaimCoreAuthorityVars,
+       CertifiedResponseClaimProjectionAuthenticated,
+       CertifiedResponseAuthorized,
+       CertifiedResponseAuthenticatedOccurrence,
+       MatchingCertifiedRequests, FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesIn,
+       AsyncCertifiedRequestsIn,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed
+
+THEOREM EmptyCertifiedResponseClaimIsInvariant ==
+  asyncCertifiedResponseClaim = {}
+    => AsyncCertifiedResponseClaimInvariant
+BY FS_EmptySet, SMT, Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesIn,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed
+
+THEOREM ExtendActiveRequestsPreservesCertifiedResponseClaimInvariant ==
+  \A items:
+    /\ AsyncCertifiedResponseClaimInvariant
+    /\ asyncSentItems' = asyncSentItems \cup items
+    /\ asyncActiveRequests' = asyncActiveRequests \cup items
+    /\ UNCHANGED
+         <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncCertifiedResponseClaim>>
+    => AsyncCertifiedResponseClaimInvariant'
+BY SMTT(30), Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       AsyncCertifiedResponseClaimCoreAuthorityVars,
+       CertifiedResponseClaimProjectionAuthenticated,
+       CertifiedResponseAuthorized,
+       CertifiedResponseAuthenticatedOccurrence,
+       MatchingCertifiedRequests, FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesIn,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed
+
+THEOREM FilterActiveRequestsAndClaimPreservesInvariant ==
+  \A additions:
+    /\ AsyncCertifiedResponseClaimInvariant
+    /\ asyncSentItems' = asyncSentItems \cup additions
+    /\ asyncActiveRequests' \subseteq asyncActiveRequests
+    /\ asyncCertifiedResponseClaim' =
+         CertifiedResponseClaimForRequests(asyncActiveRequests')
+    => AsyncCertifiedResponseClaimInvariant'
+BY SMTT(45), Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       CertifiedResponseClaimForRequests,
+       CertifiedResponseClaimProjectionAuthenticated,
+       CertifiedResponseAuthenticatedOccurrence,
+       MatchingCertifiedRequests, FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesIn,
+       AsyncCertifiedRequestHash,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed
+
+THEOREM MatchingClaimedCertifiedResponseIsAuthorized ==
+  \A item:
+    /\ AsyncCertifiedResponseClaimInvariant
+    /\ item.kind = "CertifiedResponse"
+    /\ CertifiedResponseClaimMatches(item)
+    => CertifiedResponseClaimAuthorized(item)
+BY SMTT(45), Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       CertifiedResponseClaimMatches,
+       CertifiedResponseClaimAuthorized,
+       CertifiedResponseClaimProjectionAuthenticated,
+       CertifiedResponseAuthenticatedOccurrence,
+       MatchingCertifiedRequests, FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding,
+       AsyncCertifiedResponseCanonicalWireIdentity,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesIn,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed
+
+THEOREM FrozenCertifiedResponseBindingMakesSentRequestMatch ==
+  \A item, request:
+    FrozenCertifiedResponseBinding(item, request)
+      => request \in MatchingSentCertifiedRequests(item)
+BY Isa
+   DEF FrozenCertifiedResponseBinding,
+       FrozenCertifiedRequestRegistration,
+       MatchingSentCertifiedRequests
+
+THEOREM CertifiedResponseAuthorizationSuppliesFrozenCapability ==
+  \A item:
+    CertifiedResponseAuthorized(item)
+      => CertifiedResponseCapabilityAuthorized(item)
+BY FrozenCertifiedResponseBindingMakesSentRequestMatch, Isa
+   DEF CertifiedResponseAuthorized,
+       CertifiedResponseCapabilityAuthorized
+
+THEOREM CertifiedResponseClaimAuthorizationSuppliesFrozenCapability ==
+  \A item:
+    CertifiedResponseClaimAuthorized(item)
+      => CertifiedResponseCapabilityAuthorized(item)
+BY FrozenCertifiedResponseBindingMakesSentRequestMatch, Isa
+   DEF CertifiedResponseClaimAuthorized,
+       CertifiedResponseCapabilityAuthorized
 
 THEOREM PacketForTypedItemIsTyped ==
   \A item:
     /\ AsyncConfiguration
     /\ asyncNow \in Nat
     /\ AsyncItemTyped(item)
-    => AsyncPacketTyped(
-         AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound))
+    => AsyncPacketTyped(PacketForItem(item))
 BY SMT
-   DEF AsyncConfiguration, AsyncPacketTyped, AsyncPacket
+   DEF AsyncConfiguration, AsyncPacketTyped, PacketForItem, AsyncPacket
+
+THEOREM PacketForItemHasStrictlyFutureDeadline ==
+  \A item:
+    /\ AsyncConfiguration
+    /\ asyncNow \in Nat
+    => PacketForItem(item).deadline > asyncNow
+BY SMT DEF AsyncConfiguration, PacketForItem, AsyncPacket
+
+THEOREM PacketsForItemsHaveStrictlyFutureDeadlines ==
+  \A items:
+    /\ AsyncConfiguration
+    /\ asyncNow \in Nat
+    => \A packet \in PacketsForItems(items):
+         packet.deadline > asyncNow
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncConfiguration,
+                asyncNow \in Nat
+         PROVE \A packet \in PacketsForItems(items):
+                 packet.deadline > asyncNow
+    <2>1. ASSUME NEW packet \in PacketsForItems(items)
+           PROVE packet.deadline > asyncNow
+      <3>1. PICK item \in items:
+               packet = PacketForItem(item)
+        BY <2>1 DEF PacketsForItems
+      <3> QED BY <1>1, <3>1,
+                   PacketForItemHasStrictlyFutureDeadline
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM PacketPublicationPreservesCurrentDueSourcePrefix ==
+  \A items, recipient, source:
+    /\ AsyncConfiguration
+    /\ asyncNow \in Nat
+    /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+    /\ UNCHANGED asyncNow
+    => DueSourcePackets(recipient, source)' =
+         DueSourcePackets(recipient, source)
+BY PacketsForItemsHaveStrictlyFutureDeadlines, Isa
+   DEF DueSourcePackets
 
 THEOREM PacketsForItemsAreFiniteAndTyped ==
   \A items:
@@ -1263,8 +1634,7 @@ PROOF
       <3>1. ASSUME NEW packet \in PacketsForItems(items)
              PROVE AsyncPacketTyped(packet)
         <4>1. PICK item \in items:
-                 packet = AsyncPacket(
-                   item, asyncNow, asyncNow + AsyncDeliveryBound)
+                 packet = PacketForItem(item)
           BY <3>1 DEF PacketsForItems
         <4>2. AsyncItemTyped(item)
           BY <1>1, <4>1
@@ -1281,7 +1651,9 @@ THEOREM PublishEphemeralItemsPreservesTransportContentType ==
     /\ IsFiniteSet(items)
     /\ \A item \in items: AsyncItemTyped(item)
     /\ PublishEphemeralItems(items)
-    /\ UNCHANGED <<context, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW items,
@@ -1290,13 +1662,16 @@ PROOF
                 IsFiniteSet(items),
                 \A item \in items: AsyncItemTyped(item),
                 PublishEphemeralItems(items),
-                UNCHANGED <<context, asyncHeldChunks>>
+                UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
            /\ AsyncRetainedControlType(
                 asyncRetainedControl, CurrentVoters)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -1304,11 +1679,16 @@ PROOF
     <2>2. /\ asyncSentItems' = asyncSentItems \cup items
            /\ asyncRetainedControl' = asyncRetainedControl
            /\ asyncActiveRequests' = asyncActiveRequests
+           /\ asyncCertifiedResponseClaim' =
+                asyncCertifiedResponseClaim
            /\ asyncTransport' =
                 asyncTransport \cup PacketsForItems(items)
-           /\ context' = context
+           /\ UNCHANGED
+                AsyncCertifiedResponseClaimCoreAuthorityVars
            /\ asyncHeldChunks' = asyncHeldChunks
-      BY <1>1 DEF PublishEphemeralItems
+      BY <1>1
+         DEF PublishEphemeralItems,
+             AsyncCertifiedResponseClaimCoreAuthorityVars
     <2>3. AsyncSentItemsType(asyncSentItems')
       <3>1. IsFiniteSet(asyncSentItems')
         BY <1>1, <2>1, <2>2, FS_Union
@@ -1325,8 +1705,11 @@ PROOF
     <2>6. AsyncActiveRequestsType(
              asyncActiveRequests', asyncSentItems')
       BY <2>1, <2>2, Isa DEF AsyncActiveRequestsType
+    <2>6a. AsyncCertifiedResponseClaimInvariant'
+      BY <2>1, <2>2,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant
     <2>7. AsyncTransportHistoryTypeInvariant'
-      BY <2>3, <2>5, <2>6
+      BY <2>3, <2>5, <2>6, <2>6a
          DEF AsyncTransportHistoryTypeInvariant,
              AsyncSentItemsType, AsyncRetainedControlType,
              AsyncActiveRequestsType
@@ -1882,6 +2265,7 @@ PROOF
          DEF EnqueueIoLocalControlWork, AsyncRuntimeScalarTypeVars,
              AsyncDeferredVars, AsyncDeferredTopologyTypeVars,
              AsyncTransportClockTypeVars, AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
              AsyncIngressTopologyTypeVars, LeaveCausalQueues, vars
     <2>3. /\ AsyncRuntimeScalarTypeInvariant'
            /\ AsyncCausalTypeInvariant'
@@ -2280,17 +2664,23 @@ PROOF
       BY <2>1, <2>7, <2>8
          DEF AsyncTransportClockTypeInvariant
     <2>10. /\ IsFiniteSet(
-                    AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
+                    AsyncIoResponseItemsAfterService(
+                      node, asyncIoQueues[node]))
             /\ \A item \in
-                   AsyncIoResponseItemsAfterService(asyncIoQueues[node]):
+                   AsyncIoResponseItemsAfterService(
+                     node, asyncIoQueues[node]):
                  AsyncItemTyped(item)
       BY <1>1, ServiceResponseItemsAreFiniteAndTyped
          DEF ServiceIoWorkerWork
     <2>11. /\ PublishEphemeralItems(
-                    AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
-            /\ UNCHANGED <<context, asyncHeldChunks>>
+                    AsyncIoResponseItemsAfterService(
+                      node, asyncIoQueues[node]))
+            /\ UNCHANGED
+                 <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                   asyncHeldChunks>>
       BY <1>1
-         DEF ServiceIoWorkerWork, AsyncIoResponseItemsAfterService, vars
+         DEF ServiceIoWorkerWork, AsyncIoResponseItemsAfterService,
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
     <2>12. AsyncTransportContentTypeInvariant'
       BY <2>1, <2>10, <2>11,
          PublishEphemeralItemsPreservesTransportContentType
@@ -2704,6 +3094,143 @@ PROOF
     <2> QED BY <2>2, <2>3, <2>5
   <1> QED BY <1>1
 
+THEOREM IngressOwnerBindingsAppendPreserved ==
+  \A sequence, item, recipient, source:
+    /\ sequence \in Seq(Range(sequence))
+    /\ \A index \in 1..Len(sequence):
+         /\ sequence[index].envelope.recipient = recipient
+         /\ IngressResourceSource(sequence[index]) = source
+    /\ item.envelope.recipient = recipient
+    /\ IngressResourceSource(item) = source
+    => \A index \in 1..Len(Append(sequence, item)):
+         /\ Append(sequence, item)[index].envelope.recipient = recipient
+         /\ IngressResourceSource(Append(sequence, item)[index]) = source
+PROOF
+  <1>1. ASSUME NEW sequence, NEW item, NEW recipient, NEW source,
+                sequence \in Seq(Range(sequence)),
+                \A index \in 1..Len(sequence):
+                  /\ sequence[index].envelope.recipient = recipient
+                  /\ IngressResourceSource(sequence[index]) = source,
+                item.envelope.recipient = recipient,
+                IngressResourceSource(item) = source
+         PROVE \A index \in 1..Len(Append(sequence, item)):
+                 /\ Append(sequence, item)[index].envelope.recipient =
+                      recipient
+                 /\ IngressResourceSource(
+                      Append(sequence, item)[index]) = source
+    <2>1. /\ Len(Append(sequence, item)) = Len(sequence) + 1
+           /\ \A index \in 1..Len(sequence):
+                Append(sequence, item)[index] = sequence[index]
+           /\ Append(sequence, item)[Len(sequence) + 1] = item
+      BY <1>1, AppendSequenceFacts
+    <2>2. ASSUME NEW index \in 1..Len(Append(sequence, item))
+           PROVE /\ Append(sequence, item)[index].envelope.recipient =
+                      recipient
+                 /\ IngressResourceSource(
+                      Append(sequence, item)[index]) = source
+      <3>1. Len(sequence) \in Nat
+        BY <1>1, LenProperties
+      <3>2. CASE index \in 1..Len(sequence)
+        BY <1>1, <2>1, <3>2
+      <3>3. CASE index \notin 1..Len(sequence)
+        <4>1. index = Len(sequence) + 1
+          BY <2>1, <2>2, <3>1, <3>3, SMT
+        <4> QED BY <1>1, <2>1, <4>1
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>2
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesCertifiedResponseClaimInvariant ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => AsyncCertifiedResponseClaimInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE AsyncCertifiedResponseClaimInvariant'
+    <2> DEFINE Packet == OldestDueSourcePacket(recipient, source)
+    <2> DEFINE Item == Packet.item
+    <2>1. /\ AsyncCertifiedResponseClaimInvariant
+           /\ AsyncPacketContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. /\ DueSourcePackets(recipient, source) # {}
+           /\ Packet \in asyncTransport
+           /\ AsyncPacketTyped(Packet)
+           /\ AsyncItemTyped(Item)
+      BY <1>1, <2>1, OldestDueSourcePacketFacts, Isa
+         DEF AdmitHiddenPacket, Packet, Item, AsyncPacketTyped
+    <2>3. /\ UNCHANGED
+                 <<context, prepareQCs, decisions, lockRank, lockSubject,
+                   installedTCs, commitIntents, asyncSentItems,
+                   asyncActiveRequests>>
+           /\ asyncCertifiedResponseClaim' =
+                IF Item.kind = "CertifiedResponse"
+                THEN asyncCertifiedResponseClaim
+                       \cup {AsyncCertifiedResponseCanonicalWireIdentity(Item)}
+                ELSE asyncCertifiedResponseClaim
+      BY <1>1, Isa
+         DEF AdmitHiddenPacket, Packet, Item, AsyncSchedulerVars, vars
+    <2>4. CASE Item.kind # "CertifiedResponse"
+      BY <2>1, <2>3, <2>4, Isa
+         DEF AsyncCertifiedResponseClaimInvariant,
+             CertifiedResponseClaimProjectionAuthenticated,
+             CertifiedResponseAuthorized,
+             CertifiedResponseAuthenticatedOccurrence,
+             MatchingCertifiedRequests, CertifiedRequestAuthority,
+             CertifiedBodyRecoveryAuthority,
+             DecisionCertifiedBodyRecoveryAuthority,
+             LockedPrepareRecoverySource,
+             HistoricalLockedPrepareRecoveryProvenance,
+             InstalledTcSelectsPrepareFor, ExactLockedCommitIntents,
+             NoDecisionForNode, ActiveCertifiedRequestHashes,
+             ActiveCertifiedRequestHashesIn,
+             CertifiedResponseAuthorityReady,
+             CertifiedResponseAuthorityClaimed
+    <2>5. CASE Item.kind = "CertifiedResponse"
+      <3>1. /\ CertifiedResponseAuthorized(Item)
+             /\ CertifiedResponseAuthorityReady(
+                  Item.envelope.requestHash)
+             /\ CertifiedResponseRecipientClaimAvailable(Item)
+             /\ asyncCertifiedResponseClaim' =
+                  asyncCertifiedResponseClaim
+                    \cup {AsyncCertifiedResponseCanonicalWireIdentity(Item)}
+        BY <1>1, <2>3, <2>5
+           DEF AdmitHiddenPacket, Packet, Item, CanAdmitIngressItem,
+               CertifiedResponseFreshClaimGateAllows,
+               CertifiedResponseRecipientClaimAvailable
+      <3>2. Item \in AsyncCertifiedResponseItems
+        BY <2>2, <2>5, Isa
+           DEF AsyncItemTyped, AsyncCertifiedResponseItems
+      <3>3. /\ IsFiniteSet(asyncCertifiedResponseClaim')
+             /\ asyncCertifiedResponseClaim'
+                  \subseteq AsyncCertifiedResponseClaimValues
+        BY <3>1, <3>2, FS_Singleton, SMT
+           DEF AsyncCertifiedResponseClaimValues
+      <3> QED BY <2>1, <2>3, <3>1, <3>2, <3>3,
+                   FS_Singleton, SMTT(30), Isa
+           DEF AsyncCertifiedResponseClaimInvariant,
+               CertifiedResponseClaimProjectionAuthenticated,
+               CertifiedResponseAuthorized,
+               CertifiedResponseAuthenticatedOccurrence,
+               MatchingCertifiedRequests,
+               FrozenCertifiedRequestRegistration,
+               FrozenCertifiedResponseBinding,
+               AsyncCertifiedResponseCanonicalWireIdentity,
+               CertifiedResponseClaimsAt,
+               CertifiedResponseRecipientClaimAvailable,
+               ActiveCertifiedRequestHashes,
+               ActiveCertifiedRequestHashesIn,
+               CertifiedResponseAuthorityReady,
+               CertifiedResponseAuthorityClaimed
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
 THEOREM AdmitHiddenPacketPreservesNonIngressType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
@@ -2746,15 +3273,16 @@ PROOF
                           asyncDeferredProgressQueues,
                           asyncDeferredNormalQueues>>
            /\ UNCHANGED AsyncTransportClockTypeVars
-           /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED
+                <<vars, asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests>>
            /\ UNCHANGED asyncHeldChunks
       BY <1>1, Isa
          DEF AdmitHiddenPacket, AsyncRuntimeScalarTypeVars,
              AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
              AsyncIoCapacityTypeVars, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
-             AsyncTransportHistoryTypeVars, LeaveCausalQueues,
-             AsyncSchedulerVars, vars
+             LeaveCausalQueues, AsyncSchedulerVars, vars
     <2>3. /\ AsyncRuntimeScalarTypeInvariant'
            /\ AsyncCausalTypeInvariant'
            /\ AsyncIoTopologyTypeInvariant'
@@ -2763,7 +3291,6 @@ PROOF
            /\ AsyncDeferredTopologyTypeInvariant'
            /\ AsyncDeferredContentTypeInvariant'
            /\ AsyncTransportClockTypeInvariant'
-           /\ AsyncTransportHistoryTypeInvariant'
            /\ AsyncHeldChunksTypeInvariant'
       BY <2>1, <2>2, AsyncRuntimeScalarTypeStutter,
          AsyncCausalTypeStutter, AsyncIoTopologyTypeStutter,
@@ -2771,7 +3298,15 @@ PROOF
          AsyncDeferredTopologyTypeStutter,
          AsyncDeferredContentTypeStutter,
          AsyncTransportClockTypeStutter,
-         AsyncTransportHistoryTypeStutter, AsyncHeldChunksTypeStutter
+         AsyncHeldChunksTypeStutter
+    <2>3a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1,
+         AdmitHiddenPacketPreservesCertifiedResponseClaimInvariant
+    <2>3b. AsyncTransportHistoryTypeInvariant'
+      BY <2>1, <2>2, <2>3a, Isa
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncActiveRequestLogicalIndexConsistencyInvariant,
+             CurrentVoters, CurrentEpoch
     <2>4. asyncTransport' \subseteq asyncTransport
       BY <1>1, Isa DEF AdmitHiddenPacket
     <2>5. /\ IsFiniteSet(asyncTransport')
@@ -2780,10 +3315,180 @@ PROOF
          DEF AsyncPacketContentTypeInvariant
     <2>6. AsyncPacketContentTypeInvariant'
       BY <2>5 DEF AsyncPacketContentTypeInvariant
-    <2> QED BY <2>3, <2>6
+    <2> QED BY <2>3, <2>3b, <2>6
          DEF AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
              AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
              AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+(***************************************************************************
+The authenticated delivery route selects the due transport occurrence, but it
+does not multiply certified-response queue ownership.  Every fully authorized
+response is normalized onto the one aggregate untrusted physical-completion
+lane before the count/byte gate.  Keep this action-level equality explicit so
+an accidental reversion to the outer transport source cannot hide inside the
+generic ingress type-preservation proof.
+***************************************************************************)
+THEOREM AdmitCertifiedResponseNormalizesPhysicalResourceSource ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncTypeInvariant
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ OldestDueSourcePacket(recipient, source).item.kind =
+         "CertifiedResponse"
+    /\ AdmitHiddenPacket(recipient, source)
+    => LET item == OldestDueSourcePacket(recipient, source).item
+       IN /\ IngressResourceSource(item) = AsyncUntrustedSource
+          /\ asyncIngressLanes' =
+               [asyncIngressLanes EXCEPT
+                  ![recipient][AsyncUntrustedSource] = Append(@, item)]
+BY Isa
+   DEF AdmitHiddenPacket, IngressResourceSource
+
+THEOREM CertifiedResponseClaimIngressOwnershipStutter ==
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ UNCHANGED <<asyncCertifiedResponseClaim, asyncIngressLanes>>
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner
+
+THEOREM CertifiedResponseClaimIngressOwnershipIsDownwardClosed ==
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ asyncCertifiedResponseClaim'
+       \subseteq asyncCertifiedResponseClaim
+  /\ UNCHANGED asyncIngressLanes
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner
+
+THEOREM EmptyCertifiedResponseClaimHasIngressOwnership ==
+  asyncCertifiedResponseClaim = {}
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant
+BY Isa DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant
+
+THEOREM AppendIngressLanePreservesCertifiedResponseClaimIngressOwnership ==
+  \A recipient \in ValidatorIds:
+    \A source \in AsyncIngressSources:
+      \A item:
+        /\ AsyncIngressTypeInvariant
+        /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+        /\ asyncIngressLanes' =
+             [asyncIngressLanes EXCEPT
+                ![recipient][source] =
+                  Append(@, item)]
+        /\ UNCHANGED asyncCertifiedResponseClaim
+        => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY AppendSequenceFacts, SMTT(60), Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant,
+       IngressLane, IngressLaneDepth
+
+THEOREM AppendCertifiedResponseEstablishesClaimIngressOwnership ==
+  \A recipient \in ValidatorIds:
+    \A item:
+      /\ AsyncIngressTypeInvariant
+      /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+      /\ item.kind = "CertifiedResponse"
+      /\ item.envelope.recipient = recipient
+      /\ IngressResourceSource(item) = AsyncUntrustedSource
+      /\ asyncIngressLanes' =
+           [asyncIngressLanes EXCEPT
+              ![recipient][AsyncUntrustedSource] =
+                Append(@, item)]
+      /\ asyncCertifiedResponseClaim' =
+           asyncCertifiedResponseClaim
+             \cup {AsyncCertifiedResponseCanonicalWireIdentity(item)}
+      => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY AppendSequenceFacts, SMTT(60), Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant,
+       IngressLane, IngressLaneDepth
+
+THEOREM AdmitHiddenPacketPreservesClaimIngressOwnership ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ AdmitHiddenPacket(recipient, source)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2> DEFINE Item ==
+          OldestDueSourcePacket(recipient, source).item
+    <2> DEFINE ResourceSource == IngressResourceSource(Item)
+    <2>1. /\ AsyncIngressTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ DueSourcePackets(recipient, source) # {}
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AdmitHiddenPacket
+    <2>2. /\ AsyncItemTyped(Item)
+           /\ Item.envelope.recipient = recipient
+           /\ ResourceSource \in AsyncIngressSources
+      BY <2>1, OldestDueSourcePacketFacts, SMT
+         DEF AsyncPacketContentTypeInvariant, AsyncPacketTyped,
+             Item, ResourceSource, IngressResourceSource,
+             AsyncItemTyped, AsyncIngressSources
+    <2>3. asyncIngressLanes' =
+             [asyncIngressLanes EXCEPT
+                ![recipient][ResourceSource] =
+                  Append(@, Item)]
+      BY <1>1 DEF AdmitHiddenPacket, Item, ResourceSource
+    <2>4. CASE Item.kind = "CertifiedResponse"
+      <3>1. /\ ResourceSource = AsyncUntrustedSource
+             /\ asyncCertifiedResponseClaim' =
+                  asyncCertifiedResponseClaim
+                    \cup {AsyncCertifiedResponseCanonicalWireIdentity(Item)}
+        BY <1>1, <2>4
+           DEF AdmitHiddenPacket, Item, ResourceSource,
+               IngressResourceSource
+      <3> QED BY <2>1, <2>2, <2>3, <2>4, <3>1,
+           AppendCertifiedResponseEstablishesClaimIngressOwnership
+    <2>5. CASE Item.kind # "CertifiedResponse"
+      <3>1. UNCHANGED asyncCertifiedResponseClaim
+        BY <1>1, <2>5 DEF AdmitHiddenPacket, Item
+      <3> QED BY <1>1, <2>1, <2>2, <2>3, <3>1,
+           AppendIngressLanePreservesCertifiedResponseClaimIngressOwnership
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM AdmitIngressPacketPreservesClaimIngressOwnership ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ AdmitIngressPacket(recipient, source)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                AdmitIngressPacket(recipient, source)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE AdmitHiddenPacket(recipient, source)
+      BY <1>1, <2>1,
+         AdmitHiddenPacketPreservesClaimIngressOwnership
+    <2>2. CASE CoalesceHiddenPacket(recipient, source)
+      BY <1>1, <2>2,
+         CertifiedResponseClaimIngressOwnershipStutter
+         DEF CoalesceHiddenPacket
+    <2>3. CASE DropPolicyRejectedHiddenPacket(recipient, source)
+      BY <1>1, <2>3,
+         CertifiedResponseClaimIngressOwnershipStutter
+         DEF DropPolicyRejectedHiddenPacket
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF AdmitIngressPacket
   <1> QED BY <1>1
 
 THEOREM AdmitHiddenPacketPreservesIngressContentType ==
@@ -2796,6 +3501,9 @@ PROOF
                 AsyncTypeInvariant,
                 AdmitHiddenPacket(recipient, source)
          PROVE AsyncIngressContentTypeInvariant'
+    <2> DEFINE Item ==
+           OldestDueSourcePacket(recipient, source).item
+    <2> DEFINE ResourceSource == IngressResourceSource(Item)
     <2>1. /\ AsyncPacketContentTypeInvariant
            /\ AsyncIngressTopologyTypeInvariant
            /\ AsyncIngressContentTypeInvariant
@@ -2806,10 +3514,14 @@ PROOF
              AsyncIngressTypeInvariant, AdmitHiddenPacket
     <2>2. /\ AsyncPacketTyped(
                     OldestDueSourcePacket(recipient, source))
-           /\ AsyncItemTyped(
-                OldestDueSourcePacket(recipient, source).item)
+           /\ AsyncItemTyped(Item)
       BY <1>1, <2>1, OldestDueSourcePacketFacts
-         DEF AsyncPacketTyped
+         DEF AsyncPacketTyped, Item
+    <2>2a. /\ Item.envelope.recipient = recipient
+            /\ ResourceSource \in AsyncIngressSources
+      BY <2>1, <2>2, OldestDueSourcePacketFacts, SMT
+         DEF Item, ResourceSource, IngressResourceSource,
+             AsyncItemTyped, AsyncIngressSources
     <2>3. ASSUME NEW otherRecipient \in ValidatorIds
            PROVE \A otherSource \in AsyncIngressSources:
                    /\ asyncIngressLanes'[otherRecipient][otherSource]
@@ -2820,8 +3532,14 @@ PROOF
                    /\ \A index \in
                           1..Len(
                             asyncIngressLanes'[otherRecipient][otherSource]):
-                        AsyncItemTyped(
-                          asyncIngressLanes'[otherRecipient][otherSource][index])
+                        /\ AsyncItemTyped(
+                             asyncIngressLanes'[otherRecipient][otherSource]
+                               [index])
+                        /\ asyncIngressLanes'[otherRecipient][otherSource]
+                             [index].envelope.recipient = otherRecipient
+                        /\ IngressResourceSource(
+                             asyncIngressLanes'[otherRecipient][otherSource]
+                               [index]) = otherSource
       <3>1. ASSUME NEW otherSource \in AsyncIngressSources
              PROVE /\ asyncIngressLanes'[otherRecipient][otherSource]
                           \in Seq(Range(
@@ -2832,14 +3550,22 @@ PROOF
                    /\ \A index \in
                             1..Len(
                               asyncIngressLanes'[otherRecipient][otherSource]):
-                          AsyncItemTyped(
-                            asyncIngressLanes'[otherRecipient][otherSource][index])
-        <4>1. CASE otherRecipient = recipient /\ otherSource = source
+                          /\ AsyncItemTyped(
+                               asyncIngressLanes'[otherRecipient][otherSource]
+                                 [index])
+                          /\ asyncIngressLanes'[otherRecipient][otherSource]
+                               [index].envelope.recipient = otherRecipient
+                          /\ IngressResourceSource(
+                               asyncIngressLanes'[otherRecipient][otherSource]
+                                 [index]) = otherSource
+        <4>1. CASE otherRecipient = recipient
+                     /\ otherSource = ResourceSource
           <5>1. asyncIngressLanes'[otherRecipient][otherSource] =
                    Append(IngressLane(otherRecipient, otherSource),
-                          OldestDueSourcePacket(recipient, source).item)
-            BY <1>1, <2>1, <3>1, <4>1, Isa
-               DEF AdmitHiddenPacket, IngressLane
+                          Item)
+            BY <1>1, <2>1, <2>2a, <3>1, <4>1, Isa
+               DEF AdmitHiddenPacket, IngressLane,
+                   Item, ResourceSource
           <5>2. /\ IngressLane(otherRecipient, otherSource)
                          \in Seq(Range(
                               IngressLane(otherRecipient, otherSource)))
@@ -2847,37 +3573,51 @@ PROOF
                       1..Len(IngressLane(otherRecipient, otherSource))
                  /\ \A index \in
                         1..Len(IngressLane(otherRecipient, otherSource)):
-                      AsyncItemTyped(
-                        IngressLane(otherRecipient, otherSource)[index])
+                      /\ AsyncItemTyped(
+                           IngressLane(otherRecipient, otherSource)[index])
+                      /\ IngressLane(otherRecipient, otherSource)
+                           [index].envelope.recipient = otherRecipient
+                      /\ IngressResourceSource(
+                           IngressLane(otherRecipient, otherSource)[index])
+                           = otherSource
             BY <2>1, <3>1
                DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
-          <5>3. AsyncItemTyped(
-                   OldestDueSourcePacket(recipient, source).item)
-            BY <2>2
+          <5>3. /\ AsyncItemTyped(Item)
+                 /\ Item.envelope.recipient = otherRecipient
+                 /\ IngressResourceSource(Item) = otherSource
+            BY <2>2, <2>2a, <4>1 DEF ResourceSource
           <5>4. /\ Append(IngressLane(otherRecipient, otherSource),
-                              OldestDueSourcePacket(recipient, source).item)
+                              Item)
                            \in Seq(Range(
                                 Append(IngressLane(otherRecipient, otherSource),
-                                  OldestDueSourcePacket(recipient, source).item)))
+                                  Item)))
                  /\ DOMAIN Append(IngressLane(otherRecipient, otherSource),
-                                   OldestDueSourcePacket(recipient, source).item)
+                                   Item)
                         = 1..Len(
                             Append(IngressLane(otherRecipient, otherSource),
-                              OldestDueSourcePacket(recipient, source).item))
+                              Item))
                  /\ \A index \in
                         1..Len(Append(
                           IngressLane(otherRecipient, otherSource),
-                          OldestDueSourcePacket(recipient, source).item)):
-                      AsyncItemTyped(
-                        Append(IngressLane(otherRecipient, otherSource),
-                          OldestDueSourcePacket(recipient, source).item)[index])
-            BY <5>2, <5>3, TypedIngressAppendPreservesSequence
+                          Item)):
+                      /\ AsyncItemTyped(
+                           Append(IngressLane(otherRecipient, otherSource),
+                             Item)[index])
+                      /\ Append(IngressLane(otherRecipient, otherSource),
+                           Item)[index].envelope.recipient = otherRecipient
+                      /\ IngressResourceSource(
+                           Append(IngressLane(otherRecipient, otherSource),
+                             Item)[index]) = otherSource
+            BY <5>2, <5>3, TypedIngressAppendPreservesSequence,
+               IngressOwnerBindingsAppendPreserved
           <5> QED BY <5>1, <5>4 DEF IngressLaneDepth
-        <4>2. CASE ~(otherRecipient = recipient /\ otherSource = source)
+        <4>2. CASE ~(otherRecipient = recipient
+                       /\ otherSource = ResourceSource)
           <5>1. asyncIngressLanes'[otherRecipient][otherSource] =
                    IngressLane(otherRecipient, otherSource)
-            BY <1>1, <2>1, <3>1, <4>2, Isa
-               DEF AdmitHiddenPacket, IngressLane
+            BY <1>1, <2>1, <2>2a, <3>1, <4>2, Isa
+               DEF AdmitHiddenPacket, IngressLane,
+                   Item, ResourceSource
           <5> QED BY <2>1, <3>1, <5>1
                DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
         <4> QED BY <4>1, <4>2
@@ -3185,6 +3925,9 @@ PROOF
                 AsyncTypeInvariant,
                 AdmitHiddenPacket(recipient, source)
          PROVE AsyncIngressTopologyTypeInvariant'
+    <2> DEFINE Item ==
+           OldestDueSourcePacket(recipient, source).item
+    <2> DEFINE ResourceSource == IngressResourceSource(Item)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
            /\ AsyncIngressTopologyTypeInvariant
@@ -3193,25 +3936,35 @@ PROOF
          DEF AsyncTypeInvariant, TypeInvariant,
              AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
              AsyncRuntimeScalarTypeInvariant, AsyncIngressTypeInvariant
+    <2>1a. /\ AsyncItemTyped(Item)
+            /\ Item.envelope.recipient = recipient
+            /\ ResourceSource \in AsyncIngressSources
+      BY <1>1, <2>1, OldestDueSourcePacketFacts, SMT
+         DEF AdmitHiddenPacket, AsyncPacketContentTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
+             Item, ResourceSource, IngressResourceSource,
+             AsyncItemTyped, AsyncIngressSources
     <2>2. /\ DOMAIN asyncIngressLanes' = ValidatorIds
            /\ \A otherRecipient \in ValidatorIds:
                 DOMAIN asyncIngressLanes'[otherRecipient] =
                   AsyncIngressSources
-      BY <1>1, <2>1, NestedIngressAppendLaneFacts
+      BY <1>1, <2>1, <2>1a, NestedIngressAppendLaneFacts
          DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
-             AsyncIngressContentTypeInvariant, IngressLane
+             AsyncIngressContentTypeInvariant, IngressLane,
+             Item, ResourceSource
     <2>3. /\ AsyncIngressNonemptySourcesFor(
                     asyncIngressLanes', recipient) =
                   AsyncIngressNonemptySourcesFor(
-                    asyncIngressLanes, recipient) \cup {source}
+                    asyncIngressLanes, recipient) \cup {ResourceSource}
            /\ \A otherRecipient \in ValidatorIds \ {recipient}:
                 AsyncIngressNonemptySourcesFor(
                   asyncIngressLanes', otherRecipient) =
                 AsyncIngressNonemptySourcesFor(
                   asyncIngressLanes, otherRecipient)
-      BY <1>1, <2>1, NestedIngressAppendSourceSetFacts
+      BY <1>1, <2>1, <2>1a, NestedIngressAppendSourceSetFacts
          DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
-             AsyncIngressContentTypeInvariant, IngressLane
+             AsyncIngressContentTypeInvariant, IngressLane,
+             Item, ResourceSource
     <2>4. DOMAIN asyncIngressReady' = ValidatorIds
       BY <1>1, <2>1, Isa
          DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant
@@ -3247,70 +4000,82 @@ PROOF
                AsyncIngressNonemptySourcesFor,
                IngressLaneDepth, IngressLane
       <3>2. CASE otherRecipient = recipient
-        <4>1. CASE Len(IngressLane(recipient, source)) = 0
+        <4>1. CASE Len(IngressLane(recipient, ResourceSource)) = 0
           <5>1. asyncIngressReady'[otherRecipient] =
-                   Append(asyncIngressReady[otherRecipient], source)
-            BY <1>1, <2>6, <3>2, <4>1
-               DEF AdmitHiddenPacket
-          <5>2. /\ DOMAIN Append(asyncIngressReady[otherRecipient], source) =
+                   Append(asyncIngressReady[otherRecipient], ResourceSource)
+            BY <1>1, <2>1a, <2>6, <3>2, <4>1
+               DEF AdmitHiddenPacket, Item, ResourceSource
+          <5>2. /\ DOMAIN Append(
+                              asyncIngressReady[otherRecipient],
+                              ResourceSource) =
                          1..(Len(asyncIngressReady[otherRecipient]) + 1)
-                 /\ Len(Append(asyncIngressReady[otherRecipient], source)) =
+                 /\ Len(Append(asyncIngressReady[otherRecipient],
+                               ResourceSource)) =
                          Len(asyncIngressReady[otherRecipient]) + 1
-                 /\ Append(asyncIngressReady[otherRecipient], source)
+                 /\ Append(asyncIngressReady[otherRecipient], ResourceSource)
                          \in Seq(Range(asyncIngressReady[otherRecipient])
-                                  \cup {source})
+                                  \cup {ResourceSource})
             BY <3>1, AppendSequenceFacts
-          <5>3. /\ Append(asyncIngressReady[otherRecipient], source)
+          <5>3. /\ Append(asyncIngressReady[otherRecipient], ResourceSource)
                            \in Seq(Range(
                                 Append(asyncIngressReady[otherRecipient],
-                                       source)))
-                 /\ DOMAIN Append(asyncIngressReady[otherRecipient], source) =
+                                       ResourceSource)))
+                 /\ DOMAIN Append(asyncIngressReady[otherRecipient],
+                                  ResourceSource) =
                            1..Len(Append(
-                                asyncIngressReady[otherRecipient], source))
+                                asyncIngressReady[otherRecipient],
+                                ResourceSource))
                  /\ SequenceSet(
-                        Append(asyncIngressReady[otherRecipient], source)) =
+                        Append(asyncIngressReady[otherRecipient],
+                               ResourceSource)) =
                            SequenceSet(asyncIngressReady[otherRecipient])
-                             \cup {source}
+                             \cup {ResourceSource}
             BY <3>1, <5>2, SequenceSetAfterAppend,
                SeqOfRange, LenProperties, Isa
-          <5>4. source \notin
+          <5>4. ResourceSource \notin
                    SequenceSet(asyncIngressReady[otherRecipient])
-            BY <3>1, <3>2, <4>1, SMT
+            BY <2>1a, <3>1, <3>2, <4>1, SMT
                DEF AsyncIngressNonemptySourcesFor, IngressLane
           <5>5. IsFiniteSet(
                    SequenceSet(asyncIngressReady[otherRecipient]))
             BY <2>5, <3>1, FS_Subset
           <5>6. Cardinality(
                    SequenceSet(asyncIngressReady[otherRecipient])
-                     \cup {source}) =
+                     \cup {ResourceSource}) =
                    Cardinality(
                      SequenceSet(asyncIngressReady[otherRecipient])) + 1
             BY <5>4, <5>5, FS_AddElement
-          <5>7. Len(Append(asyncIngressReady[otherRecipient], source)) =
+          <5>7. Len(Append(asyncIngressReady[otherRecipient],
+                           ResourceSource)) =
                    Cardinality(SequenceSet(
-                     Append(asyncIngressReady[otherRecipient], source)))
+                     Append(asyncIngressReady[otherRecipient],
+                            ResourceSource)))
             BY <3>1, <5>2, <5>3, <5>6, SMT
           <5>8. SequenceSet(
-                   Append(asyncIngressReady[otherRecipient], source)) =
+                   Append(asyncIngressReady[otherRecipient],
+                          ResourceSource)) =
                  AsyncIngressNonemptySourcesFor(
                    asyncIngressLanes', otherRecipient)
             BY <2>3, <2>6, <3>1, <3>2, <5>3
           <5>9. SequenceSet(
-                   Append(asyncIngressReady[otherRecipient], source))
+                   Append(asyncIngressReady[otherRecipient],
+                          ResourceSource))
                      \subseteq AsyncIngressSources
-            BY <1>1, <3>1, <5>3, Isa
+            BY <2>1a, <3>1, <5>3, Isa
           <5> QED BY <5>1, <5>2, <5>3, <5>7, <5>8, <5>9
-        <4>2. CASE Len(IngressLane(recipient, source)) # 0
-          <5>1. Len(IngressLane(recipient, source)) \in Nat
+        <4>2. CASE Len(
+                        IngressLane(recipient, ResourceSource)) # 0
+          <5>1. Len(IngressLane(recipient, ResourceSource)) \in Nat
             BY <2>1, <1>1, LenProperties
                DEF AsyncIngressContentTypeInvariant, IngressLane
-          <5>2. source \in
+          <5>2. ResourceSource \in
                    AsyncIngressNonemptySourcesFor(
                      asyncIngressLanes, otherRecipient)
-            BY <2>6, <3>2, <4>2, <5>1, SMT
+            BY <2>1a, <2>6, <3>2, <4>2, <5>1, SMT
                DEF AsyncIngressNonemptySourcesFor, IngressLane
           <5>3. AsyncIngressNonemptySourcesFor(
-                    asyncIngressLanes, otherRecipient) \cup {source} =
+                    asyncIngressLanes, otherRecipient)
+                    \cup {ResourceSource} =
                   AsyncIngressNonemptySourcesFor(
                     asyncIngressLanes, otherRecipient)
             BY <5>2, Isa
@@ -3320,8 +4085,8 @@ PROOF
                        asyncIngressLanes', otherRecipient) =
                         AsyncIngressNonemptySourcesFor(
                           asyncIngressLanes, otherRecipient)
-            BY <1>1, <2>3, <2>6, <3>2, <4>2, <5>3
-               DEF AdmitHiddenPacket
+            BY <1>1, <2>1a, <2>3, <2>6, <3>2, <4>2, <5>3
+               DEF AdmitHiddenPacket, Item, ResourceSource
           <5> QED BY <3>1, <5>4
         <4> QED BY <4>1, <4>2
       <3>3. CASE otherRecipient # recipient
@@ -3331,9 +4096,10 @@ PROOF
                      asyncIngressLanes', otherRecipient) =
                         AsyncIngressNonemptySourcesFor(
                           asyncIngressLanes, otherRecipient)
-          BY <1>1, <2>3, <2>6, <3>3, Isa
+          BY <1>1, <2>1a, <2>3, <2>6, <3>3, Isa
              DEF AdmitHiddenPacket,
-                 AsyncIngressTopologyTypeInvariant
+                 AsyncIngressTopologyTypeInvariant,
+                 Item, ResourceSource
         <4> QED BY <3>1, <4>1
       <3> QED BY <3>2, <3>3
     <2> QED BY <2>2, <2>4, <2>6
@@ -3517,6 +4283,7 @@ PROOF
          PROVE AsyncIngressCapacityTypeInvariant'
     <2> DEFINE Item ==
            OldestDueSourcePacket(recipient, source).item
+    <2> DEFINE ResourceSource == IngressResourceSource(Item)
     <2> DEFINE NextLanes == IngressLanesAfterAdmission(Item)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
@@ -3531,16 +4298,21 @@ PROOF
              AsyncRuntimeScalarTypeInvariant,
              AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
              AsyncIngressTypeInvariant, AdmitHiddenPacket
-    <2>2. /\ Item.envelope.recipient = recipient
+    <2>2. /\ AsyncItemTyped(Item)
+           /\ Item.envelope.recipient = recipient
            /\ Item.source = source
-      BY <2>1, OldestDueSourcePacketFacts DEF Item
+           /\ ResourceSource \in AsyncIngressSources
+      BY <2>1, OldestDueSourcePacketFacts, SMT
+         DEF Item, ResourceSource, IngressResourceSource,
+             AsyncPacketContentTypeInvariant, AsyncItemTyped,
+             AsyncIngressSources
     <2>3. /\ NextLanes =
                   [asyncIngressLanes EXCEPT
-                     ![recipient][source] = Append(@, Item)]
+                     ![recipient][ResourceSource] = Append(@, Item)]
            /\ asyncIngressLanes' = NextLanes
       BY <1>1, <2>2
          DEF AdmitHiddenPacket, NextLanes,
-             IngressLanesAfterAdmission, Item
+             IngressLanesAfterAdmission, Item, ResourceSource
     <2>4. IngressDepth(recipient) <
              AsyncIngressCapacity -
                IngressProtectedSlotCountFor(NextLanes, recipient)
@@ -3573,18 +4345,20 @@ PROOF
                IngressLaneDepth, IngressLane
     <2>9. IngressDepth(recipient) < AsyncIngressCapacity
       BY <2>4, <2>5, <2>6, <2>8, SMT
-    <2>10. Len(asyncIngressLanes[recipient][source]) \in Nat
+    <2>10. Len(
+              asyncIngressLanes[recipient][ResourceSource]) \in Nat
       BY <2>1, LenProperties
          DEF AsyncIngressContentTypeInvariant, IngressLane
-    <2>11. Len(asyncIngressLanes[recipient][source]) <
+    <2>11. Len(asyncIngressLanes[recipient][ResourceSource]) <
                AsyncIngressCapacity
-      <3>1. ASSUME Len(asyncIngressLanes[recipient][source]) >=
+      <3>1. ASSUME Len(
+                      asyncIngressLanes[recipient][ResourceSource]) >=
                        AsyncIngressCapacity
              PROVE FALSE
         <4>1. AsyncIngressDepthFor(
                  asyncIngressLanes, recipient) >=
                    AsyncIngressCapacity
-          BY <1>1, <2>5, <2>10, <3>1,
+          BY <1>1, <2>2, <2>5, <2>10, <3>1,
              IngressLaneAtCapacityConsumesCapacity
         <4>2. AsyncIngressDepthFor(
                  asyncIngressLanes, recipient) =
@@ -3598,27 +4372,28 @@ PROOF
         <4> QED BY <2>9, <4>3
       <3> QED BY <2>5, <2>10, <3>1, SMT
     <2>12. LET nextIndex ==
-                    <<source,
-                      Len(asyncIngressLanes[recipient][source]) + 1>>
+                    <<ResourceSource,
+                      Len(asyncIngressLanes[recipient][ResourceSource]) + 1>>
             IN /\ nextIndex \notin
                      AsyncIngressPairIndicesFor(
                        asyncIngressLanes, recipient)
                /\ AsyncIngressPairIndicesFor(NextLanes, recipient) =
                     AsyncIngressPairIndicesFor(
                       asyncIngressLanes, recipient) \cup {nextIndex}
-      <3>1. <<source,
-               Len(asyncIngressLanes[recipient][source]) + 1>>
+      <3>1. <<ResourceSource,
+               Len(asyncIngressLanes[recipient][ResourceSource]) + 1>>
                 \notin AsyncIngressPairIndicesFor(
                           asyncIngressLanes, recipient)
-        <4>1. asyncIngressLanes[recipient][source]
+        <4>1. asyncIngressLanes[recipient][ResourceSource]
                    \in Seq(Range(
-                        asyncIngressLanes[recipient][source]))
-          BY <2>1
+                        asyncIngressLanes[recipient][ResourceSource]))
+          BY <2>1, <2>2
              DEF AsyncIngressContentTypeInvariant, IngressLane
         <4> QED BY <4>1, NextIngressIndexIsFresh
       <3>2. LET nextIndex ==
-                      <<source,
-                        Len(asyncIngressLanes[recipient][source]) + 1>>
+                      <<ResourceSource,
+                        Len(
+                          asyncIngressLanes[recipient][ResourceSource]) + 1>>
               IN AsyncIngressPairIndicesFor(NextLanes, recipient) =
                    AsyncIngressPairIndicesFor(
                      asyncIngressLanes, recipient) \cup {nextIndex}
@@ -3637,16 +4412,18 @@ PROOF
              DEF AsyncIngressTopologyTypeInvariant,
                  AsyncIngressContentTypeInvariant, IngressLane
         <4>3. LET nextIndex ==
-                        <<source,
-                          Len(asyncIngressLanes[recipient][source]) + 1>>
+                        <<ResourceSource,
+                          Len(
+                            asyncIngressLanes[recipient][ResourceSource]) + 1>>
                 IN AsyncIngressPairIndicesFor(NextLanes, recipient) =
-                     IF Len(asyncIngressLanes[recipient][source]) <
+                     IF Len(
+                          asyncIngressLanes[recipient][ResourceSource]) <
                           AsyncIngressCapacity
                      THEN AsyncIngressPairIndicesFor(
                             asyncIngressLanes, recipient) \cup {nextIndex}
                      ELSE AsyncIngressPairIndicesFor(
                             asyncIngressLanes, recipient)
-          BY <2>3, <4>1, <4>2,
+          BY <2>2, <2>3, <4>1, <4>2,
              NestedIngressAppendPairSetFacts
         <4> QED BY <2>11, <4>3, SMT
       <3> QED BY <3>1, <3>2
@@ -3716,10 +4493,10 @@ PROOF
         <4>2. DOMAIN asyncIngressLanes = ValidatorIds
           BY <2>1 DEF AsyncIngressTopologyTypeInvariant
         <4>3. [asyncIngressLanes EXCEPT
-                   ![recipient][source] = Append(@, Item)]
+                   ![recipient][ResourceSource] = Append(@, Item)]
                     [otherRecipient] =
                  asyncIngressLanes[otherRecipient]
-          BY <3>1, <4>1, <4>2,
+          BY <2>2, <3>1, <4>1, <4>2,
              FunctionalUpdateAwayFromKey
         <4>4. NextLanes[otherRecipient] =
                  asyncIngressLanes[otherRecipient]
@@ -3789,17 +4566,21 @@ PROOF
              DEF AsyncIngressCapacityTypeInvariant,
                  IngressLaneDepth, IngressLane
         <4>2. Len(NextLanes[otherRecipient][otherSource]) =
-                 IF otherRecipient = recipient /\ otherSource = source
+                 IF otherRecipient = recipient
+                      /\ otherSource = ResourceSource
                  THEN Len(
                         asyncIngressLanes[otherRecipient][otherSource]) + 1
                  ELSE Len(
                         asyncIngressLanes[otherRecipient][otherSource])
-          BY <2>1, <2>3, <3>1, NestedIngressAppendLaneFacts
+          BY <2>1, <2>2, <2>3, <3>1,
+             NestedIngressAppendLaneFacts
              DEF AsyncIngressTopologyTypeInvariant,
                  AsyncIngressContentTypeInvariant, IngressLane
-        <4>3. CASE otherRecipient = recipient /\ otherSource = source
+        <4>3. CASE otherRecipient = recipient
+                     /\ otherSource = ResourceSource
           BY <2>5, <2>10, <2>11, <3>1, <4>2, <4>3, SMT
-        <4>4. CASE ~(otherRecipient = recipient /\ otherSource = source)
+        <4>4. CASE ~(otherRecipient = recipient
+                       /\ otherSource = ResourceSource)
           BY <4>1, <4>2, <4>4
         <4> QED BY <4>3, <4>4
       <3> QED BY <3>1

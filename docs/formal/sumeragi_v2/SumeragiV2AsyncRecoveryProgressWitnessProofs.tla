@@ -647,7 +647,8 @@ PROOF
                     PersistInstallCommitSourceTransition(request)
     <2>1. CASE ~DeferredQueueNonempty(node)
       BY <1>1, <2>1, Isa
-         DEF DeferredDrainStep, CommitCoreSourceProjection,
+         DEF DeferredDrainStep, DeferredWorkServiceable,
+             CommitCoreSourceProjection,
              ResponsiveCommitSignRequests,
              ResponsiveRetainedCommitItems, vars
     <2>2. CASE DeferredQueueNonempty(node)
@@ -1420,10 +1421,11 @@ DecisionTimeoutFrontierStutteringStep ==
   \/ \E request \in pendingProposal: PersistProposal(request)
   \/ \E request \in signProposals: CompleteProposalSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       subject \in Subjects, justifyRank \in Ranks,
-       justifySubject \in SubjectOrNone:
+       subject \in Subjects,
+       timeoutCertificate \in TimeoutCertificateOptionSet,
+       highestPrepare \in PrepareQcOptionSet:
        ByzantineBroadcastProposal(signer, roundView, subject,
-                                  justifyRank, justifySubject)
+                                  timeoutCertificate, highestPrepare)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)
@@ -1454,9 +1456,9 @@ DecisionTimeoutFrontierStutteringStep ==
   \/ \E node \in ValidatorIds, qc \in LockCommitQcValues:
        BeginLockCommit(node, qc)
   \/ \E request \in pendingLockCommit: PersistLockCommit(request)
-  \/ \E signer \in ValidatorIds, roundView \in Views, highRank \in Ranks,
-       highSubject \in SubjectOrNone:
-       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
   \/ \E envelope \in tcNetwork: DeliverTC(envelope)
   \/ \E node \in ValidatorIds,
@@ -1770,15 +1772,14 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-The direct FetchBody recovery frontier emitted after decision persistence is
-owned by the trusted completion pipeline.  It retains the causal command's
+The body-state-classified recovery frontier emitted after decision persistence
+is owned by the trusted completion pipeline.  It retains the causal command's
 exact identity, so the stage predicate recognizes the scheduled occurrence
 rather than reconstructing a weaker NoAsyncItem value.  The occurrence counts
 only while its consumer context, view, and generation are current.  The stage
 invariant below records the exact executable owner at each durable-body
-boundary; in particular, it does not treat a disabled speculative Apply
-candidate as sufficient recovery ownership before the body and validation
-witnesses exist.
+boundary; in particular, it does not treat Apply as sufficient recovery
+ownership before the body and validation witnesses exist.
 ***************************************************************************)
 
 DecisionBody(node, qc) ==
@@ -1821,11 +1822,15 @@ DecisionCertifiedFetchOwned(node, qc) ==
   \E item \in AsyncNetworkItems, recoveryQc \in QcRecordSet:
     /\ DecisionRecoveryCertificate(node, qc, recoveryQc)
     /\ item.kind = "CertifiedResponse"
-    /\ item.source \in recoveryQc.signers
+    /\ CertifiedResponseAuthenticatedOccurrence(item)
     /\ item.envelope.recipient = node
     /\ item.envelope.height = qc.context.height
     /\ item.envelope.view = qc.view
     /\ item.envelope.subject = qc.subject
+    /\ item.envelope.requestHash =
+         AsyncCertifiedRequestHashOf(node, recoveryQc, 0)
+    /\ item.envelope.signatureOwner = item.envelope.archiveServer
+    /\ item.envelope.citedResponder \in recoveryQc.signers
     /\ CertifiedResponseCandidate(item) \in AsyncCandidateSet
     /\ CandidateScheduled(CertifiedResponseCandidate(item))
 
@@ -1834,7 +1839,11 @@ DecisionCertifiedRequestActive(node, qc) ==
     /\ DecisionRecoveryCertificate(node, qc, recoveryQc)
     /\ request.kind = "CertifiedRequest"
     /\ request.source = node
-    /\ request.envelope.recipient \in recoveryQc.signers \ {node}
+    /\ request.envelope.requester = node
+    /\ request.envelope.certificate = recoveryQc
+    /\ request.envelope.signatureNonce = 0
+    /\ request.envelope.recipient
+         \in CertifiedArchiveRoutes(node, recoveryQc)
     /\ request.envelope.height = qc.context.height
     /\ request.envelope.view = qc.view
     /\ request.envelope.subject = qc.subject
@@ -1939,22 +1948,40 @@ AsyncProgressWitnessAndHistoricalRecoveryProperty(specification) ==
   /\ AsyncProgressWitnessProperty(specification)
   /\ HistoricalLockedBodyRecoveryProperty(specification)
 
-THEOREM PersistDecisionRecoveryUsesCompletionFetchBody ==
+THEOREM PersistDecisionRecoveryUsesBodyStateCompletion ==
   \A command:
     /\ command.kind = "PersistDecision"
     /\ PersistDecisionRequests(command) # {}
-      => LET successor == PersistDecisionFetchSuccessor(command)
+      => LET request == PersistDecisionRequest(command)
+             qc == request.qc
+             successor == PersistDecisionRecoverySuccessor(command)
          IN /\ CommandSuccessors(command) = <<successor>>
          /\ Len(CommandSuccessors(command)) = 1
-         /\ CommandSuccessors(command)[1].kind = "FetchBody"
-         /\ CommandSuccessors(command)[1].class = "Completion"
-         /\ CommandSuccessors(command)[1].item = NoAsyncItem
-         /\ CommandSuccessors(command)[1].evidence =
-              (CHOOSE request \in PersistDecisionRequests(command): TRUE).qc
+         /\ successor.kind = PersistDecisionRecoveryKind(command)
+         /\ successor.class = "Completion"
+         /\ successor.item = NoAsyncItem
+         /\ successor.evidence = qc
+         /\ (/\ BodyHeldBy(durableBodies, request.node, qc.context,
+                           qc.view, qc.subject)
+               /\ PersistDecisionValidationHeld(command)
+               => successor.kind = "Apply")
+         /\ (/\ BodyHeldBy(durableBodies, request.node, qc.context,
+                           qc.view, qc.subject)
+               /\ ~PersistDecisionValidationHeld(command)
+               => successor.kind = "ValidateBody")
+         /\ (/\ ~BodyHeldBy(durableBodies, request.node, qc.context,
+                            qc.view, qc.subject)
+               /\ PersistDecisionBody(command) \in availableBodies
+               => successor.kind = "StoreBody")
+         /\ (/\ ~BodyHeldBy(durableBodies, request.node, qc.context,
+                            qc.view, qc.subject)
+               /\ PersistDecisionBody(command) \notin availableBodies
+               => successor.kind = "FetchBody")
          /\ (CandidateConsumerCurrent(command)
-               => CandidateConsumerCurrent(
-                    CommandSuccessors(command)[1]))
-BY DEF CommandSuccessors, PersistDecisionFetchSuccessor,
+               => CandidateConsumerCurrent(successor))
+BY DEF CommandSuccessors, PersistDecisionRecoverySuccessor,
+       PersistDecisionRecoveryKind, PersistDecisionBody,
+       PersistDecisionValidationHeld, PersistDecisionRequest,
        AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
        CandidateConsumerCurrent, PersistDecisionRequests
 
@@ -2324,7 +2351,10 @@ queues, while authenticated ingress may add unrelated work.  It also fixes the
 consumer context, view, and generation; a transition that advances a consumer
 epoch must reconstruct a current Decision owner and needs a separate
 preservation proof.  Only certified body requests and already-scheduled
-current-consumer recovery candidates must survive this frame.
+current-consumer recovery candidates must survive this frame.  The signed
+response history is append-only rather than unchanged: preserving every old
+authentication occurrence is sufficient while still allowing unrelated
+service responses to be published.
 ***************************************************************************)
 
 DecisionCertifiedRequestsRetained ==
@@ -2336,6 +2366,7 @@ DecisionRetentionFrame ==
                  availableBodies, durableBodies, validatedBodies>>
   /\ AsyncCurrentResponsiveVoters'
        \subseteq AsyncCurrentResponsiveVoters
+  /\ asyncSentItems \subseteq asyncSentItems'
   /\ DecisionCertifiedRequestsRetained
   /\ \A candidate \in AsyncCandidateSet:
        CandidateScheduled(candidate) => CandidateScheduled(candidate)'
@@ -2468,9 +2499,16 @@ PROOF
     <2>5. \A node, qc:
              DecisionCertifiedFetchOwned(node, qc)
                => DecisionCertifiedFetchOwned(node, qc)'
-      BY <1>1, Isa
-         DEF DecisionRetentionFrame, DecisionCertifiedFetchOwned,
-             DecisionRecoveryCertificate
+      <3>1. \A item:
+               CertifiedResponseAuthenticatedOccurrence(item)
+                 => CertifiedResponseAuthenticatedOccurrence(item)'
+        BY <1>1, Isa
+           DEF DecisionRetentionFrame,
+               CertifiedResponseAuthenticatedOccurrence,
+               AsyncCertifiedResponseAuthProjection
+      <3> QED BY <1>1, <3>1, Isa
+           DEF DecisionRetentionFrame, DecisionCertifiedFetchOwned,
+               DecisionRecoveryCertificate
     <2>6. ASSUME NEW decision \in decisions',
                   /\ decision.node \in AsyncCurrentResponsiveVoters'
                      /\ decision.qc.context = context'
@@ -2584,6 +2622,19 @@ PROOF
          DEF ProgressWitnessInvariant,
              HistoricalLockedCommitRecoveryProgress,
              HistoricalLockedCommitRecoveryWitness,
+             HistoricalBeginLockRecoveryCandidate,
+             HistoricalBeginLockRecoveryEvidence,
+             HistoricalCertifiedResponseRecoveryEvidence,
+             CertifiedResponseAuthenticatedOccurrence,
+             AsyncCertifiedResponseAuthProjection,
+             CertifiedArchiveRoutes,
+             AsyncCertifiedRequestHashOf,
+             AsyncCertifiedSignedRequest,
+             AsyncCertifiedRequestPreimage,
+             AsyncCertifiedRequestSignature,
+             CurrentVoters, CurrentEpoch,
+             SamePrepareRecoveryRef, SameCertificateRef,
+             CertificateRefOf,
              HistoricalLockedPrepareForCommit,
              InstalledTcSelectsPrepareFor,
              NoHigherPrepareOriginKnown, CandidateScheduled,
@@ -2645,7 +2696,7 @@ THEOREM AsyncNextPreservesRecoveryAwareDecisionProgressWitness ==
   /\ AsyncDurableDecisionProgressWitness
   /\ AsyncNext
   => AsyncDurableDecisionProgressWitness'
-BY PersistDecisionRecoveryUsesCompletionFetchBody,
+BY PersistDecisionRecoveryUsesBodyStateCompletion,
    CompletionDeferralRetainsCandidate,
    ExactDurableDecisionRecoveryLifecycleTransition,
    UniqueDecisionRestartDecisionReplayIsExactCurrentFetch,
@@ -2678,7 +2729,9 @@ BY PersistDecisionRecoveryUsesCompletionFetchBody,
        ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
        AppendCausalSuccessors, FreshCommandSuccessors,
        FreshCandidateSequence, CommandSuccessors,
-       PersistDecisionFetchSuccessor, PersistDecisionRequests,
+       PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
+       PersistDecisionBody, PersistDecisionValidationHeld,
+       PersistDecisionRequest, PersistDecisionRequests,
        DrainFairIngressSelected, CertifiedResponseCandidate,
        PublishCertifiedRequests, CertifiedRequestOutbox,
        ResetNodeSchedulerForRestart, RestartReplay,

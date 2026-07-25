@@ -29,7 +29,7 @@ use tokio::time::sleep;
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 3;
+const FORMAT_VERSION: u64 = 4;
 const MAX_CONTROL_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
@@ -229,8 +229,10 @@ pub struct ConsensusMessageControlHeld {
     pub subject: Option<BlockSubject>,
     /// Complete deterministic execution result, when carried by the message.
     pub execution_commitment: Option<ExecutionCommitment>,
-    /// Inner validator signer/proposer/responder index, when singular.
+    /// Inner validator signer or proposer index, when singular.
     pub signer: Option<ValidatorIndex>,
+    /// Frozen-QC signer cited by a certified-body response.
+    pub cited_responder: Option<ValidatorIndex>,
     /// Exact signer indices carried by a QC or TC envelope.
     pub certificate_signers: Vec<ValidatorIndex>,
     /// Digest of the canonical Sumeragi v2 envelope retained by this receiver.
@@ -522,6 +524,13 @@ impl ConsensusMessageControl {
                 {
                     return Ok(ack);
                 }
+                Ok(ack) if ack_matches_expected_release_in_progress(&ack, &expected) => {
+                    // The daemon has installed the exact non-drain command,
+                    // but one or more explicitly released occurrences still
+                    // own the controller or ordinary ingress. Keep waiting for
+                    // their terminal delivered/retired acknowledgement instead
+                    // of misclassifying the matching revision as command drift.
+                }
                 Ok(ack)
                     if rejected_before.is_some_and(|baseline| ack.rejected_commands > baseline)
                         && ack.revision < expected.revision
@@ -546,12 +555,19 @@ impl ConsensusMessageControl {
                 }
                 Ok(ack) if ack.revision >= expected.revision => {
                     return Err(eyre!(
-                        "message-control acknowledgement does not bind requested revision {}: acknowledged revision={}, digest={}, rules_match={}, queue_capacity={}",
+                        "message-control acknowledgement does not bind requested revision {}: acknowledged revision={}, expected_digest={}, acknowledged_digest={}, digest_match={}, rules_match={}, expected_queue_capacity={}, acknowledged_queue_capacity={}, draining={}, drain_fence={:?}, release_pending={}, in_flight={:?}",
                         expected.revision,
                         ack.revision,
+                        expected.command_digest,
                         ack.command_digest,
+                        ack.command_digest == expected.command_digest,
                         ack.rules == expected.rules,
+                        expected.queue_capacity,
                         ack.queue_capacity,
+                        ack.draining,
+                        ack.drain_fence,
+                        ack.release_pending.len(),
+                        ack.in_flight,
                     ));
                 }
                 Ok(_) => {}
@@ -646,6 +662,15 @@ fn ack_matches_expected(ack: &ConsensusMessageControlAck, expected: &ExpectedAck
         && ack.queue_capacity == expected.queue_capacity
         && !ack.draining
         && (!expected.drain || ack.drain_fence == Some(expected.revision))
+}
+
+fn ack_matches_expected_release_in_progress(
+    ack: &ConsensusMessageControlAck,
+    expected: &ExpectedAck<'_>,
+) -> bool {
+    !expected.drain
+        && ack_matches_expected(ack, expected)
+        && (!ack.release_pending.is_empty() || ack.in_flight.is_some())
 }
 
 fn rule_value(rule: &ConsensusMessageControlRule) -> Value {
@@ -884,6 +909,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             "authenticated_via",
             "block_hash",
             "certificate_signers",
+            "cited_responder",
             "envelope_digest",
             "execution_commitment",
             "height",
@@ -957,6 +983,10 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         .map(ValidatorIndex::try_from)
         .transpose()
         .map_err(|_| eyre!("held descriptor signer exceeds the validator-index range"))?;
+    let cited_responder = optional_u64(object, "cited_responder")?
+        .map(ValidatorIndex::try_from)
+        .transpose()
+        .map_err(|_| eyre!("held descriptor cited responder exceeds the validator-index range"))?;
     let requires_single_signer = matches!(
         kind,
         ConsensusMessageControlKind::Proposal
@@ -964,11 +994,15 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
             | ConsensusMessageControlKind::CommitVote
             | ConsensusMessageControlKind::TimeoutVote
             | ConsensusMessageControlKind::PayloadChunk
-            | ConsensusMessageControlKind::CertifiedBodyResponse
     );
     if requires_single_signer != signer.is_some() {
         return Err(eyre!(
             "held descriptor disagrees with its payload kind about the inner signer"
+        ));
+    }
+    if (kind == ConsensusMessageControlKind::CertifiedBodyResponse) != cited_responder.is_some() {
+        return Err(eyre!(
+            "held descriptor disagrees with its payload kind about the cited responder"
         ));
     }
     let certificate_signers =
@@ -1029,7 +1063,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         ConsensusMessageControlKind::CertifiedBodyResponse => {
             subject.is_some()
                 && execution_commitment.is_none()
-                && has_single_signer
+                && !has_single_signer
                 && !has_certificate_signers
         }
         ConsensusMessageControlKind::CommitCertificateRequest => {
@@ -1052,6 +1086,7 @@ fn parse_held(value: &Value) -> Result<ConsensusMessageControlHeld> {
         subject,
         execution_commitment,
         signer,
+        cited_responder,
         certificate_signers,
         envelope_digest: parse_canonical_crypto_hash(object, "envelope_digest")?,
         size_bytes,
@@ -1467,6 +1502,11 @@ mod tests {
         let subject_value = norito::json::to_value(&subject).expect("encode descriptor subject");
         let commitment_value = norito::json::to_value(&descriptor_execution_commitment())
             .expect("encode descriptor execution commitment");
+        let cited_responder = if kind == ConsensusMessageControlKind::CertifiedBodyResponse {
+            Value::from(0_u64)
+        } else {
+            Value::Null
+        };
         let (height, view, subject, execution, signer, certificate_signers) = match kind {
             ConsensusMessageControlKind::Proposal => (
                 Value::from(9_u64),
@@ -1532,7 +1572,7 @@ mod tests {
                 Value::from(2_u64),
                 subject_value,
                 Value::Null,
-                Value::from(0_u64),
+                Value::Null,
                 Vec::new(),
             ),
             ConsensusMessageControlKind::CommitCertificateRequest => (
@@ -1555,6 +1595,7 @@ mod tests {
                 },
             ),
             ("certificate_signers", Value::Array(certificate_signers)),
+            ("cited_responder", cited_responder),
             (
                 "envelope_digest",
                 Value::from(CryptoHash::new(kind.as_str().as_bytes()).to_string()),
@@ -1746,6 +1787,22 @@ mod tests {
         };
         let ack = empty_ack(digest);
         assert!(ack_matches_expected(&ack, &expected));
+        assert!(!ack_matches_expected_release_in_progress(&ack, &expected));
+        assert!(ack_matches_expected_release_in_progress(
+            &ConsensusMessageControlAck {
+                release_pending: vec![1],
+                ..ack.clone()
+            },
+            &expected
+        ));
+        assert!(ack_matches_expected_release_in_progress(
+            &ConsensusMessageControlAck {
+                in_flight: Some(1),
+                in_flight_bytes: 1,
+                ..ack.clone()
+            },
+            &expected
+        ));
         assert!(!ack_matches_expected(
             &ConsensusMessageControlAck {
                 revision: 3,
@@ -1977,6 +2034,7 @@ mod tests {
             ("authenticated_via", Value::from(sender.clone())),
             ("block_hash", Value::Null),
             ("certificate_signers", Value::Array(Vec::new())),
+            ("cited_responder", Value::Null),
             (
                 "envelope_digest",
                 Value::from(CryptoHash::new(b"chunk-envelope").to_string()),
@@ -2182,6 +2240,12 @@ mod tests {
             assert_eq!(parsed.kind, kind);
             assert_eq!(parsed.sender, parsed.authenticated_via);
             assert_ne!(parsed.envelope_digest, CryptoHash::new(b""));
+            if kind == ConsensusMessageControlKind::CertifiedBodyResponse {
+                assert_eq!(parsed.signer, None);
+                assert_eq!(parsed.cited_responder, Some(0));
+            } else {
+                assert_eq!(parsed.cited_responder, None);
+            }
         }
     }
 
@@ -2206,6 +2270,30 @@ mod tests {
                 Value::Array(vec![Value::from(1_u64), Value::from(0_u64)]),
             );
         assert!(parse_held(&reordered).is_err());
+
+        let mut missing_cited_responder =
+            held_descriptor(ConsensusMessageControlKind::CertifiedBodyResponse);
+        missing_cited_responder
+            .as_object_mut()
+            .expect("certified response descriptor")
+            .insert("cited_responder".to_owned(), Value::Null);
+        assert!(parse_held(&missing_cited_responder).is_err());
+
+        let mut false_response_signer =
+            held_descriptor(ConsensusMessageControlKind::CertifiedBodyResponse);
+        false_response_signer
+            .as_object_mut()
+            .expect("certified response descriptor")
+            .insert("signer".to_owned(), Value::from(0_u64));
+        assert!(parse_held(&false_response_signer).is_err());
+
+        let mut spurious_cited_responder =
+            held_descriptor(ConsensusMessageControlKind::PrepareVote);
+        spurious_cited_responder
+            .as_object_mut()
+            .expect("vote descriptor")
+            .insert("cited_responder".to_owned(), Value::from(0_u64));
+        assert!(parse_held(&spurious_cited_responder).is_err());
     }
 
     #[cfg(unix)]

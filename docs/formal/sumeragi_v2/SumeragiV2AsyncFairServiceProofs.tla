@@ -8,7 +8,7 @@ worker actions named by `AsyncFairnessAt`.
 ***************************************************************************)
 
 THEOREM QueuedIoEnablesPostGstService ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncArchiveIoServiceNodes:
     (AsyncTypeInvariant /\ gst /\ AsyncIoQueueDepth(node) > 0)
       => ENABLED PostGstServiceIoWorker(node)
 BY ExpandENABLED, Isa
@@ -95,7 +95,7 @@ PROOF
          PROVE ENABLED <<PostGstServiceIoWorker(node)>>_AsyncAllVars
     <2>1. ENABLED PostGstServiceIoWorker(node)
       BY <1>1, QueuedIoEnablesPostGstService
-         DEF IoConsensusHead
+         DEF IoConsensusHead, AsyncArchiveIoServiceNodes
     <2>2. PostGstServiceIoWorker(node) \in BOOLEAN
       BY Isa DEF PostGstServiceIoWorker
     <2>3. <<PostGstServiceIoWorker(node)>>_AsyncAllVars \in BOOLEAN
@@ -201,7 +201,7 @@ PROOF
         BY PTL DEF IoConsensusHeadServiceExit
       <3>4. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstServiceIoWorker(node))
-        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt, AsyncVotersAt
       <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
            DEF AsyncSpecAt
     <2> QED BY <2>1
@@ -250,8 +250,10 @@ LocalCompletionCausalStep(node) ==
                      asyncOutstandingTags, asyncNodeDeadlines,
                      asyncRetransmitDeadlines, asyncSentItems,
                      asyncRetainedControl, asyncActiveRequests,
+                     asyncCertifiedResponseClaim,
                      asyncTransport, asyncIngressLanes,
-                     asyncIngressReady, asyncHeldChunks>>
+                     asyncIngressReady, asyncHeldChunks,
+                     asyncHistoricalRecoveryTargets>>
   /\ UNCHANGED AsyncDeferredVars
   /\ UpdateLocalAdmissionMetadata(node, "Causal")
   /\ asyncRunnerPhase' = asyncRunnerPhase
@@ -310,8 +312,10 @@ LocalCommandCausalStep(node) ==
                      asyncOutstandingTags, asyncNodeDeadlines,
                      asyncRetransmitDeadlines, asyncSentItems,
                      asyncRetainedControl, asyncActiveRequests,
+                     asyncCertifiedResponseClaim,
                      asyncTransport, asyncIngressLanes,
-                     asyncIngressReady, asyncHeldChunks>>
+                     asyncIngressReady, asyncHeldChunks,
+                     asyncHistoricalRecoveryTargets>>
      /\ UNCHANGED AsyncDeferredVars
      /\ UpdateLocalAdmissionMetadata(node, "Causal")
      /\ asyncRunnerPhase' = asyncRunnerPhase
@@ -378,8 +382,10 @@ LocalPhaseAdvanceStep(node) ==
                   asyncOutstandingTags, asyncNodeDeadlines,
                   asyncRetransmitDeadlines, asyncSentItems,
                   asyncRetainedControl, asyncActiveRequests,
+                  asyncCertifiedResponseClaim,
                   asyncTransport, asyncIngressLanes,
-                  asyncIngressReady, asyncHeldChunks>>
+                  asyncIngressReady, asyncHeldChunks,
+                  asyncHistoricalRecoveryTargets>>
   /\ asyncRunnerPhase' =
        [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
   /\ asyncRunnerBudget' =
@@ -442,7 +448,7 @@ SelectedIngressItem(node) ==
 
 SelectedIngressDrops(node) ==
   LET item == SelectedIngressItem(node)
-  IN item.kind = "Noise" \/ item \notin asyncSentItems
+  IN item.kind = "Noise" \/ ~IngressItemHasAuthenticatedHistory(item)
 
 SelectedIngressIsRequest(node) ==
   SelectedIngressItem(node).kind
@@ -518,7 +524,7 @@ PROOF
                     /\ ~SelectedIngressIsRequest(node)
                     /\ SelectedIngressItem(node).kind =
                          "CertifiedResponse"
-                    /\ CertifiedResponseAuthorized(
+                    /\ CertifiedResponseClaimAuthorized(
                          SelectedIngressItem(node))
         BY <1>1, <3>1, <3>10, <3>11, <3>5, ExpandENABLED, Isa
            DEF SelectedIngressDrops, SelectedIngressIsRequest,
@@ -531,7 +537,7 @@ PROOF
                     /\ ~SelectedIngressIsRequest(node)
                     /\ SelectedIngressItem(node).kind =
                          "CertifiedResponse"
-                    /\ ~CertifiedResponseAuthorized(
+                    /\ ~CertifiedResponseClaimAuthorized(
                           SelectedIngressItem(node))
         BY <1>1, <3>1, <3>10, <3>11, <3>6, ExpandENABLED, Isa
            DEF SelectedIngressDrops, SelectedIngressIsRequest,
@@ -611,8 +617,10 @@ IngressPhaseAdvanceStep(node) ==
                   asyncOutstandingTags, asyncNodeDeadlines,
                   asyncRetransmitDeadlines, asyncSentItems,
                   asyncRetainedControl, asyncActiveRequests,
+                  asyncCertifiedResponseClaim,
                   asyncTransport, asyncIngressLanes,
-                  asyncIngressReady, asyncHeldChunks>>
+                  asyncIngressReady, asyncHeldChunks,
+                  asyncHistoricalRecoveryTargets>>
   /\ asyncRunnerPhase' =
        [asyncRunnerPhase EXCEPT ![node] = "Runtime"]
   /\ asyncRunnerBudget' =
@@ -794,11 +802,12 @@ PROOF
                     source, recipient, qc, nonce)
       BY <2>5, Isa DEF InjectByzantineCertifiedRequest
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  subject \in Subjects, justifyRank \in Ranks,
-                  justifySubject \in SubjectOrNone:
+                  subject \in Subjects,
+                  timeoutCertificate \in TimeoutCertificateOptionSet,
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineProposal(
                     signer, roundView, subject,
-                    justifyRank, justifySubject)
+                    timeoutCertificate, highestPrepare)
       BY <2>6, Isa DEF AsyncByzantineProposal
     <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
                   phase \in Phases, subject \in Subjects:
@@ -806,9 +815,9 @@ PROOF
                     signer, roundView, phase, subject)
       BY <2>7, Isa DEF AsyncByzantineVote
     <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  highRank \in Ranks, highSubject \in SubjectOrNone:
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineTimeout(
-                    signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       BY <2>8, Isa DEF AsyncByzantineTimeout
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4,
                 <2>5, <2>6, <2>7, <2>8
@@ -848,7 +857,7 @@ PROOF
       BY <1>1, <2>6, Isa
          DEF DirectHistoricalCommitCertificateDiscoveryStep,
              CommitCertificateDiscoveryStepWork
-    <2>7. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>7. CASE \E node \in AsyncArchiveIoServiceNodes:
                   ServiceIoWorker(node)
       BY <1>1, <2>7, Isa DEF ServiceIoWorker, ServiceIoWorkerWork
     <2>8. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -1070,7 +1079,7 @@ IdleSerializedRuntimeStep(node) ==
 THEOREM IdleSerializedRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ ~DeferredTagExecutable(node)
     /\ ~TimeoutDue(node)
     /\ ~RetransmitDue(node)
@@ -1079,7 +1088,7 @@ THEOREM IdleSerializedRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ ~DeferredTagExecutable(node)
                 /\ ~TimeoutDue(node)
                 /\ ~RetransmitDue(node)
@@ -1115,7 +1124,7 @@ DirectRetransmitSerializedStep(node) ==
 THEOREM DirectRetransmitRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ ~DeferredTagExecutable(node)
     /\ ~TimeoutDue(node)
     /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
@@ -1124,7 +1133,7 @@ THEOREM DirectRetransmitRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ ~DeferredTagExecutable(node)
                 /\ ~TimeoutDue(node)
                 /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
@@ -1162,14 +1171,14 @@ DeferredRetransmitSerializedStep(node) ==
 THEOREM DeferredRetransmitRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ DeferredTagExecutable(node)
     /\ ~DeferredTimeoutExecutable(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTagExecutable(node)
                 /\ ~DeferredTimeoutExecutable(node)
          PROVE ENABLED SerializedRuntimeStep(node)
@@ -1204,120 +1213,15 @@ SerializedRunnerReset(node) ==
   /\ asyncRunnerBudget' =
        [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
 
-DeferredDrainEmptySerializedStep(node) ==
-  /\ UNCHANGED <<vars, asyncCommandQueues,
-                  asyncNextCommandClass, asyncFifoOwed,
-                  asyncTimeoutEmitted, asyncDeferredCompletionQueues,
-                  asyncDeferredProgressQueues,
-                  asyncDeferredNormalQueues, asyncDeferredHandoffs,
-                  asyncNextDeferredClass,
-                  asyncOutstandingTags,
-                  asyncNodeDeadlines, asyncRetransmitDeadlines,
-                  asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
-                  asyncIngressLanes, asyncIngressReady,
-                  asyncHeldChunks, asyncHistoricalRecoveryTargets>>
-  /\ LeaveCausalQueues
-  /\ asyncDeferredDrainOwed' =
-       [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
-  /\ SerializedRunnerReset(node)
+DeferredBusyServiceFence(node) ==
+  /\ asyncDeferredDrainOwed[node]
+  /\ DeferredQueueNonempty(node)
+  /\ ~NodeIdle(node)
 
-THEOREM DeferredDrainEmptyRuntimeIsEnabled ==
-  \A node \in ValidatorIds:
-    /\ asyncRunnerPhase[node] = "Runtime"
-    /\ asyncDeferredDrainOwed[node]
-    /\ ~DeferredQueueNonempty(node)
-    => ENABLED SerializedRuntimeStep(node)
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                /\ asyncRunnerPhase[node] = "Runtime"
-                /\ asyncDeferredDrainOwed[node]
-                /\ ~DeferredQueueNonempty(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
-    <2>1. ENABLED DeferredDrainEmptySerializedStep(node)
-      BY ExpandENABLED, Isa
-         DEF DeferredDrainEmptySerializedStep, SerializedRunnerReset,
-             LeaveCausalQueues, AsyncIoVars, vars
-    <2>2. DeferredDrainEmptySerializedStep(node) \in BOOLEAN
-      BY Isa DEF DeferredDrainEmptySerializedStep,
-                 SerializedRunnerReset
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
-    <2>4. DeferredDrainEmptySerializedStep(node)
-             => SerializedRuntimeStep(node)
-      BY <1>1, Isa
-         DEF DeferredDrainEmptySerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
-             RuntimeStep, DeferredDrainStep
-    <2>5. ENABLED DeferredDrainEmptySerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
-      BY <2>2, <2>3, <2>4, ENABLEDaxioms
-    <2> QED BY <2>1, <2>5
-  <1> QED BY <1>1
-
-DeferredDrainBusySerializedStep(node) ==
-  /\ LeaveCausalQueues
-  /\ AdvanceNextDeferredClass(node)
-  /\ UNCHANGED <<vars, asyncCommandQueues,
-                  asyncNextCommandClass, asyncFifoOwed,
-                  asyncTimeoutEmitted, asyncDeferredCompletionQueues,
-                  asyncDeferredProgressQueues,
-                  asyncDeferredNormalQueues, asyncOutstandingTags,
-                  asyncNodeDeadlines, asyncRetransmitDeadlines,
-                  asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
-                  asyncIngressLanes, asyncIngressReady,
-                  asyncHeldChunks, asyncHistoricalRecoveryTargets>>
-  /\ asyncDeferredDrainOwed' =
-       [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
-  /\ IF DeferredHandoffActive(node)
-     THEN RetainDeferredHandoffs
-     ELSE InstallDeferredHandoff(node, NextDeferredCommand(node))
-  /\ SerializedRunnerReset(node)
-
-THEOREM DeferredDrainBusyRuntimeIsEnabled ==
-  \A node \in ValidatorIds:
-    /\ asyncRunnerPhase[node] = "Runtime"
-    /\ asyncDeferredDrainOwed[node]
-    /\ DeferredQueueNonempty(node)
-    /\ (~DeferredHandoffActive(node)
-          \/ DeferredHandoffMatches(node, NextDeferredCommand(node)))
-    /\ ~CommandDispatchable(NextDeferredCommand(node))
-    /\ ~NodeIdle(node)
-    => ENABLED SerializedRuntimeStep(node)
-PROOF
-  <1>1. ASSUME NEW node \in ValidatorIds,
-                /\ asyncRunnerPhase[node] = "Runtime"
-                /\ asyncDeferredDrainOwed[node]
-                /\ DeferredQueueNonempty(node)
-                /\ (~DeferredHandoffActive(node)
-                      \/ DeferredHandoffMatches(
-                           node, NextDeferredCommand(node)))
-                /\ ~CommandDispatchable(NextDeferredCommand(node))
-                /\ ~NodeIdle(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
-    <2>1. ENABLED DeferredDrainBusySerializedStep(node)
-      BY ExpandENABLED, Isa
-         DEF DeferredDrainBusySerializedStep, SerializedRunnerReset,
-             LeaveCausalQueues, AsyncIoVars, vars
-    <2>2. DeferredDrainBusySerializedStep(node) \in BOOLEAN
-      BY Isa DEF DeferredDrainBusySerializedStep,
-                 SerializedRunnerReset
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
-    <2>4. DeferredDrainBusySerializedStep(node)
-             => SerializedRuntimeStep(node)
-      BY <1>1, Isa
-         DEF DeferredDrainBusySerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
-             RuntimeStep, DeferredDrainStep,
-             DeferredHandoffAllowsExecution,
-             DeferredHandoffBlocksExecution
-    <2>5. ENABLED DeferredDrainBusySerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
-      BY <2>2, <2>3, <2>4, ENABLEDaxioms
-    <2> QED BY <2>1, <2>5
-  <1> QED BY <1>1
+THEOREM DeferredBusyServiceFenceClosesDeferredDrain ==
+  \A node:
+    DeferredBusyServiceFence(node) => ~DeferredWorkServiceable(node)
+BY DEF DeferredBusyServiceFence, DeferredWorkServiceable
 
 DeferredHandoffSkipSerializedStep(node) ==
   /\ LeaveCausalQueues
@@ -1397,23 +1301,14 @@ DeferredDrainDiscardSerializedStep(node) ==
 THEOREM DeferredDrainDiscardRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ asyncDeferredDrainOwed[node]
-    /\ DeferredQueueNonempty(node)
-    /\ (~DeferredHandoffActive(node)
-          \/ DeferredHandoffMatches(node, NextDeferredCommand(node)))
+    /\ DeferredWorkServiceable(node)
     /\ ~CommandDispatchable(NextDeferredCommand(node))
-    /\ NodeIdle(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ asyncDeferredDrainOwed[node]
-                /\ DeferredQueueNonempty(node)
-                /\ (~DeferredHandoffActive(node)
-                      \/ DeferredHandoffMatches(
-                           node, NextDeferredCommand(node)))
+                /\ DeferredWorkServiceable(node)
                 /\ ~CommandDispatchable(NextDeferredCommand(node))
-                /\ NodeIdle(node)
          PROVE ENABLED SerializedRuntimeStep(node)
     <2>1. ENABLED DeferredDrainDiscardSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
@@ -1433,8 +1328,7 @@ PROOF
          DEF DeferredDrainDiscardSerializedStep,
              SerializedRunnerReset, SerializedRuntimeStep,
              RuntimeStep, DeferredDrainStep,
-             DeferredHandoffAllowsExecution,
-             DeferredHandoffBlocksExecution
+             DeferredWorkServiceable
     <2>5. ENABLED DeferredDrainDiscardSerializedStep(node)
              => ENABLED SerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
@@ -1442,7 +1336,7 @@ PROOF
   <1> QED BY <1>1
 
 FifoRuntimeSelected(node) ==
-  /\ ~asyncDeferredDrainOwed[node]
+  /\ ~DeferredWorkServiceable(node)
   /\ ~DeferredTagExecutable(node)
   /\ ~TimeoutDue(node)
   /\ NodeQueueNonempty(node)
@@ -1565,7 +1459,8 @@ DirectTimeoutDeferredSerializedStep(node) ==
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                   asyncNodeDeadlines, asyncRetransmitDeadlines,
                   asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
+                  asyncActiveRequests, asyncCertifiedResponseClaim,
+                  asyncTransport,
                   asyncIngressLanes, asyncIngressReady,
                   asyncHeldChunks, asyncHistoricalRecoveryTargets>>
   /\ SerializedRunnerReset(node)
@@ -1573,7 +1468,7 @@ DirectTimeoutDeferredSerializedStep(node) ==
 THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
     /\ ~BeginTimeoutEnabled(node)
@@ -1581,7 +1476,7 @@ THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
                 /\ ~BeginTimeoutEnabled(node)
@@ -1625,7 +1520,8 @@ DeferredTimeoutNoBeginSerializedStep(node) ==
                   asyncFifoOwed, asyncTimeoutEmitted,
                   asyncNodeDeadlines, asyncRetransmitDeadlines,
                   asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
+                  asyncActiveRequests, asyncCertifiedResponseClaim,
+                  asyncTransport,
                   asyncIngressLanes, asyncIngressReady,
                   asyncHeldChunks, asyncHistoricalRecoveryTargets>>
   /\ SerializedRunnerReset(node)
@@ -1633,14 +1529,14 @@ DeferredTimeoutNoBeginSerializedStep(node) ==
 THEOREM DeferredTimeoutNoBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ DeferredTimeoutExecutable(node)
     /\ ~BeginTimeoutEnabled(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTimeoutExecutable(node)
                 /\ ~BeginTimeoutEnabled(node)
          PROVE ENABLED SerializedRuntimeStep(node)
@@ -1685,7 +1581,8 @@ DirectTimeoutBeginSerializedStep(node) ==
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                   asyncNodeDeadlines, asyncRetransmitDeadlines,
                   asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
+                  asyncActiveRequests, asyncCertifiedResponseClaim,
+                  asyncTransport,
                   asyncIngressLanes, asyncIngressReady,
                   asyncHeldChunks, asyncHistoricalRecoveryTargets>>
   /\ SerializedRunnerReset(node)
@@ -1693,7 +1590,7 @@ DirectTimeoutBeginSerializedStep(node) ==
 THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
     /\ BeginTimeoutEnabled(node)
@@ -1701,7 +1598,7 @@ THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
                 /\ BeginTimeoutEnabled(node)
@@ -1745,7 +1642,8 @@ DeferredTimeoutBeginSerializedStep(node) ==
                   asyncFifoOwed, asyncTimeoutEmitted,
                   asyncNodeDeadlines, asyncRetransmitDeadlines,
                   asyncSentItems, asyncRetainedControl,
-                  asyncActiveRequests, asyncTransport,
+                  asyncActiveRequests, asyncCertifiedResponseClaim,
+                  asyncTransport,
                   asyncIngressLanes, asyncIngressReady,
                   asyncHeldChunks, asyncHistoricalRecoveryTargets>>
   /\ SerializedRunnerReset(node)
@@ -1753,14 +1651,14 @@ DeferredTimeoutBeginSerializedStep(node) ==
 THEOREM DeferredTimeoutBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredWorkServiceable(node)
     /\ DeferredTimeoutExecutable(node)
     /\ BeginTimeoutEnabled(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTimeoutExecutable(node)
                 /\ BeginTimeoutEnabled(node)
          PROVE ENABLED SerializedRuntimeStep(node)
@@ -1788,25 +1686,17 @@ PROOF
   <1> QED BY <1>1
 
 ExecutionRuntimeSelected(node) ==
-  \/ /\ asyncDeferredDrainOwed[node]
-           /\ DeferredQueueNonempty(node)
-           /\ DeferredHandoffAllowsExecution(
-                node, NextDeferredCommand(node))
-     \/ /\ ~asyncDeferredDrainOwed[node]
-           /\ FifoRuntimeSelected(node)
+  \/ DeferredWorkServiceable(node)
+  \/ FifoRuntimeSelected(node)
 
 SelectedRuntimeCommand(node) ==
-  IF asyncDeferredDrainOwed[node]
+  IF DeferredWorkServiceable(node)
   THEN NextDeferredCommand(node)
   ELSE NextNodeCommand(node)
 
 SelectedExecutionSchedulerFrame(node, command) ==
-  /\ IF asyncDeferredDrainOwed[node]
-     THEN /\ IF DeferredHandoffMatches(node, command)
-             THEN /\ RemoveNextDeferredCommand(node)
-                  /\ ClearDeferredHandoff(node)
-             ELSE /\ RemoveNextDeferredCommand(node)
-                  /\ RetainDeferredHandoffs
+  /\ IF DeferredWorkServiceable(node)
+     THEN /\ RemoveNextDeferredCommand(node)
           /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
           /\ UNCHANGED <<asyncCommandQueues,
                           asyncNextCommandClass, asyncFifoOwed>>
@@ -1974,27 +1864,40 @@ PROOF
     <2> QED BY <2>1
   <1> QED BY <1>1
 
+DeferredBusyCompletionSelected(node) ==
+  /\ DeferredBusyServiceFence(node)
+  /\ FifoRuntimeSelected(node)
+  /\ NextNodeCommand(node).class = "Completion"
+  /\ CommandDispatchable(NextNodeCommand(node))
+
+THEOREM DeferredBusyCompletionRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ DeferredBusyCompletionSelected(node)
+    => ENABLED SerializedRuntimeStep(node)
+BY SelectedExecutionRuntimeIsEnabled, Isa
+   DEF DeferredBusyCompletionSelected, DeferredBusyServiceFence,
+       DeferredWorkServiceable, ExecutionRuntimeSelected,
+       SelectedRuntimeCommand, FifoRuntimeSelected
+
 THEOREM SerializedRuntimeStepIsEnabled ==
   \A node \in ValidatorIds:
     asyncRunnerPhase[node] = "Runtime"
       => ENABLED SerializedRuntimeStep(node)
-BY DeferredDrainEmptyRuntimeIsEnabled,
-   DeferredDrainBusyRuntimeIsEnabled,
-   DeferredHandoffSkipRuntimeIsEnabled,
-   DeferredDrainDiscardRuntimeIsEnabled,
+BY DeferredDrainDiscardRuntimeIsEnabled,
    DeferredRetransmitRuntimeIsEnabled,
    DirectTimeoutDeferredRuntimeIsEnabled,
    DeferredTimeoutNoBeginRuntimeIsEnabled,
    DirectTimeoutBeginRuntimeIsEnabled,
    DeferredTimeoutBeginRuntimeIsEnabled,
    SelectedExecutionRuntimeIsEnabled,
+   DeferredBusyCompletionRuntimeIsEnabled,
    FifoDeferRuntimeIsEnabled,
    FifoDiscardRuntimeIsEnabled,
    DirectRetransmitRuntimeIsEnabled,
    IdleSerializedRuntimeIsEnabled, Isa
    DEF ExecutionRuntimeSelected, FifoRuntimeSelected,
-       DeferredTagExecutable, DeferredHandoffAllowsExecution,
-       DeferredHandoffBlocksExecution
+       DeferredTagExecutable, DeferredWorkServiceable
 
 NodeServiceFrame(node) ==
   /\ UNCHANGED asyncNow
@@ -2003,17 +1906,27 @@ NodeServiceFrame(node) ==
           ![node] = asyncNow + AsyncDeliveryBound]
   /\ UNCHANGED asyncIoServiceDeadlines
 
+RecoveryRunNodeGuard(node) ==
+  \/ ~ResponsiveReplayQuarantined(node)
+  \/ /\ ResponsiveReplayDraining(node)
+     /\ ~NodeIdle(node)
+     /\ asyncIngressReady[node] = <<>>
+
 LocalRunNodeStep(node) ==
   LocalAdmissionStep(node) /\ NodeServiceFrame(node)
 
 THEOREM EnabledLocalAdmissionLiftsToRunNode ==
   \A node \in AsyncCurrentResponsiveVoters:
+    /\ node \in up
     /\ ~NodeHasApplication(node)
+    /\ RecoveryRunNodeGuard(node)
     /\ ENABLED LocalAdmissionStep(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ node \in up
                 /\ ~NodeHasApplication(node)
+                /\ RecoveryRunNodeGuard(node)
                 /\ ENABLED LocalAdmissionStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED LocalRunNodeStep(node)
@@ -2031,7 +1944,9 @@ PROOF
     <2>3. RunNode(node) \in BOOLEAN
       BY Isa DEF RunNode
     <2>4. LocalRunNodeStep(node) => RunNode(node)
-      BY <1>1, Isa DEF LocalRunNodeStep, NodeServiceFrame, RunNode
+      BY <1>1, Isa
+         DEF LocalRunNodeStep, NodeServiceFrame,
+             RecoveryRunNodeGuard, RunNode, RunNodeWork
     <2>5. ENABLED LocalRunNodeStep(node) => ENABLED RunNode(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
@@ -2042,12 +1957,16 @@ IngressRunNodeStep(node) ==
 
 THEOREM EnabledIngressDrainLiftsToRunNode ==
   \A node \in AsyncCurrentResponsiveVoters:
+    /\ node \in up
     /\ ~NodeHasApplication(node)
+    /\ RecoveryRunNodeGuard(node)
     /\ ENABLED IngressDrainStep(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ node \in up
                 /\ ~NodeHasApplication(node)
+                /\ RecoveryRunNodeGuard(node)
                 /\ ENABLED IngressDrainStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED IngressRunNodeStep(node)
@@ -2062,7 +1981,9 @@ PROOF
     <2>3. RunNode(node) \in BOOLEAN
       BY Isa DEF RunNode
     <2>4. IngressRunNodeStep(node) => RunNode(node)
-      BY <1>1, Isa DEF IngressRunNodeStep, NodeServiceFrame, RunNode
+      BY <1>1, Isa
+         DEF IngressRunNodeStep, NodeServiceFrame,
+             RecoveryRunNodeGuard, RunNode, RunNodeWork
     <2>5. ENABLED IngressRunNodeStep(node) => ENABLED RunNode(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
@@ -2073,12 +1994,16 @@ SerializedRunNodeStep(node) ==
 
 THEOREM EnabledSerializedRuntimeLiftsToRunNode ==
   \A node \in AsyncCurrentResponsiveVoters:
+    /\ node \in up
     /\ ~NodeHasApplication(node)
+    /\ RecoveryRunNodeGuard(node)
     /\ ENABLED SerializedRuntimeStep(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ node \in up
                 /\ ~NodeHasApplication(node)
+                /\ RecoveryRunNodeGuard(node)
                 /\ ENABLED SerializedRuntimeStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED SerializedRunNodeStep(node)
@@ -2128,7 +2053,8 @@ PROOF
       BY Isa DEF RunNode
     <2>4. SerializedRunNodeStep(node) => RunNode(node)
       BY <1>1, Isa
-         DEF SerializedRunNodeStep, NodeServiceFrame, RunNode
+         DEF SerializedRunNodeStep, NodeServiceFrame,
+             RecoveryRunNodeGuard, RunNode, RunNodeWork
     <2>5. ENABLED SerializedRunNodeStep(node) => ENABLED RunNode(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
@@ -2137,12 +2063,16 @@ PROOF
 THEOREM ResponsiveUnappliedRunNodeIsEnabled ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncTypeInvariant
+    /\ node \in up
     /\ ~NodeHasApplication(node)
+    /\ RecoveryRunNodeGuard(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 /\ AsyncTypeInvariant
+                /\ node \in up
                 /\ ~NodeHasApplication(node)
+                /\ RecoveryRunNodeGuard(node)
          PROVE ENABLED RunNode(node)
     <2>1. node \in ValidatorIds
       BY <1>1, AsyncCurrentResponsiveVotersAreValidators
@@ -2177,6 +2107,23 @@ THEOREM AppliedNodeHasDecision ==
 BY SMT
    DEF StrongInductiveInvariant, Safety, AppliedRequiresDecision,
        NodeHasApplication, NodeHasDecision
+
+THEOREM GstExcludesResponsiveReplayQuarantine ==
+  /\ AsyncGstRecoveryPhaseInvariant
+  /\ gst
+  => \A node: ~ResponsiveReplayQuarantined(node)
+BY Isa
+   DEF AsyncGstRecoveryPhaseInvariant,
+       ResponsiveReplayQuarantined
+
+THEOREM GstResponsiveNodesAreUp ==
+  /\ AsyncRecoveryTypeInvariant
+  /\ AsyncGstRecoveryPhaseInvariant
+  /\ gst
+  => Responsive \subseteq up
+BY Isa
+   DEF AsyncRecoveryTypeInvariant, AsyncRecoveryPhases,
+       AsyncGstRecoveryPhaseInvariant
 
 THEOREM EnabledRunNodeLiftsPostGst ==
   \A node \in AsyncCurrentResponsiveVoters:
@@ -2220,12 +2167,22 @@ PROOF
          DEF AsyncStrongTypeInvariant
     <2>4. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
-    <2>5. ENABLED RunNode(node)
-      BY <2>1, <2>3, <2>4,
+    <2>5. Responsive \subseteq up
+      BY <1>1, GstResponsiveNodesAreUp
+         DEF AsyncStrongTypeInvariant
+    <2>6. node \in up
+      BY <2>1, <2>5 DEF AsyncCurrentResponsiveVoters
+    <2>7. ~ResponsiveReplayQuarantined(node)
+      BY <1>1, GstExcludesResponsiveReplayQuarantine
+         DEF AsyncStrongTypeInvariant
+    <2>8. RecoveryRunNodeGuard(node)
+      BY <2>7 DEF RecoveryRunNodeGuard
+    <2>9. ENABLED RunNode(node)
+      BY <2>1, <2>3, <2>4, <2>6, <2>8,
          ResponsiveUnappliedRunNodeIsEnabled
-    <2>6. ENABLED PostGstRunNode(node)
-      BY <1>1, <2>1, <2>5, EnabledRunNodeLiftsPostGst
-    <2> QED BY <2>1, <2>6 DEF PostGstSchedulerActionEnabled
+    <2>10. ENABLED PostGstRunNode(node)
+      BY <1>1, <2>1, <2>9, EnabledRunNodeLiftsPostGst
+    <2> QED BY <2>1, <2>10 DEF PostGstSchedulerActionEnabled
   <1> QED BY <1>1
 
 THEOREM AsyncSpecAlwaysStrongTypeInvariant ==
@@ -2268,6 +2225,21 @@ PROOF
            => HistoricalLockedBodyRecoveryStageInvariant'
       BY AsyncBracketPreservesHistoricalLockedBodyRecoveryStage
     <2> QED BY <2>1, <2>2, <2>3, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+THEOREM AsyncSpecAlwaysSerializedBusyKernelInvariant ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []AsyncSerializedBusyKernelInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []AsyncSerializedBusyKernelInvariant
+    <2>1. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>2. AsyncStrongTypeInvariant
+             => AsyncSerializedBusyKernelInvariant
+      BY DEF AsyncStrongTypeInvariant
+    <2> QED BY <2>1, <2>2, PTL
   <1> QED BY <1>1
 
 THEOREM AsyncResponsiveRestartEnabledWhileRequired ==
@@ -2500,8 +2472,9 @@ PROOF
 The replay-drain obligation is intentionally separate from restart
 selection.  It is the exact starvation-freedom boundary: the quarantined
 node's ordinary serialized runner and completion I/O worker must consume the
-current signature before DriveResponsiveReplayHead may install the next FIFO
-element, and an empty tail must eventually enable FinishResponsiveReplay.
+optional locked-body Fetch prefix and current signature before
+DriveResponsiveReplayHead may install the next signature from the FIFO tail,
+and an empty tail must eventually enable FinishResponsiveReplay.
 ***************************************************************************)
 THEOREM AsyncInitEstablishesReplayTailCommitReadyInvariant ==
   \A initialContext:
@@ -2806,7 +2779,7 @@ PROOF
         BY <1>1, <3>2, HistoricalRecoveryTargetsAreValidators,
            ReplayingRunNodeWorkPreservesCommitCarrierFrame
            DEF RunHistoricalRecoveryNode
-      <3>3. CASE \E runner \in AsyncCurrentResponsiveVoters:
+      <3>3. CASE \E runner \in AsyncResponsiveAppliedArchiveServers:
                     RunHistoricalServer(runner)
         BY <1>1, <3>3, Isa
            DEF ReplayCommitCarrierFrame, ReplayCommitIntentReady,
@@ -2955,11 +2928,14 @@ PROOF
 THEOREM ResponsiveReplayRunNodeEnabledWhileReplaying ==
   /\ AsyncStrongTypeInvariant
   /\ AsyncRecoveryReplayingPending
+  /\ ~NodeIdle(asyncRecoveryNode)
   => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
 BY ResponsiveUnappliedRunNodeIsEnabled, ExpandENABLED, Isa
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        AsyncRecoveryReplayingPending, ResponsiveReplayRunNode,
-       ResponsiveReplayDraining, RunNode, AsyncAllVars,
+       RecoveryRunNodeGuard,
+       ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+       RunNode, RunNodeWork, AsyncAllVars,
        AsyncRecoveryVars
 
 THEOREM ResponsiveReplayIoWorkerEnabledWhileQueued ==
@@ -3054,6 +3030,7 @@ PROOF
       BY AsyncRecoveryReplayingStep
     <2>3. /\ AsyncStrongTypeInvariant
            /\ AsyncRecoveryReplayingPending
+           /\ ~NodeIdle(asyncRecoveryNode)
           => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
       BY ResponsiveReplayRunNodeEnabledWhileReplaying
     <2>4. /\ AsyncStrongTypeInvariant
